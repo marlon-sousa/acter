@@ -220,6 +220,36 @@ because phase 1 bakes in three guardrails that make phase 2 purely additive:
 Phase 2 then adds only: keyboard routing switch in the frontend (edit field vs
 passthrough), a grid renderer, and the interactive-mode screen reading strategy.
 
+## Edit field ownership (non-interactive mode) — **Decided**
+
+**The edit field is 100% local; the terminal never updates it.** The shell sees no
+bytes until Enter, when Acter sends the complete line. Mirroring the shell's line
+editor (readline) into the field is rejected wholesale: it makes the field a
+rendering of remote state (async echo, remotely-owned caret) that no screen reader
+can track.
+
+Every line-editing affordance is provided locally instead:
+- **History:** up/down navigate Acter's own command history (we hold every submitted
+  command), persisted per profile across sessions, deduplicated. Recall is a normal
+  announced local text change. Phase 2 nicety: adapters may import existing shell
+  history (PSReadLine file, .bash_history) so day-one history isn't empty.
+- **Completion:** Acter-native (already Decided): history + filesystem paths.
+- **Cursor/editing keys:** native edit-field behavior; the terminal is not involved.
+
+**Invariant:** the terminal updates only the results buffer; the user updates only
+the edit field. No third case. (Interactive mode has no edit field, so the question
+does not arise there.)
+
+Consequences:
+- **Mid-command prompts** ("Y/n" confirmations): prompt text arrives as output of
+  the running command (announced by the live region); the user types the answer in
+  the edit field and presses Enter; because the boundary tracker knows a command is
+  running, the line is delivered as stdin to that program instead of opening a new
+  command block. Same field, same rule.
+- **Echo exclusion:** the shell's echo of a submitted line falls between OSC 133
+  markers A and C (prompt/echo region); block content is taken from C..D only, so
+  the command line is never duplicated under its h2.
+
 ## Long-running and never-ending commands (tail -f, watch)
 
 The auto-read policy triggers at command end — but some commands never end.
@@ -243,3 +273,7 @@ The auto-read policy triggers at command end — but some commands never end.
   active, activity in background tabs — e.g. a long build finishing in another tab).
 - SSH auth UX: password prompts, key files, agent support, host key verification —
   all must be fully screen-reader-accessible flows.
+- Password / no-echo prompts in non-interactive mode: typing a password into the
+  local edit field would display and speak it. Remote no-echo state is unreliable to
+  detect through ConPTY; likely a "secure input" toggle masking the field, possibly
+  with heuristic detection of password-prompt text as a hint.
