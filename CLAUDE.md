@@ -9,7 +9,10 @@ is the source of truth, and specs are written before code.
 - [docs/DESIGN.md](docs/DESIGN.md) — product/functional decisions and open questions.
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — engineering rules: crates, module
   role rule, ports/services, DI, test strategy.
-- [docs/ROADMAP.md](docs/ROADMAP.md) — PR-by-PR build order.
+- [docs/ROADMAP.md](docs/ROADMAP.md) — PR-by-PR build order **and status board**:
+  the answer to "what should we do now". Each entry says whether the next step is
+  writing a spec or implementing one; the implementing PR flips its own entry to
+  Done so the board is correct on main the moment the user merges.
 - [docs/specs/](docs/specs/) — one spec per roadmap PR, written and agreed before
   implementation. The spec is the implementation contract: acceptance criteria,
   files touched, definition of done.
