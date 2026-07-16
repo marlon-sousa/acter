@@ -24,9 +24,18 @@ Planning complete, implementation starting. Development is AI-first and spec-dri
 
 ## Development
 
-Requirements: a stable Rust toolchain (rustup) and Node.js 22+.
+### Machine setup (once per machine)
 
-One-time setup after cloning:
+1. Git (plus the GitHub CLI for the PR workflow).
+2. Visual Studio Build Tools with the "Desktop development with C++" workload —
+   required by both the Rust MSVC toolchain and Tauri's Windows build.
+3. rustup, stable toolchain (defaults to MSVC on Windows) — brings cargo.
+4. Node.js 22+ — brings npm. All JS tooling (Vite, vitest, TypeScript, Tauri CLI)
+   is installed per-project and version-locked; nothing global.
+5. WebView2 runtime — already present on current Windows 10/11.
+6. NVDA, for manual accessibility checklists.
+
+### Project setup (once per clone)
 
 - `npm install` inside `ui/` (installs Vite, vitest, and the pinned Tauri CLI).
 
