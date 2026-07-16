@@ -3,11 +3,14 @@
   "private": true,
   "workspaces": ["ui"],
   "scripts": {
-    "dev": "npm -w acter-ui run tauri dev",
-    "build": "npm -w acter-ui run tauri build",
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "tauri": "tauri",
     "test:ui": "npm -w acter-ui test",
-    "typecheck": "npm -w acter-ui run typecheck",
-    "tauri": "npm -w acter-ui run tauri --"
+    "typecheck": "npm -w acter-ui run typecheck"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.11.4"
   },
   "allowScripts": {
     "esbuild@0.28.1": true

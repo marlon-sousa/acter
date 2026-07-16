@@ -4,9 +4,9 @@
   "version": "0.1.0",
   "identifier": "dev.marlonsousa.acter",
   "build": {
-    "beforeDevCommand": "npm -w acter-ui run dev",
+    "beforeDevCommand": "npx vite ../../ui",
     "devUrl": "http://localhost:5173",
-    "beforeBuildCommand": "npm -w acter-ui run build",
+    "beforeBuildCommand": "npx vite build ../../ui",
     "frontendDist": "../../ui/dist"
   },
   "app": {
