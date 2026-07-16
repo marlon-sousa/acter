@@ -33,10 +33,13 @@ the answer to "what should we do now?".
    Tauri app + ARIA skeleton + echo harness; NVDA checklist in the PR body; one
    finding spawned A5.1. Also landed: role-first folder structure, views/
    convention, root npm workspace dev loop.
-3. **Next** — A5.1, F6 focuses the most recent command heading. Spec: exists —
-   [a5-buffer-focus-last-heading.md](specs/a5-buffer-focus-last-heading.md) →
-   implement. Ends with a manual NVDA checklist (results to the PR body).
-4. T1, router integration tests via the Tauri mock runtime. Spec: exists —
+3. **Done** — A5.1, F6 focuses the most recent command heading. Spec:
+   [a5-buffer-focus-last-heading.md](specs/a5-buffer-focus-last-heading.md).
+   Merged as PR #3 (2026-07-16). BufferDom focuses the most recent command
+   heading (container fallback when empty); jsdom vitest coverage. Also landed:
+   ui tests moved to a top-level test/ tree, views moved into src/views/, and a
+   merge gate that fails while the PR body has unchecked checkboxes.
+4. **Next** — T1, router integration tests via the Tauri mock runtime. Spec: exists —
    [t1-router-integration-tests.md](specs/t1-router-integration-tests.md) →
    implement. Carries the Windows loader-crash investigation gate
    (STATUS_ENTRYPOINT_NOT_FOUND); a documented fallback is an acceptable outcome.
