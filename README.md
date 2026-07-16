@@ -58,6 +58,13 @@ Frontend checks:
 - Typecheck: `npm run typecheck`
 - Tests: `npm run test:ui`
 
+### Troubleshooting
+
+- **404 page inside the app window:** an orphaned Vite process is squatting port
+  5173 (Windows sometimes leaks the dev-server child when the app closes). Find it
+  with `Get-NetTCPConnection -LocalPort 5173 -State Listen`, stop the owning
+  process, and run `npm run dev` again.
+
 ## License
 
 See [LICENSE](LICENSE).
