@@ -71,7 +71,9 @@ doc comment:
    define what the world may ask of the domain (ports/driving/: SessionApi,
    CompletionApi) — services implement them, controllers depend on them.
 4. **Adapter** — a port implementation that touches the world (acter-transports,
-   acter-shells, acter-term).
+   acter-shells, acter-term). The framework counts as the world: the Tauri **router**
+   layer (`#[tauri::command]` one-liners delegating to controllers through traits)
+   and the Tauri `EventSink` emitter are adapters living in acter-app.
 5. **Service** — a domain's actionable surface: named use cases in domain vocabulary
    (SessionService::submit_command / toggle_mode, CompletionService::complete).
    Coordinates entities, policies, and ports for one domain action; touches the world
@@ -82,11 +84,13 @@ doc comment:
    convention: trait `XxxApi` (driving port), implementation `XxxService`. Service
    trait methods stay synchronous (consistent with sync-core/async-edges; also keeps
    traits dyn-compatible without async_trait machinery).
-6. **Controller (orchestrator)** — the delivery layer: translates outside-world
-   events into service calls and results into outside-world effects; owns runtime
-   machinery (async tasks, channels, Tauri IPC). The session actor loop and the Tauri
-   command handlers are controllers. Litmus test: deleting a controller loses no
-   business behavior, only connectivity.
+6. **Controller (orchestrator)** — the delivery layer: translates protocol payloads
+   into service calls and results into protocol events; owns runtime machinery
+   (async tasks, channels). Controllers are **framework-free** plain Rust: they hold
+   `Arc<dyn SessionApi>` and `Arc<dyn EventSink>`, are reached from routers through
+   traits, and are tested with fakes under plain cargo test — no Tauri runtime. The
+   session actor loop and the per-domain command controllers are controllers. Litmus
+   test: deleting a controller loses no business behavior, only connectivity.
 
 Classifying question: **does the module do anything nondeterministic — I/O, time,
 randomness, environment?** Yes → adapter, and it deserves a port. No → one of the
@@ -109,16 +113,17 @@ Consequences and guardrails:
 - **Service sprawl guard:** a service must coordinate at least two of
   {port, entity, policy} for a named use case. A single pass-through method does not
   get a service — the controller calls the target directly.
-- Known upcoming ports this rule forces: `Clock` (anything time-based) and
-  `Notifier` (beep/audio) — tempting to inline, nondeterministic, therefore ported.
+- Known upcoming ports this rule forces: `Clock` (anything time-based), `Notifier`
+  (beep/audio), and `EventSink` (event emission to the frontend) — tempting to
+  inline, world-touching, therefore ported.
 
 ### Reference layout
 
 acter-core/src:
 - lib.rs (facade)
 - ports.rs + ports/: driven/ (transport.rs, shell_adapter.rs, terminal_engine.rs,
-  clock.rs, notifier.rs) and driving/ (session_api.rs, completion_api.rs) — one
-  folder holds every seam in the system
+  clock.rs, notifier.rs, event_sink.rs) and driving/ (session_api.rs,
+  completion_api.rs) — one folder holds every seam in the system
 - session.rs + session/: state.rs (mode/lifecycle state machine — entity),
   service.rs (SessionService — the session domain's use cases), manager.rs
   (session collection that tabs map onto — controller)
@@ -168,12 +173,21 @@ silently drift.
 
 ### The two directions
 
-- **JS → Rust: Tauri commands (invoke).** The router is Tauri's invoke handler; we
-  declare the route table by registering `#[tauri::command]` functions. Each command
-  function is a controller: it takes `Arc<dyn SessionApi>` from managed state,
-  translates the payload into a service call, returns a serializable result.
-- **Rust → JS: Tauri events (emit/listen).** Push channel for everything the backend
-  initiates.
+- **JS → Rust: Tauri commands (invoke), through routers.** `#[tauri::command]`
+  functions are **routers**: framework adapters of one line each, delegating to a
+  controller through a trait taken from managed state. Controllers are framework-free
+  (see module role rule); Tauri-specific signatures stop at the router. Routers, as
+  pure glue with no branches, share the facade-lib.rs exemption from the testing
+  rule — the specta-generated types compile-check their contract.
+- **Rust → JS: Tauri events, through the `EventSink` driven port.** Controllers and
+  session actors emit protocol events via `EventSink` (`send(SessionEvent)`); the
+  production adapter wraps the Tauri emitter, tests inject a recording fake. No
+  domain or delivery code ever holds an `AppHandle`.
+
+Consequence: the entire application — controllers, services, fake transports, full
+round trips including emitted events — runs under plain cargo test with no Tauri
+runtime. The convergence PR carries an integration test that submits a command and
+asserts the exact event sequence the frontend would receive.
 
 ### Rules
 
