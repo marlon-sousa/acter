@@ -2,8 +2,10 @@
 
 import { describe, expect, it } from 'vitest';
 
-import type { BackendApi } from '../ipc/backend';
-import type { AnnouncerView, BufferView, EditFieldView } from '../views/ports';
+import type { AnnouncerView } from '../ports/announcer_view';
+import type { BackendApi } from '../ports/backend_api';
+import type { BufferView } from '../ports/buffer_view';
+import type { EditFieldView } from '../ports/edit_field_view';
 import { AppController } from './app';
 
 class FakeBackend implements BackendApi {

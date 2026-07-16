@@ -40,7 +40,7 @@ no protocol types yet (those are A2/A3).
 
 ### Module conventions
 
-Every TS file declares its role in a header comment; router (`ipc/`) is the only
+Every TS file declares its role in a header comment; the router (`routers/`) is the only
 module importing `@tauri-apps/api`; DOM access only in view adapters.
 
 ## Acceptance criteria

@@ -1,6 +1,6 @@
 //! Service: the echo harness use case — returns the submitted text unchanged.
 
-use super::api::EchoApi;
+use crate::ports::EchoApi;
 
 pub(crate) struct EchoService;
 

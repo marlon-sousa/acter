@@ -2,7 +2,7 @@
 // once in index.html and never recreated (live-region lifecycle rule); announcements
 // replace its children so repeated identical text still mutates the DOM.
 
-import type { AnnouncerView } from './ports';
+import type { AnnouncerView } from '../ports/announcer_view';
 
 export class AnnouncerDom implements AnnouncerView {
   constructor(private readonly region: HTMLElement) {}

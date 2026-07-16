@@ -1,11 +1,12 @@
-// Role: composition root — the only place where objects are constructed and bound.
+// Role: container (composition root) — the only place where objects are
+// constructed and bound.
 
-import { AppController } from './controller/app';
-import { TauriBackend } from './ipc/router';
-import { AnnouncerDom } from './views/announcer';
-import { BufferDom } from './views/buffer';
-import { EditFieldDom } from './views/edit_field';
-import { bindKeys } from './views/keyboard';
+import { AnnouncerDom } from './adapters/announcer';
+import { BufferDom } from './adapters/buffer';
+import { EditFieldDom } from './adapters/edit_field';
+import { bindKeys } from './adapters/keyboard';
+import { AppController } from './controllers/app';
+import { TauriBackend } from './routers/tauri';
 
 function byId<T extends HTMLElement>(id: string): T {
   const element = document.getElementById(id);

@@ -1,6 +1,6 @@
 // Role: adapter (DOM) — the results buffer region: one h2 per command, response below.
 
-import type { BufferView } from './ports';
+import type { BufferView } from '../ports/buffer_view';
 
 export class BufferDom implements BufferView {
   constructor(private readonly region: HTMLElement) {}

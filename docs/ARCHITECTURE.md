@@ -55,6 +55,16 @@ Heavy module splitting; visibility and layout follow four mechanical conventions
 4. **Tests live with the code**: `#[cfg(test)] mod tests` at the bottom of the file
    under test (sees private items — no test-only exports); integration tests and
    golden transcript fixtures in each crate's `tests/`.
+5. **Folders are organized by module role, one file per concept.** Within a crate
+   (and within ui/src), the top-level folders are the roles: `entities/`,
+   `policies/`, `ports/` (driven/driving), `services/`, `controllers/`, `routers/`,
+   `adapters/`, plus the container file (`container.rs` / `main.ts`). One file per
+   port, service, adapter, controller, router. The tree is the architecture
+   diagram: the role is visible in the path before opening the file; the filename
+   carries the concept. Concept folders (session/, profile/) do not exist — a
+   concept spanning several roles is several files in several role folders. Adapter
+   crates (acter-transports, acter-shells, acter-term) are role folders promoted to
+   crate rank; an adapter with private internals earns a subfolder as usual.
 
 ### Module role rule — **Decided**
 
@@ -119,28 +129,46 @@ Consequences and guardrails:
 
 ### Reference layout
 
-acter-core/src:
+acter-core/src (the domain crate — the crate is the domain, so no domain/ wrapper):
 - lib.rs (facade)
+- entities.rs + entities/: session_state.rs (mode/lifecycle state machine),
+  profile.rs, protocol_events.rs, protocol_commands.rs (specta-annotated IPC types)
+- policies.rs + policies/: autoread.rs (threshold/pacing policy), osc133.rs
+  (sequence recognition), boundary_tracker.rs (command-block state machine),
+  profile_inheritance.rs (Defaults resolution), completion_history.rs,
+  completion_path.rs
 - ports.rs + ports/: driven/ (transport.rs, shell_adapter.rs, terminal_engine.rs,
   clock.rs, notifier.rs, event_sink.rs) and driving/ (session_api.rs,
   completion_api.rs) — one folder holds every seam in the system
-- session.rs + session/: state.rs (mode/lifecycle state machine — entity),
-  service.rs (SessionService — the session domain's use cases), manager.rs
-  (session collection that tabs map onto — controller)
-- boundary.rs + boundary/: osc133.rs (sequence recognition), tracker.rs
-  (command-block state machine)
-- autoread.rs (threshold policy — one concept, no folder needed)
-- profile.rs + profile/: settings.rs, inheritance.rs (Defaults resolution)
-- completion.rs + completion/: history.rs, path.rs
-- protocol.rs + protocol/: events.rs, commands.rs (specta-annotated IPC types)
+- services.rs + services/: session.rs (SessionService), completion.rs
+- controllers.rs + controllers/: session_actor.rs (per-session loop),
+  session_manager.rs (session collection that tabs map onto)
 
-acter-transports/src:
+acter-app/src (delivery + container):
+- lib.rs (facade), main.rs (entry point)
+- container.rs — the composition root
+- routers.rs + routers/: one file per router (echo.rs). The routers.rs facade uses
+  glob re-exports (`pub(crate) use echo::*;`) because `#[tauri::command]` generates
+  hidden companion items that `generate_handler!` needs alongside the function.
+- ports.rs + ports/ and services.rs + services/: the temporary echo harness
+  (echo_api.rs, echo.rs) until A3 wires the real core domain
+- adapters/ (later): the Tauri EventSink emitter
+
+acter-transports/src (adapter crate):
 - lib.rs (facade)
 - local.rs + local/: conpty.rs, reader.rs (blocking-read thread)
 - ssh.rs + ssh/ (feature "ssh"): connection.rs, auth.rs
 
-acter-shells/src stays flat until modules earn folders: powershell.rs, cmd.rs,
-bash.rs, integration.rs (shared OSC 133 snippet templates).
+acter-shells/src (adapter crate) stays flat until modules earn folders:
+powershell.rs, cmd.rs, bash.rs, integration.rs (shared OSC 133 snippet templates).
+
+ui/src (mirror hexagon, same convention):
+- main.ts — the container (composition root)
+- ports/: one interface per file — backend_api.ts, edit_field_view.ts,
+  buffer_view.ts, announcer_view.ts
+- routers/: tauri.ts (the only module importing @tauri-apps/api)
+- controllers/: app.ts (+ app.test.ts beside it)
+- adapters/: edit_field.ts, buffer.ts, announcer.ts, keyboard.ts
 
 ## Dependency injection
 
@@ -238,7 +266,7 @@ The six-role module rule applies to the TypeScript side too (role declared in ea
 file's header comment). Channels are one-way (Rust → JS; JS → Rust is always
 invoke), so the inbound router lives in the frontend at `channel.onmessage`.
 
-- **Router** (`ipc/` — the only module importing `@tauri-apps/api`). Inbound: owns
+- **Router** (`routers/` — the only module importing `@tauri-apps/api`). Inbound: owns
   `channel.onmessage`, exhaustive switch over the generated discriminated union,
   each variant translated into a controller call. Outbound: implements the
   `BackendApi` interface as typed invoke wrappers. An adapter of one-liners;

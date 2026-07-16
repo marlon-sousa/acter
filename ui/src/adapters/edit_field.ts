@@ -1,6 +1,6 @@
 // Role: adapter (DOM) — the command input element.
 
-import type { EditFieldView } from './ports';
+import type { EditFieldView } from '../ports/edit_field_view';
 
 export class EditFieldDom implements EditFieldView {
   constructor(private readonly input: HTMLInputElement) {}

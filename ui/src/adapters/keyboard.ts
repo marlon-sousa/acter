@@ -1,6 +1,6 @@
 // Role: adapter (DOM) — global key handling translated into controller intents.
 
-import type { AppController } from '../controller/app';
+import type { AppController } from '../controllers/app';
 
 export function bindKeys(controller: AppController, form: HTMLFormElement): void {
   form.addEventListener('submit', (event) => {

@@ -1,12 +1,9 @@
-//! Adapter: Tauri routers — one-line `#[tauri::command]` functions delegating to
-//! controllers/services through traits held in managed state. The only Rust module
-//! shaped by Tauri's command signature conventions.
+//! Facade for this crate's routers, one file per router.
+//!
+//! Glob re-exports are required here: `#[tauri::command]` generates hidden
+//! companion items (`__cmd__<name>` etc.) that `generate_handler!` resolves
+//! alongside the function, and a named re-export would leave them behind.
 
-use tauri::State;
+mod echo;
 
-use crate::composition::AppState;
-
-#[tauri::command]
-pub(crate) fn echo(state: State<'_, AppState>, text: String) -> String {
-    state.echo.echo(&text)
-}
+pub(crate) use echo::*;

@@ -1,8 +1,10 @@
 // Role: controller — translates UI intents into backend calls and view updates.
 // Framework-free: sees only the BackendApi port and the view ports.
 
-import type { BackendApi } from '../ipc/backend';
-import type { AnnouncerView, BufferView, EditFieldView } from '../views/ports';
+import type { AnnouncerView } from '../ports/announcer_view';
+import type { BackendApi } from '../ports/backend_api';
+import type { BufferView } from '../ports/buffer_view';
+import type { EditFieldView } from '../ports/edit_field_view';
 
 export class AppController {
   constructor(

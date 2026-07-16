@@ -1,10 +1,11 @@
-//! Controller (orchestrator): the composition root — the only place where concrete
-//! implementations are constructed and bound to their ports, and where the Tauri
-//! runtime is started.
+//! Controller (orchestrator): the container (composition root) — the only place
+//! where concrete implementations are constructed and bound to their ports, and
+//! where the Tauri runtime is started.
 
 use std::sync::Arc;
 
-use crate::echo::{EchoApi, EchoService};
+use crate::ports::EchoApi;
+use crate::services::EchoService;
 
 pub(crate) struct AppState {
     pub(crate) echo: Arc<dyn EchoApi>,
