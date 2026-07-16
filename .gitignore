@@ -17,8 +17,8 @@ target
 node_modules/
 ui/dist/
 
-# Tauri generated bundles
-src-tauri/gen/
+# Tauri generated schemas
+crates/acter-app/gen/
 
 # RustRover
 #  JetBrains specific template is maintained in a separate JetBrains.gitignore that can

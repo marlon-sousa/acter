@@ -1,0 +1,42 @@
+/* Readable defaults only — no visual design in A1 (see docs/specs/a1-static-shell.md). */
+
+main {
+  max-width: 60rem;
+  margin: 0 auto;
+  padding: 1rem;
+  font-family: system-ui, sans-serif;
+}
+
+#results {
+  min-height: 4rem;
+}
+
+#results .response {
+  white-space: pre-wrap;
+  font-family: monospace;
+}
+
+#command-form {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+#command-input {
+  flex: 1;
+  font-family: monospace;
+  font-size: 1rem;
+  padding: 0.25rem;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}

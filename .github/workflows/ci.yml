@@ -15,6 +15,23 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - name: Frontend install
+        run: npm ci
+        working-directory: ui
+      - name: Frontend typecheck
+        run: npm run typecheck
+        working-directory: ui
+      - name: Frontend tests
+        run: npm test
+        working-directory: ui
+      - name: Frontend build
+        run: npm run build
+        working-directory: ui
       - name: Format
         run: cargo fmt --all --check
       - name: Clippy

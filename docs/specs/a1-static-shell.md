@@ -10,9 +10,10 @@ no protocol types yet (those are A2/A3).
 ### Backend (crates/acter-app)
 
 - Tauri 2 application shell (single window) wired to the `ui/` frontend.
-- Dev orchestration: Tauri CLI (`cargo tauri dev` / `cargo tauri build`) with
-  `beforeDevCommand`/`beforeBuildCommand` running Vite in `ui/`; README development
-  section updated with the one-command dev loop.
+- Dev orchestration: Tauri CLI with `beforeDevCommand`/`beforeBuildCommand` running
+  Vite in `ui/`; the CLI ships as `@tauri-apps/cli` pinned in ui/package.json
+  (`npm run tauri dev`), with `cargo tauri dev` as an equivalent alternative for
+  those who install tauri-cli; README development section updated accordingly.
 - One router: `#[tauri::command] echo(text) -> String`, a one-liner delegating to an
   `EchoApi` trait from managed state; `EchoService` implements it (returns the text
   unchanged). Establishes the router → trait → controller pattern from day one, with
