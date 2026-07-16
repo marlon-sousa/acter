@@ -230,12 +230,29 @@ asserts the exact event sequence the frontend would receive.
 4. OSC 133 end marker → service applies auto-read policy → `CommandFinished` with
    `read_mode`; UI feeds the live region or announces too-big + beep.
 
-### Frontend organization (mirror image)
+### Frontend organization (mirror hexagon) — **Decided**
 
-- `ipc/` — generated protocol types + a thin typed wrapper over invoke/listen; the
-  only module that knows Tauri exists.
-- dispatcher — routes envelope variants to per-session view state.
-- views — DOM layer: buffer blocks, live region, edit field, focus management.
+The six-role module rule applies to the TypeScript side too (role declared in each
+file's header comment). Channels are one-way (Rust → JS; JS → Rust is always
+invoke), so the inbound router lives in the frontend at `channel.onmessage`.
+
+- **Router** (`ipc/` — the only module importing `@tauri-apps/api`). Inbound: owns
+  `channel.onmessage`, exhaustive switch over the generated discriminated union,
+  each variant translated into a controller call. Outbound: implements the
+  `BackendApi` interface as typed invoke wrappers. An adapter of one-liners;
+  exhaustiveness is compiler-checked against the generated union — same testing
+  exemption as the backend router, same justification.
+- **Controllers** (framework-free TypeScript): receive protocol events, hold view
+  state, decide what changes; initiate actions only through `BackendApi`. Tested in
+  vitest with a fake `BackendApi` and fake views — no Tauri, no DOM.
+- **View adapters** (the DOM is the world): buffer view, live-region announcer,
+  focus manager, beep player — each behind a small interface. The riskiest a11y
+  behaviors (announcement timing, live-region node lifecycle) live here, thin and
+  isolated, so a manual NVDA finding maps to one small file.
+
+Both ends of the wire are fed by protocol types generated from the single Rust
+source; the system reads identically in both languages: router (framework adapter)
+→ controller (framework-free) → ports → adapters (world).
 
 ## Frontend
 
