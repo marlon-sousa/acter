@@ -259,11 +259,20 @@ source; the system reads identically in both languages: router (framework adapte
 Same verdict as the Rust side. The object graph is small (roughly fifteen objects at
 maturity) and wiring is linear; a hand-written **composition root in `main.ts`**
 covers it and is fully compile-time checked — a missing dependency fails the build,
-whereas container frameworks (InversifyJS, tsyringe) move that failure to runtime
-and require decorators + reflect-metadata on the very classes we just made
-framework-free. **Factory functions** handle the one dynamic scope: sessions/tabs —
+whereas containers resolve at runtime (and the decorator family — InversifyJS,
+tsyringe — additionally requires annotating the classes themselves; the
+non-decorator family does not, and binds in a central container file).
+**Factory functions** handle the one dynamic scope: sessions/tabs —
 `createSessionGraph(deps)` builds the per-session cluster, closing over app-wide
 singletons.
+
+**Construction rule (both languages):** constructing a collaborator is a privilege
+of the composition root and its factories, nowhere else. No controller, service, or
+adapter ever news up a dependency at the point of use; everything is received via
+constructor. The composition root is our container.ts — same central binding list a
+DI container would hold, expressed as typed constructor calls. This invariant, not
+the tool, is what keeps layers decoupled, and it holds even if the escape hatch
+below is ever exercised.
 
 Escape hatch (recorded to avoid relitigating): if the composition root genuinely
 hurts (hundreds of lines, conditional wiring), acceptable candidates are the
