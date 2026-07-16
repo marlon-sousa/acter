@@ -361,8 +361,12 @@ Six tiers, cheapest first:
 2. **Router integration tests** (Tauri mock runtime, `tauri::test`): every router
    is exercised through the real invoke pipeline — registration, state extraction,
    argument deserialization — in plain cargo test, no webview. Convention: a new
-   router lands with its mock-runtime test in the same PR. (Spec: T1; carries a
-   Windows loader-crash investigation gate.)
+   router lands with its mock-runtime test in the same PR. (Spec: T1.) On Windows
+   this requires `acter-app`'s `build.rs` to embed the app manifest with
+   `rustc-link-arg` (not tauri's default `-bins`-scoped link) so test executables
+   carry the Common-Controls v6 manifest; without it they abort at load with
+   `STATUS_ENTRYPOINT_NOT_FOUND`. Do not revert that build.rs to a bare
+   `tauri_build::build()`.
 3. **Golden transcript tests** (the workhorse): raw byte captures from real
    PowerShell/cmd/bash sessions committed as fixtures, replayed through the
    term + boundary pipeline, asserting extracted command/output blocks. Catches
