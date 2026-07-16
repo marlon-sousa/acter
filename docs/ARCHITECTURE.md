@@ -179,10 +179,19 @@ silently drift.
   (see module role rule); Tauri-specific signatures stop at the router. Routers, as
   pure glue with no branches, share the facade-lib.rs exemption from the testing
   rule — the specta-generated types compile-check their contract.
-- **Rust → JS: Tauri events, through the `EventSink` driven port.** Controllers and
-  session actors emit protocol events via `EventSink` (`send(SessionEvent)`); the
-  production adapter wraps the Tauri emitter, tests inject a recording fake. No
-  domain or delivery code ever holds an `AppHandle`.
+- **Rust → JS: Tauri IPC Channels, through the `EventSink` driven port.** Controllers
+  and session actors emit protocol events via `EventSink` (`send(SessionEvent)`);
+  tests inject a recording fake. The production adapter wraps a
+  `tauri::ipc::Channel` established at `attach_session`: the frontend creates a JS
+  `Channel<SessionEvent>` and passes it in the invoke; the per-session envelope
+  stream flows down it. Channels, not broadcast events, because session output is a
+  sustained stream (`tail -f` never ends): Channel gives ordered, caller-bound
+  delivery on a fast path, while Tauri events broadcast to all listeners and are not
+  meant for high-throughput streaming. Broadcast events remain only for rare
+  app-level notifications (session list changed, config updated). Attachment is
+  handled by the session actor, so channel registration and the snapshot reply are
+  serialized — no event can slip between snapshot and channel going live. No domain
+  or delivery code ever holds an `AppHandle` or a Channel directly.
 
 Consequence: the entire application — controllers, services, fake transports, full
 round trips including emitted events — runs under plain cargo test with no Tauri

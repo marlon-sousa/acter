@@ -197,6 +197,19 @@ because phase 1 bakes in three guardrails that make phase 2 purely additive:
 Phase 2 then adds only: keyboard routing switch in the frontend (edit field vs
 passthrough), a grid renderer, and the interactive-mode screen reading strategy.
 
+## Long-running and never-ending commands (tail -f, watch)
+
+The auto-read policy triggers at command end — but some commands never end. Proposed
+(pending confirmation):
+
+- **Follow mode:** Ctrl+Shift+F toggles live reading of the currently running
+  command's output — the block's live region is switched on, so appended lines are
+  announced as they arrive. Default off; the end-of-command auto-read policy is
+  unchanged for everything else.
+- The status announcement (Ctrl+Shift+S) reports when a command is still running.
+- The frontend caps rendered lines per block (last N lines) for never-ending output;
+  full scrollback is retained backend-side in the terminal grid.
+
 ## Open questions
 
 - Alt-screen behavior: announce "interactive mode needed" vs auto-switch (and how to
