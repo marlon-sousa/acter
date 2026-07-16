@@ -222,8 +222,8 @@ passthrough), a grid renderer, and the interactive-mode screen reading strategy.
 
 ## Long-running and never-ending commands (tail -f, watch)
 
-The auto-read policy triggers at command end — but some commands never end. Proposed
-(pending confirmation):
+The auto-read policy triggers at command end — but some commands never end.
+**Decided:**
 
 - **Follow mode:** Ctrl+Shift+F toggles live reading of the currently running
   command's output — the block's live region is switched on, so appended lines are

@@ -254,6 +254,22 @@ Both ends of the wire are fed by protocol types generated from the single Rust
 source; the system reads identically in both languages: router (framework adapter)
 → controller (framework-free) → ports → adapters (world).
 
+### Frontend DI — **Decided: no framework**
+
+Same verdict as the Rust side. The object graph is small (roughly fifteen objects at
+maturity) and wiring is linear; a hand-written **composition root in `main.ts`**
+covers it and is fully compile-time checked — a missing dependency fails the build,
+whereas container frameworks (InversifyJS, tsyringe) move that failure to runtime
+and require decorators + reflect-metadata on the very classes we just made
+framework-free. **Factory functions** handle the one dynamic scope: sessions/tabs —
+`createSessionGraph(deps)` builds the per-session cluster, closing over app-wide
+singletons.
+
+Escape hatch (recorded to avoid relitigating): if the composition root genuinely
+hurts (hundreds of lines, conditional wiring), acceptable candidates are the
+non-decorator containers only (awilix, typed-inject) — never the reflect-metadata
+family.
+
 ## Frontend
 
 Plain TypeScript + Vite, no framework. The frontend is ARIA attributes, focus
