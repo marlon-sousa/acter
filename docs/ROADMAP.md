@@ -38,6 +38,20 @@ clippy/rustfmt config, CI on a Windows runner. No logic.
 - **A5…An — iteration.** PRs driven by manual NVDA reports. Explicitly budgeted;
   this is where screen-reader behavior gets tuned, over several rounds.
 
+## Track T — testing infrastructure (right after A1; ground line for UI testing)
+
+- **T1 — router integration tests via the Tauri mock runtime**
+  ([spec](specs/t1-router-integration-tests.md)). Every router tested through the
+  real invoke pipeline in plain cargo test. Carries a known Windows loader-crash
+  investigation gate with an explicit fallback path.
+- **T2 — end-to-end tests via WebdriverIO Tauri service**
+  ([spec](specs/t2-e2e-webdriver.md)). Real app, real WebView2, real accessibility
+  tree: smoke scenario by accessible name, live-region lifecycle assertions, and
+  axe-core inside the running engine. Separate non-blocking CI job until stable.
+
+Ordering: T1 then T2, both before A2 — every subsequent UI PR lands against this
+ground line.
+
 ## Track B — domain (parallel; automated tests only)
 
 - **B1 — foundations.** Driven-port traits, session entity/state machine, auto-read
