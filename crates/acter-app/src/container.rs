@@ -4,6 +4,8 @@
 
 use std::sync::Arc;
 
+use tauri::{Builder, generate_context, generate_handler};
+
 use crate::ports::EchoApi;
 use crate::services::EchoService;
 
@@ -15,9 +17,9 @@ pub fn run() {
     let state = AppState {
         echo: Arc::new(EchoService),
     };
-    tauri::Builder::default()
+    Builder::default()
         .manage(state)
-        .invoke_handler(tauri::generate_handler![crate::routers::echo])
-        .run(tauri::generate_context!())
+        .invoke_handler(generate_handler![crate::routers::echo])
+        .run(generate_context!())
         .expect("failed to start the Acter window");
 }

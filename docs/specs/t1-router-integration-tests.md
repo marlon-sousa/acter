@@ -42,6 +42,32 @@ the real Tauri invoke pipeline — no webview, no window, plain `cargo test`.
 2. Both router tests above pass.
 3. The investigation outcome (cause + fix) is recorded in this spec in the same PR.
 
+## Investigation outcome (2026-07-16) — root-caused and fixed
+
+The crash reproduced immediately: enabling `tauri`'s `test` feature and running
+`cargo test -p acter-app` aborted the lib test binary at load with
+`0xc0000139 STATUS_ENTRYPOINT_NOT_FOUND`, before any test ran.
+
+Root cause: Tauri embeds the Windows application manifest — the one declaring the
+`Microsoft.Windows.Common-Controls` v6 dependency — through `tauri-winres` /
+`embed-resource`, which links it with `rustc-link-arg-bins`. The `-bins` suffix
+scopes the link argument to binary targets only, so **test executables are built
+without the manifest**. Without the v6 Common-Controls dependency the loader binds
+against the ComCtl5 stub, whose v6 entry points are deliberately absent, and the
+process dies with `STATUS_ENTRYPOINT_NOT_FOUND` at startup. This matches upstream
+tauri issue #13419 (hypothesis 3); it is a manifest-scoping problem, not DLL search
+order (hypothesis 1) or feature unification (hypothesis 2).
+
+Fix (self-contained, no `.cargo/config.toml` or env vars): opt out of Tauri's
+manifest with `WindowsAttributes::new_without_app_manifest()` and embed the same
+manifest ourselves from `build.rs` using `cargo:rustc-link-arg` (no `-bins`), which
+applies to binaries **and** tests. The app binary keeps the identical manifest;
+test binaries now get it too. Files: `crates/acter-app/build.rs` and
+`crates/acter-app/windows-app-manifest.xml` (byte-for-byte the tauri-build default).
+Result: `cargo test --workspace`, `cargo fmt --check`, and
+`cargo clippy --workspace --all-targets -D warnings` all pass locally on Windows.
+The fallback below was not needed.
+
 ## Fallback (explicit downgrade path)
 
 If the loader crash proves unfixable within reasonable effort (upstream bug, no

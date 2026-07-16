@@ -39,11 +39,14 @@ the answer to "what should we do now?".
    heading (container fallback when empty); jsdom vitest coverage. Also landed:
    ui tests moved to a top-level test/ tree, views moved into src/views/, and a
    merge gate that fails while the PR body has unchecked checkboxes.
-4. **Next** — T1, router integration tests via the Tauri mock runtime. Spec: exists —
-   [t1-router-integration-tests.md](specs/t1-router-integration-tests.md) →
-   implement. Carries the Windows loader-crash investigation gate
-   (STATUS_ENTRYPOINT_NOT_FOUND); a documented fallback is an acceptable outcome.
-5. T2, end-to-end tests via WebdriverIO Tauri service. Spec: exists —
+4. **Done** — T1, router integration tests via the Tauri mock runtime. Spec:
+   [t1-router-integration-tests.md](specs/t1-router-integration-tests.md).
+   Merged as PR #4 (2026-07-16). Every router is exercised through the real Tauri
+   invoke pipeline (mock runtime, `tauri::test`); echo round-trip + missing-argument
+   tests. The Windows loader-crash gate (STATUS_ENTRYPOINT_NOT_FOUND) was
+   root-caused (bins-only manifest linking) and fixed by embedding the app manifest
+   for all artifacts in build.rs — no fallback needed.
+5. **Next** — T2, end-to-end tests via WebdriverIO Tauri service. Spec: exists —
    [t2-e2e-webdriver.md](specs/t2-e2e-webdriver.md) → implement. Separate
    non-blocking CI job; axe-core inside the real WebView2.
 6. A2, protocol. Spec: none yet → specify first. Scope sketch: IPC event/command
