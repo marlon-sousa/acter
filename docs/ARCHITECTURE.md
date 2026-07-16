@@ -158,13 +158,61 @@ if a port ever needs interaction-verification; fakes are the default.
   user-facing error must have a speakable message — domain requirement, not polish.
 - **Logging:** `tracing`.
 
-## IPC protocol
+## IPC protocol and communication flow — **Decided**
 
 Event/command types (output chunk, command boundary + exit code, alt-screen
 entered/left, resize, completion request/response, mode toggle, connection state) are
 serde types in `acter-core`. TypeScript definitions are generated from them with
 `tauri-specta`, so the protocol lives in exactly one place and the frontend cannot
 silently drift.
+
+### The two directions
+
+- **JS → Rust: Tauri commands (invoke).** The router is Tauri's invoke handler; we
+  declare the route table by registering `#[tauri::command]` functions. Each command
+  function is a controller: it takes `Arc<dyn SessionApi>` from managed state,
+  translates the payload into a service call, returns a serializable result.
+- **Rust → JS: Tauri events (emit/listen).** Push channel for everything the backend
+  initiates.
+
+### Rules
+
+- **Invoke is for actions and queries; events are for streams. An invoke never waits
+  on the shell.** `submit_command` returns immediately with an ack and a
+  **correlation id** (`command_id`); all subsequent events about that command carry
+  the same id. Completions, mode toggles, profile CRUD, snapshots: invokes. Output,
+  boundaries, alt-screen, connection state: events.
+- **One event channel, one envelope.** A single `session-event` whose payload is the
+  protocol enum (serde-tagged). specta generates a TS discriminated union, so the
+  frontend compiler forces exhaustive handling of every variant.
+- **Policy decisions ride the events.** `CommandFinished { command_id, exit_code,
+  read_mode }` carries the auto-read verdict (`Auto` | `TooBig`) computed by the
+  service; the frontend obeys, never re-measures. Policy stays in core.
+- **Output coalescing.** The session actor batches PTY output and flushes on a short
+  tick (tens of ms) or on a boundary event, whichever comes first — the IPC bridge
+  and DOM never see per-write traffic.
+- **Snapshot recovery.** The session actor is the source of truth; the frontend holds
+  view state only. `get_session_snapshot` rebuilds the whole UI (a webview reload
+  never kills sessions).
+
+### Round trip example (submit "git status")
+
+1. Frontend invoke `submit_command` → controller → `SessionApi::submit_command` →
+   service writes to the transport port → returns `command_id`. UI appends the h2
+   block immediately, tagged with the id.
+2. PTY reader thread feeds the session actor; bytes run through `TerminalEngine` and
+   the boundary tracker.
+3. Actor emits `CommandStarted`, then coalesced `Output` events; UI appends under the
+   matching block.
+4. OSC 133 end marker → service applies auto-read policy → `CommandFinished` with
+   `read_mode`; UI feeds the live region or announces too-big + beep.
+
+### Frontend organization (mirror image)
+
+- `ipc/` — generated protocol types + a thin typed wrapper over invoke/listen; the
+  only module that knows Tauri exists.
+- dispatcher — routes envelope variants to per-session view state.
+- views — DOM layer: buffer blocks, live region, edit field, focus management.
 
 ## Frontend
 
