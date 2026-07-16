@@ -1,0 +1,20 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/acter-core",
+    "crates/acter-term",
+    "crates/acter-transports",
+    "crates/acter-shells",
+    "crates/acter-app",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[workspace.lints.rust]
+unreachable_pub = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }

@@ -1,0 +1,9 @@
+[package]
+name = "acter-transports"
+description = "Adapters: byte transports to shells (local ConPTY; SSH later) behind the Transport port."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true

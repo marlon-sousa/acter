@@ -22,6 +22,23 @@ Planning complete, implementation starting. Development is AI-first and spec-dri
 - [Roadmap](docs/ROADMAP.md) — build order and PR plan.
 - [CLAUDE.md](CLAUDE.md) — the agent contract for AI-first development.
 
+## Development
+
+Requirements: a stable Rust toolchain (rustup), and Node.js once the frontend lands
+(PR A1).
+
+Current commands (workspace of five crates, no app yet):
+
+- Build everything: `cargo build --workspace`
+- Run all tests: `cargo test --workspace`
+- Lint: `cargo clippy --workspace --all-targets -- -D warnings`
+- Format check: `cargo fmt --all --check`
+
+From PR A1 onward, the Tauri CLI orchestrates the full dev loop — `cargo tauri dev`
+starts the Vite dev server, compiles the Rust side, and launches the app with hot
+reload on both halves; `cargo tauri build` produces the release bundle. npm is used
+only inside `ui/` (Vite, vitest, tsc); cargo stays the repo's front door.
+
 ## License
 
 See [LICENSE](LICENSE).

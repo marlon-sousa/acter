@@ -1,0 +1,9 @@
+[package]
+name = "acter-shells"
+description = "Adapters: shell adapters (PowerShell, cmd, bash) behind the ShellAdapter port."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
