@@ -45,7 +45,7 @@ Cargo workspace:
 
 ## Code organization within crates — **Decided**
 
-Heavy module splitting; visibility and layout follow four mechanical conventions:
+Heavy module splitting; visibility and layout follow six mechanical conventions:
 
 1. **`lib.rs` is a facade**: only `mod` declarations and `pub use` re-exports, zero
    logic. The crate's public API is readable in one screen; consumers write
@@ -71,6 +71,23 @@ Heavy module splitting; visibility and layout follow four mechanical conventions
    concept spanning several roles is several files in several role folders. Adapter
    crates (acter-transports, acter-shells, acter-term) are role folders promoted to
    crate rank; an adapter with private internals earns a subfolder as usual.
+6. **Import the symbol, then use it by bare name.** Do not reach a symbol through an
+   inline module path. Rust: `use serde_json::json;` then `json!(...)`, never
+   `serde_json::json!(...)`; `use tauri::Builder;` then `Builder::default()`, never
+   `tauri::Builder::default()`. This covers types, functions, values, and macros —
+   including attribute macros (`use tauri::command;` then `#[command]`, not
+   `#[tauri::command]`). JS/TS: named imports (`import { invoke }`), never namespace
+   imports (`import * as api`) or inline qualified access. **`::` is not always a
+   module path**, and the following stay as-is — they already are the
+   import-then-use pattern, not a violation:
+   - An associated function or enum variant on a type that is itself imported:
+     `Arc::new(..)`, `Builder::default()`, `InvokeBody::Json(..)`. Import the *type*,
+     then call through it; do not try to import the associated item.
+   - Trait-method disambiguation through a prelude trait: `Default::default()`.
+   - `crate::` / `super::` / `self::` module-locating paths that a macro needs to
+     resolve generated companion items — e.g. the command path in
+     `generate_handler![crate::routers::echo]`, which cannot be a bare import because
+     the macro also references the hidden `__cmd__echo` sibling.
 
 ### Module role rule — **Decided**
 

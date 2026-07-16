@@ -2,11 +2,11 @@
 //! the harness through its port from managed state. Routers are the only Rust
 //! modules shaped by Tauri's command signature conventions.
 
-use tauri::State;
+use tauri::{State, command};
 
 use crate::container::AppState;
 
-#[tauri::command]
+#[command]
 pub(crate) fn echo(state: State<'_, AppState>, text: String) -> String {
     state.echo.echo(&text)
 }
