@@ -16,12 +16,12 @@ oldest content — the wrong end of a terminal history.
 
 ## Deliverables (all in ui/)
 
-- `views/buffer.ts` (`BufferDom`):
+- `adapters/buffer.ts` (`BufferDom`):
   - every `<h2>` appended by `appendBlock` gets `tabindex="-1"`;
   - `focus()` focuses the **most recent command heading**; when the buffer is
     empty, it falls back to the region container.
-- `views/ports.ts`: `BufferView.focus()` doc comment updated to state the landing
-  contract (most recent heading; container when empty). Controller code is
+- `ports/buffer_view.ts`: `BufferView.focus()` doc comment updated to state the
+  landing contract (most recent heading; container when empty). Controller code is
   unchanged — the landing choice is view-adapter knowledge.
 - Tests: `BufferDom` gains vitest coverage in a jsdom environment (per-file
   `@vitest-environment jsdom` pragma; `jsdom` added as a ui devDependency):
