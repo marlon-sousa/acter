@@ -37,25 +37,26 @@ Planning complete, implementation starting. Development is AI-first and spec-dri
 
 ### Project setup (once per clone)
 
-- `npm install` inside `ui/` (installs Vite, vitest, and the pinned Tauri CLI).
+- `npm install` at the repo root (npm workspaces install the `ui/` dependencies,
+  including the pinned Tauri CLI).
 
-The dev loop (from `ui/`): `npm run tauri dev` — starts the Vite dev server,
-compiles the Rust side, and launches the app with hot reload on both halves.
-`npm run tauri build` produces the release build. The Tauri CLI is pinned in
-`ui/package.json`; installing `cargo install tauri-cli` and using `cargo tauri dev`
-from the repo root works identically if you prefer cargo as the entry point.
+Everything below runs from the repo root.
 
-Rust checks (from the repo root):
+The dev loop: `npm run dev` — starts the Vite dev server, compiles the Rust side,
+and launches the app with hot reload on both halves. `npm run build` produces the
+release build. Other Tauri CLI commands: `npm run tauri -- <args>`.
+
+Rust checks:
 
 - Build everything: `cargo build --workspace`
 - Run all tests: `cargo test --workspace`
 - Lint: `cargo clippy --workspace --all-targets -- -D warnings`
 - Format check: `cargo fmt --all --check`
 
-Frontend checks (from `ui/`):
+Frontend checks:
 
 - Typecheck: `npm run typecheck`
-- Tests: `npm test`
+- Tests: `npm run test:ui`
 
 ## License
 

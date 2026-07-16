@@ -19,19 +19,15 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: ui/package-lock.json
+          cache-dependency-path: package-lock.json
       - name: Frontend install
         run: npm ci
-        working-directory: ui
       - name: Frontend typecheck
         run: npm run typecheck
-        working-directory: ui
       - name: Frontend tests
-        run: npm test
-        working-directory: ui
+        run: npm run test:ui
       - name: Frontend build
-        run: npm run build
-        working-directory: ui
+        run: npm -w acter-ui run build
       - name: Format
         run: cargo fmt --all --check
       - name: Clippy
