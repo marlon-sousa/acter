@@ -290,20 +290,29 @@ small: session list, buffer blocks, mode flag.
 
 ## Test strategy
 
-Four tiers, cheapest first:
+Six tiers, cheapest first:
 
 1. **Pure unit tests** (core): byte sequences through the boundary state machine;
    table tests for the auto-read policy. **Property tests** (`proptest`): the OSC
    parser never panics on arbitrary bytes.
-2. **Golden transcript tests** (the workhorse): raw byte captures from real
+2. **Router integration tests** (Tauri mock runtime, `tauri::test`): every router
+   is exercised through the real invoke pipeline — registration, state extraction,
+   argument deserialization — in plain cargo test, no webview. Convention: a new
+   router lands with its mock-runtime test in the same PR. (Spec: T1; carries a
+   Windows loader-crash investigation gate.)
+3. **Golden transcript tests** (the workhorse): raw byte captures from real
    PowerShell/cmd/bash sessions committed as fixtures, replayed through the
    term + boundary pipeline, asserting extracted command/output blocks. Catches
    real-world escape-sequence weirdness without spawning shells on every run.
-3. **Integration tests**: spawn a real ConPTY, run trivial commands end-to-end.
+4. **Integration tests**: spawn a real ConPTY, run trivial commands end-to-end.
    Windows CI runner, separate job.
-4. **Accessibility**: automated axe-core checks on the built DOM in CI (missing
-   roles, detached live regions); manual NVDA pass against a written checklist per
-   release — automation cannot hear speech, and here the speech is the product.
+5. **End-to-end tests** (WebdriverIO Tauri service, spec T2): the built app over
+   WebDriver — elements located by accessible name, live-region lifecycle asserted
+   on real DOM nodes, axe-core injected into the running WebView2. Separate
+   non-blocking CI job until stable.
+6. **Accessibility, manual**: NVDA pass against a written checklist per release —
+   automation cannot hear speech, and here the speech is the product. Findings in
+   docs/A11Y-NOTES.md.
 
 ## Tooling floor
 
