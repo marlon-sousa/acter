@@ -3,7 +3,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { BufferDom } from './buffer';
+import { BufferDom } from '../../src/adapters/buffer';
 
 function makeRegion(): HTMLElement {
   const region = document.createElement('div');
