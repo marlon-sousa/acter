@@ -37,6 +37,10 @@ clippy/rustfmt config, CI on a Windows runner. No logic.
   field + screen-reader announcement of the completion.
 - **A5…An — iteration.** PRs driven by manual NVDA reports. Explicitly budgeted;
   this is where screen-reader behavior gets tuned, over several rounds.
+  - **A5.1 — F6 focuses the most recent command heading**
+    ([spec](specs/a5-buffer-focus-last-heading.md)), from PR #2's checklist
+    finding: a focused generic container triggers neither NVDA browse mode nor
+    caret sync; focus the latest h2 instead.
 
 ## Track T — testing infrastructure (right after A1; ground line for UI testing)
 
