@@ -43,9 +43,10 @@ module importing `@tauri-apps/api`; DOM access only in view adapters.
 
 Automated (CI):
 - Rust: echo service unit test; workspace checks from PR 0 stay green.
-- Frontend: vitest — controller tested with fake `BackendApi` and fake view
-  adapters: submit flow appends block, announces response, clears field; F6/Escape
-  focus logic.
+- Frontend: `tsc --noEmit` typecheck (Vite/esbuild strips types without checking;
+  the typecheck step is where compile-time guarantees live) and vitest — controller
+  tested with fake `BackendApi` and fake view adapters: submit flow appends block,
+  announces response, clears field; F6/Escape focus logic.
 
 Manual (first NVDA session — findings recorded in docs/A11Y-NOTES.md):
 1. On launch, focus is in the edit field and NVDA announces its label.
