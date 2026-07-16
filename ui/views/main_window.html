@@ -1,0 +1,29 @@
+<!doctype html>
+<!-- Role: view (main window) — declarative HTML, one file per window. The static
+     semantic skeleton (roles, labels, live region) lives here so it is inspectable
+     without executing anything; dynamic DOM behavior lives only in src/adapters/. -->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Acter</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+    <main>
+      <div id="results" role="region" aria-label="Results" tabindex="-1"></div>
+      <div id="announcer" aria-live="polite" class="visually-hidden"></div>
+      <form id="command-form">
+        <label for="command-input">Command input</label>
+        <input
+          id="command-input"
+          type="text"
+          autocomplete="off"
+          autocapitalize="off"
+          spellcheck="false"
+        />
+      </form>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

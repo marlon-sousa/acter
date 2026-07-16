@@ -1,0 +1,34 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Acter",
+  "version": "0.1.0",
+  "identifier": "dev.marlonsousa.acter",
+  "build": {
+    "beforeDevCommand": {
+      "script": "npx vite .",
+      "cwd": "../../ui"
+    },
+    "devUrl": "http://localhost:5173",
+    "beforeBuildCommand": {
+      "script": "npx vite build",
+      "cwd": "../../ui"
+    },
+    "frontendDist": "../../ui/dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Acter",
+        "url": "views/main_window.html",
+        "width": 900,
+        "height": 600
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": false
+  }
+}

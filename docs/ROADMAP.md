@@ -14,8 +14,9 @@ Companion to [DESIGN.md](DESIGN.md) (product) and [ARCHITECTURE.md](ARCHITECTURE
   validated UI behavior carries over unchanged at convergence.
 - Two parallel tracks after the scaffold. Order within a track is strict; PRs across
   tracks interleave freely.
-- Manual accessibility findings are recorded in [A11Y-NOTES.md](A11Y-NOTES.md) per session
-  (NVDA version, expected vs observed) so fixes stay traceable.
+- Manual accessibility checklists and their results live in the implementing PR's
+  body as checkboxes; findings are written inline on the unchecked item (NVDA
+  version, expected vs observed) and spawn A5+ iteration entries here.
 
 ## PR 0 — scaffold
 
