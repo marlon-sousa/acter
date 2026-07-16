@@ -242,23 +242,45 @@ does not arise there.)
 
 Consequences:
 - **Mid-command prompts** ("Y/n" confirmations): prompt text arrives as output of
-  the running command (announced by the live region); the user types the answer in
-  the edit field and presses Enter; because the boundary tracker knows a command is
-  running, the line is delivered as stdin to that program instead of opening a new
-  command block. Same field, same rule.
+  the running command (announced promptly via quiescence — see Output pacing); the
+  user types the answer in the edit field and presses Enter; because the boundary
+  tracker knows a command is running, the line is delivered as stdin to that program
+  instead of opening a new command block. Same field, same rule.
+- **History exclusion:** a line enters history only if it opened a command block
+  (submitted at the prompt). Lines sent while a command runs are program input —
+  answers, passwords, REPL input — and are never saved to history.
 - **Echo exclusion:** the shell's echo of a submitted line falls between OSC 133
   markers A and C (prompt/echo region); block content is taken from C..D only, so
   the command line is never duplicated under its h2.
 
-## Long-running and never-ending commands (tail -f, watch)
+## Output pacing: quiescence, patience, follow mode — **Decided**
 
-The auto-read policy triggers at command end — but some commands never end.
-**Decided:**
+Silence is a signal: a program that stops printing is either done or waiting for
+input. The session actor paces announcements with two timers (via the `Clock` port,
+so the whole policy is testable with a fake clock):
 
-- **Follow mode:** Ctrl+Shift+F toggles live reading of the currently running
-  command's output — the block's live region is switched on, so appended lines are
-  announced as they arrive. Default off; the end-of-command auto-read policy is
-  unchanged for everything else.
+1. **Quiescence (default 0.5 s, configurable):** when output pauses for the window,
+   the unspoken text accumulated since the last announcement (or since Enter)
+   becomes a chunk; the size threshold applies **per chunk** — under it, auto-read;
+   over it, announce "N lines arrived, too big to read." This is what gets
+   "Password:" or "Continue? y/n" spoken about half a second after they appear,
+   mid-command, and narrates long builds phase by phase.
+2. **Patience (default 10 s, configurable):** if output flows continuously with no
+   quiescent gap for the whole window, announce once: "long command running, output
+   accumulating in the buffer."
+3. **Command end (D marker):** read the unspoken remainder per policy; announce
+   failures distinctly (nonzero exit code). Fast commands finish before quiescence
+   ever fires — behavior is a single end-of-command reading, as originally designed.
+
+**Babble guard (proposed default, configurable):** after three consecutive auto-read
+chunks within one command (e.g. watch -n1, chatty logs — every burst under threshold
+forever), announce "output continues" and go quiet unless follow mode is on.
+
+**Follow mode (Ctrl+Shift+F, default off):** the explicit override — read everything
+as it arrives, ignoring thresholds and the babble guard. Its job is intentional
+monitoring; quiescence handles the organic cases.
+
+Also decided earlier and unchanged:
 - The status announcement (Ctrl+Shift+S) reports when a command is still running.
 - The frontend caps rendered lines per block (last N lines) for never-ending output;
   full scrollback is retained backend-side in the terminal grid.
