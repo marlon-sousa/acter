@@ -99,6 +99,29 @@ invisible markers: prompt-start, command-start, command-end + exit code.
 This is what closes each response block, measures output size for auto-read vs beep,
 and supplies exit codes.
 
+Marker semantics: **A** prompt start, **B** command line accepted, **C** output
+begins, **D + exit code** command finished. The prompt only reappears when the
+previous command has ended, so D is a deterministic end signal — not a heuristic.
+
+### Reliability model — **Decided**
+
+Three ways D can fail to arrive, each with defined behavior:
+
+1. **Command genuinely still running** (tail -f, REPLs, nested shells). The tracker's
+   "running" state is correct. After a configurable **patience window (default 10
+   seconds)**, announce once: "command still running; output is accumulating in the
+   buffer." Follow mode (Ctrl+Shift+F) is the companion. When D eventually arrives,
+   the normal size policy applies to the full output.
+2. **Integration silently missing** (user prompt customization clobbers the hook; SSH
+   host blocks the snippet). Detected at session start: the injected snippet emits
+   markers on the first prompt; if none appear within a grace period the session is
+   flagged and announced as **unintegrated**, and every command degrades to case 1
+   behavior — patience announcement, manual buffer review, no auto-read. Honest
+   degradation instead of wrong guesses.
+3. **Forged markers** (a program printing OSC 133 itself). The boundary tracker must
+   be robust to nonsensical transitions (e.g. D with no open command is ignored);
+   covered by property tests.
+
 ### Session shell (persistent) — **Decided**
 
 Commands run inside a persistent real shell via the transport (not spawned
