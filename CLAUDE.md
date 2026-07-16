@@ -36,4 +36,7 @@ is the source of truth, and specs are written before code.
   a domain requirement, not polish.
 - All documentation and communication must be screen-reader friendly: no ASCII-art
   diagrams, no box-drawing trees. Prose, lists, and headings only.
-- Manual NVDA findings go to docs/A11Y-NOTES.md (NVDA version, expected vs observed).
+- Manual accessibility checklists and their results go in the implementing PR's
+  body as checkboxes — one item per check, findings written inline on the unchecked
+  item (NVDA version, expected vs observed). There is no separate findings document.
+  Findings that require changes become iteration entries in ROADMAP.md.

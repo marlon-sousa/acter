@@ -24,7 +24,7 @@ no protocol types yet (those are A2/A3).
 - Vite + vanilla TypeScript project; composition root in `main.ts`.
 - Semantic skeleton (final semantics, not placeholders):
   - **Edit field**: single-line text input, accessible label "Command input"
-    (visible label or aria-label — decide in implementation, record in A11Y-NOTES).
+    (visible label or aria-label — decide in implementation, record in the PR).
   - **Results buffer**: a browse-mode-navigable region above the edit field. Each
     submitted command appends: an `<h2>` containing the command line, followed by
     the response text. Plain readable DOM — NOT itself a live region.
@@ -52,7 +52,8 @@ Automated (CI):
   tested with fake `BackendApi` and fake view adapters: submit flow appends block,
   announces response, clears field; F6/Escape focus logic.
 
-Manual (first NVDA session — findings recorded in docs/A11Y-NOTES.md):
+Manual (first NVDA session — checklist and results as checkboxes in the PR body,
+findings inline on unchecked items):
 1. On launch, focus is in the edit field and NVDA announces its label.
 2. Typing a command and pressing Enter: the response is spoken automatically,
    exactly once (no double-speak from focus movement or DOM churn).
@@ -71,6 +72,6 @@ readable defaults.
 
 ## Definition of done
 
-Merged with green CI; the manual checklist above executed with results (pass or
-finding) recorded in docs/A11Y-NOTES.md; findings that require changes become A5+
-iteration entries in ROADMAP.md.
+Merged with green CI; the manual checklist above executed with results recorded as
+checkboxes in the PR body (findings inline on unchecked items); findings that
+require changes become A5+ iteration entries in ROADMAP.md.

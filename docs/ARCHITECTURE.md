@@ -310,9 +310,10 @@ Six tiers, cheapest first:
    WebDriver — elements located by accessible name, live-region lifecycle asserted
    on real DOM nodes, axe-core injected into the running WebView2. Separate
    non-blocking CI job until stable.
-6. **Accessibility, manual**: NVDA pass against a written checklist per release —
-   automation cannot hear speech, and here the speech is the product. Findings in
-   docs/A11Y-NOTES.md.
+6. **Accessibility, manual**: NVDA pass against the spec's checklist — automation
+   cannot hear speech, and here the speech is the product. The checklist and its
+   results live in the implementing PR's body as checkboxes; findings inline on
+   unchecked items, spawning iteration entries in ROADMAP.md.
 
 ## Tooling floor
 
