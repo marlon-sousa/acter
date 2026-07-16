@@ -168,14 +168,16 @@ acter-transports/src (adapter crate):
 acter-shells/src (adapter crate) stays flat until modules earn folders:
 powershell.rs, cmd.rs, bash.rs, integration.rs (shared OSC 133 snippet templates).
 
-ui/ (mirror hexagon, same convention):
-- views/: main_window.html — declarative HTML view, one per window
+ui/ (mirror hexagon, same convention). Everything shipped lives under src/;
+tests live under a sibling test/ tree (see "UI source and test layout" below):
+- src/views/: main_window.html — declarative HTML view, one per window
 - src/main.ts — the container (composition root)
 - src/ports/: one interface per file — backend_api.ts, edit_field_view.ts,
   buffer_view.ts, announcer_view.ts
 - src/routers/: tauri.ts (the only module importing @tauri-apps/api)
-- src/controllers/: app.ts (+ app.test.ts beside it)
+- src/controllers/: app.ts
 - src/adapters/: edit_field.ts, buffer.ts, announcer.ts, keyboard.ts
+- test/: mirrors src/ — test/controllers/app.test.ts, test/adapters/buffer.test.ts
 
 ## Dependency injection
 
@@ -273,14 +275,15 @@ The six-role module rule applies to the TypeScript side too (role declared in ea
 file's header comment). Channels are one-way (Rust → JS; JS → Rust is always
 invoke), so the inbound router lives in the frontend at `channel.onmessage`.
 
-- **Views** (`ui/views/` — declarative HTML, one file per window; role declared in
-  a header comment like every TS file). The static semantic skeleton (roles,
-  labels, live regions) lives in HTML so it is inspectable without executing
-  anything — main_window.html is the entry (Vite `rollupOptions.input` + the Tauri
-  window url; a deliberate deviation from Vite's index.html default). Future
-  windows land beside it. Dynamic DOM behavior never lives here — adapters only;
-  repeated dynamic markup may use `<template>` elements inside the view, stamped
-  by adapters.
+- **Views** (`ui/src/views/` — declarative HTML, one file per window; role declared
+  in a header comment like every TS file). Views are source, so they live under
+  `src/` with the rest of the shipped frontend, not in a sibling folder. The static
+  semantic skeleton (roles, labels, live regions) lives in HTML so it is inspectable
+  without executing anything — main_window.html is the entry (Vite
+  `rollupOptions.input` + the Tauri window url `src/views/main_window.html`; a
+  deliberate deviation from Vite's index.html default). Future windows land beside
+  it. Dynamic DOM behavior never lives here — adapters only; repeated dynamic markup
+  may use `<template>` elements inside the view, stamped by adapters.
 - **Router** (`routers/` — the only module importing `@tauri-apps/api`). Inbound: owns
   `channel.onmessage`, exhaustive switch over the generated discriminated union,
   each variant translated into a controller call. Outbound: implements the
@@ -298,6 +301,23 @@ invoke), so the inbound router lives in the frontend at `channel.onmessage`.
 Both ends of the wire are fed by protocol types generated from the single Rust
 source; the system reads identically in both languages: router (framework adapter)
 → controller (framework-free) → ports → adapters (world).
+
+#### UI source and test layout — **Decided**
+
+For npm packages (currently `ui`; the Rust crates keep unit tests inline in their
+own files, so this does not apply to them):
+
+- **Everything shipped lives under `src/`** — TypeScript and views alike. Views are
+  source (declarative HTML consumed by the Vite build), so they live at
+  `src/views/`, not in a sibling `views/` folder. `src/` is the single tree the
+  build and the Tauri window url point into.
+- **Tests live under a top-level `test/` tree that mirrors `src/`.** A test for
+  `src/adapters/buffer.ts` is `test/adapters/buffer.test.ts`; it imports across the
+  boundary (`../../src/adapters/buffer`). This keeps `src/` to shippable code (tests
+  never crowd the source tree and sit nowhere the bundle can reach), while still
+  colocating each test with the role folder of the code it exercises. `tsconfig.json`
+  includes both `src` and `test`; vitest discovers `test/**/*.test.ts` by its
+  default glob.
 
 ### Frontend DI — **Decided: no framework**
 

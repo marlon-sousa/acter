@@ -8,6 +8,9 @@ export class BufferDom implements BufferView {
   appendBlock(command: string, response: string): void {
     const heading = document.createElement('h2');
     heading.textContent = command;
+    // Programmatically focusable (a heading is never in the tab order) so
+    // focus() can land here without adding it to sequential navigation.
+    heading.tabIndex = -1;
     const body = document.createElement('div');
     body.className = 'response';
     body.textContent = response;
@@ -15,7 +18,9 @@ export class BufferDom implements BufferView {
   }
 
   focus(): void {
-    this.region.focus();
+    const headings = this.region.querySelectorAll('h2');
+    const mostRecent = headings[headings.length - 1];
+    (mostRecent ?? this.region).focus();
   }
 
   containsFocus(): boolean {
