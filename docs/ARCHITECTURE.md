@@ -208,9 +208,11 @@ asserts the exact event sequence the frontend would receive.
 - **One event channel, one envelope.** A single `session-event` whose payload is the
   protocol enum (serde-tagged). specta generates a TS discriminated union, so the
   frontend compiler forces exhaustive handling of every variant.
-- **Policy decisions ride the events.** `CommandFinished { command_id, exit_code,
-  read_mode }` carries the auto-read verdict (`Auto` | `TooBig`) computed by the
-  service; the frontend obeys, never re-measures. Policy stays in core.
+- **Policy decisions ride the events.** Every announcement-bearing event — quiescent
+  output chunks and `CommandFinished { command_id, exit_code, read_mode }` alike —
+  carries the read verdict (`Auto` | `TooBig` | quiet) computed backend-side by the
+  pacing policy (see DESIGN.md, Output pacing); the frontend obeys, never
+  re-measures. Policy stays in core.
 - **Output coalescing.** The session actor batches PTY output and flushes on a short
   tick (tens of ms) or on a boundary event, whichever comes first — the IPC bridge
   and DOM never see per-write traffic.
