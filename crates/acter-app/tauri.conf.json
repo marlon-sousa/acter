@@ -19,6 +19,7 @@
     "windows": [
       {
         "title": "Acter",
+        "url": "views/main_window.html",
         "width": 900,
         "height": 600
       }

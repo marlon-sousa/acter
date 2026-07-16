@@ -35,7 +35,13 @@ Cargo workspace:
 - `crates/acter-app` — Tauri 2 app and composition root: wires concrete adapters into
   core sessions, exposes IPC commands, bridges session events to Tauri events. As thin
   as possible.
-- `ui/` — frontend (outside the Cargo workspace).
+- `ui/` — the frontend: an npm workspace member, not a crate, deliberately outside
+  the Cargo workspace. The repo has **two build worlds** — the Cargo workspace
+  (crates/) and the npm workspace (ui/, later e2e/) — connected at exactly one
+  seam: acter-app consumes ui's build, declared in tauri.conf.json's build section
+  (devUrl proxies the Vite dev server in dev; frontendDist is embedded into the
+  executable in release). Runtime coupling is the IPC protocol; build coupling is
+  that one stanza.
 
 ## Code organization within crates — **Decided**
 
@@ -162,13 +168,14 @@ acter-transports/src (adapter crate):
 acter-shells/src (adapter crate) stays flat until modules earn folders:
 powershell.rs, cmd.rs, bash.rs, integration.rs (shared OSC 133 snippet templates).
 
-ui/src (mirror hexagon, same convention):
-- main.ts — the container (composition root)
-- ports/: one interface per file — backend_api.ts, edit_field_view.ts,
+ui/ (mirror hexagon, same convention):
+- views/: main_window.html — declarative HTML view, one per window
+- src/main.ts — the container (composition root)
+- src/ports/: one interface per file — backend_api.ts, edit_field_view.ts,
   buffer_view.ts, announcer_view.ts
-- routers/: tauri.ts (the only module importing @tauri-apps/api)
-- controllers/: app.ts (+ app.test.ts beside it)
-- adapters/: edit_field.ts, buffer.ts, announcer.ts, keyboard.ts
+- src/routers/: tauri.ts (the only module importing @tauri-apps/api)
+- src/controllers/: app.ts (+ app.test.ts beside it)
+- src/adapters/: edit_field.ts, buffer.ts, announcer.ts, keyboard.ts
 
 ## Dependency injection
 
@@ -266,6 +273,14 @@ The six-role module rule applies to the TypeScript side too (role declared in ea
 file's header comment). Channels are one-way (Rust → JS; JS → Rust is always
 invoke), so the inbound router lives in the frontend at `channel.onmessage`.
 
+- **Views** (`ui/views/` — declarative HTML, one file per window; role declared in
+  a header comment like every TS file). The static semantic skeleton (roles,
+  labels, live regions) lives in HTML so it is inspectable without executing
+  anything — main_window.html is the entry (Vite `rollupOptions.input` + the Tauri
+  window url; a deliberate deviation from Vite's index.html default). Future
+  windows land beside it. Dynamic DOM behavior never lives here — adapters only;
+  repeated dynamic markup may use `<template>` elements inside the view, stamped
+  by adapters.
 - **Router** (`routers/` — the only module importing `@tauri-apps/api`). Inbound: owns
   `channel.onmessage`, exhaustive switch over the generated discriminated union,
   each variant translated into a controller call. Outbound: implements the

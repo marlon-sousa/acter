@@ -1,6 +1,6 @@
 // Role: adapter (DOM) — the single polite live region. The region element is created
-// once in index.html and never recreated (live-region lifecycle rule); announcements
-// replace its children so repeated identical text still mutates the DOM.
+// once in views/main_window.html and never recreated (live-region lifecycle rule);
+// announcements replace its children so repeated identical text still mutates the DOM.
 
 import type { AnnouncerView } from '../ports/announcer_view';
 

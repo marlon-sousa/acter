@@ -1,3 +1,5 @@
+import { fileURLToPath } from 'node:url';
+
 import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
@@ -5,6 +7,11 @@ export default defineConfig({
   server: {
     port: 5173,
     strictPort: true,
+  },
+  build: {
+    rollupOptions: {
+      input: fileURLToPath(new URL('views/main_window.html', import.meta.url)),
+    },
   },
   test: {
     environment: 'node',
