@@ -14,6 +14,13 @@ is the source of truth, and specs are written before code.
   implementation. The spec is the implementation contract: acceptance criteria,
   files touched, definition of done.
 
+## Process
+
+- Planning artifacts (specs, design/architecture decisions) are approved in
+  conversation and land directly on main. Implementation goes through a PR that
+  references its spec; the PR is judged against the spec. If implementation work
+  forces a spec amendment, the amendment rides in the implementing PR.
+
 ## Hard rules
 
 - Items marked **Decided** in the docs are settled. Do not relitigate them silently;
