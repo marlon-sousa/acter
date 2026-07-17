@@ -17,9 +17,20 @@ pub fn run() {
     let state = AppState {
         echo: Arc::new(EchoService),
     };
-    Builder::default()
+    let builder = Builder::default()
         .manage(state)
-        .invoke_handler(generate_handler![crate::routers::echo])
+        .invoke_handler(generate_handler![crate::routers::echo]);
+
+    // Embedded WebDriver server for E2E tests (spec T2): debug builds only, so
+    // release binaries carry no automation surface. Debug builds exist only on
+    // developer machines and CI.
+    #[cfg(debug_assertions)]
+    let builder = {
+        use tauri_plugin_wdio_webdriver::init;
+        builder.plugin(init())
+    };
+
+    builder
         .run(generate_context!())
         .expect("failed to start the Acter window");
 }

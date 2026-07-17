@@ -390,10 +390,21 @@ Six tiers, cheapest first:
    real-world escape-sequence weirdness without spawning shells on every run.
 4. **Integration tests**: spawn a real ConPTY, run trivial commands end-to-end.
    Windows CI runner, separate job.
-5. **End-to-end tests** (WebdriverIO Tauri service, spec T2): the built app over
-   WebDriver — elements located by accessible name, live-region lifecycle asserted
-   on real DOM nodes, axe-core injected into the running WebView2. Separate
-   non-blocking CI job until stable.
+5. **End-to-end tests** (WebdriverIO over the in-app WebDriver server, spec T2 —
+   **implemented**): the built app over WebDriver — elements located by accessible
+   name, live-region lifecycle asserted on real DOM nodes, and **axe-core injected
+   into the running WebView2** (critical/serious violations fail the build). The
+   debug binary hosts a complete W3C WebDriver server
+   (`tauri-plugin-wdio-webdriver`, registered under `debug_assertions` only), and
+   plain WebdriverIO drives it directly — no tauri-driver, no msedgedriver, no
+   service layer; release binaries carry no automation surface and CI installs no
+   drivers. Isolation: each spec's worker spawns its own app instance on a unique
+   port and kills it afterwards; specs are independent and parallelizable. Two
+   build facts E2E depends on: a standalone binary must be built with acter-app's
+   `custom-protocol` feature (Tauri keys dev-vs-embedded assets on that feature,
+   not the profile — without it the app loads the Vite `devUrl`), and the suite
+   targets the **debug** build (where the WebDriver plugin is registered; the
+   frontend bundle is identical in both profiles). Separate required CI job.
 6. **Accessibility, manual**: NVDA pass against the spec's checklist — automation
    cannot hear speech, and here the speech is the product. The checklist and its
    results live in the implementing PR's body as checkboxes; findings inline on

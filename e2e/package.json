@@ -1,0 +1,20 @@
+{
+  "name": "acter-e2e",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "End-to-end tests: the built Acter app driven over WebDriver (WebView2).",
+  "scripts": {
+    "test": "wdio run wdio.conf.ts"
+  },
+  "devDependencies": {
+    "@wdio/cli": "^9",
+    "@wdio/local-runner": "^9",
+    "@wdio/mocha-framework": "^9",
+    "@wdio/spec-reporter": "^9",
+    "@wdio/types": "^9",
+    "axe-core": "^4",
+    "tsx": "^4",
+    "typescript": "^5"
+  }
+}
