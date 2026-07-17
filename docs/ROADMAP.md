@@ -10,10 +10,13 @@ the answer to "what should we do now?".
   not marked Done, respecting the lane rules. Its "Spec" field tells you what kind
   of work comes next:
   - **Spec: none yet** → the next step is a spec conversation, not code. Write the
-    spec with the user, get it agreed in conversation, land it on main, and update
-    the entry's Spec field in the same commit. Never code ahead of an agreed spec.
-  - **Spec: exists** → implement it in a PR judged against the spec (branch off
-    main; short PR; component + trait(s) + tests per CLAUDE.md).
+    spec with the user and get it agreed in conversation. The spec is not committed
+    on its own: it lands in the implementing PR (or the first PR it covers) together
+    with the code. Never code ahead of an agreed spec.
+  - **Spec: agreed** → implement it in a PR judged against the spec (branch off
+    main; short PR; the spec file, the component + trait(s), and tests per
+    CLAUDE.md all in the one PR). The PR sets the entry's Spec field to the
+    committed spec path as it flips the entry to Done.
 - **Marking done:** the implementing PR flips its own entry to
   "Done (PR #n, date)" as part of the PR. The mark becomes true on main exactly
   when the user merges — no separate bookkeeping commit.

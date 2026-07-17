@@ -13,16 +13,19 @@ is the source of truth, and specs are written before code.
   the answer to "what should we do now". Each entry says whether the next step is
   writing a spec or implementing one; the implementing PR flips its own entry to
   Done so the board is correct on main the moment the user merges.
-- [docs/specs/](docs/specs/) — one spec per roadmap PR, written and agreed before
-  implementation. The spec is the implementation contract: acceptance criteria,
-  files touched, definition of done.
+- [docs/specs/](docs/specs/) — one spec per roadmap PR, agreed in conversation
+  before implementation and committed in the PR it covers. The spec is the
+  implementation contract: acceptance criteria, files touched, definition of done.
 
 ## Process
 
-- Planning artifacts (specs, design/architecture decisions) are approved in
-  conversation and land directly on main. Implementation goes through a PR that
-  references its spec; the PR is judged against the spec. If implementation work
-  forces a spec amendment, the amendment rides in the implementing PR.
+- Specs are approved before coding, but they travel with the code: the spec file
+  lands in the PR it belongs to (or the first PR it covers), not on main ahead of
+  it. Agree the spec in conversation first; then open one PR that contains both the
+  spec and its implementation, judged against that spec. If implementation forces a
+  spec amendment, the amendment rides in the same PR.
+- Design/architecture decisions (DESIGN.md, ARCHITECTURE.md, ROADMAP.md) are not
+  specs: they are approved in conversation and land directly on main.
 
 ## Hard rules
 
