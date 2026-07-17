@@ -46,9 +46,18 @@ the answer to "what should we do now?".
    tests. The Windows loader-crash gate (STATUS_ENTRYPOINT_NOT_FOUND) was
    root-caused (bins-only manifest linking) and fixed by embedding the app manifest
    for all artifacts in build.rs — no fallback needed.
-5. **Next** — T2, end-to-end tests via WebdriverIO Tauri service. Spec: exists —
-   [t2-e2e-webdriver.md](specs/t2-e2e-webdriver.md) → implement. Separate
-   non-blocking CI job; axe-core inside the real WebView2.
+5. **Done** — T2, end-to-end tests over WebDriver. Spec:
+   [t2-e2e-webdriver.md](specs/t2-e2e-webdriver.md). Merged as PR #5 (2026-07-16).
+   Plain WebdriverIO drives the WebDriver server embedded in the debug binary
+   (`tauri-plugin-wdio-webdriver`, registered under `debug_assertions` only —
+   release carries no automation surface); one app instance per spec on a unique
+   port, no external drivers, no service layer (tauri-driver and
+   `@wdio/tauri-service` were tried and dropped — reasoning in the spec amendment).
+   Three scenarios: smoke (edit field found by accessible name), announcer
+   (live-region node identity + announce-once), axe-core inside the real WebView2.
+   Separate non-blocking CI job. Also landed: the `custom-protocol` feature on
+   acter-app — without it a built binary loads the Vite `devUrl` instead of the
+   embedded frontend; standalone builds must enable it.
 6. A2, protocol. Spec: none yet → specify first. Scope sketch: IPC event/command
    types as entities in acter-core, tauri-specta TypeScript generation, serde
    round-trip tests.

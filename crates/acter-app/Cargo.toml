@@ -10,6 +10,19 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", features = [] }
+# Embedded WebDriver server for E2E tests (spec T2). Always a dependency — Cargo
+# cannot gate dependencies on debug_assertions (target cfg tables never evaluate
+# it) — but registration in container.rs is #[cfg(debug_assertions)], so release
+# binaries never start the automation server.
+tauri-plugin-wdio-webdriver = "1"
+
+[features]
+# Standalone/production builds must serve the embedded frontend, not the Vite dev
+# server. Tauri keys that on the `custom-protocol` feature: with it OFF (the default,
+# so `tauri dev` keeps live-reload) the app loads `devUrl`; with it ON the app serves
+# the embedded `frontendDist`. E2E and any distributable build enable it — see the
+# root `test:e2e` script. Do not add it to a default feature set.
+custom-protocol = ["tauri/custom-protocol"]
 
 [dev-dependencies]
 tauri = { version = "2", features = ["test"] }

@@ -34,3 +34,36 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Test
         run: cargo test --workspace
+
+  e2e:
+    name: e2e (Windows)
+    runs-on: windows-latest
+    # Non-blocking for its first two weeks of life (spec T2); flipped to required
+    # once stable via a one-line PR referencing the spec.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: End-to-end tests
+        # test:e2e builds the frontend, then a debug app binary with the
+        # `custom-protocol` feature (without it Tauri serves `devUrl`, not the
+        # embedded frontend; debug because the in-app WebDriver server is
+        # registered under debug_assertions only), then runs the wdio suite.
+        # No driver installs: WebdriverIO talks directly to the WebDriver server
+        # embedded in the app; each spec spawns its own instance on a unique port.
+        run: npm run test:e2e
+      - name: Upload failure screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-screenshots
+          path: e2e/screenshots/
+          if-no-files-found: ignore

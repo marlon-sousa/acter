@@ -1,12 +1,13 @@
 {
   "name": "acter",
   "private": true,
-  "workspaces": ["ui"],
+  "workspaces": ["ui", "e2e"],
   "scripts": {
     "dev": "tauri dev",
     "build": "tauri build",
     "tauri": "tauri",
     "test:ui": "npm -w acter-ui test",
+    "test:e2e": "npm -w acter-ui run build && cargo build -p acter-app --features custom-protocol && npm -w acter-e2e test",
     "typecheck": "npm -w acter-ui run typecheck"
   },
   "devDependencies": {
