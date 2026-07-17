@@ -80,9 +80,9 @@ live-reload); every standalone build, E2E included, must enable it.
      (never recreated — the live-region lifecycle rule, machine-enforced).
   3. **axe-core in the real WebView2:** inject axe via the WebDriver session and
      assert zero critical/serious violations on the running app.
-- CI: separate `e2e (Windows)` job. Non-blocking (continue-on-error) for its first
-  two weeks of life; flipped to required once stable — the flip is a one-line PR
-  referencing this spec.
+- CI: separate `e2e (Windows)` job. Planned as non-blocking for its first two weeks;
+  it passed on its first CI run (no drivers, no display trickery needed on the
+  hosted runner), so it was flipped to required inside the implementing PR itself.
 
 ## Acceptance criteria
 

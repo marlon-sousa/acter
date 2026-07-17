@@ -55,7 +55,8 @@ the answer to "what should we do now?".
    `@wdio/tauri-service` were tried and dropped — reasoning in the spec amendment).
    Three scenarios: smoke (edit field found by accessible name), announcer
    (live-region node identity + announce-once), axe-core inside the real WebView2.
-   Separate non-blocking CI job. Also landed: the `custom-protocol` feature on
+   Separate required CI job (passed its first run; flipped from non-blocking within
+   the PR). Also landed: the `custom-protocol` feature on
    acter-app — without it a built binary loads the Vite `devUrl` instead of the
    embedded frontend; standalone builds must enable it.
 6. A2, protocol. Spec: none yet → specify first. Scope sketch: IPC event/command

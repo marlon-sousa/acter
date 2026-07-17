@@ -404,8 +404,7 @@ Six tiers, cheapest first:
    `custom-protocol` feature (Tauri keys dev-vs-embedded assets on that feature,
    not the profile — without it the app loads the Vite `devUrl`), and the suite
    targets the **debug** build (where the WebDriver plugin is registered; the
-   frontend bundle is identical in both profiles). Separate non-blocking CI job
-   until stable.
+   frontend bundle is identical in both profiles). Separate required CI job.
 6. **Accessibility, manual**: NVDA pass against the spec's checklist — automation
    cannot hear speech, and here the speech is the product. The checklist and its
    results live in the implementing PR's body as checkboxes; findings inline on

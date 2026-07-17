@@ -38,9 +38,6 @@ jobs:
   e2e:
     name: e2e (Windows)
     runs-on: windows-latest
-    # Non-blocking for its first two weeks of life (spec T2); flipped to required
-    # once stable via a one-line PR referencing the spec.
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
