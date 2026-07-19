@@ -1,5 +1,12 @@
+# Normalize all text files to LF in the repo and the working tree, on every
+# platform. Git auto-detects text vs binary (`text=auto`) and leaves binaries
+# untouched; `eol=lf` overrides a local `core.autocrlf` so a Windows checkout keeps
+# LF instead of CRLF — no "LF will be replaced by CRLF" warnings, and one canonical
+# line ending everywhere.
+* text=auto eol=lf
+
 # The protocol bindings are written with LF by the Rust generator
-# (crates/acter-app/tests/protocol_bindings.rs). Pin the working-tree copy to LF so
-# the generator's output and a Windows checkout agree byte-for-byte and the CI drift
-# check is deterministic regardless of core.autocrlf.
+# (crates/acter-app/tests/protocol_bindings.rs). Covered by the rule above, but
+# pinned explicitly so the intent (byte-for-byte match with the generator, for the
+# CI drift check) is documented at the file it protects.
 ui/src/protocol.ts text eol=lf
