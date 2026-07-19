@@ -34,6 +34,12 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Test
         run: cargo test --workspace
+      - name: Protocol bindings up to date
+        # `cargo test --workspace` above re-ran the generator (tests/protocol_bindings.rs),
+        # rewriting ui/src/protocol.ts from the acter-core types. If the committed
+        # binding was stale, the working tree now differs and this fails the build —
+        # the single-source-of-truth guard for the wire protocol.
+        run: git diff --exit-code ui/src/protocol.ts
 
   e2e:
     name: e2e (Windows)

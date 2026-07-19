@@ -1,0 +1,5 @@
+# The protocol bindings are written with LF by the Rust generator
+# (crates/acter-app/tests/protocol_bindings.rs). Pin the working-tree copy to LF so
+# the generator's output and a Windows checkout agree byte-for-byte and the CI drift
+# check is deterministic regardless of core.autocrlf.
+ui/src/protocol.ts text eol=lf

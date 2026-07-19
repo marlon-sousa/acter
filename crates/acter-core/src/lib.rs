@@ -3,3 +3,9 @@
 //!
 //! Facade: this file only declares modules and re-exports the public API.
 #![warn(unreachable_pub)]
+
+mod entities;
+
+pub use entities::{
+    CommandId, ConnectionState, ExitCode, Mode, ReadMode, SessionEvent, SessionId, SubmitAck,
+};

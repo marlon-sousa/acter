@@ -27,6 +27,13 @@ custom-protocol = ["tauri/custom-protocol"]
 [dev-dependencies]
 tauri = { version = "2", features = ["test"] }
 serde_json = "1"
+# Protocol-binding generator (tests/protocol_bindings.rs): reads acter-core's IPC
+# types and emits their TypeScript mirror. A3 promotes acter-core to a normal
+# dependency when it wires the real session domain.
+acter-core = { path = "../acter-core" }
+specta = "2.0.0-rc.25"
+specta-serde = "0.0.12"
+specta-typescript = "0.0.12"
 
 [lints]
 workspace = true
