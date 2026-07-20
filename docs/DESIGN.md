@@ -144,6 +144,13 @@ individually), so cd, environment, and aliases persist between commands.
   runtime via a per-session configuration screen.
 - **Tabs are coming:** each tab is one session. (Non-visual tab navigation UX is an
   open question.)
+- **The scripted fake session is a permanent supported session kind** — **Decided**
+  (spec A3, decision 9; agreed in conversation 2026-07-19). It is selectable like any
+  real shell once the session/profile UI exists, and is the default backend until
+  then (the frontend attaches to it automatically at startup). A scriptable session
+  stays permanently useful for accessibility experiments, demos, and reproducing NVDA
+  findings without a real shell; convergence swaps the default, it does not delete the
+  fake.
 
 ### Auto-read threshold — **Decided**
 
@@ -293,6 +300,21 @@ Also decided earlier and unchanged:
   screen reader while a full-screen app runs (review cursor? live row announcements?).
 - Non-visual tab/session navigation UX (switch keys, announcing which session is
   active, activity in background tabs — e.g. a long build finishing in another tab).
+- Announcement channel model (tied to the B1 pacing work, where real output streams
+  exist): should status announcements (failure, too-big, patience, alt-screen) live in
+  a live region separate from auto-read output, and what are the interrupt/order
+  semantics — polite vs assertive, does a failure interrupt output reading or wait its
+  turn, do two regions read in a guaranteed order across NVDA/JAWS? A3 keeps a single
+  polite region that appends each announcement so back-to-back messages are all spoken
+  in order (the immediate `fail` clobber is gone); the separate-region question is
+  deferred here. Noted en route: the end-of-command failure status is naturally an
+  after-the-output thing, but patience, too-big, and alt-screen are inherently
+  mid-command and cannot wait for command end.
+- Reviewing past announcements in-app: region-only messages (failure, too-big,
+  patience) are emptied from the live region after a short idle, so they are
+  unreviewable in-app afterward (the screen reader's own speech history still holds
+  them). If in-app review is wanted, the answer is writing status lines into the buffer
+  as part of the block, not leaving stale text in the live region.
 - SSH auth UX: password prompts, key files, agent support, host key verification —
   all must be fully screen-reader-accessible flows.
 - Password / no-echo prompts in non-interactive mode: typing a password into the

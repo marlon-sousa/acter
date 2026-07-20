@@ -1,5 +1,5 @@
 //! Facade for this crate's services, one file per service.
 
-mod echo;
+mod fake_session;
 
-pub(crate) use echo::EchoService;
+pub(crate) use fake_session::FakeSessionService;

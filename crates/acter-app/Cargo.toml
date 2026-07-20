@@ -10,6 +10,12 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", features = [] }
+# The domain crate: SessionApi/EventSink ports and the IPC protocol types. A normal
+# dependency since A3 (was dev-only in A2, when only the binding generator used it).
+acter-core = { path = "../acter-core" }
+# Fake script config parsing (entities/fake_script.rs).
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 # Embedded WebDriver server for E2E tests (spec T2). Always a dependency — Cargo
 # cannot gate dependencies on debug_assertions (target cfg tables never evaluate
 # it) — but registration in container.rs is #[cfg(debug_assertions)], so release
@@ -26,11 +32,9 @@ custom-protocol = ["tauri/custom-protocol"]
 
 [dev-dependencies]
 tauri = { version = "2", features = ["test"] }
-serde_json = "1"
-# Protocol-binding generator (tests/protocol_bindings.rs): reads acter-core's IPC
-# types and emits their TypeScript mirror. A3 promotes acter-core to a normal
-# dependency when it wires the real session domain.
-acter-core = { path = "../acter-core" }
+# Protocol-binding generator (tests/protocol_bindings.rs): renders acter-core's IPC
+# types to their TypeScript mirror. acter-core and serde_json are normal dependencies
+# since A3 (see [dependencies]); specta stays test-only — nothing at runtime exports types.
 specta = "2.0.0-rc.25"
 specta-serde = "0.0.12"
 specta-typescript = "0.0.12"
