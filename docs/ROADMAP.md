@@ -74,14 +74,18 @@ the answer to "what should we do now?".
    `SessionApi` fake speaking the A2 protocol over the real Tauri Channel path, wired
    in as the default backend (attached automatically at startup); unlocks the full
    manual matrix (auto-read, too-big + beep, exit-code announcements, pacing,
-   alt-screen). Nine scenarios selected by command name (small, big, fail, slow,
-   forever, nano, tail, burst, echo fallback), config-driven by the fake script config
+   alt-screen). Ten scenarios selected by command name (small, big, fail, slow,
+   forever, nano, tail, burst, speech, echo fallback), config-driven by the fake script config
    (`ACTER_FAKE_SCRIPT` overrides built-in manual-testing defaults; E2E generates its
    own deterministic config). The two flagged decisions were resolved: the beep is a
    frontend view adapter, not a backend port (ARCHITECTURE `Notifier` removed), and
    the frontend renders each pacing verdict per decision 2. Also landed: acter-core's
    first ports (`SessionApi`, `EventSink`), the `ChannelSink` adapter; echo harness
-   removed. `get_session_snapshot` re-deferred to convergence.
+   removed. `get_session_snapshot` re-deferred to convergence. Checklist dry-run
+   finding folded in (spec amendment): the live region is emptied after each
+   announcement and moved out of the last-heading→edit-field path, so stale
+   announcement text is no longer reachable in browse mode; a `speech` scenario was
+   added to make any speech truncation audible during the NVDA pass.
 8. A4, completion path. Spec: none yet → specify first. Scope sketch: fake
    completion provider, Tab handling in the edit field, completion announcement.
 9. A5.2 and onward — iteration entries appear here as NVDA findings arrive.

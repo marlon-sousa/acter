@@ -63,6 +63,7 @@ enum Scenario {
     Nano,
     Tail,
     Burst,
+    Speech,
     Echo,
 }
 
@@ -77,6 +78,7 @@ impl Scenario {
             "nano" => Self::Nano,
             "tail" => Self::Tail,
             "burst" => Self::Burst,
+            "speech" => Self::Speech,
             _ => Self::Echo,
         }
     }
@@ -161,6 +163,16 @@ fn play(scenario: Scenario, id: CommandId, script: &FakeScript, line: &str, sink
             }
             finished(sink, id, 0, ReadMode::Auto);
         }
+        Scenario::Speech => {
+            sleep(script.speech.output_delay);
+            output(
+                sink,
+                id,
+                &counted_phrase(script.speech.word_count),
+                ReadMode::Auto,
+            );
+            finished(sink, id, 0, ReadMode::Auto);
+        }
         Scenario::Echo => {
             output(sink, id, line, ReadMode::Auto);
             finished(sink, id, 0, ReadMode::Auto);
@@ -191,6 +203,20 @@ fn numbered_lines(n: u32) -> String {
         .map(|i| format!("line {i}"))
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// One long auto-read phrase with unmistakable start and end markers and `words`
+/// numbered words between them. Spoken as a single utterance, it lets a manual NVDA
+/// pass hear whether emptying the live region truncates queued speech: if the closing
+/// marker is heard, nothing was lost, and if speech stops it stops on a numbered word
+/// that names exactly how far it got.
+fn counted_phrase(words: u32) -> String {
+    let mut phrase = String::from("long announcement starting.");
+    for i in 1..=words {
+        phrase.push_str(&format!(" word {i}"));
+    }
+    phrase.push_str(". long announcement finished");
+    phrase
 }
 
 /// Sleeps for a sampled delay. Equal bounds sleep exactly (deterministic — the
@@ -320,6 +346,8 @@ mod tests {
         s.burst.iterations = 2;
         s.burst.flood_delay = z;
         s.burst.interval = z;
+        s.speech.output_delay = z;
+        s.speech.word_count = 3;
         s
     }
 
@@ -411,6 +439,14 @@ mod tests {
                     out(1, &numbered_lines(3), ReadMode::TooBig),
                     out(1, "trickle 1", ReadMode::Auto),
                     out(1, "trickle 2", ReadMode::Auto),
+                    done(1, 0, ReadMode::Auto),
+                ],
+            },
+            Case {
+                line: "speech",
+                expected: vec![
+                    started(1),
+                    out(1, &counted_phrase(3), ReadMode::Auto),
                     done(1, 0, ReadMode::Auto),
                 ],
             },

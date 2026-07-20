@@ -151,6 +151,15 @@ backend task, emitting through the session's event sink.
   small following chunks are still read aloud after a too-big announcement, and
   that the completion beep survives intervening auto-read chunks. (Addition
   agreed in the spec conversation, 2026-07-19.)
+- `speech` — `CommandStarted`; after 100 ms one long `Auto` phrase (an opening
+  marker, `word_count` numbered words — default 60, roughly twenty seconds of
+  speech — and the closing marker `long announcement finished`);
+  `CommandFinished` (exit 0, `Auto`). Exercises the live-region clear (amendment
+  below): the phrase is deliberately longer than the clear delay, so a manual NVDA
+  pass hears whether emptying the region truncates queued speech. If the closing
+  marker is spoken, nothing was lost; if speech stops, it stops on a numbered word
+  that names exactly how far it got. (Addition agreed in conversation 2026-07-20,
+  with the live-region-clear amendment.)
 - anything else — `CommandStarted`; `Output` (the line itself, `Auto`);
   `CommandFinished` (exit 0, `Auto`). The echo fallback.
 
@@ -348,6 +357,25 @@ version, expected vs observed):
   entire app over the real WebView2 Channel: the announcer, buffer, and too-big specs
   all assert events that arrived down it). This matches the spec's stated fallback
   ("if the mock runtime cannot carry a Channel, the E2E suite is the named owner").
+
+- **The live region is emptied after each announcement, and moved out of the
+  navigation path.** Agreed in conversation 2026-07-20 while dry-running the manual
+  checklist. A live region must stay in the accessibility tree to be announced, so
+  its text is also reachable by browse-mode navigation; with the region sitting
+  between the results and the edit field, a screen reader arrowing from the last
+  command heading to the edit field read stale announcement text as page content.
+  Two changes, both in the frontend view layer (no protocol or backend change):
+  the region moves to the end of the document (out of the most-travelled path), and
+  `AnnouncerDom` empties it a short, tunable delay (1.5 s) after each announcement.
+  Emptying is safe and silent: the accessibility event fires on mutation and the
+  screen reader copies the text into its own speech queue, so clearing the DOM later
+  cannot retract unspoken speech; and the default `aria-relevant` ("additions text")
+  means removals are not announced. Consequence accepted: announcements that live
+  only in the region (failure, too-big, patience) become unreviewable in-app after
+  the delay — reviewing them belongs to a later "status lines written into the
+  buffer" decision, not here. The `speech` scenario (a single utterance longer than
+  the clear delay, with a countable closing marker) is added to make truncation, if
+  it ever occurs, audible during the NVDA pass.
 
 ## Definition of done
 

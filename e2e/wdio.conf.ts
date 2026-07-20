@@ -58,6 +58,7 @@ const e2eFakeScript = {
     iterations: 2,
     interval: FAST_MS,
   },
+  speech: { output_delay: FAST_MS, word_count: 3 },
 };
 
 // Module state is per worker process (each spec file runs in its own worker, and

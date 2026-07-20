@@ -86,6 +86,17 @@ pub(crate) struct TailScript {
     pub(crate) interval: DelayRange,
 }
 
+/// `speech`: one long auto-read phrase, deliberately longer than the live region's
+/// clear delay, for checking that emptying the region never truncates speech the
+/// screen reader has already queued.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub(crate) struct SpeechScript {
+    pub(crate) output_delay: DelayRange,
+    /// Numbered words between the opening and closing markers. The phrase is counted
+    /// so a truncation is audible as the exact word it stopped at.
+    pub(crate) word_count: u32,
+}
+
 /// `burst`: a too-big flood followed by a trickle of small auto-read chunks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 pub(crate) struct BurstScript {
@@ -117,6 +128,8 @@ pub(crate) struct FakeScript {
     pub(crate) tail: TailScript,
     #[serde(default)]
     pub(crate) burst: BurstScript,
+    #[serde(default)]
+    pub(crate) speech: SpeechScript,
 }
 
 // Built-in defaults: the human-scale manual-testing numbers from the scenario table.
@@ -195,10 +208,21 @@ impl Default for BurstScript {
     }
 }
 
+impl Default for SpeechScript {
+    fn default() -> Self {
+        Self {
+            output_delay: DelayRange::fixed(100),
+            // Sixty numbered words is roughly twenty seconds of speech — comfortably
+            // longer than the frontend's live-region clear delay, which is the point.
+            word_count: 60,
+        }
+    }
+}
+
 impl FakeScript {
     /// Every delay range in the config, for validation. Order is irrelevant — only
     /// the invariant matters — but naming each range makes rejection messages precise.
-    fn ranges(&self) -> [(&'static str, DelayRange); 12] {
+    fn ranges(&self) -> [(&'static str, DelayRange); 13] {
         [
             ("small.output_delay", self.small.output_delay),
             ("big.output_delay", self.big.output_delay),
@@ -212,6 +236,7 @@ impl FakeScript {
             ("nano.leave_delay", self.nano.leave_delay),
             ("tail.interval", self.tail.interval),
             ("burst.interval", self.burst.interval),
+            ("speech.output_delay", self.speech.output_delay),
         ]
     }
 
