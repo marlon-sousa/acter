@@ -27,12 +27,28 @@ describe('AnnouncerDom', () => {
     document.body.replaceChildren();
   });
 
-  it('announces the text exactly once', () => {
+  it('announces the text as a single node', () => {
     const region = makeRegion();
     new AnnouncerDom(region).announce('hello from acter');
 
     expect(region.childNodes).toHaveLength(1);
     expect(region.textContent).toBe('hello from acter');
+  });
+
+  it('appends back-to-back announcements as distinct nodes so neither clobbers the other', () => {
+    const region = makeRegion();
+    const announcer = new AnnouncerDom(region);
+
+    // The fail case: error output immediately followed by the failure status.
+    announcer.announce('error: the command reported a problem');
+    announcer.announce('command failed, exit code 2');
+
+    // Both are present, in order, for the AT to read as two additions.
+    expect(region.childNodes).toHaveLength(2);
+    expect(region.children[0]?.textContent).toBe(
+      'error: the command reported a problem',
+    );
+    expect(region.children[1]?.textContent).toBe('command failed, exit code 2');
   });
 
   it('empties the region after the clear delay without replacing the node', () => {
@@ -51,7 +67,7 @@ describe('AnnouncerDom', () => {
     expect(document.getElementById('announcer')).toBe(region);
   });
 
-  it('restarts the countdown on each announcement so a burst is never cut short', () => {
+  it('restarts the idle countdown on each announcement so a burst is never cut short', () => {
     const region = makeRegion();
     const announcer = new AnnouncerDom(region);
 
@@ -59,23 +75,14 @@ describe('AnnouncerDom', () => {
     vi.advanceTimersByTime(CLEAR_AFTER_MS - 100);
     announcer.announce('phase two');
 
-    // The first announcement's timer must not clear the second one.
+    // The first announcement's timer must not clear the accumulated burst.
     vi.advanceTimersByTime(200);
-    expect(region.textContent).toBe('phase two');
+    expect(region.childNodes).toHaveLength(2);
+    expect(region.textContent).toBe('phase onephase two');
 
-    // The second announcement's own countdown still applies.
+    // After the last announcement's own idle window, the whole burst is cleared.
     vi.advanceTimersByTime(CLEAR_AFTER_MS);
+    expect(region.childNodes).toHaveLength(0);
     expect(region.textContent).toBe('');
-  });
-
-  it('replaces previous text rather than appending it', () => {
-    const region = makeRegion();
-    const announcer = new AnnouncerDom(region);
-
-    announcer.announce('first');
-    announcer.announce('second');
-
-    expect(region.childNodes).toHaveLength(1);
-    expect(region.textContent).toBe('second');
   });
 });

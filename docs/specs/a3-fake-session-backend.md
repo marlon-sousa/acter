@@ -358,24 +358,39 @@ version, expected vs observed):
   all assert events that arrived down it). This matches the spec's stated fallback
   ("if the mock runtime cannot carry a Channel, the E2E suite is the named owner").
 
-- **The live region is emptied after each announcement, and moved out of the
-  navigation path.** Agreed in conversation 2026-07-20 while dry-running the manual
-  checklist. A live region must stay in the accessibility tree to be announced, so
-  its text is also reachable by browse-mode navigation; with the region sitting
-  between the results and the edit field, a screen reader arrowing from the last
-  command heading to the edit field read stale announcement text as page content.
-  Two changes, both in the frontend view layer (no protocol or backend change):
-  the region moves to the end of the document (out of the most-travelled path), and
-  `AnnouncerDom` empties it a short, tunable delay (1.5 s) after each announcement.
-  Emptying is safe and silent: the accessibility event fires on mutation and the
-  screen reader copies the text into its own speech queue, so clearing the DOM later
-  cannot retract unspoken speech; and the default `aria-relevant` ("additions text")
-  means removals are not announced. Consequence accepted: announcements that live
-  only in the region (failure, too-big, patience) become unreviewable in-app after
-  the delay — reviewing them belongs to a later "status lines written into the
-  buffer" decision, not here. The `speech` scenario (a single utterance longer than
-  the clear delay, with a countable closing marker) is added to make truncation, if
-  it ever occurs, audible during the NVDA pass.
+- **The live region appends, is emptied on idle, and moved out of the navigation
+  path.** Agreed in conversation 2026-07-20 while dry-running the manual checklist.
+  Three frontend-only changes (no protocol or backend change):
+  1. *Moved.* A live region must stay in the accessibility tree to be announced, so
+     its text is reachable by browse-mode navigation; with the region between the
+     results and the edit field, a screen reader arrowing from the last command
+     heading to the edit field read stale announcement text as page content. The
+     region moves to the end of the document, off the most-travelled path.
+  2. *Appends instead of replacing.* The `fail` dry run exposed a clobber: the error
+     output (`Auto`) and the immediately-following `command failed, exit code N` both
+     went to one region via `replaceChildren`, so the failure overwrote the output
+     before the screen reader spoke it — only the failure was heard. `AnnouncerDom`
+     now appends each announcement as a distinct node; a polite region reads additions
+     in order (default `aria-relevant` is "additions text"), so back-to-back messages
+     are all spoken, in order. Throttling a genuine flood is not this layer's job —
+     that is the backend babble guard (B1); the frontend says every announcement the
+     backend produced. Whether *status* announcements belong in a region separate from
+     *output* (with their own polite/assertive and ordering semantics) is deferred to
+     a DESIGN open question tied to the B1 pacing work; the end-of-command failure
+     status is naturally after-the-output, but patience/too-big/alt-screen are
+     inherently mid-command and cannot wait for command end.
+  3. *Emptied on idle.* A single restarting timer empties the region a short, tunable
+     delay (1.5 s) after the last announcement, so a burst accumulates and is cleared
+     only once it settles. Emptying is safe and silent: the accessibility event fires
+     on mutation and the screen reader copies the text into its own speech queue, so
+     clearing the DOM later cannot retract unspoken speech, and removals are not
+     announced. Consequence accepted: region-only announcements (failure, too-big,
+     patience) become unreviewable in-app after the delay — reviewing them belongs to a
+     later "status lines written into the buffer" decision, not here.
+
+  The `speech` scenario (a single utterance longer than the clear delay, with a
+  countable closing marker) is added to make truncation, if it ever occurs, audible
+  during the NVDA pass.
 
 ## Definition of done
 

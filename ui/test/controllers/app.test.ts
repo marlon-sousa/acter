@@ -170,7 +170,7 @@ describe('event rendering (decision 2)', () => {
     expect(beep.beeps).toBe(0);
   });
 
-  it('a nonzero exit code always announces the failure with the code', async () => {
+  it('announces the auto-read output and then the failure, in that order', async () => {
     const { backend, announcer, beep, controller } = makeApp();
     await controller.attach();
 
@@ -178,8 +178,10 @@ describe('event rendering (decision 2)', () => {
     backend.emit({ type: 'Output', command_id: 1, text: 'error: boom', read_mode: 'Auto' });
     backend.emit({ type: 'CommandFinished', command_id: 1, exit_code: 2, read_mode: 'Auto' });
 
-    expect(announcer.announcements).toContain(failureMessage(2));
-    expect(announcer.announcements).toContain('command failed, exit code 2');
+    // Both are announced, output first — the announcer appends rather than replacing,
+    // so the failure never clobbers the error output the user needs to hear.
+    expect(announcer.announcements).toEqual(['error: boom', failureMessage(2)]);
+    expect(announcer.announcements[1]).toBe('command failed, exit code 2');
     expect(beep.beeps).toBe(0);
   });
 
