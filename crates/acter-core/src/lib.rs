@@ -5,7 +5,9 @@
 #![warn(unreachable_pub)]
 
 mod entities;
+mod ports;
 
 pub use entities::{
     CommandId, ConnectionState, ExitCode, Mode, ReadMode, SessionEvent, SessionId, SubmitAck,
 };
+pub use ports::{EventSink, SessionApi};

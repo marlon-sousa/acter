@@ -13,6 +13,7 @@ name = "acter-app"
 version = "0.1.0"
 dependencies = [
  "acter-core",
+ "serde",
  "serde_json",
  "specta",
  "specta-serde",

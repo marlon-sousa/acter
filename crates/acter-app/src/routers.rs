@@ -4,14 +4,15 @@
 //! companion items (`__cmd__<name>` etc.) that `generate_handler!` resolves
 //! alongside the function, and a named re-export would leave them behind.
 
-mod echo;
+mod session;
 
-pub(crate) use echo::*;
+pub(crate) use session::*;
 
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
 
+    use acter_core::{CommandId, SubmitAck};
     use serde_json::{Value, json};
     use tauri::ipc::{CallbackFn, InvokeBody};
     use tauri::test::{INVOKE_KEY, get_ipc_response, mock_builder, mock_context, noop_assets};
@@ -19,19 +20,24 @@ mod tests {
     use tauri::{WebviewWindowBuilder, generate_handler};
 
     use crate::container::AppState;
-    use crate::services::EchoService;
+    use crate::entities::FakeScript;
+    use crate::services::FakeSessionService;
 
-    /// Builds the app on the Tauri mock runtime with the real service wired into
-    /// managed state, then invokes `cmd` through the real IPC pipeline — the same
-    /// path a webview `invoke` takes: command registration, state extraction, and
-    /// argument deserialization, none of which unit tests reach.
-    fn invoke(cmd: &str, args: Value) -> Result<String, Value> {
+    /// Builds the app on the Tauri mock runtime with the real `FakeSessionService`
+    /// wired into managed state, then invokes `cmd` through the real IPC pipeline —
+    /// the same path a webview `invoke` takes (registration, state extraction,
+    /// argument deserialization), none of which unit tests reach. No sink is attached,
+    /// so `submit_command` spawns no playback thread and only the ack is exercised.
+    fn invoke(cmd: &str, args: Value) -> Result<Value, Value> {
         let state = AppState {
-            echo: Arc::new(EchoService),
+            session: Arc::new(FakeSessionService::new(FakeScript::default())),
         };
         let app = mock_builder()
             .manage(state)
-            .invoke_handler(generate_handler![super::echo])
+            .invoke_handler(generate_handler![
+                super::submit_command,
+                super::attach_session
+            ])
             .build(mock_context(noop_assets()))
             .expect("failed to build the mock app");
         let webview = WebviewWindowBuilder::new(&app, "main", Default::default())
@@ -49,24 +55,23 @@ mod tests {
                 invoke_key: INVOKE_KEY.to_string(),
             },
         )
-        .map(|body| {
-            body.deserialize::<String>()
-                .expect("echo response was not a string")
-        })
+        .map(|body| body.deserialize::<Value>().expect("response was not JSON"))
     }
 
     #[test]
-    fn echo_round_trips_through_the_real_router() {
-        let out = invoke("echo", json!({ "text": "git status" })).expect("echo should succeed");
-        assert_eq!(out, "git status");
+    fn submit_command_returns_a_submit_ack_through_the_real_router() {
+        let out = invoke("submit_command", json!({ "sessionId": 1, "line": "small" }))
+            .expect("submit_command should succeed");
+        let ack: SubmitAck = serde_json::from_value(out).expect("response should be a SubmitAck");
+        assert_eq!(ack.command_id, CommandId(1));
     }
 
     #[test]
-    fn missing_argument_surfaces_an_error_not_a_panic() {
-        let err = invoke("echo", json!({}))
-            .expect_err("a missing `text` argument must surface as an error response");
+    fn submit_command_missing_line_surfaces_an_error_not_a_panic() {
+        let err = invoke("submit_command", json!({ "sessionId": 1 }))
+            .expect_err("a missing `line` argument must surface as an error response");
         assert!(
-            err.to_string().contains("text"),
+            err.to_string().contains("line"),
             "error should name the missing argument, got: {err}"
         );
     }

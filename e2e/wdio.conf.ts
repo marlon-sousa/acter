@@ -15,6 +15,9 @@
 // Specs are fully independent; raising maxInstances parallelizes them safely.
 
 import { spawn, type ChildProcess } from 'node:child_process';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 // The workspace target dir sits one level up from e2e/. `npm run test:e2e` builds
@@ -31,6 +34,31 @@ const appBinaryPath = fileURLToPath(
 );
 
 const BASE_PORT = 4600;
+
+// The E2E fake script config (spec: decision 8). Every delay range is deterministic
+// (min equal to max) and short, and iteration counts are small, so scenarios play
+// fast and produce exactly the same event sequence on every run. Written to a temp
+// file per worker and pointed at with ACTER_FAKE_SCRIPT when the app is spawned.
+const FAST_MS = { min_ms: 20, max_ms: 20 };
+const e2eFakeScript = {
+  small: { output_delay: FAST_MS },
+  big: { output_delay: FAST_MS, line_count: 40, finish_delay: FAST_MS },
+  fail: { output_delay: FAST_MS, exit_code: 2 },
+  slow: { chunk_delay: FAST_MS },
+  forever: {
+    chunk_delay: FAST_MS,
+    patience_delay: FAST_MS,
+    quiet_interval: FAST_MS,
+  },
+  nano: { enter_delay: FAST_MS, leave_delay: FAST_MS },
+  tail: { iterations: 2, interval: FAST_MS },
+  burst: {
+    flood_delay: FAST_MS,
+    flood_lines: 60,
+    iterations: 2,
+    interval: FAST_MS,
+  },
+};
 
 // Module state is per worker process (each spec file runs in its own worker, and
 // the worker loads this config module independently).
@@ -100,8 +128,18 @@ export const config: WebdriverIO.Config = {
     const workerIndex = Number(cid?.split('-')[1] ?? 0);
     const port = BASE_PORT + workerIndex;
 
+    // Write this worker's deterministic fake script config and point the app at it,
+    // so E2E runs entirely on its own generated config (spec acceptance criterion 7).
+    const configDir = mkdtempSync(join(tmpdir(), 'acter-e2e-'));
+    const configPath = join(configDir, 'fake-script.json');
+    writeFileSync(configPath, JSON.stringify(e2eFakeScript));
+
     app = spawn(appBinaryPath, [], {
-      env: { ...process.env, TAURI_WEBDRIVER_PORT: String(port) },
+      env: {
+        ...process.env,
+        TAURI_WEBDRIVER_PORT: String(port),
+        ACTER_FAKE_SCRIPT: configPath,
+      },
       stdio: 'ignore',
     });
     await waitReady(port, 30_000);

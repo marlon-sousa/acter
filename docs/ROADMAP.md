@@ -69,13 +69,19 @@ the answer to "what should we do now?".
    guard, and a frontend exhaustiveness guard that fails `tsc` on an unhandled
    variant. Types only — no producers (A3) and no invoke/channel runtime helpers.
    Also landed: `.gitattributes` LF-pins the generated binding.
-7. A3, fake session backend. Spec: none yet → specify first. Scope sketch:
-   scripted SessionApi fake (small output, over-threshold output, failing command,
-   slow command, never-ending command) wired into the harness; unlocks the full
-   manual matrix (auto-read, too-big + beep, exit-code announcements, pacing).
-   The spec conversation must decide: where the beep lives (first real use of the
-   Notifier port) and how the frontend renders pacing verdicts (DESIGN.md, Output
-   pacing).
+7. **Done** — A3, fake session backend. Spec:
+   [a3-fake-session-backend.md](specs/a3-fake-session-backend.md). Scripted
+   `SessionApi` fake speaking the A2 protocol over the real Tauri Channel path, wired
+   in as the default backend (attached automatically at startup); unlocks the full
+   manual matrix (auto-read, too-big + beep, exit-code announcements, pacing,
+   alt-screen). Nine scenarios selected by command name (small, big, fail, slow,
+   forever, nano, tail, burst, echo fallback), config-driven by the fake script config
+   (`ACTER_FAKE_SCRIPT` overrides built-in manual-testing defaults; E2E generates its
+   own deterministic config). The two flagged decisions were resolved: the beep is a
+   frontend view adapter, not a backend port (ARCHITECTURE `Notifier` removed), and
+   the frontend renders each pacing verdict per decision 2. Also landed: acter-core's
+   first ports (`SessionApi`, `EventSink`), the `ChannelSink` adapter; echo harness
+   removed. `get_session_snapshot` re-deferred to convergence.
 8. A4, completion path. Spec: none yet → specify first. Scope sketch: fake
    completion provider, Tab handling in the edit field, completion announcement.
 9. A5.2 and onward — iteration entries appear here as NVDA findings arrive.

@@ -144,6 +144,13 @@ individually), so cd, environment, and aliases persist between commands.
   runtime via a per-session configuration screen.
 - **Tabs are coming:** each tab is one session. (Non-visual tab navigation UX is an
   open question.)
+- **The scripted fake session is a permanent supported session kind** — **Decided**
+  (spec A3, decision 9; agreed in conversation 2026-07-19). It is selectable like any
+  real shell once the session/profile UI exists, and is the default backend until
+  then (the frontend attaches to it automatically at startup). A scriptable session
+  stays permanently useful for accessibility experiments, demos, and reproducing NVDA
+  findings without a real shell; convergence swaps the default, it does not delete the
+  fake.
 
 ### Auto-read threshold — **Decided**
 
