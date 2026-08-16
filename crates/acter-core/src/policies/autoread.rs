@@ -222,7 +222,11 @@ pub fn on_command_end(
 /// Applies the size verdict and the babble guard to one mid-command chunk. Once the
 /// guard has tripped the command is silent for the rest of its life — including its
 /// "too big" announcements, which are exactly as repetitive when the flood arrives in
-/// large chunks. Before that, a `TooBig` verdict flushes and breaks the auto-read
+/// large chunks. Silent means unspoken, not withheld: chunks keep flushing under
+/// [`ReadMode::Quiet`], so the text still reaches the results buffer and stays
+/// reviewable while the command runs. This is the one place `Quiet` is produced —
+/// [`verdict`] never returns it, because it is a decision about babble, not size.
+/// Before the trip, a `TooBig` verdict flushes and breaks the auto-read
 /// streak (it is not an auto-read), and an `Auto` verdict flushes and extends the
 /// streak — until `babble_limit` consecutive auto-reads have already been spoken, at
 /// which point the *next* one trips the guard and emits `OutputContinues` once
@@ -232,8 +236,11 @@ fn flush_with_babble_guard(
     config: &PacingConfig,
     unspoken: TextSize,
 ) -> (PacingState, PacingAction) {
-    if unspoken.lines == 0 && unspoken.chars == 0 || state.babble_tripped {
+    if unspoken.lines == 0 && unspoken.chars == 0 {
         return (state, PacingAction::None);
+    }
+    if state.babble_tripped {
+        return (state, PacingAction::Flush(ReadMode::Quiet));
     }
 
     match verdict(unspoken, config) {
@@ -576,10 +583,36 @@ mod tests {
         assert_eq!(s.consecutive_auto_reads, config.babble_limit);
         state = s;
 
-        // The fifth and everything after it is silent.
+        // The fifth and everything after it is unspoken — but still flushed, so the
+        // results buffer keeps up with the command instead of freezing mid-run.
         let (s, out) = on_wake(state, &config, small(), at);
-        assert_eq!(out.action, PacingAction::None);
+        assert_eq!(out.action, PacingAction::Flush(ReadMode::Quiet));
         assert_eq!(s.consecutive_auto_reads, config.babble_limit);
+    }
+
+    #[test]
+    fn a_tripped_guard_still_flushes_so_the_buffer_stays_reviewable() {
+        let config = PacingConfig::default();
+        let tripped = PacingState {
+            consecutive_auto_reads: config.babble_limit,
+            babble_tripped: true,
+            ..PacingState::default()
+        };
+
+        // Quiet is reachable only through the guard: `verdict` is about size and never
+        // returns it. The frontend appends Quiet output to the buffer and says nothing.
+        let (state, out) = on_wake(tripped, &config, small(), config.quiescence);
+        assert_eq!(out.action, PacingAction::Flush(ReadMode::Quiet));
+        assert_eq!(state, tripped);
+
+        // Nothing unspoken is still nothing to render.
+        let (_, out) = on_wake(
+            tripped,
+            &config,
+            TextSize { lines: 0, chars: 0 },
+            config.quiescence,
+        );
+        assert_eq!(out.action, PacingAction::None);
     }
 
     #[test]
@@ -617,8 +650,9 @@ mod tests {
 
         // "Go quiet for the remainder of the command" is literal: a flood arriving in
         // chunks over the size cap would otherwise babble "too big" just as endlessly.
+        // The text is still rendered, it just carries no announcement.
         let (state, out) = on_wake(tripped, &config, big, config.quiescence);
-        assert_eq!(out.action, PacingAction::None);
+        assert_eq!(out.action, PacingAction::Flush(ReadMode::Quiet));
         assert_eq!(state, tripped);
     }
 
@@ -634,7 +668,7 @@ mod tests {
             on_wake(tripped, &config, small(), config.quiescence)
                 .1
                 .action,
-            PacingAction::None
+            PacingAction::Flush(ReadMode::Quiet)
         );
 
         // A fresh PacingState (new command) is not tripped.

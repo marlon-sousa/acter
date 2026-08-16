@@ -69,7 +69,17 @@ in this PR:
    chunk it counts. "Quiet for the remainder" is literal and covers the too-big
    announcement as well as auto-reads — a flood arriving in chunks over the size cap is
    exactly as repetitive as one arriving under it. Before the guard trips, a too-big
-   chunk breaks the streak (it is an announcement, not an auto-read). It was DESIGN's last unratified pacing rule; B1 is the entry
+   chunk breaks the streak (it is an announcement, not an auto-read).
+
+   **Quiet means unspoken, not withheld.** A tripped guard keeps flushing, under
+   `ReadMode::Quiet`: the text reaches the results buffer and stays reviewable while the
+   command runs, it simply carries no announcement. This is what A2's `Quiet` variant was
+   defined for ("suppressed (e.g. the babble guard tripped); accumulates silently in the
+   buffer") and what the frontend already implements, and the guard is the only producer
+   of it — `verdict` never returns `Quiet`, because it answers a question about size, not
+   about babble. Withholding instead would freeze a user's view of a running `cargo
+   build` at its third line for the rest of the build, while the backend held text it
+   was refusing to show. It was DESIGN's last unratified pacing rule; B1 is the entry
    that implements pacing, so leaving it proposed would leave a hole exactly where the
    hardest case lives (`watch -n1`, chatty logs).
 7. **The policy returns a domain decision, not a protocol type.** `PacingAction` is core
@@ -149,9 +159,9 @@ Table tests, inline per convention, no fakes anywhere:
   and only once; a session that goes quiescent before the window never fires it; a
   command whose output resumes after patience does not re-fire.
 - **Babble guard:** `babble_limit` consecutive auto-reads are all read and the next chunk
-  trips it; the outcome is emitted once; subsequent chunks in that command are silent,
-  too-big ones included; a too-big chunk before the trip breaks the streak; a new command
-  resets the count; follow mode suppresses the guard entirely.
+  trips it; the outcome is emitted once; subsequent chunks in that command flush `Quiet`
+  rather than announcing, too-big ones included; a too-big chunk before the trip breaks
+  the streak; a new command resets the count; follow mode suppresses the guard entirely.
 - **Command end:** the remainder is flushed under the size policy; a command ending
   inside a quiescence window still flushes; ending with nothing unspoken emits no action.
 - **Session state:** every transition in decision 8 and 9, including the recovery case

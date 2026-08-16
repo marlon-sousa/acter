@@ -131,8 +131,13 @@ the answer to "what should we do now?".
     tripped, while its streak reset was unreachable; and follow mode never advanced the
     patience window, so switching it off fired a stale announcement. `PacingState` gains
     `continuous_since` — the fifth field B1's own implementation note predicted would be
-    needed if strict "gap resets the window" behavior was ever wanted. Six new tests
-    (46 in `acter-core`, up from 40).
+    needed if strict "gap resets the window" behavior was ever wanted. Also folded in
+    from the B1.5 spec conversation: a tripped guard now flushes `ReadMode::Quiet`
+    instead of nothing, so the results buffer keeps up with a running command instead of
+    freezing at the chunk that tripped it. That makes `Quiet` reachable for the first
+    time — A2 defined it for exactly this case and the frontend already renders it —
+    and it keeps `PacingAction::None` meaning only "nothing to emit". Seven new tests
+    (47 in `acter-core`, up from 40).
 14. B2, boundary. Spec: none yet → specify first. Scope sketch: OSC 133
     recognition + command-block tracker; proptest (never panics on arbitrary
     bytes); golden-fixture format.
