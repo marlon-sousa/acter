@@ -2,7 +2,7 @@
 // backend's SessionEvent stream into the buffer, live region, and beep. Framework-free:
 // sees only the BackendApi port and the view ports.
 
-import type { CommandId, SessionEvent } from '../protocol';
+import type { Announcement, CommandId, SessionEvent } from '../protocol';
 import type { AnnouncerView } from '../ports/announcer_view';
 import type { BackendApi } from '../ports/backend_api';
 import type { BeepView } from '../ports/beep_view';
@@ -18,6 +18,11 @@ export const altScreenEnteredMessage =
   'this program needs interactive mode, which is not available yet. Press Ctrl+C to return to the prompt';
 export const altScreenLeftMessage = 'interactive program ended';
 export const commandStoppedMessage = 'command stopped';
+// The babble guard tripped: output keeps arriving and keeps reaching the buffer, it is
+// simply no longer read aloud. The wording says both halves, because "quiet" here never
+// means the output stopped or was withheld (DESIGN, buffer and speech are separate).
+export const outputContinuesMessage =
+  'output continues, accumulating in the buffer without being read';
 export function tooBigMessage(lineCount: number): string {
   return `${lineCount} lines arrived, too big to read`;
 }
@@ -27,6 +32,12 @@ export function failureMessage(exitCode: number): string {
 
 function assertNever(event: never): never {
   throw new Error(`unhandled SessionEvent variant: ${JSON.stringify(event)}`);
+}
+
+function assertNeverAnnouncement(announcement: never): never {
+  throw new Error(
+    `unhandled Announcement kind: ${JSON.stringify(announcement)}`,
+  );
 }
 
 export class AppController {
@@ -129,6 +140,11 @@ export class AppController {
       case 'AltScreenLeft':
         this.announcer.announce(altScreenLeftMessage);
         break;
+      case 'Announce':
+        // Speaking is its own event (B1.5): the buffer is loaded by Output, and this
+        // says something about text that is already there. Nothing is appended here.
+        this.handleAnnouncement(event.command_id, event.announcement);
+        break;
       case 'TitleChanged':
       case 'ConnectionChanged':
         // No UX decided yet (no producers in Phase 1); handled to keep the switch
@@ -136,6 +152,35 @@ export class AppController {
         break;
       default:
         assertNever(event);
+    }
+  }
+
+  // One announcement, turned into one of the pinned strings this module owns. The
+  // backend sends what happened, never the words: `TooBig` carries a line count rather
+  // than the text, because past the threshold the text is not held backend-side at all.
+  private handleAnnouncement(
+    commandId: CommandId,
+    announcement: Announcement,
+  ): void {
+    switch (announcement.kind) {
+      case 'ReadAloud':
+        this.announcer.announce(announcement.text);
+        break;
+      case 'TooBig':
+        this.tooBig.add(commandId);
+        this.announcer.announce(tooBigMessage(announcement.lines));
+        break;
+      case 'StillRunning':
+        this.announcer.announce(patienceMessage);
+        break;
+      case 'OutputContinues':
+        this.announcer.announce(outputContinuesMessage);
+        break;
+      case 'Failed':
+        this.announcer.announce(failureMessage(announcement.exit_code));
+        break;
+      default:
+        assertNeverAnnouncement(announcement);
     }
   }
 

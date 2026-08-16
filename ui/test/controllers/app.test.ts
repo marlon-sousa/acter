@@ -15,6 +15,7 @@ import {
   altScreenLeftMessage,
   commandStoppedMessage,
   failureMessage,
+  outputContinuesMessage,
   patienceMessage,
   tooBigMessage,
 } from '../../src/controllers/app';
@@ -371,5 +372,126 @@ describe('focus flow', () => {
     buffer.focused = true;
     controller.escapeToEditField();
     expect(editField.focused).toBe(true);
+  });
+});
+
+describe('Announce (B1.5): speech is its own event', () => {
+  it('ReadAloud speaks the text without appending it — Output already did', async () => {
+    const { backend, buffer, announcer, controller } = makeApp();
+    await controller.attach();
+
+    backend.emit({ type: 'CommandStarted', command_id: 1 });
+    backend.emit({ type: 'Output', command_id: 1, text: 'hello\n', read_mode: 'Quiet' });
+    backend.emit({
+      type: 'Announce',
+      command_id: 1,
+      announcement: { kind: 'ReadAloud', text: 'hello\n' },
+    });
+
+    expect(buffer.appended).toEqual([{ commandId: 1, text: 'hello\n' }]);
+    expect(announcer.announcements).toEqual(['hello\n']);
+  });
+
+  it('TooBig announces the count the backend sent, never a recount of the text', async () => {
+    const { backend, buffer, announcer, controller } = makeApp();
+    await controller.attach();
+
+    backend.emit({ type: 'CommandStarted', command_id: 1 });
+    // Past the threshold the backend does not hold the text, so the count cannot be
+    // re-derived here even in principle — it is carried.
+    backend.emit({ type: 'Output', command_id: 1, text: 'y\ny\n', read_mode: 'Quiet' });
+    backend.emit({
+      type: 'Announce',
+      command_id: 1,
+      announcement: { kind: 'TooBig', lines: 500 },
+    });
+
+    expect(announcer.announcements).toEqual([tooBigMessage(500)]);
+    expect(buffer.appended).toEqual([{ commandId: 1, text: 'y\ny\n' }]);
+  });
+
+  it('a too-big Announce arms the completion beep', async () => {
+    const { backend, beep, controller } = makeApp();
+    await controller.attach();
+
+    backend.emit({ type: 'CommandStarted', command_id: 1 });
+    backend.emit({
+      type: 'Announce',
+      command_id: 1,
+      announcement: { kind: 'TooBig', lines: 500 },
+    });
+    expect(beep.beeps).toBe(0);
+
+    backend.emit({
+      type: 'CommandFinished',
+      command_id: 1,
+      exit_code: 0,
+      read_mode: 'Quiet',
+    });
+    expect(beep.beeps).toBe(1);
+  });
+
+  it('StillRunning speaks the patience string', async () => {
+    const { backend, announcer, controller } = makeApp();
+    await controller.attach();
+
+    backend.emit({ type: 'CommandStarted', command_id: 1 });
+    backend.emit({
+      type: 'Announce',
+      command_id: 1,
+      announcement: { kind: 'StillRunning' },
+    });
+
+    expect(announcer.announcements).toEqual([patienceMessage]);
+  });
+
+  it('OutputContinues says the output is still arriving, not that it stopped', async () => {
+    const { backend, announcer, controller } = makeApp();
+    await controller.attach();
+
+    backend.emit({ type: 'CommandStarted', command_id: 1 });
+    backend.emit({
+      type: 'Announce',
+      command_id: 1,
+      announcement: { kind: 'OutputContinues' },
+    });
+
+    expect(announcer.announcements).toEqual([outputContinuesMessage]);
+    expect(outputContinuesMessage).toContain('buffer');
+  });
+
+  it('Failed speaks the exit code', async () => {
+    const { backend, announcer, controller } = makeApp();
+    await controller.attach();
+
+    backend.emit({ type: 'CommandStarted', command_id: 1 });
+    backend.emit({
+      type: 'Announce',
+      command_id: 1,
+      announcement: { kind: 'Failed', exit_code: 2 },
+    });
+
+    expect(announcer.announcements).toEqual([failureMessage(2)]);
+  });
+
+  it('quiet Output is buffered and silent, so the babble guard withholds nothing', async () => {
+    const { backend, buffer, announcer, controller } = makeApp();
+    await controller.attach();
+
+    backend.emit({ type: 'CommandStarted', command_id: 1 });
+    backend.emit({
+      type: 'Announce',
+      command_id: 1,
+      announcement: { kind: 'OutputContinues' },
+    });
+    for (const text of ['still\n', 'coming\n']) {
+      backend.emit({ type: 'Output', command_id: 1, text, read_mode: 'Quiet' });
+    }
+
+    expect(buffer.appended).toEqual([
+      { commandId: 1, text: 'still\n' },
+      { commandId: 1, text: 'coming\n' },
+    ]);
+    expect(announcer.announcements).toEqual([outputContinuesMessage]);
   });
 });

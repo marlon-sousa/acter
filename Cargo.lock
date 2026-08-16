@@ -21,6 +21,7 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tauri-plugin-wdio-webdriver",
+ "tokio",
 ]
 
 [[package]]
@@ -30,6 +31,7 @@ dependencies = [
  "serde",
  "serde_json",
  "specta",
+ "tokio",
 ]
 
 [[package]]
