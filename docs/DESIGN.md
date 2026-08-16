@@ -287,6 +287,27 @@ forever), announce "output continues" and go quiet unless follow mode is on.
 as it arrives, ignoring thresholds and the babble guard. Its job is intentional
 monitoring; quiescence handles the organic cases.
 
+**Buffer and speech are separate paths — Decided.** The buffer loads whenever content
+arrives; only speech is subject to policy. Everything above — quiescence, the size
+threshold, patience, the babble guard, follow mode — decides what is *said*, never what
+the user can *find*. Going quiet always means unannounced, never withheld: a user who
+stops being read to must still be able to review the command's output as it happens.
+
+Two consequences. First, the two paths run at different cadences: the buffer is fed on
+the actor's short coalescing tick (tens of milliseconds — see ARCHITECTURE, output
+coalescing), while speech decisions are made on the pacing windows, so one spoken unit
+spans many rendered ones and the two can no longer travel as a single event. Second,
+nothing accumulates backend-side waiting for permission to be shown, which is what a
+gapless flood (`yes`, a busy `tail -f`) would otherwise force: no quiescent gap ever
+occurs, so under a single coupled path the buffer would stay empty for the whole run.
+
+The invariant that binds the two: **never announce text that is not already in the
+buffer.** A user who hears something and presses F6 to review it must find it there.
+
+How the split is expressed in the protocol — announcements carrying their own text
+versus addressing a span of already-rendered output — is B1.5's to settle, and it is
+the same seam as the announcement-channel open question below.
+
 Also decided earlier and unchanged:
 - The status announcement (Ctrl+Shift+S) reports when a command is still running.
 - The frontend caps rendered lines per block (last N lines) for never-ending output;
