@@ -120,18 +120,30 @@ the answer to "what should we do now?".
     out). No driven-port traits and no `Clock` — deliberately deferred to the next
     lane-2 entry (spec deviation recorded in the spec itself). 40 new table tests,
     no fakes.
-13. B2, boundary. Spec: none yet → specify first. Scope sketch: OSC 133
+13. B1.1, pacing policy review fixes. Spec: [b1-foundations.md](specs/b1-foundations.md)
+    (amended in the same PR — no new spec). Five defects found reviewing PR #10, all in
+    `policies::autoread`: the babble guard tripped one chunk early and swallowed that
+    chunk's text; patience was anchored to command start, so a command that sat silent
+    and then spoke announced "still running" on its first chunk; empty chunks (escape
+    sequences, spinner repaints) reset the quiescence clock and could postpone a
+    "Password:" prompt indefinitely; a too-big chunk still announced after the guard had
+    tripped, while its streak reset was unreachable; and follow mode never advanced the
+    patience window, so switching it off fired a stale announcement. `PacingState` gains
+    `continuous_since` — the fifth field B1's own implementation note predicted would be
+    needed if strict "gap resets the window" behavior was ever wanted. Six new tests
+    (46 in `acter-core`, up from 40).
+14. B2, boundary. Spec: none yet → specify first. Scope sketch: OSC 133
     recognition + command-block tracker; proptest (never panics on arbitrary
     bytes); golden-fixture format.
-14. B3, terminal engine. Spec: none yet → specify first. Scope sketch: acter-term
+15. B3, terminal engine. Spec: none yet → specify first. Scope sketch: acter-term
     wrapping alacritty_terminal behind TerminalEngine; text extraction +
     alt-screen detection tests.
-15. B4, local transport. Spec: none yet → specify first. Scope sketch: LocalPty on
+16. B4, local transport. Spec: none yet → specify first. Scope sketch: LocalPty on
     ConPTY + blocking-reader thread; real-shell integration test in a separate CI
     job.
-16. B5, PowerShell adapter. Spec: none yet → specify first. Scope sketch: OSC 133
+17. B5, PowerShell adapter. Spec: none yet → specify first. Scope sketch: OSC 133
     injection snippet; record the first golden transcripts as fixtures.
-17. B6, real SessionService. Spec: none yet → specify first. Scope sketch:
+18. B6, real SessionService. Spec: none yet → specify first. Scope sketch:
     implements SessionApi; tested against fake driven ports.
 
 ## Convergence (requires A3 and B6 both Done)
