@@ -112,9 +112,14 @@ the answer to "what should we do now?".
 
 ## Status board — lane 2: domain (pure Rust; may start anytime, parallel to lane 1)
 
-12. B1, foundations. Spec: none yet → specify first. Scope sketch: driven-port
-    traits, session entity/state machine, auto-read/pacing policy against a fake
-    clock; table tests.
+12. **Done** — B1, foundations. Spec: [b1-foundations.md](specs/b1-foundations.md).
+    `acter-core` gained `entities/session_state.rs` (mode/integration/screen state
+    machine, with integration recovery from `Unintegrated`) and
+    `policies/autoread.rs` (the quiescence/patience/babble-guard pacing policy,
+    pure: elapsed time in as a `Duration` offset, decision plus next wake deadline
+    out). No driven-port traits and no `Clock` — deliberately deferred to the next
+    lane-2 entry (spec deviation recorded in the spec itself). 40 new table tests,
+    no fakes.
 13. B2, boundary. Spec: none yet → specify first. Scope sketch: OSC 133
     recognition + command-block tracker; proptest (never panics on arbitrary
     bytes); golden-fixture format.
