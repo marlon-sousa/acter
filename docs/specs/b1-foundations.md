@@ -62,9 +62,24 @@ in this PR:
    endless command is buffer management, which belongs to the actor alongside the
    line-cap rendering decision DESIGN already assigns elsewhere.
 6. **The babble guard is ratified**, with the count configurable like every other
-   threshold: after `babble_limit` (default 3) consecutive auto-read chunks within one
-   command, emit the babble outcome once and go quiet for the remainder of that command
-   unless follow mode is on. It was DESIGN's last unratified pacing rule; B1 is the entry
+   threshold: `babble_limit` (default 3) consecutive auto-read chunks within one command
+   are read, and the *next* one instead emits the babble outcome once and goes quiet for
+   the remainder of that command unless follow mode is on. "After three chunks" is
+   DESIGN's wording and means three are spoken; the guard never swallows the text of a
+   chunk it counts. "Quiet for the remainder" is literal and covers the too-big
+   announcement as well as auto-reads — a flood arriving in chunks over the size cap is
+   exactly as repetitive as one arriving under it. Before the guard trips, a too-big
+   chunk breaks the streak (it is an announcement, not an auto-read).
+
+   **Quiet means unspoken, not withheld.** A tripped guard keeps flushing, under
+   `ReadMode::Quiet`: the text reaches the results buffer and stays reviewable while the
+   command runs, it simply carries no announcement. This is what A2's `Quiet` variant was
+   defined for ("suppressed (e.g. the babble guard tripped); accumulates silently in the
+   buffer") and what the frontend already implements, and the guard is the only producer
+   of it — `verdict` never returns `Quiet`, because it answers a question about size, not
+   about babble. Withholding instead would freeze a user's view of a running `cargo
+   build` at its third line for the rest of the build, while the backend held text it
+   was refusing to show. It was DESIGN's last unratified pacing rule; B1 is the entry
    that implements pacing, so leaving it proposed would leave a hole exactly where the
    hardest case lives (`watch -n1`, chatty logs).
 7. **The policy returns a domain decision, not a protocol type.** `PacingAction` is core
@@ -104,8 +119,9 @@ All in `acter-core`. No other crate is touched.
 ### `entities/pacing_state.rs`
 
 - `PacingState` (role: entity/value): consecutive auto-read count, whether patience has
-  fired for this command, whether the babble guard has tripped, and the offset of the
-  last output.
+  fired for this command, whether the babble guard has tripped, the offset of the last
+  output, and the offset at which the current run of unread output began (see the
+  patience implementation note).
 - `PacingConfig` (role: entity/value): `quiescence` (0.5s), `patience` (10s),
   `max_lines` (25), `max_chars` (2000), `babble_limit` (3) — DESIGN's decided defaults
   as a `Default` impl, following A3's fake-script-config precedent of numbers-as-data.
@@ -142,9 +158,10 @@ Table tests, inline per convention, no fakes anywhere:
 - **Patience:** continuous output with no quiescent gap for the whole window fires once
   and only once; a session that goes quiescent before the window never fires it; a
   command whose output resumes after patience does not re-fire.
-- **Babble guard:** the Nth consecutive auto-read trips it; the outcome is emitted once;
-  subsequent chunks in that command are silent; a new command resets the count; follow
-  mode suppresses the guard entirely.
+- **Babble guard:** `babble_limit` consecutive auto-reads are all read and the next chunk
+  trips it; the outcome is emitted once; subsequent chunks in that command flush `Quiet`
+  rather than announcing, too-big ones included; a too-big chunk before the trip breaks
+  the streak; a new command resets the count; follow mode suppresses the guard entirely.
 - **Command end:** the remainder is flushed under the size policy; a command ending
   inside a quiescence window still flushes; ending with nothing unspoken emits no action.
 - **Session state:** every transition in decision 8 and 9, including the recovery case
@@ -184,10 +201,12 @@ Table tests, inline per convention, no fakes anywhere:
 - Line-cap rendering for endless output, and the unspoken-text buffer itself
   (decision 5).
 
-## Implementation notes (amendment, added during implementation)
+## Implementation notes (amendments)
 
-Two plumbing decisions the deliverables section left implicit, recorded here rather
-than left to silently diverge:
+Decisions the deliverables section left implicit, recorded here rather than left to
+silently diverge. The first landed with the implementation in PR #10; the patience and
+empty-chunk notes below, and the babble-guard wording in decision 6, were rewritten in
+B1.1 after review of that PR found the behavior they described to be wrong.
 
 - **`on_output` takes an added `follow_mode: bool` parameter**, not shown in the
   deliverables' signature. Follow mode's bypass ("every chunk flushes `Auto`,
@@ -199,17 +218,25 @@ than left to silently diverge:
   `on_command_end` sees an empty buffer by construction under follow mode (decision
   5 — the actor keeps the unspoken buffer empty because every chunk was already
   flushed), so no parameter was needed there either.
-- **Patience is anchored to command start, not reset by quiescence gaps.** DESIGN's
-  "no quiescent gap for the whole window" reads as literally requiring an
-  uninterrupted stretch, which would need a fifth `PacingState` field (a
-  "continuous-since" timestamp) beyond the four the deliverables section lists.
-  Instead, patience fires once elapsed time since command start reaches
-  `PacingConfig::patience` and no quiescence-triggered flush has happened to occupy
-  that exact wake — a command that goes quiescent and ends well before the patience
-  window simply never reaches it, which satisfies the spec's own patience test case
-  ("a session that goes quiescent before the window never fires it") without the
-  extra field. If a real command later needs the strict "gap resets the window"
-  behavior, that is a one-field addition, not a rearchitecture.
+- **Patience is anchored to the current run of unread output, not to command start.**
+  DESIGN's "no quiescent gap for the whole window" requires an uninterrupted stretch,
+  and anchoring to command start does not express it: a command that sits silent for
+  fifteen seconds and then speaks would announce "long command running, output
+  accumulating in the buffer" the instant its first chunk arrived, having accumulated
+  nothing. So `PacingState` carries a fifth field, `continuous_since`, set to the
+  offset of any chunk that arrives after a quiescent gap — whatever preceded such a gap
+  was flushed, or was never there — and patience fires when `at - continuous_since`
+  reaches `PacingConfig::patience`. A command that goes quiescent and ends before the
+  window still never fires it. Follow mode reads every chunk on arrival, so each chunk
+  restarts the run: nothing accumulates while follow mode is on, and switching it off
+  starts the window fresh instead of firing a stale announcement.
+- **An empty chunk is not output.** A chunk measuring zero lines and zero chars —
+  escape sequences, a cursor move, a repaint that painted no text — leaves `PacingState`
+  untouched, so it cannot push the quiescence deadline out; otherwise a spinner
+  redrawing twice a second would postpone the reading of an already accumulated
+  "Password:" prompt for as long as it kept spinning. The outcome restates the pending
+  deadline (what remains of it) rather than returning `None`, so a caller that re-arms
+  its timer on every outcome does not drop the flush it was already waiting for.
 
 ## Definition of done
 
