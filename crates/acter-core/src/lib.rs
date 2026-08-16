@@ -5,9 +5,14 @@
 #![warn(unreachable_pub)]
 
 mod entities;
+mod policies;
 mod ports;
 
 pub use entities::{
-    CommandId, ConnectionState, ExitCode, Mode, ReadMode, SessionEvent, SessionId, SubmitAck,
+    CommandId, ConnectionState, ExitCode, Integration, Mode, PacingConfig, PacingState, ReadMode,
+    Screen, SessionEvent, SessionId, SessionState, SubmitAck,
+};
+pub use policies::{
+    PacingAction, PacingOutcome, TextSize, measure, on_command_end, on_output, on_wake, verdict,
 };
 pub use ports::{EventSink, SessionApi};
