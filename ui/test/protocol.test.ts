@@ -21,6 +21,8 @@ function describeEvent(event: SessionEvent): string {
       return `output ${event.command_id} (${event.read_mode}): ${event.text}`;
     case 'CommandFinished':
       return `finished ${event.command_id} exit ${event.exit_code} (${event.read_mode})`;
+    case 'CommandInterrupted':
+      return `interrupted ${event.command_id}`;
     case 'CommandStillRunning':
       return `still running ${event.command_id}`;
     case 'AltScreenEntered':

@@ -307,6 +307,20 @@ Also decided earlier and unchanged:
   turn, do two regions read in a guaranteed order across NVDA/JAWS? A3 keeps a single
   polite region that appends each announcement so back-to-back messages are all spoken
   in order (the immediate `fail` clobber is gone); the separate-region question is
+  deferred here. **Live evidence, 2026-08-15 (A3.1's NVDA run, captured through the
+  screen-reader bridge):** two announcements appended within one tick are spoken as a
+  *single concatenated utterance*, not as two. Stopping two commands at once produced
+  one utterance reading "command stopped command stopped". So "the region appends and
+  the reader speaks additions in order" is true about order but not about separation —
+  back-to-back messages merge, and a listener cannot tell one announcement from two.
+  This sharpens the open question: the choice is not only polite-versus-assertive and
+  cross-region ordering, but whether announcements need an enforced boundary
+  (separate nodes are not enough) and whether coalescing should be prevented in the
+  view or upstream by the pacing policy. That case was fake-only (concurrent commands
+  do not occur with a real shell), but the merging mechanism is general and applies to
+  any pair — an auto-read chunk followed immediately by a failure, or too-big followed
+  by patience. Also bears on B1's babble guard, which is the layer that would throttle
+  a genuine flood.
   deferred here. Noted en route: the end-of-command failure status is naturally an
   after-the-output thing, but patience, too-big, and alt-screen are inherently
   mid-command and cannot wait for command end.
