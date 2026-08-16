@@ -120,8 +120,9 @@ the answer to "what should we do now?".
     out). No driven-port traits and no `Clock` — deliberately deferred to the next
     lane-2 entry (spec deviation recorded in the spec itself). 40 new table tests,
     no fakes.
-13. B1.1, pacing policy review fixes. Spec: [b1-foundations.md](specs/b1-foundations.md)
-    (amended in the same PR — no new spec). Five defects found reviewing PR #10, all in
+13. **Done** — B1.1, pacing policy review fixes. Spec:
+    [b1-foundations.md](specs/b1-foundations.md) (amended in the same PR — no new spec).
+    Merged as PR #11 (2026-08-16). Five defects found reviewing PR #10, all in
     `policies::autoread`: the babble guard tripped one chunk early and swallowed that
     chunk's text; patience was anchored to command start, so a command that sat silent
     and then spoke announced "still running" on its first chunk; empty chunks (escape
