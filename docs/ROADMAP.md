@@ -203,8 +203,9 @@ the answer to "what should we do now?".
     so the scheduling contract is asserted without a runtime; `entities/unspoken_text.rs`
     became its own entity, since the bound on held text is an invariant over data;
     `PacingConfig` gained `render_tick` (ARCHITECTURE's number, not DESIGN's); and the
-    production `Clock` adapter waits for the wiring that first spawns an actor, because
-    an adapter nothing constructs fails CI under `-D warnings`.
+    production `SystemClock` adapter landed here rather than being deferred to the entry
+    that first spawns an actor — that is B6 or convergence, and leaving `Clock` on main
+    for months with only a test fake behind it is the very shape B1 refused to create.
 17. B2, boundary. Spec: none yet → specify first. Scope sketch: OSC 133
     recognition + command-block tracker; proptest (never panics on arbitrary
     bytes); golden-fixture format.
