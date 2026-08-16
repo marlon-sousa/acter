@@ -97,7 +97,23 @@ the answer to "what should we do now?".
    `SessionApi::interrupt_command`, and `InterruptAck` were cut from the spec because
    the edit-field input model is under discussion (see A3.2) and a pass-through model
    would delete exactly that work.
-9. A3.2, the `Ctrl+C` interrupt surface. Spec: none yet → **blocked on the input-model
+9. A5.2, announcement serialization in the announcer. Spec: none yet → specify first.
+   Placed ahead of A3.2 and A4 deliberately: it is a defect in already-merged behavior,
+   and unlike A3.2 it is not blocked. A3.1's NVDA run showed that two announcements
+   appended to the live region within one tick are spoken as a **single concatenated
+   utterance** — stopping two commands produced one utterance reading "command stopped
+   command stopped". The events were never ambiguous: two distinct `CommandInterrupted`
+   messages arrived separately, and `app.ts` appended both into the same node in the
+   same tick. So the defect is entirely the announcer's, and so is the fix. Scope
+   sketch: the announcer takes a queue it drains rather than appending on arrival; it
+   may coalesce identical adjacent announcements into a counted form (it owns the pinned
+   strings, so it is the only layer that can); jsdom tests for queueing and coalescing;
+   an NVDA checklist to confirm the result is distinguishable by ear. Open number: the
+   append spacing at which NVDA treats two additions as separate utterances — to be
+   measured through the screen-reader bridge, with the caveat that the bridge captures
+   speech, not audio, so whether separate utterances are *perceptibly* separate stays a
+   human check. Bears directly on DESIGN's announcement-channel open question.
+10. A3.2, the `Ctrl+C` interrupt surface. Spec: none yet → **blocked on the input-model
    decision, not merely unspecified** (the question is stated in A3.1's spec, section
    "The open question this spec deliberately does not bet on"). DESIGN's keystroke map
    already decides that Ctrl+C without a selection interrupts the running command, and
@@ -106,13 +122,13 @@ the answer to "what should we do now?".
    question: with a local edit field it is a `SessionApi` method plus a keystroke
    handler; under a pass-through field it is byte `0x03` written to the PTY and none
    of that exists.
-10. A4, completion path. Spec: none yet → specify first. Scope sketch: fake
+11. A4, completion path. Spec: none yet → specify first. Scope sketch: fake
     completion provider, Tab handling in the edit field, completion announcement.
-11. A5.2 and onward — iteration entries appear here as NVDA findings arrive.
+12. A5.3 and onward — iteration entries appear here as NVDA findings arrive.
 
 ## Status board — lane 2: domain (pure Rust; may start anytime, parallel to lane 1)
 
-12. **Done** — B1, foundations. Spec: [b1-foundations.md](specs/b1-foundations.md).
+13. **Done** — B1, foundations. Spec: [b1-foundations.md](specs/b1-foundations.md).
     `acter-core` gained `entities/session_state.rs` (mode/integration/screen state
     machine, with integration recovery from `Unintegrated`) and
     `policies/autoread.rs` (the quiescence/patience/babble-guard pacing policy,
@@ -120,7 +136,7 @@ the answer to "what should we do now?".
     out). No driven-port traits and no `Clock` — deliberately deferred to the next
     lane-2 entry (spec deviation recorded in the spec itself). 40 new table tests,
     no fakes.
-13. **Done** — B1.1, pacing policy review fixes. Spec:
+14. **Done** — B1.1, pacing policy review fixes. Spec:
     [b1-foundations.md](specs/b1-foundations.md) (amended in the same PR — no new spec).
     Merged as PR #11 (2026-08-16). Five defects found reviewing PR #10, all in
     `policies::autoread`: the babble guard tripped one chunk early and swallowed that
@@ -138,18 +154,41 @@ the answer to "what should we do now?".
     time — A2 defined it for exactly this case and the frontend already renders it —
     and it keeps `PacingAction::None` meaning only "nothing to emit". Seven new tests
     (47 in `acter-core`, up from 40).
-14. B2, boundary. Spec: none yet → specify first. Scope sketch: OSC 133
+15. B1.5, session actor and the `Clock` port. Spec: none yet → agreed in conversation
+    2026-08-16, draft to follow. Placed ahead of B2 by decision: B1 shipped a pacing
+    policy with no caller, so its whole scheduling contract (`wake_after`, and the
+    empty-chunk rule that restates a pending deadline rather than dropping it) is still
+    a hypothesis no code has exercised. B2 is independent of it and can wait; proving
+    the timer loop cannot. Delivers `ports/driven/clock.rs` and
+    `controllers/session_actor.rs` — a controller, not a service, per the module role
+    rule — owning one session's `PacingState`, `SessionState`, and unspoken-text buffer,
+    and mapping `PacingAction` onto `SessionEvent`s. Its inputs arrive as domain facts
+    on a channel (text extracted, command started, command ended with an exit code), so
+    it needs neither `Transport` nor `TerminalEngine` nor the boundary tracker to exist;
+    B2 and B4 later replace the test that feeds it. Decided in conversation: `Clock`
+    supplies `now()` plus a timer the actor selects on, so tests drive time by hand with
+    no tokio time machinery; announcements are their own events carrying their own text,
+    rather than addressing a span of already-rendered output, because the decided
+    frontend line cap can evict a span before speech resolves it and a reader that goes
+    silent when told to speak is the worst failure available here; the actor enforces
+    render-before-announce, so DESIGN's "never announce text that is not already in the
+    buffer" invariant is tested rather than assumed; patience keeps its per-command
+    latch, to be revisited with NVDA evidence rather than guessed at twice. Adds the
+    protocol variant the babble announcement needs (B1 decision 7 recorded the hole).
+    Explicitly **not** here: utterance separation, which A5.2 owns — this entry must
+    only avoid making it worse.
+16. B2, boundary. Spec: none yet → specify first. Scope sketch: OSC 133
     recognition + command-block tracker; proptest (never panics on arbitrary
     bytes); golden-fixture format.
-15. B3, terminal engine. Spec: none yet → specify first. Scope sketch: acter-term
+17. B3, terminal engine. Spec: none yet → specify first. Scope sketch: acter-term
     wrapping alacritty_terminal behind TerminalEngine; text extraction +
     alt-screen detection tests.
-16. B4, local transport. Spec: none yet → specify first. Scope sketch: LocalPty on
+18. B4, local transport. Spec: none yet → specify first. Scope sketch: LocalPty on
     ConPTY + blocking-reader thread; real-shell integration test in a separate CI
     job.
-17. B5, PowerShell adapter. Spec: none yet → specify first. Scope sketch: OSC 133
+19. B5, PowerShell adapter. Spec: none yet → specify first. Scope sketch: OSC 133
     injection snippet; record the first golden transcripts as fixtures.
-18. B6, real SessionService. Spec: none yet → specify first. Scope sketch:
+20. B6, real SessionService. Spec: none yet → specify first. Scope sketch:
     implements SessionApi; tested against fake driven ports.
 
 ## Convergence (requires A3 and B6 both Done)
