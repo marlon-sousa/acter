@@ -42,6 +42,12 @@ pub struct PacingConfig {
     /// Consecutive auto-read chunks within one command that trip the babble guard
     /// (default 3).
     pub babble_limit: u32,
+    /// The rendering cadence: how long output coalesces before it reaches the buffer
+    /// (default 50ms). ARCHITECTURE's number, not DESIGN's — "a short tick (tens of ms)"
+    /// so the IPC bridge and DOM never see per-write traffic. It lives here because this
+    /// is where pacing numbers live, but it governs the rendering path, which no policy
+    /// decides: the buffer loads whenever content arrives.
+    pub render_tick: Duration,
 }
 
 impl Default for PacingConfig {
@@ -52,6 +58,7 @@ impl Default for PacingConfig {
             max_lines: 25,
             max_chars: 2000,
             babble_limit: 3,
+            render_tick: Duration::from_millis(50),
         }
     }
 }
@@ -68,6 +75,7 @@ mod tests {
         assert_eq!(config.max_lines, 25);
         assert_eq!(config.max_chars, 2000);
         assert_eq!(config.babble_limit, 3);
+        assert_eq!(config.render_tick, Duration::from_millis(50));
     }
 
     #[test]

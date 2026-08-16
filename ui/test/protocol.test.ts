@@ -4,10 +4,29 @@
 
 import { describe, expect, it } from 'vitest';
 
-import type { SessionEvent, SubmitAck } from '../src/protocol';
+import type { Announcement, SessionEvent, SubmitAck } from '../src/protocol';
 
 function assertNever(x: never): never {
   throw new Error(`unhandled SessionEvent variant: ${JSON.stringify(x)}`);
+}
+
+// The same guard one level down: Announcement is a nested union, so a new kind added
+// in Rust has to be handled here too or `tsc` fails.
+function describeAnnouncement(announcement: Announcement): string {
+  switch (announcement.kind) {
+    case 'ReadAloud':
+      return `read ${announcement.text}`;
+    case 'TooBig':
+      return `too big ${announcement.lines}`;
+    case 'StillRunning':
+      return 'still running';
+    case 'OutputContinues':
+      return 'output continues';
+    case 'Failed':
+      return `failed ${announcement.exit_code}`;
+    default:
+      return assertNever(announcement);
+  }
 }
 
 // A total function over every SessionEvent variant. If the generated union grows a
@@ -33,6 +52,8 @@ function describeEvent(event: SessionEvent): string {
       return `title ${event.title}`;
     case 'ConnectionChanged':
       return `connection ${event.state}`;
+    case 'Announce':
+      return `announce ${event.command_id}: ${describeAnnouncement(event.announcement)}`;
     default:
       return assertNever(event);
   }
@@ -58,6 +79,13 @@ describe('protocol bindings', () => {
 
     const altScreen: SessionEvent = { type: 'AltScreenEntered' };
     expect(describeEvent(altScreen)).toBe('alt-screen entered');
+
+    const announce: SessionEvent = {
+      type: 'Announce',
+      command_id: 1,
+      announcement: { kind: 'TooBig', lines: 120 },
+    };
+    expect(describeEvent(announce)).toBe('announce 1: too big 120');
   });
 
   it('types SubmitAck as the correlation id return payload', () => {

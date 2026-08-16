@@ -434,7 +434,8 @@ mod tests {
             | SessionEvent::Output { command_id, .. }
             | SessionEvent::CommandFinished { command_id, .. }
             | SessionEvent::CommandInterrupted { command_id }
-            | SessionEvent::CommandStillRunning { command_id } => Some(*command_id),
+            | SessionEvent::CommandStillRunning { command_id }
+            | SessionEvent::Announce { command_id, .. } => Some(*command_id),
             SessionEvent::AltScreenEntered
             | SessionEvent::AltScreenLeft
             | SessionEvent::TitleChanged { .. }

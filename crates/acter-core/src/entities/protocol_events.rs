@@ -46,6 +46,38 @@ pub enum SessionEvent {
     TitleChanged { title: String },
     /// The transport connection state changed.
     ConnectionChanged { state: ConnectionState },
+    /// Something should be said. Speaking is its own event: as long as one event type
+    /// could mean both "render this" and "say this", the two paths DESIGN separates stay
+    /// coupled in the type system. The frontend appends [`SessionEvent::Output`] to the
+    /// buffer and routes this to the announcer, with no branching between them.
+    ///
+    /// Ordering carries the invariant: the actor emits the rendering event covering a
+    /// span before any `Announce` about it, and the per-session channel delivers in
+    /// order, so text is always in the buffer before it is spoken. Nothing correlates
+    /// the two — an announcement is self-contained, which is why a rendered span being
+    /// evicted under the frontend's line cap can never silence one.
+    Announce {
+        command_id: CommandId,
+        announcement: Announcement,
+    },
+}
+
+/// What to say. Only reading output aloud carries text; every other announcement
+/// carries the data the frontend needs to build a pinned string it already owns.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(tag = "kind")]
+pub enum Announcement {
+    /// Read this span aloud: it is under the auto-read threshold.
+    ReadAloud { text: String },
+    /// Over the threshold — announced by size, not read. Carries no text on purpose:
+    /// the span is already rendered, and past the threshold the actor stops holding it.
+    TooBig { lines: u32 },
+    /// The patience window elapsed with output still flowing.
+    StillRunning,
+    /// The babble guard tripped: output keeps arriving in the buffer, unannounced.
+    OutputContinues,
+    /// The command ended with a nonzero exit code.
+    Failed { exit_code: ExitCode },
 }
 
 #[cfg(test)]
@@ -82,6 +114,30 @@ mod tests {
             SessionEvent::ConnectionChanged {
                 state: ConnectionState::Reconnecting,
             },
+            SessionEvent::Announce {
+                command_id: CommandId(1),
+                announcement: Announcement::ReadAloud {
+                    text: "hello".to_owned(),
+                },
+            },
+            SessionEvent::Announce {
+                command_id: CommandId(1),
+                announcement: Announcement::TooBig { lines: 120 },
+            },
+            SessionEvent::Announce {
+                command_id: CommandId(1),
+                announcement: Announcement::StillRunning,
+            },
+            SessionEvent::Announce {
+                command_id: CommandId(1),
+                announcement: Announcement::OutputContinues,
+            },
+            SessionEvent::Announce {
+                command_id: CommandId(1),
+                announcement: Announcement::Failed {
+                    exit_code: ExitCode(1),
+                },
+            },
         ]
     }
 
@@ -108,6 +164,22 @@ mod tests {
                 "command_id": 3,
                 "text": "line",
                 "read_mode": "TooBig",
+            })
+        );
+    }
+
+    #[test]
+    fn an_announcement_is_a_nested_tagged_object() {
+        assert_eq!(
+            serde_json::to_value(SessionEvent::Announce {
+                command_id: CommandId(7),
+                announcement: Announcement::TooBig { lines: 120 },
+            })
+            .unwrap(),
+            json!({
+                "type": "Announce",
+                "command_id": 7,
+                "announcement": { "kind": "TooBig", "lines": 120 },
             })
         );
     }

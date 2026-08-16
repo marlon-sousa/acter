@@ -6,5 +6,5 @@
 mod driven;
 mod driving;
 
-pub use driven::EventSink;
+pub use driven::{Clock, EventSink, Timer};
 pub use driving::SessionApi;

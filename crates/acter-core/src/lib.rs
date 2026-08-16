@@ -4,15 +4,17 @@
 //! Facade: this file only declares modules and re-exports the public API.
 #![warn(unreachable_pub)]
 
+mod controllers;
 mod entities;
 mod policies;
 mod ports;
 
+pub use controllers::{Requests, SessionActor, SessionInput, Wake};
 pub use entities::{
-    CommandId, ConnectionState, ExitCode, Integration, Mode, PacingConfig, PacingState, ReadMode,
-    Screen, SessionEvent, SessionId, SessionState, SubmitAck,
+    Announcement, CommandId, ConnectionState, ExitCode, Integration, Mode, PacingConfig,
+    PacingState, ReadMode, Screen, SessionEvent, SessionId, SessionState, SubmitAck,
 };
 pub use policies::{
     PacingAction, PacingOutcome, TextSize, measure, on_command_end, on_output, on_wake, verdict,
 };
-pub use ports::{EventSink, SessionApi};
+pub use ports::{Clock, EventSink, SessionApi, Timer};
