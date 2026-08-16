@@ -99,7 +99,7 @@ the answer to "what should we do now?".
    would delete exactly that work.
 9. **Done** — A5.2, announcement serialization in the announcer. Spec:
    [a5.2-announcement-serialization.md](specs/a5.2-announcement-serialization.md).
-   Merged as PR #n (2026-08-16). The announcer serializes announcements through a queue
+   Merged as PR #15 (2026-08-16). The announcer serializes announcements through a queue
    drained one per turn, so no two announcements share a live-region mutation batch — two
    stops are spoken as two `command stopped` utterances. Coalescing rejected (no new
    strings). The render-before-announce invariant is pinned by a controller ordering test;
