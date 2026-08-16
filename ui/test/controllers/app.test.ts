@@ -13,6 +13,7 @@ import {
   AppController,
   altScreenEnteredMessage,
   altScreenLeftMessage,
+  commandStoppedMessage,
   failureMessage,
   patienceMessage,
   tooBigMessage,
@@ -182,6 +183,49 @@ describe('event rendering (decision 2)', () => {
     // so the failure never clobbers the error output the user needs to hear.
     expect(announcer.announcements).toEqual(['error: boom', failureMessage(2)]);
     expect(announcer.announcements[1]).toBe('command failed, exit code 2');
+    expect(beep.beeps).toBe(0);
+  });
+
+  it('CommandInterrupted announces the stop and closes the block', async () => {
+    const { backend, buffer, announcer, controller } = makeApp();
+    await controller.attach();
+
+    backend.emit({ type: 'CommandStarted', command_id: 1 });
+    backend.emit({ type: 'Output', command_id: 1, text: 'phase one', read_mode: 'Auto' });
+    backend.emit({ type: 'CommandInterrupted', command_id: 1 });
+
+    expect(announcer.announcements).toEqual(['phase one', commandStoppedMessage]);
+    expect(announcer.announcements[1]).toBe('command stopped');
+    // The block was closed, so a later event for the same id opens a fresh one.
+    backend.emit({ type: 'Output', command_id: 1, text: 'late', read_mode: 'Auto' });
+    expect(buffer.opened).toEqual([
+      { commandId: 1, commandLine: '' },
+      { commandId: 1, commandLine: '' },
+    ]);
+  });
+
+  it('does not beep on a stopped command that had carried a too-big chunk', async () => {
+    const { backend, beep, announcer, controller } = makeApp();
+    await controller.attach();
+
+    backend.emit({ type: 'CommandStarted', command_id: 1 });
+    backend.emit({ type: 'Output', command_id: 1, text: 'a\nb', read_mode: 'TooBig' });
+    backend.emit({ type: 'CommandInterrupted', command_id: 1 });
+
+    // The beep answers "your too-big output finished"; a stop already has a spoken
+    // answer, so it must stay silent (A3.1 decision 7).
+    expect(beep.beeps).toBe(0);
+    expect(announcer.announcements.at(-1)).toBe(commandStoppedMessage);
+  });
+
+  it('clears the too-big flag on interrupt, so a reused id does not beep later', async () => {
+    const { backend, beep, controller } = makeApp();
+    await controller.attach();
+
+    backend.emit({ type: 'Output', command_id: 1, text: 'a\nb', read_mode: 'TooBig' });
+    backend.emit({ type: 'CommandInterrupted', command_id: 1 });
+    backend.emit({ type: 'CommandFinished', command_id: 1, exit_code: 0, read_mode: 'Auto' });
+
     expect(beep.beeps).toBe(0);
   });
 

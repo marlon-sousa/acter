@@ -86,27 +86,47 @@ the answer to "what should we do now?".
    announcement and moved out of the last-heading→edit-field path, so stale
    announcement text is no longer reachable in browse mode; a `speech` scenario was
    added to make any speech truncation audible during the NVDA pass.
-8. A4, completion path. Spec: none yet → specify first. Scope sketch: fake
-   completion provider, Tab handling in the edit field, completion announcement.
-9. A5.2 and onward — iteration entries appear here as NVDA findings arrive.
+8. **Done** — A3.1, stopping a running scenario. Spec:
+   [a3.1-interrupt-command.md](specs/a3.1-interrupt-command.md). Typing `stop` halts
+   every running scripted command, so the endless scenarios (`forever`, `tail`,
+   `burst`) stop being one-way doors and a manual or E2E session can return to a clean
+   state. Adds `SessionEvent::CommandInterrupted` (terminal — no `CommandFinished`
+   follows) and the pinned string `command stopped`; the fake gains per-command cancel
+   tokens so a stop *wakes* a sleeping script instead of landing after its next delay.
+   Deliberately scoped below the user-facing interrupt: `Ctrl+C`,
+   `SessionApi::interrupt_command`, and `InterruptAck` were cut from the spec because
+   the edit-field input model is under discussion (see A3.2) and a pass-through model
+   would delete exactly that work.
+9. A3.2, the `Ctrl+C` interrupt surface. Spec: none yet → **blocked on the input-model
+   decision, not merely unspecified** (the question is stated in A3.1's spec, section
+   "The open question this spec deliberately does not bet on"). DESIGN's keystroke map
+   already decides that Ctrl+C without a selection interrupts the running command, and
+   A3's alt-screen string already tells the user to press it, so phase 1 currently
+   promises a key that does nothing. What the fix looks like depends entirely on that
+   question: with a local edit field it is a `SessionApi` method plus a keystroke
+   handler; under a pass-through field it is byte `0x03` written to the PTY and none
+   of that exists.
+10. A4, completion path. Spec: none yet → specify first. Scope sketch: fake
+    completion provider, Tab handling in the edit field, completion announcement.
+11. A5.2 and onward — iteration entries appear here as NVDA findings arrive.
 
 ## Status board — lane 2: domain (pure Rust; may start anytime, parallel to lane 1)
 
-10. B1, foundations. Spec: none yet → specify first. Scope sketch: driven-port
+12. B1, foundations. Spec: none yet → specify first. Scope sketch: driven-port
     traits, session entity/state machine, auto-read/pacing policy against a fake
     clock; table tests.
-11. B2, boundary. Spec: none yet → specify first. Scope sketch: OSC 133
+13. B2, boundary. Spec: none yet → specify first. Scope sketch: OSC 133
     recognition + command-block tracker; proptest (never panics on arbitrary
     bytes); golden-fixture format.
-12. B3, terminal engine. Spec: none yet → specify first. Scope sketch: acter-term
+14. B3, terminal engine. Spec: none yet → specify first. Scope sketch: acter-term
     wrapping alacritty_terminal behind TerminalEngine; text extraction +
     alt-screen detection tests.
-13. B4, local transport. Spec: none yet → specify first. Scope sketch: LocalPty on
+15. B4, local transport. Spec: none yet → specify first. Scope sketch: LocalPty on
     ConPTY + blocking-reader thread; real-shell integration test in a separate CI
     job.
-14. B5, PowerShell adapter. Spec: none yet → specify first. Scope sketch: OSC 133
+16. B5, PowerShell adapter. Spec: none yet → specify first. Scope sketch: OSC 133
     injection snippet; record the first golden transcripts as fixtures.
-15. B6, real SessionService. Spec: none yet → specify first. Scope sketch:
+17. B6, real SessionService. Spec: none yet → specify first. Scope sketch:
     implements SessionApi; tested against fake driven ports.
 
 ## Convergence (requires A3 and B6 both Done)

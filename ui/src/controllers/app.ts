@@ -17,6 +17,7 @@ export const patienceMessage =
 export const altScreenEnteredMessage =
   'this program needs interactive mode, which is not available yet. Press Ctrl+C to return to the prompt';
 export const altScreenLeftMessage = 'interactive program ended';
+export const commandStoppedMessage = 'command stopped';
 export function tooBigMessage(lineCount: number): string {
   return `${lineCount} lines arrived, too big to read`;
 }
@@ -107,6 +108,15 @@ export class AppController {
         if (this.tooBig.has(event.command_id)) {
           this.beep.beep();
         }
+        this.tooBig.delete(event.command_id);
+        this.openBlocks.delete(event.command_id);
+        break;
+      case 'CommandInterrupted':
+        // Terminal, like CommandFinished: same cleanup, but deliberately no beep. The
+        // beep answers "the too-big output you were warned about has finished"; a
+        // stopped command already has a spoken answer (A3.1 decision 7).
+        this.ensureBlock(event.command_id);
+        this.announcer.announce(commandStoppedMessage);
         this.tooBig.delete(event.command_id);
         this.openBlocks.delete(event.command_id);
         break;

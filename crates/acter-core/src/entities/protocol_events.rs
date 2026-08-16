@@ -30,6 +30,12 @@ pub enum SessionEvent {
         exit_code: ExitCode,
         read_mode: ReadMode,
     },
+    /// The command was stopped before it ended on its own. Terminal: no
+    /// `CommandFinished` follows. Distinct from `CommandFinished` on purpose — the exit
+    /// code of a process the user stopped carries no information worth announcing, and
+    /// inferring "stopped" from a conventional code (130 on Unix, `0xC000013A` on
+    /// Windows) would mis-announce a program that genuinely exits with it.
+    CommandInterrupted { command_id: CommandId },
     /// Patience announcement: output has flowed for the whole window with no end marker.
     CommandStillRunning { command_id: CommandId },
     /// A program entered the alternate screen (ncurses/full-screen); interactive mode needed.
@@ -61,6 +67,9 @@ mod tests {
                 command_id: CommandId(1),
                 exit_code: ExitCode(0),
                 read_mode: ReadMode::Quiet,
+            },
+            SessionEvent::CommandInterrupted {
+                command_id: CommandId(1),
             },
             SessionEvent::CommandStillRunning {
                 command_id: CommandId(1),
