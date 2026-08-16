@@ -8,15 +8,22 @@ use std::time::Duration;
 
 /// Per-command pacing bookkeeping. Invariants (enforced by `policies::autoread`):
 /// `consecutive_auto_reads` never exceeds `PacingConfig::babble_limit`; `patience_fired`
-/// latches true at most once per command. A fresh command starts from `default()`; the
-/// caller (a later actor) does not construct or inspect the fields directly, only
-/// threads the value through the policy's free functions.
+/// latches true at most once per command; `continuous_since` never runs ahead of
+/// `last_output_at`. A fresh command starts from `default()`; the caller (a later actor)
+/// does not construct or inspect the fields directly, only threads the value through the
+/// policy's free functions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct PacingState {
     pub(crate) consecutive_auto_reads: u32,
     pub(crate) patience_fired: bool,
     pub(crate) babble_tripped: bool,
+    /// Offset of the last chunk that carried real text; empty chunks do not move it.
     pub(crate) last_output_at: Duration,
+    /// Offset at which the current run of *unread* continuous output began — the last
+    /// chunk that arrived after a quiescent gap, or after follow mode read one aloud.
+    /// Patience is measured from here, so a command that sits silent and then speaks
+    /// does not count that silence as output flowing.
+    pub(crate) continuous_since: Duration,
 }
 
 /// The pacing thresholds: DESIGN's decided defaults as data (Output pacing / Auto-read
@@ -70,5 +77,6 @@ mod tests {
         assert!(!state.patience_fired);
         assert!(!state.babble_tripped);
         assert_eq!(state.last_output_at, Duration::ZERO);
+        assert_eq!(state.continuous_since, Duration::ZERO);
     }
 }
