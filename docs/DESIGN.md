@@ -342,7 +342,16 @@ Also decided earlier and unchanged:
   any pair — an auto-read chunk followed immediately by a failure, or too-big followed
   by patience. Also bears on B1's babble guard, which is the layer that would throttle
   a genuine flood.
-  deferred here. Noted en route: the end-of-command failure status is naturally an
+  **Resolved by A5.2 (2026-08-16):** the announcer now serializes announcements — a
+  queue drained one per turn, so no two announcements share a live-region mutation
+  batch; two stops are spoken as two `command stopped` utterances. Coalescing was
+  rejected (no new strings). The exact separation mechanism — a temporal gap and/or a
+  structural separator (`<br>`) — is measured through the screen-reader bridge rather
+  than assumed. Render-before-announce holds via the controller's render-then-announce
+  order plus the deferred drain; a commit/acknowledge gate is deferred to whichever PR
+  makes buffer rendering asynchronous (rAF batching). The separate-region, polite-vs-
+  assertive, and cross-region-order questions remain open.
+  Noted en route: the end-of-command failure status is naturally an
   after-the-output thing, but patience, too-big, and alt-screen are inherently
   mid-command and cannot wait for command end.
 - Reviewing past announcements in-app: region-only messages (failure, too-big,

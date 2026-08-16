@@ -136,6 +136,39 @@ describe('event rendering (decision 2)', () => {
     expect(announcer.announcements).toEqual(['hello from acter']);
   });
 
+  it('renders an auto-read chunk into the buffer before announcing it (A5.2)', async () => {
+    const backend = new FakeBackend();
+    const order: string[] = [];
+    // Two fakes sharing one call log: the invariant under test is cross-view ordering,
+    // which the per-view recordings cannot show.
+    const buffer: BufferView = {
+      openBlock: () => { },
+      appendOutput: () => {
+        order.push('buffer');
+      },
+      focus: () => { },
+      containsFocus: () => false,
+    };
+    const announcer: AnnouncerView = {
+      announce: () => {
+        order.push('announce');
+      },
+    };
+    const controller = new AppController(
+      backend,
+      new FakeEditField(),
+      buffer,
+      announcer,
+      new FakeBeep(),
+    );
+    await controller.attach();
+
+    backend.emit({ type: 'CommandStarted', command_id: 1 });
+    backend.emit({ type: 'Output', command_id: 1, text: 'hello', read_mode: 'Auto' });
+
+    expect(order).toEqual(['buffer', 'announce']);
+  });
+
   it('Output/TooBig appends the text and announces the line count phrasing', async () => {
     const { backend, buffer, announcer, controller } = makeApp();
     await controller.attach();

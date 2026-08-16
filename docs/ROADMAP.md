@@ -97,34 +97,15 @@ the answer to "what should we do now?".
    `SessionApi::interrupt_command`, and `InterruptAck` were cut from the spec because
    the edit-field input model is under discussion (see A3.2) and a pass-through model
    would delete exactly that work.
-9. A5.2, announcement serialization in the announcer. Spec: none yet → specify first.
-   Placed ahead of A3.2 and A4 deliberately: it is a defect in already-merged behavior,
-   and unlike A3.2 it is not blocked. A3.1's NVDA run showed that two announcements
-   appended to the live region within one tick are spoken as a **single concatenated
-   utterance** — stopping two commands produced one utterance reading "command stopped
-   command stopped". The events were never ambiguous: two distinct `CommandInterrupted`
-   messages arrived separately, and `app.ts` appended both into the same node in the
-   same tick. So the defect is entirely the announcer's, and so is the fix. Scope
-   sketch: the announcer takes a queue it drains rather than appending on arrival; it
-   may coalesce identical adjacent announcements into a counted form (it owns the pinned
-   strings, so it is the only layer that can); jsdom tests for queueing and coalescing;
-   an NVDA checklist to confirm the result is distinguishable by ear. Open number: the
-   append spacing at which NVDA treats two additions as separate utterances — to be
-   measured through the screen-reader bridge, with the caveat that the bridge captures
-   speech, not audio, so whether separate utterances are *perceptibly* separate stays a
-   human check. Bears directly on DESIGN's announcement-channel open question.
-
-   Also this entry's, because the announcer is the only layer that can enforce it:
-   **the render-before-announce invariant must be structural, not conventional.** DESIGN
-   decides that text is never announced before it is in the buffer, and the backend holds
-   up its half by emission order on the ordered per-session channel — but a buffer that
-   batches DOM appends into a `requestAnimationFrame` while the announcer speaks on
-   receipt would invert that with no test noticing. So the queue stamps each arrival with
-   a monotonic index and drains only entries the buffer has already committed, accepting
-   a delay of one commit. Under a flood, the only case where rendering could fall
-   meaningfully behind, the babble guard has already silenced announcements. jsdom test:
-   an announcement arriving while a render is still pending is spoken after it, not
-   before.
+9. **Done** — A5.2, announcement serialization in the announcer. Spec:
+   [a5.2-announcement-serialization.md](specs/a5.2-announcement-serialization.md).
+   Merged as PR #n (2026-08-16). The announcer serializes announcements through a queue
+   drained one per turn, so no two announcements share a live-region mutation batch — two
+   stops are spoken as two `command stopped` utterances. Coalescing rejected (no new
+   strings). The render-before-announce invariant is pinned by a controller ordering test;
+   the commit/acknowledge gate is deferred to the PR that makes buffer rendering async.
+   The exact separation mechanism (gap and/or `<br>`) is measured through the
+   screen-reader bridge rather than assumed.
 10. A6, announcement protocol cleanup. Spec: none yet → specify first. **Depends on B1.5**
     (lane 2), which introduces `SessionEvent::Announce` additively and leaves the shapes
     it supersedes in place: A2's exhaustiveness guard fails `tsc` until every variant is
