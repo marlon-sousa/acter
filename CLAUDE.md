@@ -46,3 +46,15 @@ is the source of truth, and specs are written before code.
   body as checkboxes — one item per check, findings written inline on the unchecked
   item (NVDA version, expected vs observed). There is no separate findings document.
   Findings that require changes become iteration entries in ROADMAP.md.
+- **Who may run a checklist item.** An agent may run and record any item it can
+  actually observe, driving a real screen reader through the screen-readers MCP bridge
+  and recording what was spoken. Such an item is checked by the agent, and its
+  observation is written inline exactly as a human's would be, naming the reader
+  version and the capture mode. Items an agent **cannot** observe stay the human's to
+  verify and check — the bridge captures speech and braille, not audio, so anything
+  turning on a beep, a sound cue, or subjective comfort is human-only. State plainly in
+  the PR body which items were agent-observed and which were human-verified; a checked
+  box must never imply a sense nobody used. Mode surprises are the standard trap here:
+  the tester's NVDA does not switch focus mode automatically, so an agent must read the
+  current mode and set the one it needs rather than assume, and must not report a mode
+  artifact as a defect in the software under test.
