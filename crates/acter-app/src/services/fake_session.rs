@@ -771,8 +771,14 @@ mod tests {
             .wait_until(|events| has(events, &still_running(1)) && has(events, &still_running(2)));
 
         service.submit_command(SessionId(1), "stop");
-        let events = recorder
-            .wait_until(|events| has(events, &interrupted(1)) && has(events, &interrupted(2)));
+        // Wait for stop's own block to close too, not just for the interruptions it
+        // caused: command 3 finishes on its own playback thread, so waiting only on the
+        // interruptions can snapshot between its started and finished events.
+        let events = recorder.wait_until(|events| {
+            has(events, &interrupted(1))
+                && has(events, &interrupted(2))
+                && has(events, &done(3, 0, ReadMode::Quiet))
+        });
 
         assert_eq!(for_command(&events, 1).last(), Some(&interrupted(1)));
         assert_eq!(for_command(&events, 2).last(), Some(&interrupted(2)));
