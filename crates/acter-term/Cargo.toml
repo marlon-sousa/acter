@@ -5,5 +5,11 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[dependencies]
+# The emulation engine this adapter will wrap (B3). Re-exports the `vte` parser as
+# `alacritty_terminal::vte`, which the root `[patch.crates-io]` entry points at our fork
+# so unrecognized OSC sequences reach `Handler::unhandled_osc` instead of being dropped.
+alacritty_terminal = "0.26.0"
+
 [lints]
 workspace = true

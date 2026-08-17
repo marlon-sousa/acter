@@ -18,3 +18,20 @@ unreachable_pub = "warn"
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }
+
+# vte 0.15 parses OSC sequences it does not recognize and then discards them: the
+# catch-all arm of `Performer::osc_dispatch` logs at `debug!` and returns, `Performer`
+# is private with no public constructor, and `ansi::Handler` has no catch-all method.
+# OSC 133 shell-integration markers are therefore unobservable by an embedder, which
+# B3's command-boundary tracking depends on. The fork adds one generic escape hatch,
+# `Handler::unhandled_osc(&mut self, params: &[&[u8]])`, defaulting to a no-op so every
+# existing implementer — `alacritty_terminal::Term` included — compiles unchanged. It
+# carries no OSC 133 knowledge; interpreting params is acter's job. Precedent: the
+# `vt100` crate ships the same hook as `Callbacks::unhandled_osc`.
+#
+# A git URL, not a path, so CI resolves it too. Patching here rather than forking
+# alacritty_terminal: that crate re-exports vte (`pub use vte;`) and pulls `ansi` in via
+# vte's `ansi` feature, so it needs no changes at all. Whether to send this upstream to
+# alacritty/vte is an open decision; until then the fork is the dependency.
+[patch.crates-io]
+vte = { git = "https://github.com/marlon-sousa/vte", branch = "unhandled-osc" }

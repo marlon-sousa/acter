@@ -218,10 +218,35 @@ the answer to "what should we do now?".
     detection tests; **OSC 133 recognition**, moved here from B2 by decision, feeding
     B2's tracker the `TerminalItem` stream it already consumes — with the "never panics
     on arbitrary bytes" property test, which belongs wherever bytes are actually parsed.
-    One thing to verify before the spec is final: alacritty_terminal's own `Processor`
-    exposes no OSC hook, so this most likely means driving `vte::Parser` directly with a
-    `Perform` that intercepts `osc_dispatch` for 133 and forwards everything else to
-    `Term`'s handler.
+    The "one thing to verify before the spec is final" is now **verified, and the answer
+    changed** (conversation 2026-08-17; groundwork landed ahead of the spec because it is a
+    dependency change, not a component). Confirmed against source: `alacritty_terminal`
+    0.26.0 depends on `vte` 0.15, re-exports it (`pub use vte;`) and pulls in `ansi` via
+    vte's `ansi` feature — it does not vendor its own copy. In vte, `Performer` is private
+    with no public constructor and the catch-all arm of `osc_dispatch` logs unrecognized OSC
+    at `debug!` and discards it, so OSC 133 is parsed correctly and then thrown away with no
+    embedder hook. Fixed in a fork of alacritty/vte
+    (marlon-sousa/vte, branch `unhandled-osc`) adding one generic escape hatch,
+    `ansi::Handler::unhandled_osc(&mut self, params: &[&[u8]])`, defaulting to a no-op so
+    `Term` compiles unchanged; wired in via `[patch.crates-io]` in the root manifest. It
+    carries no OSC 133 knowledge — interpreting params is acter's job. Whether to send it
+    upstream is deliberately still open; until then the fork is the dependency.
+    Two consequences for B3's spec. First, **driving `vte::Parser` with a raw `Perform` is
+    off the table**: `Perform` is the byte-level trait below `ansi::Handler`, so that route
+    meant reimplementing the whole `ansi` layer (CSI/SGR/mode parsing); B3 now works at
+    `ansi::Handler` and gets that for free. Second, **the ~70-method forward to `Term` is
+    probably unnecessary**, and which way to go is the spec's call: either one pass with a
+    wrapper owning a `Term` and forwarding all 72 `Handler` methods, or two `Processor`s over
+    the same bytes — one driving `Term` directly with zero forwarding (alt-screen from
+    `Term::mode()` containing `ALT_SCREEN`, grid via `Term::grid()`/`Term::damage()`), the
+    other a small handler implementing only what the speech path needs, the rest left as
+    default no-ops. The second costs one extra parse pass and has no silently-wrong-forward
+    failure mode; it also matches DESIGN's decided buffer/speech split. Its real open
+    question, and the one the spec must actually answer, is how much emulation *spoken* text
+    needs: `input` alone is wrong for `\r` overwrites, `clear_line`, `erase_chars` and
+    absolute `goto`, so the subset must be enumerated and justified, with grid-based
+    extraction at marker boundaries as the fallback if cursor-addressed output proves to
+    matter.
 19. B3.5, the `Transport` port and the scripted byte-level fake. Spec: none yet →
     specify first. **Placed here by decision (agreed in conversation 2026-08-16):**
     A3's fake implements `SessionApi`, the *driving* port at the top of the stack, so
