@@ -53,7 +53,7 @@ export class AppController {
     private readonly buffer: BufferView,
     private readonly announcer: AnnouncerView,
     private readonly beep: BeepView,
-  ) { }
+  ) {}
 
   /** Attach to the session at startup; every SessionEvent flows to handleEvent. */
   async attach(): Promise<void> {

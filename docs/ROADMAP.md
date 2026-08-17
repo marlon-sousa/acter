@@ -104,8 +104,14 @@ the answer to "what should we do now?".
    stops are spoken as two `command stopped` utterances. Coalescing rejected (no new
    strings). The render-before-announce invariant is pinned by a controller ordering test;
    the commit/acknowledge gate is deferred to the PR that makes buffer rendering async.
-   The exact separation mechanism (gap and/or `<br>`) is measured through the
-   screen-reader bridge rather than assumed.
+   The separation mechanism was measured through the screen-reader bridge rather than
+   assumed, and the measurement mattered: a separate macrotask alone still merged,
+   because WebView2 batches accessibility updates per rendering lifecycle. On NVDA
+   2026.1.1, 1/50/75 ms merged and 100/250 ms separated, so the landed drain spacing is
+   250 ms and the `<br>` fallback was not needed. The gap is applied between
+   announcements rather than before each one, so a lone announcement is not delayed at
+   all and only a burst's second and later items wait; that is the thing to re-check if
+   B1's pacing ever emits announcements faster than the drain.
 10. A6, announcement protocol cleanup. Spec: none yet → specify first. **Depends on B1.5**
     (lane 2), which introduces `SessionEvent::Announce` additively and leaves the shapes
     it supersedes in place: A2's exhaustiveness guard fails `tsc` until every variant is

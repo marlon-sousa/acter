@@ -4,9 +4,11 @@
 // Announcements are QUEUED and drained one per turn into the live region as distinct
 // child nodes. A polite region reads additions in order, and NVDA reads a single
 // mutation batch as a single utterance — so two announcements must never share a batch
-// (A3.1's "command stopped command stopped" finding). Draining one item per macrotask
-// makes each announcement its own mutation, which the screen reader can then speak as a
-// separate utterance. The region is never replaced, only appended to and empties.
+// (A3.1's "command stopped command stopped" finding). Draining one item per turn, spaced
+// far enough apart to clear the WebView2 accessibility batching window (see
+// DRAIN_SPACING_MS), makes each announcement its own live-region change, which the screen
+// reader then speaks as a separate utterance. The region is never replaced, only appended
+// to and emptied.
 //
 // The region is emptied after a short idle, measured from the last drained announcement,
 // so a burst accumulates and clears only once it has settled. Emptying is safe and
@@ -31,35 +33,59 @@ import type { AnnouncerView } from '../ports/announcer_view';
 // from the manual NVDA pass.
 const CLEAR_AFTER_MS = 1500;
 
-// One announcement is drained per macrotask, so no two announcements ever share a
-// live-region mutation batch. The spacing is a small positive duration so a burst's
-// chained drains land in distinct timer slots rather than one batched turn. The exact
-// spacing at which NVDA treats two additions as separate utterances is measured through
-// the screen-reader bridge; if a temporal gap is not enough, the fallback is a
-// structural separator (<br>) between successive drains, tuned here.
-const DRAIN_SPACING_MS = 1;
+// How long the drain waits between announcements, so no two ever share a live-region
+// mutation batch.
+//
+// A distinct task is NOT enough on its own. WebView2 batches accessibility updates
+// per rendering lifecycle, so mutations closer together than that batch still reach NVDA
+// as ONE live-region change and are spoken as one utterance. The spacing therefore has
+// to clear the batching window, not merely the JS task queue.
+//
+// Measured through the screen-reader bridge (NVDA 2026.1.1, WebView2, two commands
+// stopped at once, silent capture): 1 ms, 50 ms, and 75 ms all merged into a single
+// "command stopped command stopped" utterance; 100 ms and 250 ms produced two separate
+// utterances. The threshold on that machine sits between 75 ms and 100 ms, so 100 ms is
+// the edge and not a safe setting — the value below is ~2.5x the measured threshold, to
+// absorb machine load, WebView2 version, and NVDA cadence. A temporal gap alone was
+// sufficient, so the structural-separator (<br>) fallback is deliberately NOT used.
+//
+// This is a gap BETWEEN announcements, never a delay before one (see scheduleDrain), so
+// a lone announcement — the common case — is as prompt as it was before serialization and
+// pays nothing. Only the second and later items of a burst wait, which is exactly when
+// the wait buys something. Backend pacing (quiescence + babble guard, B1) is already far
+// coarser than this gap: in the `burst` scenario the queue never reached depth 2.
+const DRAIN_SPACING_MS = 250;
 
 export class AnnouncerDom implements AnnouncerView {
   private readonly queue: string[] = [];
   private drainScheduled = false;
+  private lastDrainAt = Number.NEGATIVE_INFINITY;
   private clearTimer: ReturnType<typeof setTimeout> | undefined;
 
-  constructor(private readonly region: HTMLElement) { }
+  constructor(private readonly region: HTMLElement) {}
 
   announce(text: string): void {
     this.queue.push(text);
     this.scheduleDrain();
   }
 
+  // The spacing is a gap BETWEEN announcements, not a delay before each one: an
+  // announcement arriving into an idle region has nothing to share a mutation batch with,
+  // so it drains on the next turn with no added wait. Only an announcement following a
+  // recent drain waits, and only for the remainder of the gap. This keeps the common case
+  // — one announcement, nothing else pending — as prompt as it was before serialization,
+  // while a burst still separates.
   private scheduleDrain(): void {
     if (this.drainScheduled) {
       return;
     }
     this.drainScheduled = true;
+    const sinceLastDrain = Date.now() - this.lastDrainAt;
+    const wait = Math.max(0, DRAIN_SPACING_MS - sinceLastDrain);
     setTimeout(() => {
       this.drainScheduled = false;
       this.drainOne();
-    }, DRAIN_SPACING_MS);
+    }, wait);
   }
 
   private drainOne(): void {
@@ -70,6 +96,7 @@ export class AnnouncerDom implements AnnouncerView {
     const line = document.createElement('div');
     line.textContent = text;
     this.region.append(line);
+    this.lastDrainAt = Date.now();
 
     // Restart the idle countdown on every drained announcement, so a burst accumulates
     // and is cleared only once it has settled — never out from under its own latest

@@ -142,11 +142,11 @@ describe('event rendering (decision 2)', () => {
     // Two fakes sharing one call log: the invariant under test is cross-view ordering,
     // which the per-view recordings cannot show.
     const buffer: BufferView = {
-      openBlock: () => { },
+      openBlock: () => {},
       appendOutput: () => {
         order.push('buffer');
       },
-      focus: () => { },
+      focus: () => {},
       containsFocus: () => false,
     };
     const announcer: AnnouncerView = {

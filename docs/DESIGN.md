@@ -345,9 +345,18 @@ Also decided earlier and unchanged:
   **Resolved by A5.2 (2026-08-16):** the announcer now serializes announcements — a
   queue drained one per turn, so no two announcements share a live-region mutation
   batch; two stops are spoken as two `command stopped` utterances. Coalescing was
-  rejected (no new strings). The exact separation mechanism — a temporal gap and/or a
-  structural separator (`<br>`) — is measured through the screen-reader bridge rather
-  than assumed. Render-before-announce holds via the controller's render-then-announce
+  rejected (no new strings). The separation mechanism was measured through the
+  screen-reader bridge rather than assumed, and the measurement changed the answer: a
+  separate macrotask is not enough, because WebView2 batches accessibility updates per
+  rendering lifecycle and mutations inside one batch still reach NVDA as a single
+  live-region change. On NVDA 2026.1.1, 1 ms, 50 ms, and 75 ms all merged; 100 ms and
+  250 ms separated. The landed drain spacing is 250 ms — about 2.5x the measured
+  threshold, for margin against machine load and version drift — and a temporal gap
+  alone proved sufficient, so the structural `<br>` separator was not needed. The gap
+  is applied *between* announcements, never before one: an announcement arriving into an
+  idle region cannot merge with anything, so it is not delayed at all, and only the
+  second and later items of a burst wait.
+  Render-before-announce holds via the controller's render-then-announce
   order plus the deferred drain; a commit/acknowledge gate is deferred to whichever PR
   makes buffer rendering asynchronous (rAF batching). The separate-region, polite-vs-
   assertive, and cross-region-order questions remain open.
