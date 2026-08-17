@@ -194,7 +194,8 @@ the answer to "what should we do now?".
     that first spawns an actor — that is B6 or convergence, and leaving `Clock` on main
     for months with only a test fake behind it is the very shape B1 refused to create.
 17. **Done** — B2, the command-block boundary tracker. Spec:
-    [b2-boundary-tracker.md](specs/b2-boundary-tracker.md). `BoundaryTracker` turns the
+    [b2-boundary-tracker.md](specs/b2-boundary-tracker.md). Merged as PR #16.
+    `BoundaryTracker` turns the
     ordered stream of text and OSC 133 markers into command blocks and labelled regions
     (`Prompt` A..B, `CommandLine` B..C, `Output` C..D, and `Unstructured` for text with
     no block context), so DESIGN's echo exclusion is a caller's filter rather than a rule
