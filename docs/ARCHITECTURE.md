@@ -26,8 +26,12 @@ Cargo workspace:
   - trait definitions (ports): `Transport`, `ShellAdapter`, `TerminalEngine`
   - IPC protocol types (serde) — see "IPC protocol" below
 - `crates/acter-term` — wraps `alacritty_terminal` behind the `TerminalEngine` trait:
-  bytes in; grid state, extracted text, alt-screen transitions out. Separate crate to
-  keep the heavy dependency out of core and the engine swappable.
+  bytes in; grid state, extracted text, alt-screen transitions, and **recognized OSC 133
+  markers** out. Separate crate to keep the heavy dependency out of core and the engine
+  swappable. Recognition lives here, not in core, because this crate already runs a real
+  escape-sequence parser over the byte stream and a second parser could disagree with the
+  first about what is a real sequence (spec B2, decision 1); the command-boundary *state
+  machine* it feeds stays in core.
 - `crates/acter-transports` — `LocalPty` (ConPTY via `portable-pty`) and `Ssh`
   (`russh`, behind a feature flag; phase 1 builds don't pay for it).
 - `crates/acter-shells` — PowerShell / cmd / bash adapters: shell-integration
@@ -161,9 +165,11 @@ acter-core/src (the domain crate — the crate is the domain, so no domain/ wrap
 - lib.rs (facade)
 - entities.rs + entities/: session_state.rs (mode/lifecycle state machine),
   profile.rs, protocol_common.rs (shared IPC value types: ids, verdicts, states),
-  protocol_events.rs, protocol_commands.rs (specta-annotated IPC types)
-- policies.rs + policies/: autoread.rs (threshold/pacing policy), osc133.rs
-  (sequence recognition), boundary_tracker.rs (command-block state machine),
+  protocol_events.rs, protocol_commands.rs (specta-annotated IPC types),
+  osc133.rs (the recognized-marker value type), terminal_item.rs (one element of the
+  stream the engine emits: text or a marker)
+- policies.rs + policies/: autoread.rs (threshold/pacing policy),
+  boundary_tracker.rs (command-block state machine over that stream),
   profile_inheritance.rs (Defaults resolution), completion_history.rs,
   completion_path.rs
 - ports.rs + ports/: driven/ (transport.rs, shell_adapter.rs, terminal_engine.rs,
