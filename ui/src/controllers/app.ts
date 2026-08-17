@@ -95,6 +95,10 @@ export class AppController {
         break;
       case 'Output':
         this.ensureBlock(event.command_id);
+        // Render-before-announce invariant (pinned by spec A5.2): append to the buffer
+        // BEFORE announcing. The announcer's deferred drain guarantees the live region
+        // mutates after this synchronous append, so spoken text is always already in the
+        // buffer.
         this.buffer.appendOutput(event.command_id, event.text);
         if (event.read_mode === 'Auto') {
           this.announcer.announce(event.text);
