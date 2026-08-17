@@ -193,26 +193,88 @@ the answer to "what should we do now?".
     production `SystemClock` adapter landed here rather than being deferred to the entry
     that first spawns an actor — that is B6 or convergence, and leaving `Clock` on main
     for months with only a test fake behind it is the very shape B1 refused to create.
-17. B2, boundary. Spec: none yet → specify first. Scope sketch: OSC 133
-    recognition + command-block tracker; proptest (never panics on arbitrary
-    bytes); golden-fixture format.
+17. **Done** — B2, the command-block boundary tracker. Spec:
+    [b2-boundary-tracker.md](specs/b2-boundary-tracker.md). Merged as PR #16.
+    `BoundaryTracker` turns the
+    ordered stream of text and OSC 133 markers into command blocks and labelled regions
+    (`Prompt` A..B, `CommandLine` B..C, `Output` C..D, and `Unstructured` for text with
+    no block context), so DESIGN's echo exclusion is a caller's filter rather than a rule
+    buried in a state machine. Decided in conversation: recognition is **not** here —
+    acter-term already runs a real escape-sequence parser and a second one could disagree
+    with it about what is a real sequence, so B2 is the tracker alone and ARCHITECTURE's
+    reference layout was amended in this PR to match (`policies/osc133.rs` never existed;
+    the marker value type is an entity). Regions are cut over extracted text rather than
+    raw bytes, which is the stream DESIGN's threshold was always about. The tracker is
+    id-free and clock-free: command-id correlation and the integration grace period are
+    B6's. Any marker meaning "back at the prompt" closes an open block with
+    `Option<ExitCode>` `None` — stranding a session in "running" is the worse failure for
+    a screen reader user — and that same shape covers a bare `D`; every other nonsense
+    transition is absorbed rather than rejected. Thirteen table tests plus proptest
+    (a new dev-dependency): never panics, blocks are balanced and never nest,
+    `MarkersObserved` latches once, and above all **text is never lost** — for this
+    product, silently dropping output is the cardinal defect.
 18. B3, terminal engine. Spec: none yet → specify first. Scope sketch: acter-term
-    wrapping alacritty_terminal behind TerminalEngine; text extraction +
-    alt-screen detection tests.
-19. B4, local transport. Spec: none yet → specify first. Scope sketch: LocalPty on
+    wrapping alacritty_terminal behind TerminalEngine; text extraction + alt-screen
+    detection tests; **OSC 133 recognition**, moved here from B2 by decision, feeding
+    B2's tracker the `TerminalItem` stream it already consumes — with the "never panics
+    on arbitrary bytes" property test, which belongs wherever bytes are actually parsed.
+    One thing to verify before the spec is final: alacritty_terminal's own `Processor`
+    exposes no OSC hook, so this most likely means driving `vte::Parser` directly with a
+    `Perform` that intercepts `osc_dispatch` for 133 and forwards everything else to
+    `Term`'s handler.
+19. B3.5, the `Transport` port and the scripted byte-level fake. Spec: none yet →
+    specify first. **Placed here by decision (agreed in conversation 2026-08-16):**
+    A3's fake implements `SessionApi`, the *driving* port at the top of the stack, so
+    every manual NVDA session so far has validated the frontend against a hand-written
+    event stream and nothing below it — not the pacing policy, not the actor, and not
+    the tracker B2 is about to add. This entry moves the fake down to the driven port:
+    a scripted `Transport` emitting bytes — real OSC 133 markers, real escape
+    sequences, real alt-screen enter/leave — with the engine, tracker, policy and actor
+    all genuinely running above it. Fake only what cannot run deterministically in CI (a
+    shell on a PTY); keep everything above it real. Scope sketch: `ports/driven/transport.rs`,
+    the fake adapter in acter-app, and the full-pipeline test — transcript in, real
+    engine and tracker and actor, recorded `EventSink` out. **Owns the golden-fixture
+    format** (moved here from B2): a fixture is a stream of *bytes*, so nothing can replay
+    one until B3 exists, and this is the entry that actually needs to — one format, two
+    consumers, a cargo-test fixture and a runnable fake session. Three things it buys that no
+    entry currently does: every lane-2 component gains a caller the moment it lands (the
+    lesson B1.5 recorded about B1); DESIGN's reliability model becomes testable end to
+    end (markers split across reads, forged markers, a `D` that never arrives), which the
+    event-level fake structurally cannot produce; and the fake becomes a request/response
+    loop that answers a written command line with B/C markers, which turns A3.2's blocked
+    input-model question into something that can be tried rather than argued. `Transport`
+    lands with a shipped implementer rather than a test-only one, so it is not the shape
+    B1.5 refused to create. All ten A3 scenarios translate (`nano` is `ESC[?1049h`,
+    `fail` is `D;1`, `burst`/`forever`/`tail` are byte timing), and DESIGN's "the scripted
+    fake session is a permanent supported session kind" survives unchanged — the
+    scenarios are permanent; only the altitude they are expressed at was wrong.
+20. B6, real SessionService. Spec: none yet → specify first. **Moved ahead of B4/B5**:
+    with B3.5's transport underneath it, this is the entry that switches the app's
+    default backend from the A3 event-level fake to the byte path, so it is convergence
+    made user-facing — and manual NVDA testing starts exercising the real pipeline
+    months before ConPTY exists. The A3 fake stays the default until this lands, so the
+    slowest feedback loop in the project never goes dark. Scope sketch: implements
+    `SessionApi`, owns command-id correlation (the tracker is id-free — see B2) and the
+    integration grace period, spawns the actor; tested against fake driven ports.
+21. B4, local transport. Spec: none yet → specify first. Scope sketch: LocalPty on
     ConPTY + blocking-reader thread; real-shell integration test in a separate CI
-    job.
-20. B5, PowerShell adapter. Spec: none yet → specify first. Scope sketch: OSC 133
-    injection snippet; record the first golden transcripts as fixtures.
-21. B6, real SessionService. Spec: none yet → specify first. Scope sketch:
-    implements SessionApi; tested against fake driven ports.
+    job. `Transport` already exists by now (B3.5), so this is a second implementer,
+    not a new seam.
+22. B5, PowerShell adapter. Spec: none yet → specify first. Scope sketch: OSC 133
+    injection snippet; record the first golden transcripts as fixtures, in B2's format
+    — so a captured real session is replayable as a fake session.
 
-## Convergence (requires A3 and B6 both Done)
+## Convergence (requires B4, B5 and B6 all Done)
 
-Spec: none yet → specify when unblocked. The container swaps the fake SessionApi
-for the real SessionService; an integration test submits a command through the real
-service against fake transports and asserts the exact event sequence. If both lanes
-were honest, this PR is boring — that is the success criterion.
+Spec: none yet → specify when unblocked. The container swaps the scripted fake
+`Transport` for `LocalPty`; an integration test submits a command through the real
+service and asserts the exact event sequence. B3.5 and B6 do the work this section
+used to carry, so what remains here is one adapter swap. If the lanes were honest,
+this PR is boring — that is the success criterion.
+
+Note what this does *not* buy: real ConPTY quirks and real PowerShell prompt
+behavior are only exercised by B4, B5 and the transcripts captured there. The
+scripted transport reduces the risk they carry; it does not remove it.
 
 ## Post-convergence (still phase 1; specify each when reached)
 
