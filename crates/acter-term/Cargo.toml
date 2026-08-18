@@ -6,10 +6,19 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-# The emulation engine this adapter will wrap (B3). Re-exports the `vte` parser as
+# The port this crate implements, and the items it emits.
+acter-core = { path = "../acter-core" }
+# The emulation engine this adapter wraps. Re-exports the `vte` parser as
 # `alacritty_terminal::vte`, which the root `[patch.crates-io]` entry points at our fork
 # so unrecognized OSC sequences reach `Handler::unhandled_osc` instead of being dropped.
+# The only dependency: the adapter is driven entirely by byte slices, so it needs no
+# runtime, no I/O and no transport.
 alacritty_terminal = "0.26.0"
+
+[dev-dependencies]
+# Properties over arbitrary byte streams: this is the crate that parses them
+# (ARCHITECTURE, test tier 1).
+proptest = "1"
 
 [lints]
 workspace = true

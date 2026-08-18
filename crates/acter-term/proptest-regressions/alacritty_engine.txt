@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 46c6981160e07e59232fb24c77208d9fc31a8ecbaa7f3332c700a171b955b678 # shrinks to transcript = [27, 91, 50, 75, 13, 10, 27, 91, 51, 49, 109, 27, 91, 66, 27, 91, 51, 49, 109, 27, 91, 66, 97, 27, 91, 65], chunk = 9
+cc 5d3f843a1b4f09c9549b9568debcbcdca1edd250e8a1b328f33acdd1048aa2ee # shrinks to transcript = [13, 10, 97, 27, 91, 65]

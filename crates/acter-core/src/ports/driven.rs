@@ -3,6 +3,8 @@
 
 mod clock;
 mod event_sink;
+mod terminal_engine;
 
 pub use clock::{Clock, Timer};
 pub use event_sink::EventSink;
+pub use terminal_engine::TerminalEngine;

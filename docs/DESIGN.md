@@ -308,6 +308,42 @@ How the split is expressed in the protocol — announcements carrying their own 
 versus addressing a span of already-rendered output — is B1.5's to settle, and it is
 the same seam as the announcement-channel open question below.
 
+**Output is a stream of identified lines, and a rewrite is a revision — Decided.**
+(Agreed in conversation 2026-08-17, while specifying B3.) A terminal's output is not an
+append-only text stream, however much it looks like one: programs rewrite what they have
+already written. A `\r` progress bar, a spinner, `cargo`'s status line, `docker pull`'s
+stack of per-layer bars — all of them repaint lines in place on the primary screen, with
+no alternate screen involved.
+
+That cannot be deferred to the frontend, because it changes what the backend must emit.
+The engine therefore emits **lines with identity**: an opaque id minted when a line is
+first produced, and each item saying whether its text was *appended* to that line,
+*rewrote* it, or *settled* it as final.
+
+The alternative — emitting the line again as fresh text every time it changes — was
+considered and rejected. It fills a review buffer with hundreds of copies of a spinner,
+and for a user who navigates by reading rather than glancing, a buffer full of
+near-identical lines is not a cosmetic problem: it is the thing they have to read
+through to find the output that mattered.
+
+Identity is session-global and outlives the command block that produced it, so the
+frontend can always find a line. The *right to revise* it does not: closing a block
+freezes its lines, and a later rewrite of the same screen rows produces new lines
+instead. A review buffer whose history changes behind the reader is worse than a
+duplicate.
+
+This is what makes the separate paths above concrete rather than merely a cadence
+difference. The **buffer** applies every revision, so it always shows current state.
+**Speech** takes appended text as it always has, ignores rewrites as churn, and takes
+the settled text as a line's final word — so a spinner is never read mid-spin, while its
+result still is. The binding invariant is unaffected: settled and appended text is in
+the buffer before it is ever announced.
+
+Consumer-side consequences are recorded against B6: the unspoken-text accumulator is
+currently flat and append-only (it drops text once a too-big verdict settles), so making
+speech correct under rewrites means keying it by line; the protocol needs a line-aware
+wire format; and the frontend needs a map from id to rendered node.
+
 Also decided earlier and unchanged:
 - The status announcement (Ctrl+Shift+S) reports when a command is still running.
 - The frontend caps rendered lines per block (last N lines) for never-ending output;
@@ -315,6 +351,16 @@ Also decided earlier and unchanged:
 
 ## Open questions
 
+- Browse-cursor stability under in-place updates (raised 2026-08-17 with the
+  identified-lines decision above, and to be answered by observation, not argument):
+  when a line already rendered in the buffer is *mutated* while the user is sitting in
+  browse mode reading, does NVDA's review cursor hold its position, or move? This is not
+  about announcement — the buffer is not a live region, so a mutation is silent by
+  construction, and whether an update is *spoken* is our own policy choice. It is about
+  whether a progress line repainting several times a second yanks a user who pressed F6
+  to review an earlier command. If it does, the answer is likely to suspend updates while
+  the buffer holds focus. Probeable today with a static page and the screen-readers
+  bridge, ahead of any frontend work.
 - Alt-screen behavior: announce "interactive mode needed" vs auto-switch (and how to
   announce the switch back).
 - Interactive-mode screen reading strategy: how the buffer/grid is exposed to the
