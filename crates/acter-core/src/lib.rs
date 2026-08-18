@@ -11,12 +11,12 @@ mod ports;
 
 pub use controllers::{Requests, SessionActor, SessionInput, Wake};
 pub use entities::{
-    Announcement, CommandId, ConnectionState, ExitCode, Integration, Mode, Osc133Marker,
-    PacingConfig, PacingState, ReadMode, Screen, SessionEvent, SessionId, SessionState, SubmitAck,
-    TerminalItem,
+    Announcement, CommandId, ConnectionState, ExitCode, Integration, LineId, LineRevision, Mode,
+    Osc133Marker, PacingConfig, PacingState, ReadMode, Screen, SessionEvent, SessionId,
+    SessionState, SubmitAck, TerminalItem,
 };
 pub use policies::{
     BoundaryEvent, BoundaryTracker, PacingAction, PacingOutcome, Region, TextSize, measure,
     on_command_end, on_output, on_wake, verdict,
 };
-pub use ports::{Clock, EventSink, SessionApi, Timer};
+pub use ports::{Clock, EventSink, SessionApi, TerminalEngine, Timer};

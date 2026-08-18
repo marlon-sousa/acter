@@ -1,18 +1,21 @@
 //! Policy: the command-block boundary tracker — DESIGN's linchpin for non-interactive
-//! mode. Takes the ordered stream of text and OSC 133 markers the terminal engine emits,
-//! and says where each command block begins and ends and which region every piece of
-//! text fell in.
+//! mode. Takes the ordered stream of identified lines, OSC 133 markers and screen
+//! transitions the terminal engine emits, and says where each command block begins and
+//! ends and which region every line fell in.
 //!
-//! It cuts; it never extracts and never filters (spec B2, decision 2). Nothing is
-//! dropped, nothing is rewritten, and no opinion is formed about what a region is *for*:
-//! DESIGN's echo exclusion — block content is C..D only — is then a caller's filter over
-//! labelled regions rather than a rule buried in a state machine.
+//! It cuts; it never extracts and never filters (spec B2, decision 2). Items pass
+//! through unchanged except for the region label: same id, same text, same revision, in
+//! the same order. Nothing is dropped, nothing is rewritten, and no opinion is formed
+//! about what a region is *for*: DESIGN's echo exclusion — block content is C..D only —
+//! is then a caller's filter over labelled regions rather than a rule buried in a state
+//! machine.
 //!
-//! Pure: no clock, no ports, no identity. Command ids and the integration grace period
-//! belong to the service above it (decision 5), because both need state this layer
-//! deliberately does not have.
+//! Pure: no clock, no ports, no identity of its own. Line identity is minted by the
+//! engine and only carried here; command ids and the integration grace period belong to
+//! the service above it (decision 5), because both need state this layer deliberately
+//! does not have.
 
-use crate::{ExitCode, Osc133Marker, TerminalItem};
+use crate::{ExitCode, LineId, LineRevision, Osc133Marker, Screen, TerminalItem};
 
 /// Where a piece of text fell relative to the markers around it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -42,11 +45,24 @@ pub enum BoundaryEvent {
     MarkersObserved,
     /// A command's output region opened.
     BlockStarted,
-    /// Text, labelled with the region it fell in.
-    Text { region: Region, text: String },
+    /// One line item, labelled with the region it fell in. Everything else about it —
+    /// which line, what text, what the text did to that line — is carried through
+    /// untouched.
+    Line {
+        region: Region,
+        id: LineId,
+        text: String,
+        revision: LineRevision,
+    },
     /// The open block closed. `exit` is `None` when the end was not a well-formed `D`
     /// carrying a code — either a bare `D`, or a prompt reappearing mid-block.
     BlockEnded { exit: Option<ExitCode> },
+    /// The emulator switched screens, passed through at its place in the stream.
+    ///
+    /// It travels here rather than on a side channel so ordering stays decided in one
+    /// place: the alternate screen is entered in the middle of a batch, and which lines
+    /// arrived before the switch is exactly what a caller must not have to reconstruct.
+    ScreenChanged(Screen),
 }
 
 /// One session's boundary state machine.
@@ -73,7 +89,7 @@ impl BoundaryTracker {
     ///
     /// Batch in, batch out, because that is the shape the caller has: one batch of items
     /// per read from the transport (decision 9). State carries across calls — a marker in
-    /// one batch governs the text in the next.
+    /// one batch governs the lines in the next.
     pub fn observe(&mut self, items: impl IntoIterator<Item = TerminalItem>) -> Vec<BoundaryEvent> {
         let mut events = Vec::new();
         for item in items {
@@ -81,11 +97,19 @@ impl BoundaryTracker {
                 // Empty text passes through rather than being swallowed: B1.1 made an
                 // empty chunk meaningful — it must not move the quiescence deadline — so
                 // dropping one here would hide the case the pacing policy was built for.
-                TerminalItem::Text(text) => events.push(BoundaryEvent::Text {
+                TerminalItem::Line { id, text, revision } => events.push(BoundaryEvent::Line {
                     region: self.region,
+                    id,
                     text,
+                    revision,
                 }),
                 TerminalItem::Marker(marker) => self.observe_marker(marker, &mut events),
+                // A screen change says nothing about command blocks: a program redrawing
+                // on the alternate screen has neither started nor finished a command, so
+                // the region is left exactly as it was and the item is only relayed.
+                TerminalItem::ScreenChanged(screen) => {
+                    events.push(BoundaryEvent::ScreenChanged(screen))
+                }
             }
         }
         events
@@ -142,12 +166,31 @@ impl BoundaryTracker {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
     use proptest::prelude::*;
 
     use super::*;
 
+    /// A counter for tests that do not care which id they get, only that one is carried.
+    static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+
+    /// Most table tests below care about labelling rather than revision, so this helper
+    /// mints a fresh id and appends: the ordinary shape of streaming output.
     fn text(s: &str) -> TerminalItem {
-        TerminalItem::Text(s.to_owned())
+        line(
+            NEXT_ID.fetch_add(1, Ordering::Relaxed),
+            s,
+            LineRevision::Appended,
+        )
+    }
+
+    fn line(id: u64, s: &str, revision: LineRevision) -> TerminalItem {
+        TerminalItem::Line {
+            id: LineId(id),
+            text: s.to_owned(),
+            revision,
+        }
     }
 
     fn a() -> TerminalItem {
@@ -174,25 +217,28 @@ mod tests {
         events
             .iter()
             .filter_map(|event| match event {
-                BoundaryEvent::Text { region, .. } => Some(*region),
+                BoundaryEvent::Line { region, .. } => Some(*region),
                 _ => None,
             })
             .collect()
     }
 
     #[test]
-    fn happy_cycle_brackets_the_block_and_labels_its_text() {
+    fn happy_cycle_brackets_the_block_and_labels_its_line() {
         let mut tracker = BoundaryTracker::new();
-        let events = tracker.observe([a(), b(), c(), text("hello\n"), d(0)]);
+        let events =
+            tracker.observe([a(), b(), c(), line(7, "hello", LineRevision::Settled), d(0)]);
 
         assert_eq!(
             events,
             vec![
                 BoundaryEvent::MarkersObserved,
                 BoundaryEvent::BlockStarted,
-                BoundaryEvent::Text {
+                BoundaryEvent::Line {
                     region: Region::Output,
-                    text: "hello\n".to_owned(),
+                    id: LineId(7),
+                    text: "hello".to_owned(),
+                    revision: LineRevision::Settled,
                 },
                 BoundaryEvent::BlockEnded {
                     exit: Some(ExitCode(0)),
@@ -208,9 +254,9 @@ mod tests {
             a(),
             text("PS C:\\> "),
             b(),
-            text("git status\r\n"),
+            text("git status"),
             c(),
-            text("nothing to commit\n"),
+            text("nothing to commit"),
             d(0),
         ]);
 
@@ -223,7 +269,7 @@ mod tests {
     #[test]
     fn text_before_any_marker_is_unstructured() {
         let mut tracker = BoundaryTracker::new();
-        let events = tracker.observe([text("banner from the shell\n")]);
+        let events = tracker.observe([text("banner from the shell")]);
 
         assert_eq!(regions(&events), vec![Region::Unstructured]);
         assert!(!events.contains(&BoundaryEvent::MarkersObserved));
@@ -232,7 +278,7 @@ mod tests {
     #[test]
     fn text_between_a_command_end_and_the_next_prompt_is_unstructured() {
         let mut tracker = BoundaryTracker::new();
-        let events = tracker.observe([c(), d(0), text("stray\n")]);
+        let events = tracker.observe([c(), d(0), text("stray")]);
 
         assert_eq!(regions(&events), vec![Region::Unstructured]);
     }
@@ -240,15 +286,21 @@ mod tests {
     #[test]
     fn command_end_with_no_open_block_is_ignored() {
         let mut tracker = BoundaryTracker::new();
-        let events = tracker.observe([a(), d(0), text("still the prompt")]);
+        let events = tracker.observe([
+            a(),
+            d(0),
+            line(3, "still the prompt", LineRevision::Appended),
+        ]);
 
         assert_eq!(
             events,
             vec![
                 BoundaryEvent::MarkersObserved,
-                BoundaryEvent::Text {
+                BoundaryEvent::Line {
                     region: Region::Prompt,
+                    id: LineId(3),
                     text: "still the prompt".to_owned(),
+                    revision: LineRevision::Appended,
                 },
             ]
         );
@@ -270,21 +322,30 @@ mod tests {
     #[test]
     fn prompt_start_mid_block_closes_it_with_an_unknown_exit_code() {
         let mut tracker = BoundaryTracker::new();
-        let events = tracker.observe([c(), text("output"), a(), text("prompt")]);
+        let events = tracker.observe([
+            c(),
+            line(1, "output", LineRevision::Appended),
+            a(),
+            line(2, "prompt", LineRevision::Appended),
+        ]);
 
         assert_eq!(
             events,
             vec![
                 BoundaryEvent::MarkersObserved,
                 BoundaryEvent::BlockStarted,
-                BoundaryEvent::Text {
+                BoundaryEvent::Line {
                     region: Region::Output,
+                    id: LineId(1),
                     text: "output".to_owned(),
+                    revision: LineRevision::Appended,
                 },
                 BoundaryEvent::BlockEnded { exit: None },
-                BoundaryEvent::Text {
+                BoundaryEvent::Line {
                     region: Region::Prompt,
+                    id: LineId(2),
                     text: "prompt".to_owned(),
+                    revision: LineRevision::Appended,
                 },
             ]
         );
@@ -329,12 +390,73 @@ mod tests {
     #[test]
     fn empty_text_passes_through_rather_than_being_swallowed() {
         let mut tracker = BoundaryTracker::new();
-        let events = tracker.observe([c(), text("")]);
+        let events = tracker.observe([c(), line(9, "", LineRevision::Appended)]);
 
-        assert!(events.contains(&BoundaryEvent::Text {
+        assert!(events.contains(&BoundaryEvent::Line {
             region: Region::Output,
+            id: LineId(9),
             text: String::new(),
+            revision: LineRevision::Appended,
         }));
+    }
+
+    #[test]
+    fn every_revision_kind_survives_the_label() {
+        let mut tracker = BoundaryTracker::new();
+        let events = tracker.observe([
+            c(),
+            line(4, "downloading", LineRevision::Appended),
+            line(4, "done", LineRevision::Rewritten),
+            line(4, "done", LineRevision::Settled),
+        ]);
+
+        let revisions: Vec<_> = events
+            .iter()
+            .filter_map(|event| match event {
+                BoundaryEvent::Line { revision, .. } => Some(*revision),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            revisions,
+            vec![
+                LineRevision::Appended,
+                LineRevision::Rewritten,
+                LineRevision::Settled,
+            ]
+        );
+    }
+
+    #[test]
+    fn a_screen_change_is_relayed_in_place_without_touching_the_region() {
+        let mut tracker = BoundaryTracker::new();
+        let events = tracker.observe([
+            c(),
+            line(1, "before", LineRevision::Appended),
+            TerminalItem::ScreenChanged(Screen::Alternate),
+            line(2, "after", LineRevision::Appended),
+        ]);
+
+        assert_eq!(
+            events,
+            vec![
+                BoundaryEvent::MarkersObserved,
+                BoundaryEvent::BlockStarted,
+                BoundaryEvent::Line {
+                    region: Region::Output,
+                    id: LineId(1),
+                    text: "before".to_owned(),
+                    revision: LineRevision::Appended,
+                },
+                BoundaryEvent::ScreenChanged(Screen::Alternate),
+                BoundaryEvent::Line {
+                    region: Region::Output,
+                    id: LineId(2),
+                    text: "after".to_owned(),
+                    revision: LineRevision::Appended,
+                },
+            ]
+        );
     }
 
     #[test]
@@ -350,15 +472,31 @@ mod tests {
         assert_eq!(regions(&second), vec![Region::Output]);
     }
 
+    fn any_revision() -> impl Strategy<Value = LineRevision> {
+        prop_oneof![
+            Just(LineRevision::Appended),
+            Just(LineRevision::Rewritten),
+            Just(LineRevision::Settled),
+        ]
+    }
+
     fn any_item() -> impl Strategy<Value = TerminalItem> {
         prop_oneof![
-            any::<String>().prop_map(TerminalItem::Text),
+            (any::<u64>(), any::<String>(), any_revision()).prop_map(|(id, text, revision)| {
+                TerminalItem::Line {
+                    id: LineId(id),
+                    text,
+                    revision,
+                }
+            }),
             Just(TerminalItem::Marker(Osc133Marker::PromptStart)),
             Just(TerminalItem::Marker(Osc133Marker::CommandStart)),
             Just(TerminalItem::Marker(Osc133Marker::OutputStart)),
             any::<Option<i32>>().prop_map(|code| TerminalItem::Marker(Osc133Marker::CommandEnd(
                 code.map(ExitCode)
             ))),
+            Just(TerminalItem::ScreenChanged(Screen::Normal)),
+            Just(TerminalItem::ScreenChanged(Screen::Alternate)),
         ]
     }
 
@@ -368,24 +506,35 @@ mod tests {
 
     proptest! {
         /// The property that matters most for this product: for a screen-reader terminal,
-        /// silently dropping output is the cardinal defect. Every input character comes
-        /// out, in order, whatever nonsense the markers around it did.
+        /// silently dropping output is the cardinal defect. Every line item comes out, in
+        /// order, carrying the same id, the same text and the same revision it went in
+        /// with — the tracker adds a label and nothing else. Screen changes are relayed
+        /// on the same terms.
+        ///
+        /// This is B2's "text is never lost" restated for identified lines. Identity made
+        /// the old concatenation equality ill-typed, and the replacement is strictly
+        /// stronger: it no longer has to reason about what the text means.
         #[test]
-        fn text_is_never_lost(items in any_stream()) {
+        fn items_pass_through_unchanged_except_for_the_region_label(items in any_stream()) {
             let mut tracker = BoundaryTracker::new();
             let events = tracker.observe(items.clone());
 
-            let given: String = items
+            let given: Vec<_> = items
                 .iter()
-                .filter_map(|item| match item {
-                    TerminalItem::Text(text) => Some(text.as_str()),
-                    TerminalItem::Marker(_) => None,
-                })
+                .filter(|item| !matches!(item, TerminalItem::Marker(_)))
+                .cloned()
                 .collect();
-            let emitted: String = events
+            let emitted: Vec<_> = events
                 .iter()
                 .filter_map(|event| match event {
-                    BoundaryEvent::Text { text, .. } => Some(text.as_str()),
+                    BoundaryEvent::Line { id, text, revision, .. } => Some(TerminalItem::Line {
+                        id: *id,
+                        text: text.clone(),
+                        revision: *revision,
+                    }),
+                    BoundaryEvent::ScreenChanged(screen) => {
+                        Some(TerminalItem::ScreenChanged(*screen))
+                    }
                     _ => None,
                 })
                 .collect();

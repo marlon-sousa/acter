@@ -213,7 +213,8 @@ the answer to "what should we do now?".
     (a new dev-dependency): never panics, blocks are balanced and never nest,
     `MarkersObserved` latches once, and above all **text is never lost** — for this
     product, silently dropping output is the cardinal defect.
-18. B3, terminal engine. Spec: none yet → specify first. Scope sketch: acter-term
+18. B3, terminal engine. **Done.** Spec:
+    [b3-terminal-engine.md](specs/b3-terminal-engine.md). Scope: acter-term
     wrapping alacritty_terminal behind TerminalEngine; text extraction + alt-screen
     detection tests; **OSC 133 recognition**, moved here from B2 by decision, feeding
     B2's tracker the `TerminalItem` stream it already consumes — with the "never panics
@@ -231,22 +232,36 @@ the answer to "what should we do now?".
     `Term` compiles unchanged; wired in via `[patch.crates-io]` in the root manifest. It
     carries no OSC 133 knowledge — interpreting params is acter's job. Whether to send it
     upstream is deliberately still open; until then the fork is the dependency.
-    Two consequences for B3's spec. First, **driving `vte::Parser` with a raw `Perform` is
-    off the table**: `Perform` is the byte-level trait below `ansi::Handler`, so that route
-    meant reimplementing the whole `ansi` layer (CSI/SGR/mode parsing); B3 now works at
-    `ansi::Handler` and gets that for free. Second, **the ~70-method forward to `Term` is
-    probably unnecessary**, and which way to go is the spec's call: either one pass with a
-    wrapper owning a `Term` and forwarding all 72 `Handler` methods, or two `Processor`s over
-    the same bytes — one driving `Term` directly with zero forwarding (alt-screen from
-    `Term::mode()` containing `ALT_SCREEN`, grid via `Term::grid()`/`Term::damage()`), the
-    other a small handler implementing only what the speech path needs, the rest left as
-    default no-ops. The second costs one extra parse pass and has no silently-wrong-forward
-    failure mode; it also matches DESIGN's decided buffer/speech split. Its real open
-    question, and the one the spec must actually answer, is how much emulation *spoken* text
-    needs: `input` alone is wrong for `\r` overwrites, `clear_line`, `erase_chars` and
-    absolute `goto`, so the subset must be enumerated and justified, with grid-based
-    extraction at marker boundaries as the fallback if cursor-addressed output proves to
-    matter.
+    **Driving `vte::Parser` with a raw `Perform` is off the table**: `Perform` is the
+    byte-level trait below `ansi::Handler`, so that route meant reimplementing the whole
+    `ansi` layer (CSI/SGR/mode parsing); B3 works at `ansi::Handler` and gets that for free.
+    Shipped: **two `Processor`s over the same bytes**, not a 72-method forwarding wrapper.
+    One drives `Term` with zero forwarding, the other a sniffer implementing three methods
+    (`unhandled_osc` for OSC 133, `set_private_mode` and `unset_private_mode` for
+    alt-screen's `1049`). Forwarding was rejected because every `Handler` method is
+    defaulted, so a future vte release that adds one would silently get a no-op instead of
+    reaching `Term` — vte did exactly that in 0.13.0 and 0.13.1.
+    The question this entry used to pose — how much emulation *spoken* text needs — is
+    **retired rather than answered**: DESIGN's Decided phasing item already requires the text
+    view to be derived from the grid, so there is no `Handler` subset to enumerate. Two
+    findings from verifying the API changed scope: `Term` answers device queries through its
+    `EventListener` (`PtyWrite`, `ColorRequest`, `TextAreaSizeRequest`), so replies must
+    leave the engine or querying programs hang; and `Term::damage()` is viewport-scoped, so
+    extraction works over absolute rows instead. Alt-screen transitions travel *in* the item
+    stream, because one read routinely carries `1049h` plus an app's first repaint.
+    Its largest consequence is a DESIGN decision of its own (**output is a stream of
+    identified lines, and a rewrite is a revision**), so the item stream became
+    `Line { id, text, revision }` plus `Marker` plus `ScreenChanged` — amending B2's
+    `TerminalItem`, its `BoundaryEvent::Text` arm and its cardinal property (now *items pass
+    through unchanged except for the region label*) in the same PR.
+    Three amendments the implementation forced, all recorded inline in the spec. A newline
+    does **not** settle a line: it contradicted the in-place-update case the whole decision
+    exists for, so settling happens only where change is impossible — scroll-out, block end,
+    screen change, resize. The engine reclaims the emulator's history after each scan, since
+    absolute row numbers are stable only until the scrollback fills and there is no eviction
+    count to read back; the emulator's history is a staging area, and the user's scrollback
+    is the buffer this stream feeds. And a block end retires a line's id while *keeping* the
+    row's text, so a frozen row stays quiet until it actually changes.
 19. B3.5, the `Transport` port and the scripted byte-level fake. Spec: none yet →
     specify first. **Placed here by decision (agreed in conversation 2026-08-16):**
     A3's fake implements `SessionApi`, the *driving* port at the top of the stack, so

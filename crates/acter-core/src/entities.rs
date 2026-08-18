@@ -16,5 +16,5 @@ pub use protocol_commands::SubmitAck;
 pub use protocol_common::{CommandId, ConnectionState, ExitCode, Mode, ReadMode, SessionId};
 pub use protocol_events::{Announcement, SessionEvent};
 pub use session_state::{Integration, Screen, SessionState};
-pub use terminal_item::TerminalItem;
+pub use terminal_item::{LineId, LineRevision, TerminalItem};
 pub(crate) use unspoken_text::UnspokenText;

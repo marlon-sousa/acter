@@ -43,7 +43,9 @@ version = "0.1.0"
 name = "acter-term"
 version = "0.1.0"
 dependencies = [
+ "acter-core",
  "alacritty_terminal",
+ "proptest",
 ]
 
 [[package]]
