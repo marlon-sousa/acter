@@ -197,9 +197,17 @@ acter-app/src (delivery + container):
 
 acter-transports/src (adapter crate):
 - lib.rs (facade)
-- scripted.rs + scripted/: transcript.rs (the transcript format, its validation and
-  payload expansion), default_transcript.json (the built-in scenarios, `include_str!`-ed).
+- scripted.rs + scripted/: `ScriptedTransport`, the fake *pipe* — the task, the clock,
+  the read channel, where each read ends, what was written, the last resize. Plus
+  transcript.rs (the transcript format, its validation and payload expansion) and
+  default_transcript.json (the built-in scenarios, `include_str!`-ed).
   `ScriptedTransport` is a permanent session kind, not scaffolding (spec B3.5, decision 2)
+- fake.rs + fake/: the fake *far end*, which composes with the pipe rather than being
+  welded to it (spec B3.6) — shell.rs (the `FakeShell` seam plus `Script`, `Delivery` and
+  `Submission`; a seam inside this adapter, not one of acter-core's ports),
+  transcript_shell.rs (answers from a transcript: prompt, echo, line discipline, rule
+  matching), unmarked.rs (the decorator for a far end with no shell integration),
+  chunking.rs (how one delivery becomes reads)
 - local.rs + local/: conpty.rs, reader.rs (blocking-read thread)
 - ssh.rs + ssh/ (feature "ssh"): connection.rs, auth.rs
 

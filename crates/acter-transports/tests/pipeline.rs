@@ -31,7 +31,9 @@ use acter_core::{
     TerminalEngine, Timer, Transport, Wake,
 };
 use acter_term::AlacrittyEngine;
-use acter_transports::{ScriptedTransport, SessionTranscript};
+use acter_transports::{
+    Chunking, FakeShell, ScriptedTransport, SessionTranscript, TranscriptShell, Unmarked,
+};
 use tokio::sync::mpsc::{Receiver, channel};
 use tokio::sync::oneshot;
 use tokio::task::yield_now;
@@ -143,10 +145,18 @@ struct Pipeline {
 }
 
 impl Pipeline {
+    /// The ordinary case: a transcript-backed far end, one delivery per read.
     fn start(transcript: SessionTranscript) -> Self {
+        Self::over(Box::new(TranscriptShell::new(transcript)), Chunking::Whole)
+    }
+
+    /// Any far end, cut any way — which is what B3.6 bought: the fixtures below are
+    /// replayed unchanged over a shell that emits no markers, and over a pipe that hands
+    /// the engine one byte at a time.
+    fn over(shell: Box<dyn FakeShell>, chunking: Chunking) -> Self {
         let clock = Arc::new(FakeClock::default());
         let events = Arc::new(Recorder::default());
-        let mut transport = ScriptedTransport::new(transcript, clock.clone());
+        let mut transport = ScriptedTransport::with_shell(shell, chunking, clock.clone());
         let (sender, reads) = channel(READS);
         transport.start(sender);
 
@@ -344,6 +354,49 @@ impl Pipeline {
             .collect()
     }
 
+    /// What a session said, with everything about *how* its bytes were cut left out.
+    ///
+    /// The comparison the byte-at-a-time suite is built on, and the reason it is stated
+    /// this way rather than as event equality: see [`Substance`].
+    fn substance(&self) -> Substance {
+        let mut blocks: Vec<Block> = Vec::new();
+        for event in self.events() {
+            match event {
+                SessionEvent::CommandStarted { command_id } => blocks.push(Block {
+                    command_id,
+                    output: String::new(),
+                    exit_code: None,
+                }),
+                SessionEvent::Output {
+                    command_id, text, ..
+                } => match blocks
+                    .iter_mut()
+                    .find(|block| block.command_id == command_id)
+                {
+                    Some(block) => block.output.push_str(&text),
+                    None => panic!("output for a command that never started: {command_id:?}"),
+                },
+                SessionEvent::CommandFinished {
+                    command_id,
+                    exit_code,
+                    ..
+                } => match blocks
+                    .iter_mut()
+                    .find(|block| block.command_id == command_id)
+                {
+                    Some(block) => block.exit_code = Some(exit_code),
+                    None => panic!("a command finished that never started: {command_id:?}"),
+                },
+                _ => {}
+            }
+        }
+        Substance {
+            integrated: self.integrated,
+            blocks,
+            announcements: self.announcements(),
+        }
+    }
+
     fn announcements(&self) -> Vec<Announcement> {
         self.events()
             .into_iter()
@@ -361,6 +414,32 @@ fn wake(current: Option<Duration>, requested: Wake, now: Duration) -> Option<Dur
         Wake::Clear => None,
         Wake::After(after) => Some(now + after),
     }
+}
+
+/// What a session said, independent of how its bytes arrived.
+///
+/// **Not the event stream, and deliberately not.** Replaying a fixture one byte at a
+/// time does not produce an identical stream: the engine emits a line item per advance,
+/// so a byte-at-a-time read produces many more `Appended` revisions than one whole read
+/// does. That is correct behavior rather than a defect, so claiming event equality would
+/// be claiming something false. What must be identical is this — the concatenated output
+/// text per command, the block structure, the exit codes, whether markers were
+/// recognized at all, and what was said out loud. That is B2's cardinal property (text
+/// is never lost) plus B3's marker recognition, asserted across the whole fixture suite
+/// (spec B3.6, decision 3).
+#[derive(Debug, PartialEq, Eq)]
+struct Substance {
+    integrated: bool,
+    blocks: Vec<Block>,
+    announcements: Vec<Announcement>,
+}
+
+/// One command block: what it was called, everything it said, and how it ended.
+#[derive(Debug, PartialEq, Eq)]
+struct Block {
+    command_id: CommandId,
+    output: String,
+    exit_code: Option<ExitCode>,
 }
 
 fn fixture(name: &str) -> PathBuf {
@@ -542,24 +621,28 @@ async fn an_interrupt_ends_the_running_command_without_inventing_a_failure() {
 
 /// DESIGN's reliability model, one test per case. First: a marker cut in half by a read
 /// boundary, which is the case an event-level fake structurally cannot produce.
+///
+/// It used to be one hand-authored fixture that split one marker. It is now a property
+/// of the pipe, so *every* marker in this session arrives in pieces — the A, the B, the
+/// C and the D, each cut into seven reads — and the session still says exactly what it
+/// says when each arrives whole (spec B3.6, decision 3).
 #[tokio::test]
 async fn a_marker_split_across_two_reads_is_still_one_marker() {
-    let mut pipeline = Pipeline::start(loaded("split_marker.json"));
+    let mut pipeline = Pipeline::over(Box::new(TranscriptShell::builtin()), Chunking::Bytes(1));
     pipeline.run_until(0).await;
 
-    pipeline.submit("split");
+    pipeline.submit("small");
     pipeline.run_until(1_000).await;
 
+    assert!(pipeline.integrated, "the markers were recognized in pieces");
     assert_eq!(
-        pipeline.events(),
-        vec![
-            started(),
-            output("output line"),
-            finished(0),
-            announce(Announcement::ReadAloud {
-                text: "output line".to_owned()
-            }),
-        ]
+        pipeline.substance().blocks,
+        vec![Block {
+            command_id: CommandId(1),
+            output: "hello from acter".to_owned(),
+            exit_code: Some(ExitCode(0)),
+        }],
+        "one block, opened and closed by markers nobody ever received whole"
     );
 }
 
@@ -623,12 +706,19 @@ async fn a_command_that_never_ends_announces_that_it_is_still_running() {
 /// A shell with no integration at all. Every line is unstructured, so no command block
 /// ever opens and the session never claims to be integrated — DESIGN's reliability case
 /// 2, which B6 turns into the grace period.
+///
+/// It is the *built-in* shell with its markers taken away, not a transcript that answers
+/// only the handful of lines somebody thought to write down: integration missing is
+/// something that happens to a working shell (spec B3.6, decision 4).
 #[tokio::test]
 async fn a_session_with_no_markers_never_reports_a_command_or_integration() {
-    let mut pipeline = Pipeline::start(loaded("unmarked_session.json"));
+    let mut pipeline = Pipeline::over(
+        Box::new(Unmarked::new(TranscriptShell::builtin())),
+        Chunking::Whole,
+    );
     pipeline.run_until(0).await;
 
-    pipeline.submit("hello");
+    pipeline.submit("small");
     pipeline.run_until(2_000).await;
 
     assert!(!pipeline.integrated, "no marker ever arrived");
@@ -675,4 +765,176 @@ async fn a_resize_reaches_the_transport() {
         .expect("the session is open");
 
     assert_eq!(pipeline.transport.last_resize(), Some((100, 30)));
+}
+
+/// One replayable session: a far end, and the lines submitted to it with the scripted
+/// moment each is given to answer by.
+struct Case {
+    name: &'static str,
+    far_end: &'static str,
+    submissions: &'static [(&'static str, u64)],
+}
+
+impl Case {
+    async fn replay(&self, chunking: Chunking) -> Substance {
+        let mut pipeline = Pipeline::over(far_end(self.far_end), chunking);
+        pipeline.run_until(0).await;
+        for (line, until) in self.submissions {
+            pipeline.submit(line);
+            pipeline.run_until(*until).await;
+        }
+        pipeline.substance()
+    }
+}
+
+/// A far end by name: the built-in shell, the built-in shell with its integration taken
+/// away, or a transcript fixture from disk.
+fn far_end(name: &str) -> Box<dyn FakeShell> {
+    match name {
+        "builtin" => Box::new(TranscriptShell::builtin()),
+        "unmarked builtin" => Box::new(Unmarked::new(TranscriptShell::builtin())),
+        fixture => Box::new(TranscriptShell::new(loaded(fixture))),
+    }
+}
+
+/// Every session this crate can replay: the ten built-in scenarios and every fixture,
+/// each with enough scripted time to finish saying what it has to say.
+const CASES: &[Case] = &[
+    Case {
+        name: "a small answer",
+        far_end: "builtin",
+        submissions: &[("small", 1_000)],
+    },
+    Case {
+        name: "a flood",
+        far_end: "builtin",
+        submissions: &[("big", 1_000)],
+    },
+    Case {
+        name: "a failure with an exit code",
+        far_end: "builtin",
+        submissions: &[("fail", 1_000)],
+    },
+    Case {
+        name: "three phases with quiescent gaps",
+        far_end: "builtin",
+        submissions: &[("slow", 6_000)],
+    },
+    Case {
+        name: "an announcement long enough to be read by size",
+        far_end: "builtin",
+        submissions: &[("speech", 1_000)],
+    },
+    Case {
+        name: "a sampled trickle",
+        far_end: "builtin",
+        submissions: &[("tail", 100_000)],
+    },
+    Case {
+        name: "a flood then a trickle",
+        far_end: "builtin",
+        submissions: &[("burst", 60_000)],
+    },
+    Case {
+        name: "a full-screen program",
+        far_end: "builtin",
+        submissions: &[("nano", 10_000)],
+    },
+    Case {
+        name: "a command interrupted while it runs",
+        far_end: "builtin",
+        submissions: &[("forever", 3_000), ("stop", 4_000)],
+    },
+    Case {
+        name: "an unrecognized line",
+        far_end: "builtin",
+        submissions: &[("nothing scripted this", 1_000)],
+    },
+    Case {
+        name: "a far end with no integration",
+        far_end: "unmarked builtin",
+        submissions: &[("small", 2_000)],
+    },
+    Case {
+        name: "alt_screen.json",
+        far_end: "alt_screen.json",
+        submissions: &[("nano", 1_000)],
+    },
+    Case {
+        name: "captured_prompt.json",
+        far_end: "captured_prompt.json",
+        submissions: &[("hello", 1_000)],
+    },
+    Case {
+        name: "device_query.json",
+        far_end: "device_query.json",
+        submissions: &[("where", 1_000)],
+    },
+    Case {
+        name: "forged_marker.json",
+        far_end: "forged_marker.json",
+        submissions: &[("forge", 2_000)],
+    },
+    Case {
+        name: "no_end_marker.json",
+        far_end: "no_end_marker.json",
+        submissions: &[("hang", 11_000)],
+    },
+];
+
+/// **The headline test of B3.6**, and the reason the entry exists.
+///
+/// DESIGN's "a marker split across two reads" used to be proven by one hand-authored
+/// fixture that split one marker. Read boundaries are a property of the pipe rather than
+/// of what the far end said, so they became [`Chunking`] — and the case became a
+/// dimension every session is replayed under. Under `Bytes(1)` every marker, every
+/// escape sequence, every device query and every line of output arrives one byte at a
+/// time.
+///
+/// What it asserts is [`Substance`], not the event stream: byte-at-a-time reads produce
+/// many more `Appended` revisions, which is correct, so event equality would be a false
+/// claim. Text, blocks, exit codes, marker recognition and speech are what must not move.
+#[tokio::test]
+async fn every_session_says_the_same_thing_when_every_byte_is_its_own_read() {
+    for case in CASES {
+        let whole = case.replay(Chunking::Whole).await;
+        let byte_at_a_time = case.replay(Chunking::Bytes(1)).await;
+
+        assert_eq!(
+            byte_at_a_time, whole,
+            "{} said something different when its bytes were cut differently",
+            case.name
+        );
+    }
+}
+
+/// The other half of the same claim, and the one that keeps the test above from passing
+/// vacuously: every case really does drive a session through the whole pipeline.
+///
+/// A block with nothing in it counts — the default rule opens and closes one without
+/// saying a word, and that block *is* the substance being compared. The one exception
+/// states itself: a far end with no integration produces no blocks at all, which is
+/// DESIGN's reliability case 2 rather than a case that failed to run.
+#[tokio::test]
+async fn every_case_in_the_suite_actually_produces_a_session() {
+    for case in CASES {
+        let substance = case.replay(Chunking::Bytes(1)).await;
+
+        if case.far_end == "unmarked builtin" {
+            assert!(!substance.integrated, "{}: {substance:?}", case.name);
+            assert!(substance.blocks.is_empty(), "{}: {substance:?}", case.name);
+            continue;
+        }
+
+        assert!(
+            substance.integrated,
+            "{} never recognized a marker: {substance:?}",
+            case.name
+        );
+        assert!(
+            !substance.blocks.is_empty(),
+            "{} opened no command block: {substance:?}",
+            case.name
+        );
+    }
 }
