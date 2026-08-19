@@ -19,4 +19,4 @@ pub use policies::{
     BoundaryEvent, BoundaryTracker, PacingAction, PacingOutcome, Region, TextSize, measure,
     on_command_end, on_output, on_wake, verdict,
 };
-pub use ports::{Clock, EventSink, SessionApi, TerminalEngine, Timer};
+pub use ports::{Clock, EventSink, SessionApi, TerminalEngine, Timer, Transport, TransportError};

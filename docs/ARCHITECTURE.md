@@ -175,7 +175,7 @@ acter-core/src (the domain crate — the crate is the domain, so no domain/ wrap
 - ports.rs + ports/: driven/ (transport.rs, shell_adapter.rs, terminal_engine.rs,
   clock.rs, event_sink.rs) and driving/ (session_api.rs, completion_api.rs) — one
   folder holds every seam in the system. `event_sink.rs` and `driving/session_api.rs`
-  landed in A3.
+  landed in A3; `clock.rs` in B1.5, `terminal_engine.rs` in B3, `transport.rs` in B3.5.
 - services.rs + services/: session.rs (SessionService), completion.rs
 - controllers.rs + controllers/: session_actor.rs (per-session loop),
   session_manager.rs (session collection that tabs map onto)
@@ -197,6 +197,9 @@ acter-app/src (delivery + container):
 
 acter-transports/src (adapter crate):
 - lib.rs (facade)
+- scripted.rs + scripted/: transcript.rs (the transcript format, its validation and
+  payload expansion), default_transcript.json (the built-in scenarios, `include_str!`-ed).
+  `ScriptedTransport` is a permanent session kind, not scaffolding (spec B3.5, decision 2)
 - local.rs + local/: conpty.rs, reader.rs (blocking-read thread)
 - ssh.rs + ssh/ (feature "ssh"): connection.rs, auth.rs
 
@@ -413,10 +416,17 @@ Six tiers, cheapest first:
    carry the Common-Controls v6 manifest; without it they abort at load with
    `STATUS_ENTRYPOINT_NOT_FOUND`. Do not revert that build.rs to a bare
    `tauri_build::build()`.
-3. **Golden transcript tests** (the workhorse): raw byte captures from real
-   PowerShell/cmd/bash sessions committed as fixtures, replayed through the
-   term + boundary pipeline, asserting extracted command/output blocks. Catches
-   real-world escape-sequence weirdness without spawning shells on every run.
+3. **Golden transcript tests** (the workhorse): byte-level fixtures replayed through the
+   term + boundary pipeline, asserting extracted command/output blocks. The fixture format
+   is `acter-transports`' **session transcript** (spec B3.5): JSON naming a prompt
+   sequence and a rule per submitted line, whose steps carry text, OSC 133 marker
+   shorthands, base64, or a `file` payload pointing at a raw capture from a real
+   PowerShell/cmd/bash session (B5 records the first of those). One format, two consumers
+   — a cargo test replays it, and `ScriptedTransport` plays the same file as a live
+   session, so a fixture and a manual scenario can never drift apart. Catches real-world
+   escape-sequence weirdness, and DESIGN's reliability cases (a marker split across two
+   reads, a forged marker, an end marker that never arrives), without spawning shells on
+   every run.
 4. **Integration tests**: spawn a real ConPTY, run trivial commands end-to-end.
    Windows CI runner, separate job.
 5. **End-to-end tests** (WebdriverIO over the in-app WebDriver server, spec T2 —

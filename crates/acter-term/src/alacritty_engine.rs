@@ -91,9 +91,9 @@ impl AlacrittyEngine {
         }
     }
 
-    /// Places one sniffed signal in the stream, and reports whether the grid's row
-    /// numbering is about to stop meaning what it meant.
-    fn place(&mut self, signal: Signal, items: &mut Vec<TerminalItem>) -> bool {
+    /// Places one sniffed signal in the stream, and reports the screen the numbering is
+    /// about to belong to, when the signal is one that stops it meaning what it meant.
+    fn place(&mut self, signal: Signal, items: &mut Vec<TerminalItem>) -> Option<Screen> {
         match signal {
             // Only a command end freezes a block's lines. A prompt start or a command
             // start would freeze the row the prompt is drawn on, which is the same row
@@ -104,7 +104,7 @@ impl AlacrittyEngine {
                     self.extractor.settle_block(&self.term, items);
                 }
                 items.push(TerminalItem::Marker(marker));
-                false
+                None
             }
             // Settled from the grid that is still current: the emulator has not swapped
             // yet, so the lines are read as they were on the screen being left. The rows
@@ -113,7 +113,7 @@ impl AlacrittyEngine {
             Signal::ScreenChanged(screen) => {
                 self.extractor.settle_and_forget(&self.term, items);
                 items.push(TerminalItem::ScreenChanged(screen));
-                true
+                Some(screen)
             }
         }
     }
@@ -146,15 +146,21 @@ impl TerminalEngine for AlacrittyEngine {
                 .advance(&mut self.term, &bytes[segment..index]);
             self.extractor.extract(&mut self.term, &mut items);
 
-            let mut renumbered = false;
+            let mut renumbered = None;
             for signal in self.sniffer.drain() {
-                renumbered |= self.place(signal, &mut items);
+                // The last renumbering wins: it is the one the grid ends up in.
+                renumbered = self.place(signal, &mut items).or(renumbered);
             }
 
             self.term_parser
                 .advance(&mut self.term, &bytes[index..=index]);
-            if renumbered {
-                self.extractor.reanchor(&self.term);
+            match renumbered {
+                // The alternate screen arrives blank and is painted from its top row, so
+                // the epoch starts there; the normal screen comes back holding text that
+                // was emitted before the program took over, so it starts at the cursor.
+                Some(Screen::Alternate) => self.extractor.reanchor_to_top(&self.term),
+                Some(Screen::Normal) => self.extractor.reanchor(&self.term),
+                None => {}
             }
             segment = index + 1;
         }
@@ -390,6 +396,11 @@ mod tests {
         );
     }
 
+    /// The empty line is not noise: this program switched screens without homing the
+    /// cursor and wrote on the second row, so the first row of the alternate screen
+    /// really is blank — and blank rows above content are spacing a user navigating by
+    /// line depends on. A fresh grid is scanned from its top precisely so that nothing
+    /// painted above the cursor can be lost.
     #[test]
     fn a_screen_change_settles_open_lines_before_the_transition() {
         let mut engine = engine();
@@ -401,10 +412,33 @@ mod tests {
                 line(0, "before", APPENDED),
                 line(0, "before", SETTLED),
                 TerminalItem::ScreenChanged(Screen::Alternate),
-                line(1, "after", APPENDED),
+                line(1, "", APPENDED),
+                line(2, "after", APPENDED),
             ]
         );
         assert_eq!(engine.screen(), Screen::Alternate);
+    }
+
+    /// What a full-screen program actually writes: enter, home the cursor, clear, then
+    /// paint from the top row. The cursor was part-way down the normal screen when the
+    /// switch happened, so anchoring the new epoch there would drop every row painted
+    /// above it — for `nano` its title bar, for `vim` most of the file (found by B3.5's
+    /// pipeline test, the first caller to feed this engine a real repaint).
+    #[test]
+    fn a_repaint_from_the_top_of_the_alternate_screen_loses_no_rows() {
+        let mut engine = engine();
+        engine.advance(b"first\r\nsecond\r\n");
+        let items = engine.advance(b"\x1b[?1049h\x1b[H\x1b[2J  a title bar\r\nthe first line\r\n");
+
+        let painted = items
+            .iter()
+            .position(|item| *item == TerminalItem::ScreenChanged(Screen::Alternate))
+            .expect("the switch is in the stream");
+        assert_eq!(
+            texts(&items[painted + 1..]),
+            ["  a title bar", "the first line"],
+            "every painted row arrives, in the order it was painted"
+        );
     }
 
     #[test]

@@ -8,6 +8,9 @@ license.workspace = true
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 specta = { version = "2.0.0-rc.25", features = ["derive"] }
+# Port error types with speakable `Display` strings; ARCHITECTURE prescribes it for
+# library crates (`anyhow` stays confined to acter-app).
+thiserror = "2"
 # Primitives, not the runtime: no "rt" feature, so this crate structurally cannot spawn
 # a task or build a runtime. The session actor exposes `run()` as a future and the
 # composition root spawns it (spec B1.5, decision 2).
