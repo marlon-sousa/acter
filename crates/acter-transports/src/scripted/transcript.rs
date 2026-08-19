@@ -8,9 +8,12 @@
 //! replays the same file as a live session. There is deliberately no second dialect for
 //! tests (spec B3.5, decision 5).
 //!
-//! **A step is a read boundary.** Each step is one delivery to whoever is reading, so
-//! chunking is scriptable: a marker split across two reads is two steps with zero delay,
-//! which is DESIGN's reliability case and the thing B3's own test had to hand-write.
+//! **A step is a delivery, not a read boundary.** It says what the far end emits and how
+//! long it waits first; where a read ends is the pipe's, and a transcript deliberately
+//! cannot say (spec B3.6, decision 3). Chunking used to be scriptable — a marker split
+//! across two reads was two steps with zero delay — which proved DESIGN's reliability
+//! case for exactly one hand-written marker. It is now
+//! [`Chunking`](crate::Chunking), a dimension every transcript is replayed under.
 //!
 //! **The marker shorthand is authoring convenience, never a bypass.** A `marker` payload
 //! expands to the real OSC 133 sequence terminated with BEL, so the recognizer in
@@ -78,8 +81,8 @@ pub(crate) struct Rule {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Step {
-    /// How long to wait before this delivery. Absent means no wait at all, which is how
-    /// a payload is split across two reads with nothing observable between them.
+    /// How long to wait before this delivery. Absent means no wait at all: the next
+    /// thing the far end says, with nothing observable between them.
     #[serde(default)]
     delay: DelayRange,
     payload: Payload,
@@ -165,7 +168,7 @@ impl MarkerKind {
 }
 
 impl Default for DelayRange {
-    /// No wait: the common case for the steps that exist only to cut a read.
+    /// No wait: the common case, for everything the far end says without pausing first.
     fn default() -> Self {
         Self::fixed(0)
     }
@@ -181,7 +184,7 @@ impl DelayRange {
 
     /// Whether this range asks for no wait at all, in which case no timer is requested
     /// from the clock — a zero wait is not a wait, and asking for one would make every
-    /// read-boundary step depend on a clock tick.
+    /// instant delivery depend on a clock tick no scenario asked for.
     pub(crate) const fn is_instant(self) -> bool {
         self.max_ms == 0
     }
@@ -693,10 +696,8 @@ mod tests {
     #[test]
     fn every_reliability_fixture_loads() {
         for name in [
-            "split_marker.json",
             "forged_marker.json",
             "no_end_marker.json",
-            "unmarked_session.json",
             "alt_screen.json",
             "device_query.json",
             "captured_prompt.json",

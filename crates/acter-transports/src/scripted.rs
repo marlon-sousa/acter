@@ -1,34 +1,35 @@
-//! Adapter: `ScriptedTransport` — a [`Transport`] that behaves like a shell, playing a
-//! [`SessionTranscript`] instead of talking to a process.
+//! Adapter: `ScriptedTransport` — the fake *pipe*. A [`Transport`] that carries a
+//! [`FakeShell`]'s bytes instead of a process's.
 //!
-//! **It is a request/response loop, not a linear tape** (spec B3.5, decision 4). On
-//! [`start`](Transport::start) it emits the transcript's prompt sequence: prompt-start,
-//! the prompt text, command-line-start. A written line is echoed back the way a real
-//! terminal echoes what was typed, the matching rule's steps play, and the prompt
-//! returns. That is what B2's regions actually require — `Prompt` is A..B, `CommandLine`
-//! is the B..C echo, `Output` is C..D — and an event-level fake can produce neither a
-//! prompt nor an echo, which is why DESIGN's echo exclusion had never been exercised
-//! against something that echoes.
+//! **It decides how bytes arrive, never what they say** (spec B3.6, decision 1). The
+//! prompt, the echo, the line discipline, rule matching and the interrupt predicate all
+//! live behind [`FakeShell`]; what is left here is the half that is genuinely about a
+//! pipe: the task, the clock, the read channel, where each read ends, what was written,
+//! the last resize, and the far end going away. `ScriptedTransport::new` composes the
+//! ordinary case — a transcript, read whole — and
+//! [`with_shell`](ScriptedTransport::with_shell) composes any other.
 //!
 //! **Every delay comes from the [`Clock`] port; nothing sleeps.** With B1.5's fake clock
-//! a transcript's timing is honored exactly at zero real time, which is what makes the
-//! pacing policy assertable; with `SystemClock` the same code is a manual session paced
-//! for a human ear. Reaching for `tokio::time` here would force every timing test to
-//! either sleep for real — B1.5 already recorded that Windows timer granularity makes
-//! short waits unassertable — or drop the timing, and for `tail`, `burst` and `forever`
-//! the timing *is* the thing under test (decision 3).
+//! a script's timing is honored exactly at zero real time, which is what makes the pacing
+//! policy assertable; with `SystemClock` the same code is a manual session paced for a
+//! human ear. Reaching for `tokio::time` here would force every timing test to either
+//! sleep for real — B1.5 already recorded that Windows timer granularity makes short
+//! waits unassertable — or drop the timing, and for `tail`, `burst` and `forever` the
+//! timing *is* the thing under test (spec B3.5, decision 3).
+//!
+//! **An interrupt stays answerable during a wait, not merely between deliveries.** That
+//! is the trap A3.1 hit once and fixed: an interrupt noticed only between deliveries
+//! arrives one delivery late, which for a `forever` scenario means never. So the wait
+//! itself watches the inbox, and asks the shell whether what arrived interrupts.
 //!
 //! **What it does not decide.** Which bytes the frontend sends on Ctrl+C is A3.2's
-//! question. This transport answers whatever arrives: a rule marked `interrupts` cancels
-//! the sequence in flight, and the built-in transcript marks both the literal `stop`
-//! line and a written `0x03`, so either answer already has the other end of the wire
-//! (decision 7).
+//! question. This transport answers whatever arrives: the built-in transcript marks both
+//! the literal `stop` line and a written `0x03` as interrupting, so either answer already
+//! has the other end of the wire (spec B3.5, decision 7).
 
-mod transcript;
+pub(crate) mod transcript;
 
-use std::borrow::Cow;
 use std::collections::VecDeque;
-use std::mem::take;
 use std::sync::Arc;
 
 use acter_core::{Clock, Transport, TransportError};
@@ -36,34 +37,34 @@ use tokio::select;
 use tokio::spawn;
 use tokio::sync::mpsc::{Sender, UnboundedReceiver, UnboundedSender, unbounded_channel};
 
+use crate::fake::{Chunking, FakeShell, Script, Submission, TranscriptShell};
+use transcript::{DelayRange, Repeat};
+
 pub use transcript::SessionTranscript;
-use transcript::{DelayRange, Repeat, Step};
 
 /// The starting state of the delay sampler. Any nonzero value will do; it is fixed so a
-/// transcript with sampled ranges replays identically every run.
+/// script with sampled ranges replays identically every run.
 const ROLL_SEED: u64 = 0x_5EED_AC7E_5EED_AC7E;
-
-/// The line ending the fake's echo appends, which is what a terminal shows when Enter is
-/// pressed: the carriage return moves to column one, the line feed moves down.
-const CRLF: &[u8] = b"\r\n";
 
 /// One scripted session.
 ///
-/// Constructed with the transcript it plays and the clock it waits on, and driven
+/// Constructed with the far end it carries and the clock it waits on, and driven
 /// entirely through the [`Transport`] port. Nothing about it is test-only: DESIGN's
 /// Decided item makes the scripted session a permanent supported session kind, and from
 /// B6 onward it is the transport a profile selects rather than a service that imitates
 /// one.
 pub struct ScriptedTransport {
-    transcript: Arc<SessionTranscript>,
+    /// The far end. Moved into the emission loop by [`Transport::start`], because a
+    /// shell is a state machine and cannot be in two places at once.
+    shell: Option<Box<dyn FakeShell>>,
+    chunking: Chunking,
     clock: Arc<dyn Clock>,
-    /// The emission task's inbox. `None` until [`Transport::start`], which is the one
-    /// thing that distinguishes "not started" from "ended" for a caller.
-    submissions: Option<UnboundedSender<Submission>>,
+    /// The emission task's inbox, carrying writes exactly as they arrived. `None` until
+    /// [`Transport::start`], which is the one thing that distinguishes "not started"
+    /// from "ended" for a caller.
+    writes: Option<UnboundedSender<Vec<u8>>>,
     /// A handle on the read channel, kept only to notice that the far side let go.
     reads: Option<Sender<Vec<u8>>>,
-    /// Bytes written but not yet a whole submission.
-    partial: Vec<u8>,
     /// Every byte ever written, in order — including the device-query answers the
     /// terminal engine produced, which is what makes `TerminalEngine::take_replies`
     /// assertable end to end.
@@ -72,13 +73,29 @@ pub struct ScriptedTransport {
 }
 
 impl ScriptedTransport {
+    /// The ordinary composition: a transcript-backed shell, one delivery per read.
     pub fn new(transcript: SessionTranscript, clock: Arc<dyn Clock>) -> Self {
-        Self {
-            transcript: Arc::new(transcript),
+        Self::with_shell(
+            Box::new(TranscriptShell::new(transcript)),
+            Chunking::Whole,
             clock,
-            submissions: None,
+        )
+    }
+
+    /// Any far end, cut any way: an [`Unmarked`](crate::Unmarked) shell for a session
+    /// with no integration, [`Chunking::Bytes`] to make every marker and every escape
+    /// sequence arrive a byte at a time.
+    pub fn with_shell(
+        shell: Box<dyn FakeShell>,
+        chunking: Chunking,
+        clock: Arc<dyn Clock>,
+    ) -> Self {
+        Self {
+            shell: Some(shell),
+            chunking,
+            clock,
+            writes: None,
             reads: None,
-            partial: Vec::new(),
             written: Vec::new(),
             last_resize: None,
         }
@@ -98,51 +115,51 @@ impl ScriptedTransport {
 }
 
 impl Transport for ScriptedTransport {
-    /// Spawns the emission loop and greets with the prompt.
+    /// Spawns the emission loop, which greets with the shell's prompt.
     ///
     /// Must be called from within a tokio runtime, which is true of every session actor
-    /// — the same requirement `SystemClock::timer` carries for the same reason. Starting
-    /// twice replaces the first loop: its inbox is dropped, so it ends at its next wait.
+    /// — the same requirement `SystemClock::timer` carries for the same reason.
+    ///
+    /// Starting twice is not a restart: the far end moved into the first loop, so the
+    /// second call has nothing to run. Its channel closes immediately and its writes
+    /// report a session that has ended, which is the truthful answer available — a
+    /// session is torn down and replaced, never restarted in place.
     fn start(&mut self, bytes: Sender<Vec<u8>>) {
-        let (submissions, inbox) = unbounded_channel();
-        self.submissions = Some(submissions);
+        let (writes, inbox) = unbounded_channel();
+        self.writes = Some(writes);
         self.reads = Some(bytes.clone());
+        let Some(shell) = self.shell.take() else {
+            return;
+        };
         let emitter = Emitter {
-            transcript: Arc::clone(&self.transcript),
+            shell,
+            chunking: self.chunking,
             clock: Arc::clone(&self.clock),
             bytes,
             inbox,
+            pending: Vec::new(),
             queued: VecDeque::new(),
             roll: ROLL_SEED,
         };
         spawn(emitter.run());
     }
 
-    /// Takes bytes the way a shell's line discipline does: they accumulate until a line
-    /// is complete, and each complete line becomes one submission.
+    /// Records the bytes and hands them to the far end, unchanged and uncut.
     ///
-    /// One exception, and it is decision 7's whole point: bytes that exactly match a rule
-    /// marked `interrupts` are submitted without waiting for a line ending, because a
-    /// control byte never carries one. Everything else — a device-query answer, a partial
-    /// line — simply accumulates, which is also how those answers end up recorded rather
-    /// than mistaken for commands.
+    /// Which of them add up to a submitted command is the shell's to say, not the pipe's:
+    /// the line discipline runs in the emission loop, where the shell lives, so a
+    /// device-query answer written mid-line ends up recorded rather than mistaken for a
+    /// command without this method having to know why.
     fn write(&mut self, bytes: &[u8]) -> Result<(), TransportError> {
-        let submissions = self
-            .submissions
-            .as_ref()
-            .ok_or(TransportError::NotStarted)?;
+        let writes = self.writes.as_ref().ok_or(TransportError::NotStarted)?;
         if self.reads.as_ref().is_some_and(Sender::is_closed) {
             return Err(TransportError::Closed);
         }
 
         self.written.extend_from_slice(bytes);
-        self.partial.extend_from_slice(bytes);
-        for submission in submissions_in(&mut self.partial, &self.transcript) {
-            submissions
-                .send(submission)
-                .map_err(|_| TransportError::Closed)?;
-        }
-        Ok(())
+        writes
+            .send(bytes.to_vec())
+            .map_err(|_| TransportError::Closed)
     }
 
     /// Accepted and recorded. A scripted session has no grid of its own to reflow — the
@@ -154,61 +171,19 @@ impl Transport for ScriptedTransport {
     }
 }
 
-/// One thing the far end was told, on its way to the emission loop.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct Submission {
-    bytes: Vec<u8>,
-    /// Whether a line ending was consumed with it. A submission that ended a line is
-    /// echoed with one; an interrupt byte is echoed as itself.
-    terminated: bool,
-}
-
-impl Submission {
-    /// The submitted bytes as a line, for matching. Lossy because a rule is authored as
-    /// text and bytes that are not text can never equal one.
-    fn line(&self) -> Cow<'_, str> {
-        String::from_utf8_lossy(&self.bytes)
-    }
-}
-
-/// Cuts everything complete out of the pending write buffer, leaving the remainder.
-fn submissions_in(partial: &mut Vec<u8>, transcript: &SessionTranscript) -> Vec<Submission> {
-    let mut submissions = Vec::new();
-    loop {
-        if let Some(index) = partial
-            .iter()
-            .position(|byte| *byte == b'\r' || *byte == b'\n')
-        {
-            let line = partial[..index].to_vec();
-            // A carriage return and line feed together end one line, not two.
-            let pair =
-                usize::from(partial[index] == b'\r' && partial.get(index + 1) == Some(&b'\n'));
-            partial.drain(..index + 1 + pair);
-            submissions.push(Submission {
-                bytes: line,
-                terminated: true,
-            });
-            continue;
-        }
-        if !partial.is_empty() && transcript.interrupts(&String::from_utf8_lossy(partial)) {
-            submissions.push(Submission {
-                bytes: take(partial),
-                terminated: false,
-            });
-            continue;
-        }
-        return submissions;
-    }
-}
-
-/// The emission loop: one task, owning the read channel and the submission inbox.
+/// The emission loop: one task, owning the far end, the read channel and the write
+/// inbox.
 struct Emitter {
-    transcript: Arc<SessionTranscript>,
+    shell: Box<dyn FakeShell>,
+    chunking: Chunking,
     clock: Arc<dyn Clock>,
     bytes: Sender<Vec<u8>>,
-    inbox: UnboundedReceiver<Submission>,
-    /// Submissions that arrived while a sequence was running and did not interrupt it —
-    /// a real shell's typeahead. Taken in order once the sequence ends.
+    inbox: UnboundedReceiver<Vec<u8>>,
+    /// Bytes written but not yet recognized as a submission. The buffer the shell's line
+    /// discipline drains.
+    pending: Vec<u8>,
+    /// Submissions that arrived while a script was playing and did not interrupt it — a
+    /// real shell's typeahead. Taken in order once the script ends.
     queued: VecDeque<Submission>,
     roll: u64,
 }
@@ -216,12 +191,12 @@ struct Emitter {
 /// The far end let go: the session is over and the loop returns.
 struct Gone;
 
-/// How a rule's steps ended.
+/// How a script ended.
 enum Ran {
-    /// Every step played.
+    /// Every delivery played.
     Completed,
-    /// A rule marked `interrupts` arrived and this sequence stops here; the interrupting
-    /// submission is answered next.
+    /// An interrupting submission arrived and this script stops here; that submission is
+    /// answered next.
     Interrupted(Submission),
     /// The reader is gone.
     Gone,
@@ -236,25 +211,18 @@ enum Waited {
 
 impl Emitter {
     async fn run(mut self) {
-        if self.emit_prompt().await.is_err() {
+        if self.greet().await.is_err() {
             return;
         }
         while let Some(submission) = self.next_submission().await {
             let mut current = submission;
             loop {
-                if self.echo(&current).await.is_err() {
-                    return;
-                }
-                // Cloned so the borrowed rule outlives every `&mut self` call below: the
-                // transcript is immutable and shared, which is exactly what an `Arc` is
-                // for.
-                let transcript = Arc::clone(&self.transcript);
-                let rule = transcript.rule_for(&current.line());
-                match self.run_steps(rule.steps()).await {
+                let answer = self.shell.answer(&current);
+                match self.play(&answer).await {
                     Ran::Gone => return,
                     Ran::Interrupted(next) => current = next,
                     Ran::Completed => {
-                        if self.emit_prompt().await.is_err() {
+                        if self.greet().await.is_err() {
                             return;
                         }
                         break;
@@ -264,12 +232,12 @@ impl Emitter {
         }
     }
 
-    /// The prompt sequence, at the start of the session and after every completed rule.
-    /// Nothing interrupts a prompt — it is instantaneous — so a submission that arrives
-    /// during one is simply answered next.
-    async fn emit_prompt(&mut self) -> Result<(), Gone> {
-        let transcript = Arc::clone(&self.transcript);
-        match self.run_steps(transcript.prompt()).await {
+    /// The prompt sequence, at the start of the session and after every answer that ran
+    /// to completion. Nothing interrupts a prompt — it is instantaneous — so a
+    /// submission that arrives during one is simply answered next.
+    async fn greet(&mut self) -> Result<(), Gone> {
+        let prompt = self.shell.greet();
+        match self.play(&prompt).await {
             Ran::Completed => Ok(()),
             Ran::Interrupted(submission) => {
                 self.queued.push_front(submission);
@@ -279,30 +247,22 @@ impl Emitter {
         }
     }
 
-    /// Plays one rule's steps, watching for an interrupt throughout every wait.
-    async fn run_steps(&mut self, steps: &[Step]) -> Ran {
-        for step in steps {
-            let mut left = match step.repeat() {
+    /// Plays one script, watching for an interrupt throughout every wait.
+    async fn play(&mut self, script: &Script) -> Ran {
+        for delivery in script.deliveries() {
+            let mut left = match delivery.repeat() {
                 Repeat::Times(times) => Some(times),
                 // Endless: nothing counts down, and only an interrupt or the reader
                 // going away ends it.
                 Repeat::Endless(_) => None,
             };
             while left.is_none_or(|times| times > 0) {
-                match self.wait(step.delay()).await {
+                match self.wait(delivery.delay()).await {
                     Waited::Elapsed => {}
                     Waited::Interrupted(submission) => return Ran::Interrupted(submission),
                     Waited::Gone => return Ran::Gone,
                 }
-                let Ok(payload) = self.transcript.expand(step.payload()) else {
-                    // Validation resolved every payload when the transcript was loaded,
-                    // so this means a capture file was removed underneath a running
-                    // session. Ending is the honest answer: the session closes and the
-                    // domain reports a session that ended, rather than playing a
-                    // transcript with a hole in it.
-                    return Ran::Gone;
-                };
-                if self.send(payload).await.is_err() {
+                if self.send(delivery.bytes()).await.is_err() {
                     return Ran::Gone;
                 }
                 left = left.map(|times| times - 1);
@@ -311,15 +271,11 @@ impl Emitter {
         Ran::Completed
     }
 
-    /// Waits out one step's delay, staying answerable while it waits.
+    /// Waits out one delivery's delay, staying answerable while it waits.
     ///
-    /// The trap A3.1 hit once and fixed: an interrupt that is only noticed *between*
-    /// steps arrives one step late, which for a `forever` scenario means never. So the
-    /// wait itself is what watches the inbox.
-    ///
-    /// A zero delay asks the clock for nothing at all. A step with no delay exists to cut
-    /// a read, not to wait, and a timer for zero time would make every such step depend
-    /// on a clock tick that no scenario asked for.
+    /// A zero delay asks the clock for nothing at all: a timer for zero time would make
+    /// every instant delivery — the echo, a marker the shell draws without pausing —
+    /// depend on a clock tick that no scenario asked for.
     async fn wait(&mut self, delay: DelayRange) -> Waited {
         if delay.is_instant() {
             return Waited::Elapsed;
@@ -337,40 +293,60 @@ impl Emitter {
             match received {
                 None => return Waited::Elapsed,
                 Some(None) => return Waited::Gone,
-                Some(Some(submission)) => {
-                    if self.transcript.interrupts(&submission.line()) {
-                        return Waited::Interrupted(submission);
+                Some(Some(written)) => {
+                    if let Some(interrupt) = self.take(written) {
+                        return Waited::Interrupted(interrupt);
                     }
-                    self.queued.push_back(submission);
                 }
             }
         }
     }
 
-    /// The next thing to answer: typeahead first, then whatever arrives.
+    /// The next thing to answer: typeahead first, then whatever is written next.
     async fn next_submission(&mut self) -> Option<Submission> {
-        match self.queued.pop_front() {
-            Some(queued) => Some(queued),
-            None => self.inbox.recv().await,
+        loop {
+            if let Some(queued) = self.queued.pop_front() {
+                return Some(queued);
+            }
+            let written = self.inbox.recv().await?;
+            // Between two answers there is nothing to interrupt, so a submission that
+            // would have interrupted is simply the next one answered — and it goes to
+            // the front, because it arrived before anything queued behind it.
+            if let Some(interrupt) = self.take(written) {
+                self.queued.push_front(interrupt);
+            }
         }
     }
 
-    /// Echoes what was submitted, as the terminal does with what was typed. This is the
-    /// text B2 labels `CommandLine` and DESIGN's echo exclusion drops.
-    async fn echo(&self, submission: &Submission) -> Result<(), Gone> {
-        let mut bytes = submission.bytes.clone();
-        if submission.terminated {
-            bytes.extend_from_slice(CRLF);
+    /// Hands written bytes to the shell's line discipline and files what comes back: the
+    /// first submission the shell calls interrupting is returned, everything else queues
+    /// as typeahead, and what was not a whole submission stays pending.
+    fn take(&mut self, written: Vec<u8>) -> Option<Submission> {
+        self.pending.extend_from_slice(&written);
+        let submissions = self.shell.accept(&mut self.pending);
+        let mut interrupt = None;
+        for submission in submissions {
+            if interrupt.is_none() && self.shell.interrupts(&submission) {
+                interrupt = Some(submission);
+            } else {
+                self.queued.push_back(submission);
+            }
         }
-        if bytes.is_empty() {
-            return Ok(());
-        }
-        self.send(bytes).await
+        interrupt
     }
 
-    /// One delivery: one read for whoever is on the other end.
-    async fn send(&self, bytes: Vec<u8>) -> Result<(), Gone> {
-        self.bytes.send(bytes).await.map_err(|_| Gone)
+    /// One delivery, cut into reads. Where those cuts fall is this side's decision and
+    /// nothing the shell said — which is what makes every fixture replayable a byte at a
+    /// time (spec B3.6, decision 3).
+    ///
+    /// `&mut self` rather than `&self` only because a shared borrow held across an await
+    /// would require the far end to be `Sync`, and a [`FakeShell`] is a state machine
+    /// with one owner: `Send`, deliberately not `Sync`.
+    async fn send(&mut self, bytes: &[u8]) -> Result<(), Gone> {
+        for read in self.chunking.cut(bytes) {
+            self.bytes.send(read.to_vec()).await.map_err(|_| Gone)?;
+        }
+        Ok(())
     }
 
     /// The next value for a sampled delay range. An xorshift over a fixed seed rather
@@ -389,7 +365,7 @@ impl Emitter {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
+    use std::mem::take;
     use std::sync::Mutex;
     use std::time::Duration;
 
@@ -398,10 +374,12 @@ mod tests {
     use tokio::sync::oneshot;
     use tokio::task::yield_now;
 
+    use crate::Unmarked;
+
     use super::*;
 
     /// One read's worth of buffer. Large enough that no test ever observes a full
-    /// channel, so what a test sees is what the transcript said and nothing about
+    /// channel, so what a test sees is what the script said and nothing about
     /// back-pressure.
     const READS: usize = 256;
 
@@ -479,8 +457,12 @@ mod tests {
 
     impl Session {
         fn start(transcript: SessionTranscript) -> Self {
+            Self::over(Box::new(TranscriptShell::new(transcript)), Chunking::Whole)
+        }
+
+        fn over(shell: Box<dyn FakeShell>, chunking: Chunking) -> Self {
             let clock = Arc::new(FakeClock::default());
-            let mut transport = ScriptedTransport::new(transcript, clock.clone());
+            let mut transport = ScriptedTransport::with_shell(shell, chunking, clock.clone());
             let (sender, reads) = channel(READS);
             transport.start(sender);
             Self {
@@ -516,9 +498,9 @@ mod tests {
         }
 
         /// Walks time forward one armed deadline at a time up to `at`, collecting
-        /// everything emitted on the way. One deadline at a time because a step arms its
-        /// successor only once it has fired: jumping straight to `at` would deliver one
-        /// step of a repeating sequence and leave the rest in the future.
+        /// everything emitted on the way. One deadline at a time because a delivery arms
+        /// its successor only once it has fired: jumping straight to `at` would deliver
+        /// one step of a repeating sequence and leave the rest in the future.
         async fn advance_to(&mut self, at: u64) -> Vec<Vec<u8>> {
             let at = Duration::from_millis(at);
             // Whatever is already ready runs first, so the loop below sees the timer the
@@ -542,10 +524,6 @@ mod tests {
 
     fn transcript(json: &str) -> SessionTranscript {
         SessionTranscript::parse(json).expect("the test transcript parses")
-    }
-
-    fn fixture(name: &str) -> PathBuf {
-        PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures")).join(name)
     }
 
     /// A prompt, and one rule that answers `go` with `n` deliveries of "tick" every
@@ -654,7 +632,7 @@ mod tests {
         assert_eq!(
             session.clock.requested(),
             [Duration::from_millis(10), Duration::from_millis(250)],
-            "a step with no delay asks the clock for nothing at all"
+            "an instant delivery asks the clock for nothing at all"
         );
     }
 
@@ -690,8 +668,8 @@ mod tests {
         );
     }
 
-    /// The trap A3.1 hit once and fixed: an interrupt noticed only *between* steps
-    /// arrives one step late, which for an endless sequence means never.
+    /// The trap A3.1 hit once and fixed: an interrupt noticed only *between* deliveries
+    /// arrives one delivery late, which for an endless sequence means never.
     #[tokio::test]
     async fn an_interrupting_rule_cancels_a_sequence_while_it_is_waiting() {
         let mut session = Session::start(transcript(
@@ -731,7 +709,7 @@ mod tests {
 
         assert!(
             session.advance_to(60_000).await.is_empty(),
-            "the cancelled step must never arrive, however long anyone waits"
+            "the cancelled delivery must never arrive, however long anyone waits"
         );
     }
 
@@ -756,23 +734,45 @@ mod tests {
         );
     }
 
-    /// The whole reason the format has steps rather than one blob per rule: a delivery is
-    /// a read, so a fixture can cut one wherever DESIGN's reliability model needs it.
+    /// Where a read ends is the pipe's decision and nothing the shell said: the same
+    /// prompt the transcript draws in three deliveries arrives one byte at a time,
+    /// markers cut in half included. B3.6 decision 3 — what used to be a hand-authored
+    /// `split_marker.json` is now a property of the carrier.
     #[tokio::test]
-    async fn a_marker_split_across_two_steps_arrives_as_two_reads() {
-        let mut session = Session::start(
-            SessionTranscript::load(fixture("split_marker.json")).expect("the fixture loads"),
-        );
-        let _prompt = session.reads().await;
+    async fn the_pipe_cuts_a_delivery_and_the_shell_never_does() {
+        let mut session = Session::over(Box::new(TranscriptShell::builtin()), Chunking::Bytes(1));
 
-        session.write("split\n");
-        let _echo = session.reads().await;
+        let reads = session.reads().await;
+        assert!(
+            reads.iter().all(|read| read.len() == 1),
+            "every read is one byte: {:?}",
+            texts(&reads)
+        );
+        assert_eq!(
+            texts(&reads).concat(),
+            "\x1b]133;A\x07acter> \x1b]133;B\x07",
+            "and not a byte of the prompt was lost or moved"
+        );
+    }
+
+    /// The unintegrated far end DESIGN's reliability case 2 is about: the same shell,
+    /// answering the same lines, with no markers on the wire at all.
+    #[tokio::test]
+    async fn an_unmarked_shell_still_prompts_and_answers() {
+        let mut session = Session::over(
+            Box::new(Unmarked::new(TranscriptShell::builtin())),
+            Chunking::Whole,
+        );
 
         assert_eq!(
-            texts(&session.advance_to(100).await)[..3],
-            ["output line\r\n", "\x1b]133;", "D;0\x07"],
-            "the marker is cut in half, and each half is its own read"
+            texts(&session.reads().await),
+            ["acter> "],
+            "the prompt text is drawn and the markers around it are not"
         );
+
+        session.write("small\n");
+        let answered = texts(&session.advance_to(100).await).concat();
+        assert_eq!(answered, "small\r\nhello from acter\r\nacter> ");
     }
 
     #[tokio::test]
@@ -803,6 +803,28 @@ mod tests {
         assert_eq!(
             error.to_string(),
             "The session has ended, so the text could not be sent."
+        );
+    }
+
+    /// A session is torn down and replaced, never restarted in place: the far end went
+    /// into the first loop, and the second channel says so rather than pretending.
+    #[tokio::test]
+    async fn starting_twice_ends_the_second_session_rather_than_forking_the_far_end() {
+        let mut session = Session::start(SessionTranscript::builtin());
+        let _prompt = session.reads().await;
+
+        let (sender, mut second) = channel(READS);
+        session.transport.start(sender);
+        yield_now().await;
+
+        assert_eq!(
+            second.try_recv().ok(),
+            None,
+            "nothing is emitted to a channel with no far end behind it"
+        );
+        assert_eq!(
+            session.transport.write(b"small\n"),
+            Err(TransportError::Closed)
         );
     }
 

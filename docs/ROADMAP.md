@@ -335,7 +335,44 @@ the answer to "what should we do now?".
     `fail` is `D;1`, `burst`/`forever`/`tail` are byte timing), and DESIGN's "the scripted
     fake session is a permanent supported session kind" survives unchanged — the
     scenarios are permanent; only the altitude they are expressed at was wrong.
-20. B6, real SessionService. Spec: none yet → specify first. **Next in lane 2.**
+20. B3.6, the fake shell and the fake pipe. **Done.** Spec:
+    [b3.6-fake-shell.md](specs/b3.6-fake-shell.md).
+    A refactor of one adapter crate, with `acter-core` untouched. `ScriptedTransport`
+    fused two things — what the far end *says* and how its bytes *arrive* — and this
+    entry separates them so they compose. `FakeShell` is the seam: synchronous,
+    runtime-free, no clock and no channel, so every wait stays in the pipe and "nothing
+    anywhere sleeps" remains a property of one file. `TranscriptShell` answers from a
+    transcript (the prompt, the echo, the line discipline, rule matching, the interrupt
+    predicate, all moved out unchanged in behavior); `Unmarked` wraps any shell and drops
+    its OSC 133, because a far end with no integration is not a different transcript but a
+    working shell with its markers taken away. `ScriptedTransport` keeps the task, the
+    clock, the read channel, `written()`, `last_resize()` — and gains `Chunking`, which is
+    where read boundaries went.
+    **The headline result:** read boundaries used to be authored into transcripts, so
+    DESIGN's "a marker split across two reads" was proven for exactly one hand-written
+    marker. It is now a dimension: every built-in scenario and every fixture is replayed
+    under `Chunking::Bytes(1)`, where each marker, escape sequence, device query and line
+    of output arrives one byte at a time, and asserted to say the same thing as under
+    `Whole` — the same output text per command, the same blocks, the same exit codes, the
+    same marker recognition and the same announcements. That is B2's cardinal property
+    (text is never lost) plus B3's marker recognition, held across the whole suite instead
+    of one case. It is deliberately *not* claimed as event equality: byte-at-a-time reads
+    produce many more `Appended` revisions, which is correct behavior.
+    Two fixtures are deleted rather than converted — `split_marker.json`, whose subject
+    became that dimension, and `unmarked_session.json`, which becomes
+    `Unmarked::new(TranscriptShell::builtin())` and now answers anything the built-in
+    shell knows rather than the one line somebody wrote down. Every other fixture and the
+    built-in transcript are byte-identical, and `pipeline.rs`'s assertions hold as written
+    except for those two, which is the refactor's own proof.
+    `acter-shells` is still deliberately empty and the crate gained no dependency (spec
+    decisions 6 and 7). No protocol change, no binding regeneration, no frontend change,
+    and the app still runs the A3 fake as its default backend until B6 — so no
+    accessibility checklist.
+    **Placed before B6 by decision (agreed in conversation 2026-08-19):** B6 switches the
+    default backend and runs the first real accessibility matrix against these fixtures,
+    so landing the split afterwards would author them twice. B6 adds only `interrupt` to
+    this crate, so going first costs it nothing.
+21. B6, real SessionService. Spec: none yet → specify first. **Next in lane 2.**
     **Moved ahead of B4/B5**:
     with B3.5's transport underneath it, this is the entry that switches the app's
     default backend from the A3 event-level fake to the byte path, so it is convergence
@@ -353,17 +390,21 @@ the answer to "what should we do now?".
     remains is wiring the transport, engine, tracker and actor together behind
     `SessionApi`, correlation, the grace period, and switching the default backend — at
     which point the manual matrix tests the real policy instead of a script imitating it.
+    **The fake it wires is now a composition** (B3.6): a `ScriptedTransport` is a
+    `FakeShell` plus a `Chunking`, so the unintegrated session the grace period exists for
+    is `Unmarked::new(TranscriptShell::builtin())` rather than a fixture, and the manual
+    matrix can be run against any chunking without a second set of transcripts.
     **It also deletes `FakeSessionService`** (agreed in conversation 2026-08-18): after
     B3.5, faking is a *transport* choice rather than a service-level one, so from here
     there is exactly one session service and the scripted session is a profile that
     selects `ScriptedTransport`. DESIGN's Decided "the scripted fake session is a
     permanent supported session kind" survives unchanged — the scenarios became data in
     B3.5; what is deleted here is the imitation of a domain that now runs for real.
-21. B4, local transport. Spec: none yet → specify first. Scope sketch: LocalPty on
+22. B4, local transport. Spec: none yet → specify first. Scope sketch: LocalPty on
     ConPTY + blocking-reader thread; real-shell integration test in a separate CI
     job. `Transport` already exists by now (B3.5), so this is a second implementer,
     not a new seam.
-22. B5, PowerShell adapter. Spec: none yet → specify first. Scope sketch: OSC 133
+23. B5, PowerShell adapter. Spec: none yet → specify first. Scope sketch: OSC 133
     injection snippet; record the first golden transcripts as fixtures, in B2's format
     — so a captured real session is replayable as a fake session.
 
