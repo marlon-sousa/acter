@@ -121,6 +121,18 @@ the answer to "what should we do now?".
     `Announce` so the frontend stops having two ways to be told to speak. Until it lands,
     that duplication is real and deliberate — recorded in B1.5's decision 10 rather than
     left to be discovered in review.
+
+    **The fake migration here is deliberately short-lived, and that is a scheduling
+    choice, not an oversight** (agreed in conversation 2026-08-18, while specifying
+    B3.5). B3.5 moves faking down to the `Transport` port, so from B6 onward there is one
+    session service and the scripted session is a transport choice rather than a second
+    `SessionApi` implementer — which means B6 *deletes* `FakeSessionService` instead of
+    keeping it. Migrating it onto `Announce` here therefore buys only the span between A6
+    and B6. Keeping A6 first is still the call: lane 1 has nothing else unblocked in
+    front of it (A3.2 is blocked, A4 unspecified) so it would otherwise idle, and the
+    frontend every manual NVDA pass runs against gets one way to be told to speak sooner.
+    Whoever implements A6 should keep the fake's migration as small as it can be, since
+    it is scaffolding with a known end date.
 11. A3.2, the `Ctrl+C` interrupt surface. Spec: none yet → **blocked on the input-model
    decision, not merely unspecified** (the question is stated in A3.1's spec, section
    "The open question this spec deliberately does not bet on"). DESIGN's keystroke map
@@ -262,8 +274,10 @@ the answer to "what should we do now?".
     count to read back; the emulator's history is a staging area, and the user's scrollback
     is the buffer this stream feeds. And a block end retires a line's id while *keeping* the
     row's text, so a frozen row stays quiet until it actually changes.
-19. B3.5, the `Transport` port and the scripted byte-level fake. Spec: none yet →
-    specify first. **Placed here by decision (agreed in conversation 2026-08-16):**
+19. B3.5, the `Transport` port and the scripted byte-level fake. Spec: **agreed** in
+    conversation 2026-08-18 → implement next; the spec file lands in the implementing PR
+    as `specs/b3.5-scripted-transport.md`, per the process rule that a spec travels with
+    its code. **Placed here by decision (agreed in conversation 2026-08-16):**
     A3's fake implements `SessionApi`, the *driving* port at the top of the stack, so
     every manual NVDA session so far has validated the frontend against a hand-written
     event stream and nothing below it — not the pacing policy, not the actor, and not
@@ -295,7 +309,15 @@ the answer to "what should we do now?".
     months before ConPTY exists. The A3 fake stays the default until this lands, so the
     slowest feedback loop in the project never goes dark. Scope sketch: implements
     `SessionApi`, owns command-id correlation (the tracker is id-free — see B2) and the
-    integration grace period, spawns the actor; tested against fake driven ports.
+    integration grace period, spawns the actor; tested against fake driven ports. Most of
+    it already exists as the glue in B3.5's pipeline test, which that spec deliberately
+    kept dumb and named as this entry's to promote.
+    **It also deletes `FakeSessionService`** (agreed in conversation 2026-08-18): after
+    B3.5, faking is a *transport* choice rather than a service-level one, so from here
+    there is exactly one session service and the scripted session is a profile that
+    selects `ScriptedTransport`. DESIGN's Decided "the scripted fake session is a
+    permanent supported session kind" survives unchanged — the scenarios became data in
+    B3.5; what is deleted here is the imitation of a domain that now runs for real.
 21. B4, local transport. Spec: none yet → specify first. Scope sketch: LocalPty on
     ConPTY + blocking-reader thread; real-shell integration test in a separate CI
     job. `Transport` already exists by now (B3.5), so this is a second implementer,
