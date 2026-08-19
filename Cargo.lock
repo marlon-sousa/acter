@@ -32,6 +32,7 @@ dependencies = [
  "serde",
  "serde_json",
  "specta",
+ "thiserror 2.0.18",
  "tokio",
 ]
 
@@ -51,6 +52,13 @@ dependencies = [
 [[package]]
 name = "acter-transports"
 version = "0.1.0"
+dependencies = [
+ "acter-core",
+ "acter-term",
+ "serde",
+ "serde_json",
+ "tokio",
+]
 
 [[package]]
 name = "adler2"

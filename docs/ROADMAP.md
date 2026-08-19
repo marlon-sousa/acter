@@ -274,10 +274,40 @@ the answer to "what should we do now?".
     count to read back; the emulator's history is a staging area, and the user's scrollback
     is the buffer this stream feeds. And a block end retires a line's id while *keeping* the
     row's text, so a frozen row stays quiet until it actually changes.
-19. B3.5, the `Transport` port and the scripted byte-level fake. Spec: **agreed** in
-    conversation 2026-08-18 → implement next; the spec file lands in the implementing PR
-    as `specs/b3.5-scripted-transport.md`, per the process rule that a spec travels with
-    its code. **Placed here by decision (agreed in conversation 2026-08-16):**
+19. B3.5, the `Transport` port and the scripted byte-level fake. **Done.** Spec:
+    [b3.5-scripted-transport.md](specs/b3.5-scripted-transport.md).
+    Delivers `ports/driven/transport.rs` (push reads onto a caller-supplied channel, the
+    end of a session being that channel closing rather than an error variant; `write` and
+    `resize` return a `TransportError` whose `Display` strings are spoken sentences, and
+    `acter-core` gains `thiserror`), and `acter-transports`' first contents:
+    `SessionTranscript` — the JSON fixture format, its validation and its payload
+    expansion, OSC 133 marker shorthands included — plus `ScriptedTransport`, which
+    behaves like a shell rather than playing a tape: it draws a prompt, echoes what was
+    written, plays the matching rule, and draws the next prompt, with every delay taken
+    from B1.5's `Clock` so nothing anywhere sleeps. The ten A3 scenarios are now data
+    (`default_transcript.json`), and **their verdicts are no longer scripted**: the
+    built-in numbers are chosen against `PacingConfig`'s defaults — thirty lines because
+    the threshold is twenty-five, a quarter-second stream because the quiescence window is
+    half a second — so `TooBig` and the patience announcement are computed by B1's real
+    policy for the first time. The full-pipeline test replays a transcript through the real
+    `AlacrittyEngine`, the real `BoundaryTracker`, the real policy and the real
+    `SessionActor` into a recording `EventSink`, and its glue is deliberately dumb and
+    named as B6's to promote: ids minted in submission order at `BlockStarted`, every
+    region but `Output` dropped, `take_replies` drained and written back. DESIGN's
+    reliability model is tested end to end for the first time (a marker split across two
+    reads, a forged `D`, a `D` that never arrives, a session with no markers at all), and
+    `TerminalEngine::take_replies` finally has a consumer.
+    **It also fixes a B3 defect its own first run found** — the amendment is recorded in
+    this spec, not B3's: entering the alternate screen anchored the extractor's next scan
+    at the cursor, so every row a full-screen program painted *above* it after the usual
+    `ESC[H ESC[2J` was dropped (`nano`'s title bar, most of `vim`'s first screenful). A
+    fresh grid is now scanned from its top. Losing text is this product's cardinal defect,
+    so it is fixed here rather than filed; one B3 test changed with it, and a regression
+    test lands beside B3's own.
+    No protocol change, so no binding regeneration and no frontend change — the A3 fake is
+    still the default backend until B6, and this PR has no user-facing surface at all,
+    which is why it carries no accessibility checklist (spec decision 10).
+    **Placed here by decision (agreed in conversation 2026-08-16):**
     A3's fake implements `SessionApi`, the *driving* port at the top of the stack, so
     every manual NVDA session so far has validated the frontend against a hand-written
     event stream and nothing below it — not the pacing policy, not the actor, and not
@@ -285,9 +315,12 @@ the answer to "what should we do now?".
     a scripted `Transport` emitting bytes — real OSC 133 markers, real escape
     sequences, real alt-screen enter/leave — with the engine, tracker, policy and actor
     all genuinely running above it. Fake only what cannot run deterministically in CI (a
-    shell on a PTY); keep everything above it real. Scope sketch: `ports/driven/transport.rs`,
-    the fake adapter in acter-app, and the full-pipeline test — transcript in, real
-    engine and tracker and actor, recorded `EventSink` out. **Owns the golden-fixture
+    shell on a PTY); keep everything above it real. Scope sketch as sketched here:
+    `ports/driven/transport.rs`, the fake adapter, and the full-pipeline test — transcript
+    in, real engine and tracker and actor, recorded `EventSink` out. (The sketch put the
+    adapter in acter-app, following A3's precedent; the spec put it in acter-transports
+    instead — decision 2 — because this fake is a product feature with no retirement date,
+    and B4's `LocalPty` lands beside it.) **Owns the golden-fixture
     format** (moved here from B2): a fixture is a stream of *bytes*, so nothing can replay
     one until B3 exists, and this is the entry that actually needs to — one format, two
     consumers, a cargo-test fixture and a runnable fake session. Three things it buys that no
@@ -302,7 +335,8 @@ the answer to "what should we do now?".
     `fail` is `D;1`, `burst`/`forever`/`tail` are byte timing), and DESIGN's "the scripted
     fake session is a permanent supported session kind" survives unchanged — the
     scenarios are permanent; only the altitude they are expressed at was wrong.
-20. B6, real SessionService. Spec: none yet → specify first. **Moved ahead of B4/B5**:
+20. B6, real SessionService. Spec: none yet → specify first. **Next in lane 2.**
+    **Moved ahead of B4/B5**:
     with B3.5's transport underneath it, this is the entry that switches the app's
     default backend from the A3 event-level fake to the byte path, so it is convergence
     made user-facing — and manual NVDA testing starts exercising the real pipeline
@@ -311,7 +345,14 @@ the answer to "what should we do now?".
     `SessionApi`, owns command-id correlation (the tracker is id-free — see B2) and the
     integration grace period, spawns the actor; tested against fake driven ports. Most of
     it already exists as the glue in B3.5's pipeline test, which that spec deliberately
-    kept dumb and named as this entry's to promote.
+    kept dumb and named as this entry's to promote — including the two rules that glue
+    needed and that a real service must get right: separating consecutive lines so the
+    pacing policy counts them, and taking an append always but a settlement only when it is
+    a line's first or last word. **The ten scenarios already exist as data**
+    (`acter-transports`' built-in transcript), so nothing here re-authors them: what
+    remains is wiring the transport, engine, tracker and actor together behind
+    `SessionApi`, correlation, the grace period, and switching the default backend — at
+    which point the manual matrix tests the real policy instead of a script imitating it.
     **It also deletes `FakeSessionService`** (agreed in conversation 2026-08-18): after
     B3.5, faking is a *transport* choice rather than a service-level one, so from here
     there is exactly one session service and the scripted session is a profile that

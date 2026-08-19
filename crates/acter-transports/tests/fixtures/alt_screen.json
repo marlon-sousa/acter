@@ -1,0 +1,82 @@
+{
+  "on_start": [
+    {
+      "payload": {
+        "marker": {
+          "kind": "A"
+        }
+      }
+    },
+    {
+      "payload": {
+        "text": "acter> "
+      }
+    },
+    {
+      "payload": {
+        "marker": {
+          "kind": "B"
+        }
+      }
+    }
+  ],
+  "rules": [
+    {
+      "match": "nano",
+      "steps": [
+        {
+          "payload": {
+            "marker": {
+              "kind": "C"
+            }
+          }
+        },
+        {
+          "delay": {
+            "min_ms": 100,
+            "max_ms": 100
+          },
+          "payload": {
+            "text": "\u001b[?1049h\u001b[H\u001b[2J  GNU nano 7.2\r\nediting a file\r\n"
+          }
+        },
+        {
+          "delay": {
+            "min_ms": 100,
+            "max_ms": 100
+          },
+          "payload": {
+            "text": "\u001b[?1049l"
+          }
+        },
+        {
+          "payload": {
+            "marker": {
+              "kind": "D",
+              "exit_code": 0
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "default": {
+    "steps": [
+      {
+        "payload": {
+          "marker": {
+            "kind": "C"
+          }
+        }
+      },
+      {
+        "payload": {
+          "marker": {
+            "kind": "D",
+            "exit_code": 0
+          }
+        }
+      }
+    ]
+  }
+}

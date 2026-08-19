@@ -4,7 +4,9 @@
 mod clock;
 mod event_sink;
 mod terminal_engine;
+mod transport;
 
 pub use clock::{Clock, Timer};
 pub use event_sink::EventSink;
 pub use terminal_engine::TerminalEngine;
+pub use transport::{Transport, TransportError};

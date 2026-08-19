@@ -1,0 +1,28 @@
+{
+  "on_start": [
+    {
+      "payload": {
+        "text": "$ "
+      }
+    }
+  ],
+  "rules": [
+    {
+      "match": "hello",
+      "steps": [
+        {
+          "delay": {
+            "min_ms": 100,
+            "max_ms": 100
+          },
+          "payload": {
+            "text": "hello from an unintegrated shell\r\n"
+          }
+        }
+      ]
+    }
+  ],
+  "default": {
+    "steps": []
+  }
+}

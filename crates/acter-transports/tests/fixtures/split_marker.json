@@ -1,0 +1,75 @@
+{
+  "on_start": [
+    {
+      "payload": {
+        "marker": {
+          "kind": "A"
+        }
+      }
+    },
+    {
+      "payload": {
+        "text": "acter> "
+      }
+    },
+    {
+      "payload": {
+        "marker": {
+          "kind": "B"
+        }
+      }
+    }
+  ],
+  "rules": [
+    {
+      "match": "split",
+      "steps": [
+        {
+          "payload": {
+            "marker": {
+              "kind": "C"
+            }
+          }
+        },
+        {
+          "delay": {
+            "min_ms": 100,
+            "max_ms": 100
+          },
+          "payload": {
+            "text": "output line\r\n"
+          }
+        },
+        {
+          "payload": {
+            "text": "\u001b]133;"
+          }
+        },
+        {
+          "payload": {
+            "text": "D;0\u0007"
+          }
+        }
+      ]
+    }
+  ],
+  "default": {
+    "steps": [
+      {
+        "payload": {
+          "marker": {
+            "kind": "C"
+          }
+        }
+      },
+      {
+        "payload": {
+          "marker": {
+            "kind": "D",
+            "exit_code": 0
+          }
+        }
+      }
+    ]
+  }
+}

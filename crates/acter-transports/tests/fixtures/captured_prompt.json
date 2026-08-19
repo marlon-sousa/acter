@@ -1,0 +1,59 @@
+{
+  "on_start": [
+    {
+      "payload": {
+        "file": "captured_prompt.bin"
+      }
+    }
+  ],
+  "rules": [
+    {
+      "match": "hello",
+      "steps": [
+        {
+          "payload": {
+            "marker": {
+              "kind": "C"
+            }
+          }
+        },
+        {
+          "delay": {
+            "min_ms": 100,
+            "max_ms": 100
+          },
+          "payload": {
+            "text": "hello\r\n"
+          }
+        },
+        {
+          "payload": {
+            "marker": {
+              "kind": "D",
+              "exit_code": 0
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "default": {
+    "steps": [
+      {
+        "payload": {
+          "marker": {
+            "kind": "C"
+          }
+        }
+      },
+      {
+        "payload": {
+          "marker": {
+            "kind": "D",
+            "exit_code": 0
+          }
+        }
+      }
+    ]
+  }
+}

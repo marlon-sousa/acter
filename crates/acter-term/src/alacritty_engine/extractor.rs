@@ -168,8 +168,26 @@ impl Extractor {
 
     /// Starts a fresh epoch at the current cursor, after the grid has become something
     /// the old row numbering no longer describes.
+    ///
+    /// The cursor, not the top of the screen, because the rows above it are content this
+    /// extractor has already emitted once: a resize reflows text that is still the same
+    /// text, and the normal screen a program hands back still holds the session it was
+    /// paused from. Anchoring higher would re-emit all of it as new lines.
     pub(super) fn reanchor<T: EventListener>(&mut self, term: &Term<T>) {
         self.scan_floor = View::of(term, self.base).cursor;
+    }
+
+    /// Starts a fresh epoch at the top of the screen area, for a grid whose content has
+    /// never been emitted: the alternate screen, which mode 1049 clears on the way in.
+    ///
+    /// The cursor is the wrong anchor there, and the difference is not academic — a
+    /// full-screen program's first write is `ESC[H ESC[2J`, painting from row zero
+    /// upward of wherever the cursor happened to be. Anchoring at the cursor loses every
+    /// row above it, which for `nano` is its title bar and for `vim` its first screenful
+    /// of the file (found by the B3.5 pipeline test, which was the first caller to feed
+    /// this engine a real repaint).
+    pub(super) fn reanchor_to_top<T: EventListener>(&mut self, term: &Term<T>) {
+        self.scan_floor = View::of(term, self.base).top;
     }
 
     /// Emits the line starting at `row` and returns the absolute row it ends on.
