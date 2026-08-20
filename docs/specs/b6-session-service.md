@@ -141,6 +141,13 @@ to the byte path.
    `default_transcript.json` already exercises through its interrupt-byte rule (the rule
    matching the byte `0x03`), so the port ships with a working implementer in the same PR.
 
+   **Updated after B3.6:** that path now lives behind `FakeShell`. Which submissions
+   interrupt is the far end's knowledge, and the pipe only asks — so the implementation is
+   the pipe's own vocabulary rather than anything that re-matches a rule: hand the byte the
+   shell's line discipline already recognizes to the emission loop, exactly as a write of
+   `0x03` arrives today. `ScriptedTransport` gains no knowledge of what an interrupt *is*,
+   which is the property B3.6 exists to protect.
+
 6. **Both vocabularies ship with one member, and the map between them is a policy.**
 
    ```rust
@@ -291,6 +298,17 @@ to the byte path.
     doing a manual NVDA run, without building any configuration machinery. The profile
     that eventually selects one is a lookup that already resolves.
 
+    **Updated after B3.6: a name resolves to a composition, not only to a file.** Two of
+    those three stopped being transcripts. "Never emits markers" is
+    `Unmarked::new(TranscriptShell::builtin())`, a decorator over any far end; "splits a
+    marker across two reads" is `Chunking::Bytes(1)` over *any* transcript, since read
+    boundaries belong to the pipe. Only the forged marker is still a transcript, and
+    correctly so — forging one is something a *program* does, which is a property of the
+    command that was run (B3.6, decision 5). So the lookup this passage argues for resolves
+    a name to a shell plus a chunking, and the set of nameable simulated profiles is now
+    the product of the two rather than a list of files somebody wrote. That is a larger
+    payoff than this decision originally claimed, at the same few lines of cost.
+
 ## Deliverables
 
 ### `acter-core`
@@ -329,7 +347,8 @@ to the byte path.
 ### Docs
 
 - `ROADMAP.md` — B6 flipped to Done; A3.2 unblocked and rescoped to a frontend keystroke
-  handler over `send_key`; EOF filed as a B5 item.
+  handler over `send_key`; EOF filed as a B5 item; read timing filed against B4 (see Out
+  of scope), with whatever the accessibility matrix found recorded against it.
 - `ARCHITECTURE.md` — the reference layout's `acter-app` bullets, which still describe the
   A3 fake as the wired backend.
 - `DESIGN.md` — the injection-retry idea recorded as an open question (see Out of scope).
@@ -348,7 +367,10 @@ to the byte path.
   `Pending` to `Integrated` on a marker, and recovery from `Unintegrated` on a late one.
 - `pipeline.rs`'s unmarked-session test **rewritten**: it currently asserts silence and
   must assert honest degradation — the announcement, output reaching the buffer, patience
-  firing, and no auto-read.
+  firing, and no auto-read. Since B3.6 it runs over
+  `Unmarked::new(TranscriptShell::builtin())` rather than a fixture, so the rewrite is to
+  its assertions only; the far end it degrades is the full built-in shell, which is what
+  makes "every command degrades to case 1" assertable over more than one scripted line.
 - Nothing sleeps or reads the real clock, per B3.5 acceptance criterion 2.
 
 ## Acceptance criteria
@@ -402,10 +424,58 @@ to the byte path.
   story is unchanged — a scripted profile still fills the transport slot with
   `ScriptedTransport` and the shell-adapter slot with a null adapter.
 
-  Deferred rather than done here on scope grounds, cheaply: this entry adds only
-  `interrupt` to `ScriptedTransport`, so it does not deepen the conflation. **B5 is the
-  natural moment**, when real transcripts are captured and "what the shell said" becomes
-  recorded data while "how it arrived" becomes an independent dimension worth varying.
+  **Done, and not at B5: it landed as B3.6, before this entry.** This paragraph used to
+  defer it to B5 on the grounds that this PR adds only `interrupt` and so does not deepen
+  the conflation. That argument was right about the cost and wrong about the order. B6
+  switches the default backend and runs the first real accessibility matrix against these
+  fixtures, so splitting afterwards would author them twice — and B3.6 cost this entry
+  nothing, since `interrupt` is one line either way (see decision 5's update). Spec:
+  [b3.6-fake-shell.md](b3.6-fake-shell.md).
+
+  What B6 inherits from it: `ScriptedTransport` is now a `Box<dyn FakeShell>` plus a
+  `Chunking` plus a `Clock`; the unintegrated far end decision 10 degrades is
+  `Unmarked::new(TranscriptShell::builtin())` rather than a fixture; and every fixture is
+  already replayed byte-at-a-time with its output text, blocks, exit codes, marker
+  recognition and announcements asserted unchanged. The shape this paragraph predicted is
+  the shape that shipped, including that it is not a `ShellAdapter`.
+
+- **Read timing: a pipe that spaces its reads apart in time.** Raised in conversation
+  2026-08-19, after B3.6, and worth having.
+
+  What is already simulated is the far end's timing: every delivery carries a delay taken
+  from the `Clock` port, which is what makes `slow`, `tail`, `burst` and `forever` mean
+  anything. What is not simulated is the gap *between the reads of one delivery*.
+  `ScriptedTransport::send` cuts a delivery with `Chunking` and pushes every read into the
+  channel with no clock advance, so under `Bytes(1)` all two hundred and fifty bytes of a
+  flood land at the same instant. The suite therefore proves that cutting never loses text
+  and never breaks a marker, and says nothing about a line whose halves arrive on either
+  side of the half-second quiescence window the pacing policy uses to decide a line is
+  done.
+
+  **It buys less than it first appears to, and that is the reason to be precise about
+  it.** The domain sees only bytes and arrival times, so a shell that pauses mid-line and a
+  pipe that delays half a read are indistinguishable to it — and the first is already
+  authorable as two steps with a delay between them. What a timing pipe adds is not
+  expressiveness but *uniformity*: exactly what `Chunking` added, turning something
+  expressible-but-expressed-nowhere into a dimension every fixture runs under. Today no
+  fixture delivers a partial line across a quiescent gap, so what the real policy does with
+  one is untested.
+
+  **It is not free, which is why it is its own entry rather than a line here.** `Chunking`
+  is currently a pure policy — deterministic in, deterministic out, unit-tested with no
+  runtime — and spacing reads apart either puts the clock inside it or splits the concept
+  in two. Worse, the natural implementation is `send` calling the pipe's existing `wait`
+  between reads, which would let an interrupt cancel a command *mid-delivery*, halfway
+  through a marker. That is arguably more realistic and definitely a behavior change, and
+  it deserves a decision made in the open rather than inherited from an implementation
+  convenience.
+
+  **B4 is the natural moment.** That is when `LocalPty` on ConPTY makes real read timing
+  observable, so the fake's model can be built against a pattern somebody measured instead
+  of one somebody guessed — the same discipline this spec already applies to designing
+  `ShellAdapter` against a fake alone. One thing would promote it earlier: if this entry's
+  accessibility matrix turns up a line announced before it was finished, that is the
+  evidence, and it becomes the next entry rather than a later one.
 
 - **A null `ShellAdapter` and profiles as a configuration surface.** Also B5's, for a
   different reason: that is when the trait first ships with PowerShell behind it, and when
