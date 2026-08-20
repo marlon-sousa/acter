@@ -79,6 +79,34 @@ to the byte path.
      timeout that retires an unclaimed id would guess, and guessing wrong is what DESIGN's
      reliability model exists to avoid.
 
+   **Amendment, from the manual accessibility pass.** The second edge is sharper than it
+   was written. It is not "one command may be mis-attributed": once the queue is off by
+   one it stays off by one, so *every later block in the session* carries the previous
+   command's heading and the previous command's output goes under the heading before it.
+   Heard with NVDA, that is a session where every answer belongs to the question before
+   it — which is worse than the wording above admits, and it is recorded here rather than
+   softened.
+
+   It is nonetheless still accepted for B6, because every rule that would retire an
+   unclaimed id contradicts the first half of this same decision. The obvious one — *a
+   new prompt means the shell is ready for input, so nothing submitted before it can
+   still be pending* — retires the queue at OSC 133 A, and a real shell draws its prompt
+   **before** it reads the line a fast typist already sent. Two lines submitted at an
+   idle prompt then lose the second's id at the first command's prompt, which is exactly
+   what `blocks_claim_submitted_ids_in_the_order_they_were_submitted` exists to forbid.
+   Prompt, echo and `C` cannot separate "the shell has finished with that line" from "the
+   shell has not read that line yet", so no marker-based rule decides this. Two that
+   might, neither of them B6's, are recorded as roadmap iterations: making the block
+   heading come from the shell's own echo (the B..C region, which the tracker already
+   labels) instead of from a queued guess, so a drifted id can no longer mislabel
+   anything; and retiring ids typed while the alternate screen was up, since text typed
+   into a full-screen program was input to that program and never a command line.
+
+   What surfaced it manually is worth naming too: the built-in transcript's `stop` rule
+   consumes a *submitted line* to model an interrupt, so it mints a command id for
+   something that is a keystroke in the shipped product and mints none there. Once A3.2
+   binds Ctrl+C, that particular trigger stops existing.
+
 4. **The frontend sends the keystroke, not the meaning.**
 
    `SessionApi` gains one method carrying what was pressed:

@@ -460,6 +460,32 @@ the answer to "what should we do now?".
     needs something in a profile's shell-adapter slot to be "selectable like any real
     shell" as DESIGN Decided.
 
+24. B6.1, correlation that cannot drift. Spec: none yet → specify first. **An iteration
+    entry from B6's manual NVDA pass**, not a planned step. B6's decision 3 accepted one
+    hole knowingly: an id submitted for a line that never opens a block stays queued and
+    the next block claims it. Driving the matrix with NVDA showed the consequence is worse
+    than that wording admits — the queue does not recover, so from that point on *every*
+    block in the session carries the previous command's heading, and a listener hears
+    every answer under the question before it. The trigger there was the built-in
+    transcript's `stop` rule, which consumes a submitted line to model an interrupt and so
+    mints an id for something that is a keystroke in the shipped product; A3.2 removes
+    that particular trigger, but not the hole. Two candidate fixes, to choose between when
+    this is specified:
+    **Headings from the shell's own echo.** The tracker already labels the B..C region as
+    `Region::CommandLine` — that is the shell saying which line it read — so the pump can
+    carry that text on `CommandStarted` and the frontend can use it as the block heading
+    instead of the optimistic one from the ack. A drifted id then still routes output to
+    a consistent block; what it can no longer do is put the wrong words on it.
+    **Retire ids consumed by a full-screen program.** Text typed while the alternate
+    screen is up was input to that program and was never a command line, so those ids can
+    be retired when the alternate screen is left. Narrow, principled, and it closes the
+    one case that is reachable today without A3.2.
+    What must **not** be done is the obvious rule — retire the queue at the next prompt.
+    A real shell draws its prompt before it reads a line a fast typist already sent, so
+    that rule loses the second of two quickly-typed commands, which is exactly what
+    `blocks_claim_submitted_ids_in_the_order_they_were_submitted` forbids. The reasoning
+    is written out in B6's spec under decision 3.
+
 ## Convergence (requires B4, B5 and B6 all Done)
 
 Spec: none yet → specify when unblocked. The container swaps the scripted fake
