@@ -436,6 +436,22 @@ to the byte path.
 - `controllers/app.ts` — a pinned string for `IntegrationUnavailable` and its handler
   arm; A2's exhaustiveness guard forces this rather than leaving it optional.
 
+### `e2e`
+
+- `wdio.conf.ts`: the runner writes the built-in transcript with every delay range
+  replaced by an equal-bounds 20 ms, and points the app at it with `ACTER_TRANSCRIPT`.
+
+  **Amendment, found after the first B6 commit.** Deleting `ACTER_FAKE_SCRIPT` (decision
+  12) left the E2E runner still spawning the app with it, so the suite ran against the
+  built-in transcript at its shipped timings and three of seven spec files were red. T2
+  decision 8's requirement — deterministic and fast — has to be met at the transport now
+  that faking is a transport choice, and equal delay bounds are what make it
+  deterministic: unequal bounds are sampled per delivery, which is why `tail` and `burst`
+  could not run in a suite at all. Repeat counts are untouched, `forever` included.
+  `big`, `tail` and `stop` are retargeted from the A3 fake's scenario shapes onto the
+  transcript's, which is also where the silent stop of decision 8 stops being a surprise
+  and becomes an assertion.
+
 ### Docs
 
 - `ROADMAP.md` — B6 flipped to Done; A3.2 unblocked and rescoped to a frontend keystroke

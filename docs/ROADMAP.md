@@ -425,6 +425,12 @@ the answer to "what should we do now?".
     under `Chunking::Bytes(1)` and asserted to say the same thing. Its unmarked-session
     test used to assert silence and now asserts honest degradation — the only assertion
     that changed meaning.
+    **The E2E suite moved onto a transcript too**, in the same PR and one commit later:
+    deleting `ACTER_FAKE_SCRIPT` had left the runner spawning the app with a variable
+    nothing read, so the suite had been running against the shipped timings and three of
+    its seven spec files were red. The runner now writes the built-in transcript with
+    every delay replaced by a deterministic 20 ms, which is T2 decision 8's requirement
+    met where faking actually lives since B3.5.
 22. B4, local transport. Spec: none yet → specify first. **Next in lane 2.** Scope
     sketch: LocalPty on ConPTY + blocking-reader thread; real-shell integration test in a
     separate CI job. `Transport` already exists by now (B3.5), so this is a second implementer,
