@@ -10,10 +10,15 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", features = [] }
-# The domain crate: SessionApi/EventSink ports and the IPC protocol types. A normal
+# The domain crate: the session service, its ports and the IPC protocol types. A normal
 # dependency since A3 (was dev-only in A2, when only the binding generator used it).
 acter-core = { path = "../acter-core" }
-# Fake script config parsing (entities/fake_script.rs).
+# The terminal engine behind the `TerminalEngine` port, and the byte transport behind
+# `Transport`. Adapter crates, named only here: the container is the one place allowed to
+# know which implementation fills a port (B6).
+acter-term = { path = "../acter-term" }
+acter-transports = { path = "../acter-transports" }
+# Protocol payloads that cross the IPC boundary as JSON.
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # The real clock behind the `Clock` port (adapters/system_clock.rs). Tauri owns the

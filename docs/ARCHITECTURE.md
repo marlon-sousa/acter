@@ -170,28 +170,32 @@ acter-core/src (the domain crate — the crate is the domain, so no domain/ wrap
   stream the engine emits: text or a marker)
 - policies.rs + policies/: autoread.rs (threshold/pacing policy),
   boundary_tracker.rs (command-block state machine over that stream),
+  keybindings.rs (the keystroke-to-`SessionIntent` table),
   profile_inheritance.rs (Defaults resolution), completion_history.rs,
   completion_path.rs
 - ports.rs + ports/: driven/ (transport.rs, shell_adapter.rs, terminal_engine.rs,
   clock.rs, event_sink.rs) and driving/ (session_api.rs, completion_api.rs) — one
   folder holds every seam in the system. `event_sink.rs` and `driving/session_api.rs`
   landed in A3; `clock.rs` in B1.5, `terminal_engine.rs` in B3, `transport.rs` in B3.5.
-- services.rs + services/: session.rs (SessionService), completion.rs
+- services.rs + services/: session.rs (SessionService — one session end to end: the pump
+  task owning transport, engine, tracker and correlation, plus the actor task; B6),
+  completion.rs
 - controllers.rs + controllers/: session_actor.rs (per-session loop),
   session_manager.rs (session collection that tabs map onto)
 
 acter-app/src (delivery + container):
 - lib.rs (facade), main.rs (entry point)
-- container.rs — the composition root; reads `ACTER_FAKE_SCRIPT`, wires the fake
-  `SessionApi` (A3)
-- entities.rs + entities/: fake_script.rs — the fake script config (serde value type,
-  built-in defaults, range validation)
-- services.rs + services/: fake_session.rs (FakeSessionService, the scripted
-  `SessionApi` backend; A3) until the real SessionService lands at convergence
+- container.rs — the composition root; enters the runtime Tauri owns, reads
+  `ACTER_TRANSCRIPT` (a built-in name or a path to a transcript) and wires acter-core's
+  `SessionService` over a `ScriptedTransport` and an `AlacrittyEngine` (B6). The one place
+  that names an adapter crate. There is no fake `SessionApi` any more: faking is a
+  transport choice, so the session service is always the real one and only its far end is
+  scripted.
 - adapters.rs + adapters/: channel_sink.rs (ChannelSink — the `EventSink` over a Tauri
-  IPC Channel, the only place a Channel is held)
+  IPC Channel, the only place a Channel is held), system_clock.rs (the `Clock` over real
+  monotonic time)
 - routers.rs + routers/: one file per router (session.rs — attach_session,
-  submit_command). The routers.rs facade uses glob re-exports (`pub(crate) use
+  submit_command, send_key). The routers.rs facade uses glob re-exports (`pub(crate) use
   session::*;`) because `#[tauri::command]` generates hidden companion items that
   `generate_handler!` needs alongside the function.
 

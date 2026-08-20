@@ -42,6 +42,18 @@ pub struct PacingConfig {
     /// Consecutive auto-read chunks within one command that trip the babble guard
     /// (default 3).
     pub babble_limit: u32,
+    /// How long a session waits for its first shell-integration marker before it is
+    /// flagged unintegrated (default 5s).
+    ///
+    /// DESIGN decides the grace period exists and gives no number. Five seconds because
+    /// it only has to cover shell startup — the injected snippet emits markers on the
+    /// first prompt — but PowerShell profile loading routinely takes seconds, and the
+    /// asymmetry is sharp: a false `Unintegrated` degrades every command in the
+    /// session, while a late detection costs one command's boundaries and then recovers
+    /// ([`SessionState::markers_observed`](crate::SessionState::markers_observed)
+    /// upgrades from `Unintegrated`). Of every number in this struct it is the one most
+    /// likely to be retuned by NVDA evidence (spec B6, decision 9).
+    pub integration_grace: Duration,
     /// The rendering cadence: how long output coalesces before it reaches the buffer
     /// (default 50ms). ARCHITECTURE's number, not DESIGN's — "a short tick (tens of ms)"
     /// so the IPC bridge and DOM never see per-write traffic. It lives here because this
@@ -58,6 +70,7 @@ impl Default for PacingConfig {
             max_lines: 25,
             max_chars: 2000,
             babble_limit: 3,
+            integration_grace: Duration::from_secs(5),
             render_tick: Duration::from_millis(50),
         }
     }
@@ -75,6 +88,7 @@ mod tests {
         assert_eq!(config.max_lines, 25);
         assert_eq!(config.max_chars, 2000);
         assert_eq!(config.babble_limit, 3);
+        assert_eq!(config.integration_grace, Duration::from_secs(5));
         assert_eq!(config.render_tick, Duration::from_millis(50));
     }
 

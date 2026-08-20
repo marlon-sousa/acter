@@ -22,8 +22,8 @@ use tokio::sync::mpsc;
 use crate::entities::UnspokenText;
 use crate::policies::{PacingAction, measure, on_command_end, on_output, on_wake};
 use crate::{
-    Announcement, Clock, CommandId, EventSink, ExitCode, Mode, PacingConfig, PacingState, ReadMode,
-    SessionEvent, SessionState, Timer,
+    Announcement, Clock, CommandId, EventSink, ExitCode, Integration, Mode, PacingConfig,
+    PacingState, ReadMode, SessionEvent, SessionState, Timer,
 };
 
 /// A domain fact the actor is told about. Deliberately not bytes: extraction, OSC 133
@@ -45,6 +45,23 @@ pub enum SessionInput {
         command_id: CommandId,
         exit_code: ExitCode,
     },
+    /// The running command was stopped rather than finishing.
+    ///
+    /// Only the service can tell the two apart, and not from the exit code: a block
+    /// closing with no code is either a bare `D` or a prompt reappearing mid-block (B2),
+    /// so what distinguishes them is that the service had asked the transport to
+    /// interrupt. Left to the exit code, a stopped command would be announced as
+    /// "finished, exit code 0" — the wrong announcement A3.1 decision 4 created
+    /// `CommandInterrupted` to avoid (spec B6, decision 8).
+    CommandInterrupted {
+        command_id: CommandId,
+    },
+    /// Shell-integration markers were observed: command boundaries are trustworthy.
+    /// Resolves the session, and recovers one already flagged unintegrated.
+    MarkersObserved,
+    /// The startup grace period elapsed. Resolves a session that has seen no markers to
+    /// unintegrated; a session already resolved either way is unaffected.
+    GracePeriodExpired,
     /// Follow mode was toggled. An explicit override: every chunk is read on arrival.
     FollowMode(bool),
     /// A program entered or left the alternate screen.
@@ -127,7 +144,13 @@ impl SessionActor {
 
     /// Runs until the input channel closes. Thin by design: every decision is in the
     /// synchronous methods below.
-    pub async fn run(mut self, mut inputs: mpsc::Receiver<SessionInput>) {
+    ///
+    /// The channel is unbounded because the actor is its single consumer and never waits
+    /// on anything itself, so nothing is gained by making its producer wait — while
+    /// dropping one of these is losing a domain fact, and for `Output` that is losing
+    /// text, which is this product's cardinal defect. Back-pressure belongs one seam
+    /// lower, on the bounded read channel between the transport and the pump.
+    pub async fn run(mut self, mut inputs: mpsc::UnboundedReceiver<SessionInput>) {
         let mut render_timer: Option<Timer> = None;
         let mut pacing_timer: Option<Timer> = None;
 
@@ -175,6 +198,15 @@ impl SessionActor {
                 command_id,
                 exit_code,
             } => self.command_ended(command_id, exit_code),
+            SessionInput::CommandInterrupted { command_id } => self.command_interrupted(command_id),
+            SessionInput::MarkersObserved => self.session = self.session.markers_observed(),
+            SessionInput::GracePeriodExpired => {
+                let next = self.session.grace_period_expired();
+                if next != self.session {
+                    self.session = next;
+                    self.sink.send(SessionEvent::IntegrationUnavailable);
+                }
+            }
             SessionInput::FollowMode(on) => self.follow_mode = on,
             SessionInput::AltScreenEntered => {
                 let next = self.session.alt_screen_entered();
@@ -246,23 +278,47 @@ impl SessionActor {
     }
 
     fn command_ended(&mut self, command_id: CommandId, exit_code: ExitCode) {
-        let Some(active) = self.active.as_mut() else {
-            return;
-        };
-        let (pacing, outcome) = on_command_end(active.pacing, &self.config, active.unspoken.size());
-        active.pacing = pacing;
-        // Everything reaches the buffer before anything is said about it, including the
-        // final remainder.
-        self.flush_render();
-        self.sink.send(SessionEvent::CommandFinished {
+        let Some(outcome) = self.close(SessionEvent::CommandFinished {
             command_id,
             exit_code,
             read_mode: ReadMode::Quiet,
-        });
-        self.apply(outcome.action);
+        }) else {
+            return;
+        };
+        self.apply(outcome);
         if exit_code.0 != 0 {
             self.announce(Announcement::Failed { exit_code });
         }
+        self.retire();
+    }
+
+    /// The same close, with the terminal event that says the user stopped it. No
+    /// `Failed`: the exit code of a process the user stopped carries nothing worth
+    /// announcing, and the frontend already has one thing to say about a stop.
+    fn command_interrupted(&mut self, command_id: CommandId) {
+        let Some(outcome) = self.close(SessionEvent::CommandInterrupted { command_id }) else {
+            return;
+        };
+        self.apply(outcome);
+        self.retire();
+    }
+
+    /// What both endings share: the policy's last word on the remainder, everything
+    /// reaching the buffer before anything is said about it, and then the terminal
+    /// event. `None` when no command was running, which is a fact about the far end
+    /// rather than an error — a `D` with no open block is DESIGN's reliability case 3.
+    fn close(&mut self, terminal: SessionEvent) -> Option<PacingAction> {
+        let active = self.active.as_mut()?;
+        let (pacing, outcome) = on_command_end(active.pacing, &self.config, active.unspoken.size());
+        active.pacing = pacing;
+        self.flush_render();
+        self.sink.send(terminal);
+        Some(outcome.action)
+    }
+
+    /// The command is over: nothing accumulates for it and neither timer has anything
+    /// left to wake for.
+    fn retire(&mut self) {
         self.active = None;
         self.requests.render = Wake::Clear;
         self.requests.pacing = Wake::Clear;
@@ -283,8 +339,19 @@ impl SessionActor {
                     // Rendered, not spoken: the babble guard went quiet, so the buffer
                     // keeps up and the listener is left alone.
                     ReadMode::Quiet => {}
+                    // Read aloud, unless this session has no shell integration. There
+                    // the span is not a command's output but everything that arrived
+                    // between two submissions, prompt and echo included, and DESIGN's
+                    // reliability case 2 Decided that such a session degrades to case 1:
+                    // patience announcement, manual buffer review, no auto-read. The
+                    // text is still taken, so the policy's counting is identical either
+                    // way and the status announcements below — too big, still running,
+                    // output continues — keep working. In a degraded session the
+                    // listener gets status and never content (spec B6, decision 10).
                     ReadMode::Auto => {
-                        if let Some(text) = text {
+                        if let Some(text) = text
+                            && self.session.integration != Integration::Unintegrated
+                        {
                             self.announce(Announcement::ReadAloud { text });
                         }
                     }
@@ -725,6 +792,214 @@ mod tests {
         );
     }
 
+    // --- Integration ------------------------------------------------------------
+
+    #[test]
+    fn the_grace_period_expiring_with_no_markers_says_so_once() {
+        let (mut actor, _clock, sink) = actor();
+        actor.handle(SessionInput::GracePeriodExpired);
+        actor.handle(SessionInput::GracePeriodExpired);
+
+        assert_eq!(
+            sink.events(),
+            vec![SessionEvent::IntegrationUnavailable],
+            "a session is flagged unintegrated once, not once per expiry"
+        );
+    }
+
+    #[test]
+    fn a_marker_before_the_grace_period_expires_keeps_the_session_quiet() {
+        let (mut actor, _clock, sink) = actor();
+        actor.handle(SessionInput::MarkersObserved);
+        actor.handle(SessionInput::GracePeriodExpired);
+
+        assert!(
+            sink.events().is_empty(),
+            "an integrated session announces nothing: {:?}",
+            sink.events()
+        );
+    }
+
+    /// DESIGN decision 8's recovery, from the actor's side: a late marker upgrades the
+    /// session and auto-read comes back, with nothing said about it.
+    #[test]
+    fn a_late_marker_recovers_the_session_and_restores_auto_read() {
+        let config = PacingConfig::default();
+        let (mut actor, clock, sink) = actor();
+        actor.handle(SessionInput::GracePeriodExpired);
+        started(&mut actor);
+
+        output(
+            &mut actor,
+            "degraded
+",
+        );
+        clock.advance_to(config.quiescence);
+        actor.wake_pacing();
+        assert!(
+            sink.announcements().is_empty(),
+            "an unintegrated session reads nothing aloud: {:?}",
+            sink.announcements()
+        );
+
+        actor.handle(SessionInput::MarkersObserved);
+        output(
+            &mut actor,
+            "recovered
+",
+        );
+        clock.advance_to(config.quiescence * 2);
+        actor.wake_pacing();
+
+        assert_eq!(
+            sink.announcements(),
+            vec![Announcement::ReadAloud {
+                text: "recovered
+"
+                .to_owned()
+            }]
+        );
+        assert_eq!(
+            sink.events()
+                .iter()
+                .filter(|event| **event == SessionEvent::IntegrationUnavailable)
+                .count(),
+            1,
+            "recovery is silent"
+        );
+    }
+
+    /// The degraded session gets status and never content: nothing is read aloud, and
+    /// the buffer, the patience window and the size announcement all keep working.
+    #[test]
+    fn an_unintegrated_session_renders_everything_and_reads_nothing() {
+        let config = PacingConfig::default();
+        let (mut actor, clock, sink) = actor();
+        actor.handle(SessionInput::GracePeriodExpired);
+        started(&mut actor);
+
+        for _ in 0..500 {
+            output(
+                &mut actor, "y
+",
+            );
+        }
+        clock.advance_to(config.quiescence);
+        actor.wake_pacing();
+
+        assert_eq!(
+            sink.announcements(),
+            vec![Announcement::TooBig { lines: 500 }],
+            "size is status, not content: it is still announced"
+        );
+        assert_eq!(
+            sink.rendered(),
+            "y
+"
+            .repeat(500),
+            "every line is reviewable, which is the whole of case 1"
+        );
+    }
+
+    #[test]
+    fn an_unintegrated_session_still_announces_patience() {
+        let config = PacingConfig::default();
+        let (mut actor, clock, sink) = actor();
+        actor.handle(SessionInput::GracePeriodExpired);
+        started(&mut actor);
+
+        // Output flowing with no quiescent gap for the whole patience window.
+        let mut at = Duration::ZERO;
+        while at < config.patience {
+            at += config.quiescence / 2;
+            clock.advance_to(at);
+            output(
+                &mut actor, "working
+",
+            );
+            actor.wake_pacing();
+        }
+
+        assert!(
+            sink.announcements().contains(&Announcement::StillRunning),
+            "case 2 degrades to case 1, which is the patience announcement: {:?}",
+            sink.announcements()
+        );
+        assert!(
+            !sink
+                .announcements()
+                .iter()
+                .any(|announcement| matches!(announcement, Announcement::ReadAloud { .. })),
+            "and case 1 is no auto-read"
+        );
+    }
+
+    // --- Stopping ---------------------------------------------------------------
+
+    #[test]
+    fn an_interrupted_command_is_reported_as_stopped_and_never_as_failed() {
+        let (mut actor, _clock, sink) = actor();
+        started(&mut actor);
+        output(
+            &mut actor,
+            "partial output
+",
+        );
+
+        actor.handle(SessionInput::CommandInterrupted {
+            command_id: CommandId(1),
+        });
+
+        assert!(
+            sink.events().contains(&SessionEvent::CommandInterrupted {
+                command_id: CommandId(1),
+            }),
+            "the stop is reported: {:?}",
+            sink.events()
+        );
+        assert!(
+            !sink
+                .events()
+                .iter()
+                .any(|event| matches!(event, SessionEvent::CommandFinished { .. })),
+            "and never also as finished"
+        );
+        assert!(
+            !sink
+                .announcements()
+                .iter()
+                .any(|announcement| matches!(announcement, Announcement::Failed { .. })),
+            "a command the user stopped did not fail"
+        );
+        assert_eq!(
+            sink.rendered(),
+            "partial output
+",
+            "what it managed to say still reaches the buffer"
+        );
+    }
+
+    #[test]
+    fn an_interrupt_clears_both_timers_like_any_other_ending() {
+        let (mut actor, _clock, _sink) = actor();
+        started(&mut actor);
+        output(
+            &mut actor, "text
+",
+        );
+
+        actor.handle(SessionInput::CommandInterrupted {
+            command_id: CommandId(1),
+        });
+        assert_eq!(
+            actor.take_requests(),
+            Requests {
+                render: Wake::Clear,
+                pacing: Wake::Clear,
+            }
+        );
+    }
+
     #[test]
     fn alt_screen_transitions_are_idempotent() {
         let (mut actor, _clock, sink) = actor();
@@ -760,20 +1035,18 @@ mod tests {
         let clock = Arc::new(FakeClock::default());
         let sink = Arc::new(Recorder::default());
         let actor = SessionActor::new(config, clock.clone(), sink.clone());
-        let (inputs, rx) = mpsc::channel(8);
+        let (inputs, rx) = mpsc::unbounded_channel();
         let loop_done = tokio::spawn(actor.run(rx));
 
         inputs
             .send(SessionInput::CommandStarted {
                 command_id: CommandId(1),
             })
-            .await
             .expect("actor is running");
         inputs
             .send(SessionInput::Output {
                 text: "hello\n".to_owned(),
             })
-            .await
             .expect("actor is running");
         until(&sink, "the command to open", |events| !events.is_empty()).await;
 

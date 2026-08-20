@@ -18,6 +18,14 @@ export const altScreenEnteredMessage =
   'this program needs interactive mode, which is not available yet. Press Ctrl+C to return to the prompt';
 export const altScreenLeftMessage = 'interactive program ended';
 export const commandStoppedMessage = 'command stopped';
+// This session's shell never announced itself, so there are no command boundaries in it:
+// nothing is read aloud, output still accumulates in the buffer for review, and long
+// commands are still announced as running. The wording says what the user has to do
+// differently rather than naming the mechanism, because "OSC 133" is not a thing to say
+// to somebody trying to run a command (DESIGN's reliability case 2, backend event added
+// in B6).
+export const integrationUnavailableMessage =
+  'shell integration unavailable, output will not be read automatically; review it in the buffer';
 // The babble guard tripped: output keeps arriving and keeps reaching the buffer, it is
 // simply no longer read aloud. The wording says both halves, because "quiet" here never
 // means the output stopped or was withheld (DESIGN, buffer and speech are separate).
@@ -113,10 +121,12 @@ export class AppController {
         if (event.read_mode === 'TooBig') {
           this.tooBig.add(event.command_id);
         }
-        // Failure is always spoken, regardless of verdicts.
-        if (event.exit_code !== 0) {
-          this.announcer.announce(failureMessage(event.exit_code));
-        }
+        // Nothing is said here about the exit code. Speaking is its own event since
+        // B1.5, and the backend sends `Announce { Failed }` after this one — after the
+        // remainder of the output has been read, which is the order a listener needs:
+        // the error text first, the verdict about it second. Announcing here as well
+        // (an A3-era leftover, found in B6's manual pass) said it twice and said it
+        // first, ahead of the line it was about.
         // Beep if this command ever carried a too-big verdict: "you were told it is
         // too big; the beep tells you it is done." A fully auto-read success gets no
         // extra finish speech — its output was already read.
@@ -137,6 +147,11 @@ export class AppController {
         break;
       case 'CommandStillRunning':
         this.announcer.announce(patienceMessage);
+        break;
+      case 'IntegrationUnavailable':
+        // Session-scoped, like the alt-screen pair: it carries no command id because it
+        // fires before any command exists.
+        this.announcer.announce(integrationUnavailableMessage);
         break;
       case 'AltScreenEntered':
         this.announcer.announce(altScreenEnteredMessage);

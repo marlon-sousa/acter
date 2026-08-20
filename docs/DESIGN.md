@@ -414,6 +414,16 @@ Also decided earlier and unchanged:
   unreviewable in-app afterward (the screen reader's own speech history still holds
   them). If in-app review is wanted, the answer is writing status lines into the buffer
   as part of the block, not leaving stale text in the live region.
+- Retrying the injection when the first attempt produces no markers (raised 2026-08-19
+  while specifying B6, and recorded there rather than decided). Reliability case 2 above
+  is **Decided** and now implemented: a session whose markers never appear is flagged,
+  announced, and degraded honestly. What is not decided is whether it should first *try
+  again* — an alternative injection, a different snippet, a second prompt — which would
+  make case 2 rarer rather than merely honest. It needs `ShellAdapter` to exist (B5), and
+  it belongs to a larger conversation about what a session's startup handshake actually
+  is: how many attempts, how long each one may take against the grace period the user is
+  waiting through, and whether a session that recovered on the second try should say so.
+  Decided no earlier than B5.
 - SSH auth UX: password prompts, key files, agent support, host key verification —
   all must be fully screen-reader-accessible flows.
 - Password / no-echo prompts in non-interactive mode: typing a password into the

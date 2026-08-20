@@ -15,7 +15,7 @@
 // Specs are fully independent; raising maxInstances parallelizes them safely.
 
 import { spawn, type ChildProcess } from 'node:child_process';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -35,31 +35,70 @@ const appBinaryPath = fileURLToPath(
 
 const BASE_PORT = 4600;
 
-// The E2E fake script config (spec: decision 8). Every delay range is deterministic
-// (min equal to max) and short, and iteration counts are small, so scenarios play
-// fast and produce exactly the same event sequence on every run. Written to a temp
-// file per worker and pointed at with ACTER_FAKE_SCRIPT when the app is spawned.
+// The simulated session E2E runs against: the *built-in transcript with time taken
+// out* (spec B6, decision 12).
+//
+// This used to be a hand-written `ACTER_FAKE_SCRIPT` config, and B6 deleted both the
+// variable and the domain-level fake it configured. Faking is a transport choice now,
+// so the deterministic-and-fast requirement T2 decision 8 stated has to be met at the
+// transport: same shell, same rules, same text, same marker structure — only the waits
+// are different. Every delay range becomes an equal-bounds 20 ms, which is what makes a
+// run reproducible (unequal bounds are sampled per delivery, so `tail` and `burst`
+// would otherwise pace themselves anywhere between three and eight seconds a chunk).
+//
+// Repeat counts are left exactly as they are, `forever` included: how many times a
+// thing happens is part of the scenario, and `stop.spec.ts` needs a script that
+// genuinely never ends.
+//
+// Reading the crate's transcript rather than copying it is deliberate. A copy would
+// drift from the shell the manual accessibility matrix runs against, and then E2E would
+// be asserting about a session nobody uses.
+const TRANSCRIPT_SOURCE = fileURLToPath(
+  new URL(
+    '../crates/acter-transports/src/scripted/default_transcript.json',
+    import.meta.url,
+  ),
+);
+
+// Equal bounds, so a delivery's wait is a constant rather than a sample.
 const FAST_MS = { min_ms: 20, max_ms: 20 };
-const e2eFakeScript = {
-  small: { output_delay: FAST_MS },
-  big: { output_delay: FAST_MS, line_count: 40, finish_delay: FAST_MS },
-  fail: { output_delay: FAST_MS, exit_code: 2 },
-  slow: { chunk_delay: FAST_MS },
-  forever: {
-    chunk_delay: FAST_MS,
-    patience_delay: FAST_MS,
-    quiet_interval: FAST_MS,
-  },
-  nano: { enter_delay: FAST_MS, leave_delay: FAST_MS },
-  tail: { iterations: 2, interval: FAST_MS },
-  burst: {
-    flood_delay: FAST_MS,
-    flood_lines: 60,
-    iterations: 2,
-    interval: FAST_MS,
-  },
-  speech: { output_delay: FAST_MS, word_count: 3 },
-};
+
+interface Step {
+  delay?: { min_ms: number; max_ms: number };
+  [key: string]: unknown;
+}
+
+interface Rule {
+  steps?: Step[];
+  [key: string]: unknown;
+}
+
+interface Transcript {
+  on_start?: Step[];
+  rules?: Rule[];
+  default?: Rule;
+  [key: string]: unknown;
+}
+
+/** The built-in transcript with every wait replaced by a deterministic 20 ms. */
+function fastTranscript(): Transcript {
+  const transcript = JSON.parse(
+    readFileSync(TRANSCRIPT_SOURCE, 'utf8'),
+  ) as Transcript;
+  const hurry = (steps: Step[] | undefined): void => {
+    for (const step of steps ?? []) {
+      if (step.delay !== undefined) {
+        step.delay = { ...FAST_MS };
+      }
+    }
+  };
+  hurry(transcript.on_start);
+  for (const rule of transcript.rules ?? []) {
+    hurry(rule.steps);
+  }
+  hurry(transcript.default?.steps);
+  return transcript;
+}
 
 // Module state is per worker process (each spec file runs in its own worker, and
 // the worker loads this config module independently).
@@ -129,17 +168,18 @@ export const config: WebdriverIO.Config = {
     const workerIndex = Number(cid?.split('-')[1] ?? 0);
     const port = BASE_PORT + workerIndex;
 
-    // Write this worker's deterministic fake script config and point the app at it,
-    // so E2E runs entirely on its own generated config (spec acceptance criterion 7).
+    // Write this worker's own copy of the fast transcript and point the app at it, so
+    // E2E runs entirely on a session it generated (spec acceptance criterion 7). A file
+    // per worker, because `ACTER_TRANSCRIPT` takes a path and workers are independent.
     const configDir = mkdtempSync(join(tmpdir(), 'acter-e2e-'));
-    const configPath = join(configDir, 'fake-script.json');
-    writeFileSync(configPath, JSON.stringify(e2eFakeScript));
+    const configPath = join(configDir, 'transcript.json');
+    writeFileSync(configPath, JSON.stringify(fastTranscript()));
 
     app = spawn(appBinaryPath, [], {
       env: {
         ...process.env,
         TAURI_WEBDRIVER_PORT: String(port),
-        ACTER_FAKE_SCRIPT: configPath,
+        ACTER_TRANSCRIPT: configPath,
       },
       stdio: 'ignore',
     });
@@ -159,6 +199,9 @@ export const config: WebdriverIO.Config = {
   // artifact (readable-output acceptance criterion).
   afterTest: async function (test, _context, { passed }) {
     if (!passed) {
+      // Created on demand: the directory is not in the tree, and saveScreenshot fails
+      // rather than creating it — which lost the artifact exactly when it was wanted.
+      mkdirSync('./screenshots', { recursive: true });
       const safe = test.title.replace(/[^a-z0-9]+/gi, '-').toLowerCase();
       await browser.saveScreenshot(`./screenshots/${safe}.png`);
     }

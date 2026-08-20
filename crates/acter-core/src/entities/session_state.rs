@@ -17,6 +17,33 @@ pub enum Integration {
     Unintegrated,
 }
 
+impl Integration {
+    /// OSC 133 markers observed. Resolves `Pending`, and recovers `Unintegrated`
+    /// (DESIGN decision 8); an already-`Integrated` session is unaffected.
+    ///
+    /// The transitions live on the value rather than only on [`SessionState`] because
+    /// two components apply them: the actor, which owns the session state and the
+    /// behavior that changes with it, and the service's pump, which must know at
+    /// submission time whether to open a command itself (spec B6, decision 10). Both
+    /// are driven by the same two facts, so sharing the transition is what keeps them
+    /// from ever disagreeing about what those facts meant.
+    pub fn markers_observed(self) -> Self {
+        match self {
+            Self::Pending | Self::Unintegrated => Self::Integrated,
+            Self::Integrated => self,
+        }
+    }
+
+    /// The startup grace period elapsed with no markers observed. Resolves `Pending` to
+    /// `Unintegrated`; a session already resolved either way is unaffected.
+    pub fn grace_period_expired(self) -> Self {
+        match self {
+            Self::Pending => Self::Unintegrated,
+            Self::Integrated | Self::Unintegrated => self,
+        }
+    }
+}
+
 /// Which screen the terminal is currently rendering.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Screen {
@@ -50,24 +77,18 @@ impl SessionState {
     /// OSC 133 markers observed. Resolves `Pending`, and recovers `Unintegrated`
     /// (decision 8); an already-`Integrated` session is unaffected.
     pub fn markers_observed(self) -> Self {
-        match self.integration {
-            Integration::Pending | Integration::Unintegrated => Self {
-                integration: Integration::Integrated,
-                ..self
-            },
-            Integration::Integrated => self,
+        Self {
+            integration: self.integration.markers_observed(),
+            ..self
         }
     }
 
     /// The startup grace period elapsed with no markers observed. Resolves `Pending`
     /// to `Unintegrated`; a session already resolved either way is unaffected.
     pub fn grace_period_expired(self) -> Self {
-        match self.integration {
-            Integration::Pending => Self {
-                integration: Integration::Unintegrated,
-                ..self
-            },
-            Integration::Integrated | Integration::Unintegrated => self,
+        Self {
+            integration: self.integration.grace_period_expired(),
+            ..self
         }
     }
 
@@ -144,6 +165,31 @@ mod tests {
             .grace_period_expired()
             .grace_period_expired();
         assert_eq!(state.integration, Integration::Unintegrated);
+    }
+
+    /// The transitions the service's pump applies to the bare value, which must agree
+    /// with the ones the actor applies to the whole state.
+    #[test]
+    fn the_bare_integration_transitions_match_the_session_state_ones() {
+        let states = [
+            Integration::Pending,
+            Integration::Integrated,
+            Integration::Unintegrated,
+        ];
+        for integration in states {
+            let state = SessionState {
+                integration,
+                ..SessionState::new(Mode::NonInteractive)
+            };
+            assert_eq!(
+                state.markers_observed().integration,
+                integration.markers_observed()
+            );
+            assert_eq!(
+                state.grace_period_expired().integration,
+                integration.grace_period_expired()
+            );
+        }
     }
 
     #[test]

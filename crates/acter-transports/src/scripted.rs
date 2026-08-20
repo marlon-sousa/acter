@@ -42,6 +42,16 @@ use transcript::{DelayRange, Repeat};
 
 pub use transcript::SessionTranscript;
 
+/// The byte a terminal's line discipline carries an interrupt on, and the whole of what
+/// this pipe knows about interrupting: it hands the far end the byte a written Ctrl+C
+/// already delivers today, and the far end decides what that means.
+///
+/// Which submissions interrupt is the shell's knowledge and stays there — the built-in
+/// transcript marks both the literal `stop` line and a written `0x03` as interrupting, so
+/// this reaches the same rule a real Ctrl+C always did (spec B3.6 keeps that split, and
+/// spec B6 decision 5 keeps this side of it one line).
+const INTERRUPT: u8 = 0x03;
+
 /// The starting state of the delay sampler. Any nonzero value will do; it is fixed so a
 /// script with sampled ranges replays identically every run.
 const ROLL_SEED: u64 = 0x_5EED_AC7E_5EED_AC7E;
@@ -160,6 +170,16 @@ impl Transport for ScriptedTransport {
         writes
             .send(bytes.to_vec())
             .map_err(|_| TransportError::Closed)
+    }
+
+    /// Delivered as the byte the far end already recognizes, through the same inbox a
+    /// write uses — so it arrives during a wait rather than between two deliveries, which
+    /// is what makes interrupting an endless sequence possible at all.
+    ///
+    /// Recorded in [`written`](Self::written) like any other byte: a scripted session
+    /// keeps everything it was told, and an interrupt is something it was told.
+    fn interrupt(&mut self) -> Result<(), TransportError> {
+        self.write(&[INTERRUPT])
     }
 
     /// Accepted and recorded. A scripted session has no grid of its own to reflow — the
@@ -731,6 +751,34 @@ mod tests {
         assert!(
             answer.contains(&"\x1b]133;D\x07".to_owned()),
             "an interrupted command ends with no exit code to report: {answer:?}"
+        );
+    }
+
+    /// The port's method, on the implementer that ships with it. `interrupt` exists
+    /// because over SSH an interrupt is a channel request rather than bytes in the data
+    /// stream, so the service cannot compute bytes and call `write` — and here it lands
+    /// exactly where a written Ctrl+C always did, which is the point: this pipe still
+    /// knows nothing about what an interrupt *is* beyond which byte carries one.
+    #[tokio::test]
+    async fn interrupting_reaches_the_same_rule_a_written_control_byte_does() {
+        let mut session = Session::start(SessionTranscript::builtin());
+        let _prompt = session.reads().await;
+        session.write("forever\n");
+        let _echo = session.reads().await;
+        let _running = session.advance_to(3000).await;
+
+        session.transport.interrupt().expect("the session is open");
+
+        let answer = texts(&session.reads().await);
+        assert!(answer.contains(&"^C\r\n".to_owned()), "got: {answer:?}");
+        assert!(
+            answer.contains(&"\x1b]133;D\x07".to_owned()),
+            "an interrupted command ends with no exit code to report: {answer:?}"
+        );
+        assert_eq!(
+            session.transport.written(),
+            b"forever\n\x03",
+            "and a scripted session keeps every byte it was told, this one included"
         );
     }
 

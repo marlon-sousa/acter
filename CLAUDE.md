@@ -58,3 +58,12 @@ is the source of truth, and specs are written before code.
   the tester's NVDA does not switch focus mode automatically, so an agent must read the
   current mode and set the one it needs rather than assume, and must not report a mode
   artifact as a defect in the software under test.
+- **Connect to the bridge as the `user` persona, not `validator`.** Acter is for screen
+  reader users, so what a checklist item asks is whether an ordinary, non-expert user can
+  hear and do the thing — and that question is only answered by driving the way one drives:
+  focus, tab, the arrows, typing, and the reader's ordinary reading commands. A stance with
+  more reach answers a different question, and an item checked from it would claim
+  reachability the product has not earned. `validator` is for one purpose, and it is stated
+  when used: characterising a UI failure already found, where introspection says *what* is
+  wrong rather than only that something is. Never to get past a failure. `expert` is for
+  working out how the reader itself behaves, not for judging Acter.

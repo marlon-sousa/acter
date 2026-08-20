@@ -38,6 +38,22 @@ pub enum SessionEvent {
     CommandInterrupted { command_id: CommandId },
     /// Patience announcement: output has flowed for the whole window with no end marker.
     CommandStillRunning { command_id: CommandId },
+    /// The startup grace period elapsed with no shell-integration markers: this session
+    /// has no command boundaries and every command in it degrades to patience-only
+    /// behavior (DESIGN's reliability case 2).
+    ///
+    /// Session-scoped and carrying no `command_id`, the shape `AltScreenEntered` and
+    /// `AltScreenLeft` already have, because it fires at session start before any
+    /// command exists — which is why it is not an
+    /// [`Announce`](SessionEvent::Announce), whose payload is about a command. Reusing
+    /// `ConnectionChanged` was rejected: that describes the transport, and "the pipe is
+    /// down" and "the shell did not announce itself" must not sound alike to a listener
+    /// (spec B6, decision 11).
+    ///
+    /// Recovery is silent: a marker arriving later upgrades the session (DESIGN
+    /// decision 8) and nothing is said, because there is nothing the user must do
+    /// differently.
+    IntegrationUnavailable,
     /// A program entered the alternate screen (ncurses/full-screen); interactive mode needed.
     AltScreenEntered,
     /// The alternate screen was left; non-interactive rendering resumes.
@@ -106,6 +122,7 @@ mod tests {
             SessionEvent::CommandStillRunning {
                 command_id: CommandId(1),
             },
+            SessionEvent::IntegrationUnavailable,
             SessionEvent::AltScreenEntered,
             SessionEvent::AltScreenLeft,
             SessionEvent::TitleChanged {

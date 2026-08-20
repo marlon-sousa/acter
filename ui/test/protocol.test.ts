@@ -44,6 +44,8 @@ function describeEvent(event: SessionEvent): string {
       return `interrupted ${event.command_id}`;
     case 'CommandStillRunning':
       return `still running ${event.command_id}`;
+    case 'IntegrationUnavailable':
+      return 'integration unavailable';
     case 'AltScreenEntered':
       return 'alt-screen entered';
     case 'AltScreenLeft':

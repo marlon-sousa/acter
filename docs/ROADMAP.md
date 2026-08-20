@@ -122,26 +122,35 @@ the answer to "what should we do now?".
     that duplication is real and deliberate — recorded in B1.5's decision 10 rather than
     left to be discovered in review.
 
-    **The fake migration here is deliberately short-lived, and that is a scheduling
-    choice, not an oversight** (agreed in conversation 2026-08-18, while specifying
-    B3.5). B3.5 moves faking down to the `Transport` port, so from B6 onward there is one
-    session service and the scripted session is a transport choice rather than a second
-    `SessionApi` implementer — which means B6 *deletes* `FakeSessionService` instead of
-    keeping it. Migrating it onto `Announce` here therefore buys only the span between A6
-    and B6. Keeping A6 first is still the call: lane 1 has nothing else unblocked in
-    front of it (A3.2 is blocked, A4 unspecified) so it would otherwise idle, and the
-    frontend every manual NVDA pass runs against gets one way to be told to speak sooner.
-    Whoever implements A6 should keep the fake's migration as small as it can be, since
-    it is scaffolding with a known end date.
-11. A3.2, the `Ctrl+C` interrupt surface. Spec: none yet → **blocked on the input-model
-   decision, not merely unspecified** (the question is stated in A3.1's spec, section
-   "The open question this spec deliberately does not bet on"). DESIGN's keystroke map
-   already decides that Ctrl+C without a selection interrupts the running command, and
-   A3's alt-screen string already tells the user to press it, so phase 1 currently
-   promises a key that does nothing. What the fix looks like depends entirely on that
-   question: with a local edit field it is a `SessionApi` method plus a keystroke
-   handler; under a pass-through field it is byte `0x03` written to the PTY and none
-   of that exists.
+    **The fake migration this entry planned is no longer part of it** (updated by B6,
+    2026-08-20). The plan above was written when `FakeSessionService` was the default
+    backend and would have needed migrating onto `Announce` for the span between A6 and
+    B6. B6 landed first and deleted it: there is exactly one session service now, it emits
+    `Announce` already, and nothing scripts a verdict anywhere in the tree. So what remains
+    here is only the removal half — retire `Output.read_mode`, `CommandStillRunning` and
+    the failure-via-`CommandFinished.exit_code` path from the protocol, the actor and the
+    frontend — which is smaller than the entry was scoped for and no longer has a deadline
+    attached to it. Note that the actor still sets `Output.read_mode: Quiet` on every
+    rendering event as a vestigial field, and the frontend still has two ways to be told to
+    speak; that duplication is what this entry pays off.
+11. A3.2, the `Ctrl+C` interrupt surface. Spec: none yet → specify first. **Unblocked by
+   B6** (lane 2), and rescoped to frontend work only. The input-model question A3.1 left
+   open — stated in that spec's "The open question this spec deliberately does not bet on"
+   — is answered in the direction DESIGN's **Decided** edit-field ownership already
+   pointed: the field is 100% local and the shell sees no bytes until Enter, so an
+   interrupt is never "a key that reaches the pty". It is a report to the session about a
+   key the frontend chose not to handle, and the backend decides what it means.
+   What remains is entirely in `ui/`: notice `Ctrl+C` in the keyboard adapter, consume it
+   locally **when there is a selection** (that is the native copy, and it must never reach
+   the backend), otherwise call `send_key` with the `KeyPress` and say something about the
+   `KeyAck` that comes back. Three answers to word: `Applied` needs nothing said — the
+   `CommandInterrupted` event already speaks — while `NothingToActOn` and `Unbound` are
+   the two cases only the frontend can voice, and A3.1 decision 6 named the first of them
+   as the thing the typed `stop` had no honest way to say. `BackendApi`, `TauriBackend`
+   and the pinned strings are the surface; the invoke, the keybinding policy and the
+   transport method all exist and are tested.
+   Until it lands the promise stays unkept: A3's alt-screen string already tells the user
+   to press Ctrl+C to return to the prompt.
 12. A4, completion path. Spec: none yet → specify first. Scope sketch: fake
     completion provider, Tab handling in the edit field, completion announcement.
 13. A5.3 and onward — iteration entries appear here as NVDA findings arrive.
@@ -372,41 +381,116 @@ the answer to "what should we do now?".
     default backend and runs the first real accessibility matrix against these fixtures,
     so landing the split afterwards would author them twice. B6 adds only `interrupt` to
     this crate, so going first costs it nothing.
-21. B6, real SessionService. Spec: none yet → specify first. **Next in lane 2.**
-    **Moved ahead of B4/B5**:
-    with B3.5's transport underneath it, this is the entry that switches the app's
-    default backend from the A3 event-level fake to the byte path, so it is convergence
-    made user-facing — and manual NVDA testing starts exercising the real pipeline
-    months before ConPTY exists. The A3 fake stays the default until this lands, so the
-    slowest feedback loop in the project never goes dark. Scope sketch: implements
-    `SessionApi`, owns command-id correlation (the tracker is id-free — see B2) and the
-    integration grace period, spawns the actor; tested against fake driven ports. Most of
-    it already exists as the glue in B3.5's pipeline test, which that spec deliberately
-    kept dumb and named as this entry's to promote — including the two rules that glue
-    needed and that a real service must get right: separating consecutive lines so the
-    pacing policy counts them, and taking an append always but a settlement only when it is
-    a line's first or last word. **The ten scenarios already exist as data**
-    (`acter-transports`' built-in transcript), so nothing here re-authors them: what
-    remains is wiring the transport, engine, tracker and actor together behind
-    `SessionApi`, correlation, the grace period, and switching the default backend — at
-    which point the manual matrix tests the real policy instead of a script imitating it.
-    **The fake it wires is now a composition** (B3.6): a `ScriptedTransport` is a
-    `FakeShell` plus a `Chunking`, so the unintegrated session the grace period exists for
-    is `Unmarked::new(TranscriptShell::builtin())` rather than a fixture, and the manual
-    matrix can be run against any chunking without a second set of transcripts.
-    **It also deletes `FakeSessionService`** (agreed in conversation 2026-08-18): after
-    B3.5, faking is a *transport* choice rather than a service-level one, so from here
-    there is exactly one session service and the scripted session is a profile that
-    selects `ScriptedTransport`. DESIGN's Decided "the scripted fake session is a
-    permanent supported session kind" survives unchanged — the scenarios became data in
-    B3.5; what is deleted here is the imitation of a domain that now runs for real.
-22. B4, local transport. Spec: none yet → specify first. Scope sketch: LocalPty on
-    ConPTY + blocking-reader thread; real-shell integration test in a separate CI
-    job. `Transport` already exists by now (B3.5), so this is a second implementer,
-    not a new seam.
+21. B6, real SessionService. **Done.** Spec:
+    [b6-session-service.md](specs/b6-session-service.md).
+    `acter-core`'s first service owns a session end to end: two tasks, the pump one of
+    them, owning the transport, the engine, the tracker and the correlation queue, with
+    `SessionActor` on the other. The pump is the transport's single owner by construction
+    — `Transport` is `Send` and not `Sync` with `&mut self` on every method — and that is
+    an ordering guarantee rather than a lock: a device-query answer can never overtake a
+    submitted line. Ids are minted at submission for the ack the frontend needs, and
+    claimed at `BlockStarted`; both edges are answered rather than discovered (an
+    unclaimed id waits for the next block, and a block nobody submitted is still a real
+    command, because dropping its text is the one thing this product must never do).
+    **The default backend is now the byte path.** Launching Acter with nothing set runs
+    the built-in transcript through the real engine, tracker, pacing policy and actor, so
+    the manual matrix tests the real policy for the first time: `TooBig`, the patience
+    announcement, the babble guard and the auto-read decision are computed from real text
+    and real timing instead of scripted. `ACTER_TRANSCRIPT` selects another simulated
+    session — `builtin`, `builtin-by-byte`, `unmarked`, `unmarked-by-byte`, or a path to a
+    transcript — which is B3.6's shell-times-chunking product made selectable by name, and
+    an unknown one is a loud startup failure rather than a quiet fallback.
+    **Three pieces of the domain came alive.** `Integration`'s grace period is a real
+    `Clock` timer (default 5s, the number in the spec most likely to be retuned by NVDA
+    evidence); a session that never announces itself is flagged, says so, and degrades
+    every command to DESIGN's case 1 — the submission becomes the boundary, text reaches
+    the buffer, patience fires, auto-read is suppressed — which is reliability case 2
+    happening for the first time rather than being Decided and unimplemented. And
+    `SessionEvent::CommandInterrupted` has a real producer: the service records that it
+    asked the transport to interrupt, so a block closing with no exit code while one is
+    outstanding is announced as stopped instead of "finished, exit code 0".
+    **The keystroke surface is a seam, not a feature.** `SessionApi::send_key` carries a
+    `KeyPress`; `policies/keybindings.rs` is the pure table mapping it to a
+    `SessionIntent`; `Transport::interrupt` is a method because over SSH an interrupt is a
+    channel request rather than bytes. `Key` and `SessionIntent` ship with one variant
+    each. This unblocks A3.2, which is now frontend work over a method with a real backend
+    behind it.
+    **`FakeSessionService` and `FakeScript` are deleted**, with `ACTER_FAKE_SCRIPT`:
+    faking is a transport choice since B3.5, so there is exactly one session service.
+    DESIGN's Decided "the scripted fake session is a permanent supported session kind"
+    survives unchanged — the scenarios became data in B3.5; what is gone is the imitation
+    of a domain that now runs for real.
+    **`pipeline.rs` is the regression net**: the same transcripts and very nearly the same
+    assertions, with fifty lines of glue replaced by the real component, still replayed
+    under `Chunking::Bytes(1)` and asserted to say the same thing. Its unmarked-session
+    test used to assert silence and now asserts honest degradation — the only assertion
+    that changed meaning.
+    **The E2E suite moved onto a transcript too**, in the same PR and one commit later:
+    deleting `ACTER_FAKE_SCRIPT` had left the runner spawning the app with a variable
+    nothing read, so the suite had been running against the shipped timings and three of
+    its seven spec files were red. The runner now writes the built-in transcript with
+    every delay replaced by a deterministic 20 ms, which is T2 decision 8's requirement
+    met where faking actually lives since B3.5.
+22. B4, local transport. Spec: none yet → specify first. **Next in lane 2.** Scope
+    sketch: LocalPty on ConPTY + blocking-reader thread; real-shell integration test in a
+    separate CI job. `Transport` already exists by now (B3.5), so this is a second implementer,
+    not a new seam — `interrupt` included, which B6 added to the port and which over a
+    local ConPTY is a control byte in the data stream rather than the channel request SSH
+    will need.
+    **Also carries read timing** (raised 2026-08-19, filed here by B6). The fake pipe
+    simulates the far end's timing but not the gap *between the reads of one delivery*:
+    `Chunking` cuts a delivery and pushes every read with no clock advance, so under
+    `Bytes(1)` a two-hundred-and-fifty-byte flood lands at one instant. The suite therefore
+    proves that cutting never loses text and never breaks a marker, and says nothing about
+    a line whose halves arrive on either side of the half-second quiescence window. B4 is
+    the natural moment because ConPTY makes real read timing observable, so the fake's
+    model can be built against a pattern somebody measured rather than guessed. It is not
+    free: `Chunking` is a pure policy today, and spacing reads apart either puts the clock
+    inside it or splits the concept in two — and the natural implementation would let an
+    interrupt cancel a command *mid-delivery*, halfway through a marker, which is a
+    behavior change deserving a decision made in the open. B6's accessibility matrix found
+    no line announced before it was finished, so nothing promotes this ahead of B4.
 23. B5, PowerShell adapter. Spec: none yet → specify first. Scope sketch: OSC 133
     injection snippet; record the first golden transcripts as fixtures, in B2's format
     — so a captured real session is replayable as a fake session.
+    **Also carries EOF** (filed here by B6, decision 6). `SessionIntent` ships with
+    `Interrupt` alone, and EOF is the obvious second member deliberately left out: by
+    DESIGN's own transport-versus-shell criterion it is *shell* knowledge — PowerShell on
+    ConPTY wants Ctrl+Z, bash over WSL wants `0x04`, same transport and different answers
+    — so it needs `ShellAdapter`, which is this entry. When it lands it is one variant, one
+    keybinding-table row and one adapter method; nothing above it changes, which is the
+    point of putting the binding table behind the port in B6.
+    **And the null `ShellAdapter` and the profile slot it fills** — B6 left both out for
+    the same reason B1 refused to declare a trait with only a fake implementer: this is
+    when the trait first ships with PowerShell behind it, and when the scripted session
+    needs something in a profile's shell-adapter slot to be "selectable like any real
+    shell" as DESIGN Decided.
+
+24. B6.1, correlation that cannot drift. Spec: none yet → specify first. **An iteration
+    entry from B6's manual NVDA pass**, not a planned step. B6's decision 3 accepted one
+    hole knowingly: an id submitted for a line that never opens a block stays queued and
+    the next block claims it. Driving the matrix with NVDA showed the consequence is worse
+    than that wording admits — the queue does not recover, so from that point on *every*
+    block in the session carries the previous command's heading, and a listener hears
+    every answer under the question before it. The trigger there was the built-in
+    transcript's `stop` rule, which consumes a submitted line to model an interrupt and so
+    mints an id for something that is a keystroke in the shipped product; A3.2 removes
+    that particular trigger, but not the hole. Two candidate fixes, to choose between when
+    this is specified:
+    **Headings from the shell's own echo.** The tracker already labels the B..C region as
+    `Region::CommandLine` — that is the shell saying which line it read — so the pump can
+    carry that text on `CommandStarted` and the frontend can use it as the block heading
+    instead of the optimistic one from the ack. A drifted id then still routes output to
+    a consistent block; what it can no longer do is put the wrong words on it.
+    **Retire ids consumed by a full-screen program.** Text typed while the alternate
+    screen is up was input to that program and was never a command line, so those ids can
+    be retired when the alternate screen is left. Narrow, principled, and it closes the
+    one case that is reachable today without A3.2.
+    What must **not** be done is the obvious rule — retire the queue at the next prompt.
+    A real shell draws its prompt before it reads a line a fast typist already sent, so
+    that rule loses the second of two quickly-typed commands, which is exactly what
+    `blocks_claim_submitted_ids_in_the_order_they_were_submitted` forbids. The reasoning
+    is written out in B6's spec under decision 3.
 
 ## Convergence (requires B4, B5 and B6 all Done)
 
