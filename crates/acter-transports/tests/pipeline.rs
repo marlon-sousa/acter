@@ -996,3 +996,46 @@ async fn every_case_in_the_suite_actually_produces_a_session() {
         );
     }
 }
+
+/// The companion to the case above, and the one B6's manual NVDA pass sent me looking
+/// for: a command that *completes* in an unintegrated session, rather than one that runs
+/// forever.
+///
+/// The two are not the same path. `forever` never reaches a quiescence flush with a
+/// finished command behind it, so it exercises the patience announcement and the babble
+/// guard; a command that ends exercises the flush of the remainder, which is the only
+/// place `ReadAloud` is produced. Without this, the suppression that DESIGN's reliability
+/// case 2 requires was asserted only where it was never really tested.
+///
+/// With no markers there is no `D` either, so the command stays open until the next
+/// submission closes it — which is exactly decision 10's model, and why the assertion
+/// here is about what was said rather than about the exit code.
+#[tokio::test]
+async fn a_completed_command_in_an_unintegrated_session_is_never_read_aloud() {
+    let mut pipeline = Pipeline::over(
+        Box::new(Unmarked::new(TranscriptShell::builtin())),
+        Chunking::Whole,
+    );
+
+    pipeline.run_until(500).await;
+    pipeline.submit("small");
+    pipeline.run_until(3_000).await;
+
+    assert!(
+        pipeline.rendered().contains("hello from acter"),
+        "the output still reaches the buffer, which is the whole of manual review: {:?}",
+        pipeline.rendered()
+    );
+    assert!(
+        pipeline.rendered().contains("small"),
+        "echo exclusion is lost with the markers, so the echoed line is in the buffer too"
+    );
+    assert!(
+        !pipeline
+            .announcements()
+            .iter()
+            .any(|announcement| matches!(announcement, Announcement::ReadAloud { .. })),
+        "and neither the echo nor the output is read aloud: {:?}",
+        pipeline.announcements()
+    );
+}

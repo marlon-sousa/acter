@@ -206,19 +206,44 @@ describe('event rendering (decision 2)', () => {
     expect(beep.beeps).toBe(0);
   });
 
-  it('announces the auto-read output and then the failure, in that order', async () => {
+  // The event shape the backend actually produces: the text is rendered quietly, the
+  // speech about it rides an `Announce`, and the failure verdict is a second `Announce`
+  // sent after the terminal event. Written this way because B6's manual NVDA pass heard
+  // the failure spoken TWICE and heard it FIRST — before the error line it was about —
+  // which is what a second producer in `CommandFinished` did.
+  it('announces the output and then the failure, once each, in that order', async () => {
     const { backend, announcer, beep, controller } = makeApp();
     await controller.attach();
 
     backend.emit({ type: 'CommandStarted', command_id: 1 });
-    backend.emit({ type: 'Output', command_id: 1, text: 'error: boom', read_mode: 'Auto' });
-    backend.emit({ type: 'CommandFinished', command_id: 1, exit_code: 2, read_mode: 'Auto' });
+    backend.emit({ type: 'Output', command_id: 1, text: 'error: boom', read_mode: 'Quiet' });
+    backend.emit({
+      type: 'Announce',
+      command_id: 1,
+      announcement: { kind: 'ReadAloud', text: 'error: boom' },
+    });
+    backend.emit({ type: 'CommandFinished', command_id: 1, exit_code: 2, read_mode: 'Quiet' });
+    backend.emit({
+      type: 'Announce',
+      command_id: 1,
+      announcement: { kind: 'Failed', exit_code: 2 },
+    });
 
-    // Both are announced, output first — the announcer appends rather than replacing,
-    // so the failure never clobbers the error output the user needs to hear.
+    // The error text first, the verdict about it second, and each said exactly once.
     expect(announcer.announcements).toEqual(['error: boom', failureMessage(2)]);
-    expect(announcer.announcements[1]).toBe('command failed, exit code 2');
     expect(beep.beeps).toBe(0);
+  });
+
+  // A finish carries no speech of its own: `CommandFinished` is a lifecycle event, and
+  // everything spoken about a command comes from an `Announce`.
+  it('a failing command that finishes says nothing until the Failed announcement', async () => {
+    const { backend, announcer, controller } = makeApp();
+    await controller.attach();
+
+    backend.emit({ type: 'CommandStarted', command_id: 1 });
+    backend.emit({ type: 'CommandFinished', command_id: 1, exit_code: 2, read_mode: 'Quiet' });
+
+    expect(announcer.announcements).toEqual([]);
   });
 
   it('CommandInterrupted announces the stop and closes the block', async () => {

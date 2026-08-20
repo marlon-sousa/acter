@@ -121,10 +121,12 @@ export class AppController {
         if (event.read_mode === 'TooBig') {
           this.tooBig.add(event.command_id);
         }
-        // Failure is always spoken, regardless of verdicts.
-        if (event.exit_code !== 0) {
-          this.announcer.announce(failureMessage(event.exit_code));
-        }
+        // Nothing is said here about the exit code. Speaking is its own event since
+        // B1.5, and the backend sends `Announce { Failed }` after this one — after the
+        // remainder of the output has been read, which is the order a listener needs:
+        // the error text first, the verdict about it second. Announcing here as well
+        // (an A3-era leftover, found in B6's manual pass) said it twice and said it
+        // first, ahead of the line it was about.
         // Beep if this command ever carried a too-big verdict: "you were told it is
         // too big; the beep tells you it is done." A fully auto-read success gets no
         // extra finish speech — its output was already read.
