@@ -38,6 +38,52 @@ export type ConnectionState = "Connected" | "Reconnecting" | "Disconnected";
 export type ExitCode = number;
 
 /**
+ *  Which key, with exactly the one variant something presses today.
+ * 
+ *  Named variants (Tab, Escape, the arrows, the function keys) arrive when an entry
+ *  needs them — Tab with A4's completion, the rest with phase 2's pass-through key —
+ *  and not before. Shipping the whole keyboard now would be a dozen variants with no
+ *  consumer, which is the shape B1 refused to create and B3.5 decision 10 restated
+ *  (spec B6, decision 6).
+ */
+export type Key = 
+/**  A character key, as the frontend read it off the keyboard event. */
+{ Char: string };
+
+/**
+ *  What became of a keystroke: the two questions the frontend cannot answer itself.
+ * 
+ *  A key nothing is bound to and a bound key that found nothing running are different
+ *  things to say to a listener, so they are different answers here. Which words each
+ *  one becomes is the frontend's (A3.2); this only reports what happened.
+ */
+export type KeyAck = 
+/**  No binding for this keystroke. Nothing was attempted. */
+"Unbound" | 
+/**  Bound, and acted on: the intent reached the session. */
+"Applied" | 
+/**
+ *  Bound, but there was no running command to act on.
+ * 
+ *  The honest answer to A3.1 decision 6's "nothing to stop", which the typed `stop`
+ *  had no way to give.
+ */
+"NothingToActOn";
+
+/**
+ *  One keystroke the frontend did not consume, described rather than interpreted.
+ * 
+ *  Modifiers are flags rather than a set because a keystroke has exactly these three
+ *  and a listener never asks "which modifiers", only "was Ctrl held".
+ */
+export type KeyPress = {
+	key: Key,
+	ctrl: boolean,
+	shift: boolean,
+	alt: boolean,
+};
+
+/**
  *  Rendering mode over the one live session. Phase 1 only ever emits
  *  [`Mode::NonInteractive`]; the interactive variant is defined so Phase 2 is additive.
  */
@@ -77,6 +123,24 @@ export type SessionEvent =
 { type: "CommandInterrupted"; command_id: CommandId } | 
 /**  Patience announcement: output has flowed for the whole window with no end marker. */
 { type: "CommandStillRunning"; command_id: CommandId } | 
+/**
+ *  The startup grace period elapsed with no shell-integration markers: this session
+ *  has no command boundaries and every command in it degrades to patience-only
+ *  behavior (DESIGN's reliability case 2).
+ * 
+ *  Session-scoped and carrying no `command_id`, the shape `AltScreenEntered` and
+ *  `AltScreenLeft` already have, because it fires at session start before any
+ *  command exists — which is why it is not an
+ *  [`Announce`](SessionEvent::Announce), whose payload is about a command. Reusing
+ *  `ConnectionChanged` was rejected: that describes the transport, and "the pipe is
+ *  down" and "the shell did not announce itself" must not sound alike to a listener
+ *  (spec B6, decision 11).
+ * 
+ *  Recovery is silent: a marker arriving later upgrades the session (DESIGN
+ *  decision 8) and nothing is said, because there is nothing the user must do
+ *  differently.
+ */
+{ type: "IntegrationUnavailable" } | 
 /**  A program entered the alternate screen (ncurses/full-screen); interactive mode needed. */
 { type: "AltScreenEntered" } | 
 /**  The alternate screen was left; non-interactive rendering resumes. */

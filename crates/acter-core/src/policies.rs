@@ -3,8 +3,10 @@
 
 mod autoread;
 mod boundary_tracker;
+mod keybindings;
 
 pub use autoread::{
     PacingAction, PacingOutcome, TextSize, measure, on_command_end, on_output, on_wake, verdict,
 };
 pub use boundary_tracker::{BoundaryEvent, BoundaryTracker, Region};
+pub use keybindings::intent_for;

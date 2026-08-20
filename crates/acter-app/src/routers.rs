@@ -12,31 +12,37 @@ pub(crate) use session::*;
 mod tests {
     use std::sync::Arc;
 
-    use acter_core::{CommandId, SubmitAck};
+    use acter_core::{CommandId, KeyAck, SubmitAck};
     use serde_json::{Value, json};
     use tauri::ipc::{CallbackFn, InvokeBody};
     use tauri::test::{INVOKE_KEY, get_ipc_response, mock_builder, mock_context, noop_assets};
     use tauri::webview::InvokeRequest;
     use tauri::{WebviewWindowBuilder, generate_handler};
 
-    use crate::container::AppState;
-    use crate::entities::FakeScript;
-    use crate::services::FakeSessionService;
+    use crate::container::{AppState, session};
 
-    /// Builds the app on the Tauri mock runtime with the real `FakeSessionService`
-    /// wired into managed state, then invokes `cmd` through the real IPC pipeline —
-    /// the same path a webview `invoke` takes (registration, state extraction,
-    /// argument deserialization), none of which unit tests reach. No sink is attached,
-    /// so `submit_command` spawns no playback thread and only the ack is exercised.
+    /// Builds the app on the Tauri mock runtime with the real session wired into managed
+    /// state, then invokes `cmd` through the real IPC pipeline — the same path a webview
+    /// `invoke` takes (registration, state extraction, argument deserialization), none of
+    /// which unit tests reach. No sink is attached, so nothing the session produces has
+    /// anywhere to go and only the invoke surface is exercised.
+    ///
+    /// The session is built inside the async runtime for the reason the container does
+    /// the same: it starts tasks.
     fn invoke(cmd: &str, args: Value) -> Result<Value, Value> {
-        let state = AppState {
-            session: Arc::new(FakeSessionService::new(FakeScript::default())),
+        let runtime = tauri::async_runtime::handle();
+        let state = {
+            let _entered = runtime.inner().enter();
+            AppState {
+                session: Arc::new(session()),
+            }
         };
         let app = mock_builder()
             .manage(state)
             .invoke_handler(generate_handler![
                 super::submit_command,
-                super::attach_session
+                super::attach_session,
+                super::send_key
             ])
             .build(mock_context(noop_assets()))
             .expect("failed to build the mock app");
@@ -64,6 +70,23 @@ mod tests {
             .expect("submit_command should succeed");
         let ack: SubmitAck = serde_json::from_value(out).expect("response should be a SubmitAck");
         assert_eq!(ack.command_id, CommandId(1));
+    }
+
+    /// The keystroke protocol over the wire: a `KeyPress` deserialized from the shape the
+    /// frontend will send, and a `KeyAck` back. Nothing is running in a session nobody
+    /// submitted to, which is one of the two answers the ack exists to give.
+    #[test]
+    fn send_key_takes_a_key_press_and_answers_a_key_ack() {
+        let out = invoke(
+            "send_key",
+            json!({
+                "sessionId": 1,
+                "key": { "key": { "Char": "c" }, "ctrl": true, "shift": false, "alt": false }
+            }),
+        )
+        .expect("send_key should succeed");
+        let ack: KeyAck = serde_json::from_value(out).expect("response should be a KeyAck");
+        assert_eq!(ack, KeyAck::NothingToActOn);
     }
 
     #[test]

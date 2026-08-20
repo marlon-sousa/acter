@@ -12,6 +12,7 @@ import type { EditFieldView } from '../../src/ports/edit_field_view';
 import {
   AppController,
   altScreenEnteredMessage,
+  integrationUnavailableMessage,
   altScreenLeftMessage,
   commandStoppedMessage,
   failureMessage,
@@ -326,6 +327,19 @@ describe('event rendering (decision 2)', () => {
       'this program needs interactive mode, which is not available yet. Press Ctrl+C to return to the prompt',
     );
     expect(announcer.announcements[1]).toBe('interactive program ended');
+  });
+
+  it('IntegrationUnavailable announces the pinned string and opens no block', async () => {
+    const { backend, announcer, buffer, controller } = makeApp();
+    await controller.attach();
+
+    backend.emit({ type: 'IntegrationUnavailable' });
+
+    expect(announcer.announcements).toEqual([integrationUnavailableMessage]);
+    expect(announcer.announcements[0]).toBe(
+      'shell integration unavailable, output will not be read automatically; review it in the buffer',
+    );
+    expect(buffer.opened).toEqual([]);
   });
 
   it('TitleChanged and ConnectionChanged are silent no-ops', async () => {

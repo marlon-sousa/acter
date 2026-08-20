@@ -44,6 +44,25 @@ pub trait Transport: Send {
     /// device-query answer the terminal engine produced.
     fn write(&mut self, bytes: &[u8]) -> Result<(), TransportError>;
 
+    /// Stops whatever is running at the far end.
+    ///
+    /// A method rather than bytes the caller computes, for the reason `resize` is one:
+    /// over a local ConPTY an interrupt may be a control byte travelling in the data
+    /// stream, while over SSH it is a channel request that travels *outside* it. So
+    /// there is no byte sequence a service could write that means "interrupt" on both,
+    /// and the knowledge of which mechanism applies is exactly what differs between
+    /// implementers — which is the definition of something belonging on a port.
+    ///
+    /// By DESIGN's transport-versus-shell criterion this is transport knowledge and not
+    /// shell knowledge: fix the shell to bash and interrupting it over WSL and over SSH
+    /// are still different mechanisms. EOF is the other way round — PowerShell wants
+    /// Ctrl+Z and bash wants `0x04` on the *same* transport — so it belongs to
+    /// `ShellAdapter` and is B5's (spec B6, decisions 5 and 6).
+    ///
+    /// Says nothing about what the far end will do about it: whether a command actually
+    /// ended is observed the ordinary way, in the bytes that follow.
+    fn interrupt(&mut self) -> Result<(), TransportError>;
+
     /// Tells the far end the screen changed size. Separate from
     /// [`TerminalEngine::resize`](crate::TerminalEngine::resize), which resizes the
     /// emulated grid: both have to happen, and only one of them is I/O.

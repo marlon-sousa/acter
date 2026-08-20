@@ -18,6 +18,14 @@ export const altScreenEnteredMessage =
   'this program needs interactive mode, which is not available yet. Press Ctrl+C to return to the prompt';
 export const altScreenLeftMessage = 'interactive program ended';
 export const commandStoppedMessage = 'command stopped';
+// This session's shell never announced itself, so there are no command boundaries in it:
+// nothing is read aloud, output still accumulates in the buffer for review, and long
+// commands are still announced as running. The wording says what the user has to do
+// differently rather than naming the mechanism, because "OSC 133" is not a thing to say
+// to somebody trying to run a command (DESIGN's reliability case 2, backend event added
+// in B6).
+export const integrationUnavailableMessage =
+  'shell integration unavailable, output will not be read automatically; review it in the buffer';
 // The babble guard tripped: output keeps arriving and keeps reaching the buffer, it is
 // simply no longer read aloud. The wording says both halves, because "quiet" here never
 // means the output stopped or was withheld (DESIGN, buffer and speech are separate).
@@ -137,6 +145,11 @@ export class AppController {
         break;
       case 'CommandStillRunning':
         this.announcer.announce(patienceMessage);
+        break;
+      case 'IntegrationUnavailable':
+        // Session-scoped, like the alt-screen pair: it carries no command id because it
+        // fires before any command exists.
+        this.announcer.announce(integrationUnavailableMessage);
         break;
       case 'AltScreenEntered':
         this.announcer.announce(altScreenEnteredMessage);

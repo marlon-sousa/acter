@@ -13,7 +13,8 @@ use std::fs;
 use std::path::PathBuf;
 
 use acter_core::{
-    CommandId, ConnectionState, ExitCode, Mode, ReadMode, SessionEvent, SessionId, SubmitAck,
+    CommandId, ConnectionState, ExitCode, Key, KeyAck, KeyPress, Mode, ReadMode, SessionEvent,
+    SessionId, SubmitAck,
 };
 use specta::Types;
 use specta_typescript::Typescript;
@@ -27,12 +28,16 @@ const HEADER: &str = "\
 
 fn render() -> String {
     // Register the whole surface explicitly — including types no event/command
-    // references yet (SessionId, Mode), so the full protocol is emitted before its
-    // producers land. Referenced types (CommandId, ExitCode, ReadMode,
-    // ConnectionState) come along automatically but are listed for clarity.
+    // references yet (SessionId, Mode) and types whose frontend consumer is still to
+    // come (KeyPress and KeyAck, which A3.2 will send and read), so the full protocol is
+    // emitted before its producers land. Referenced types (CommandId, ExitCode, ReadMode,
+    // ConnectionState, Key) come along automatically but are listed for clarity.
     let types = Types::default()
         .register::<SessionEvent>()
         .register::<SubmitAck>()
+        .register::<KeyPress>()
+        .register::<Key>()
+        .register::<KeyAck>()
         .register::<SessionId>()
         .register::<CommandId>()
         .register::<ExitCode>()

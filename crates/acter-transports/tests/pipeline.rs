@@ -1,6 +1,7 @@
 //! The full pipeline, transcript in and recorded events out: a `ScriptedTransport`
-//! feeding the real `AlacrittyEngine`, the real `BoundaryTracker`, the real pacing policy
-//! and the real `SessionActor`, with a recording `EventSink` on the far end.
+//! feeding the real `SessionService`, which owns the real `AlacrittyEngine`, the real
+//! `BoundaryTracker`, the real pacing policy and the real `SessionActor`, with a
+//! recording `EventSink` on the far end.
 //!
 //! Nothing above the transport is faked. That is the entry's whole point: A3's fake
 //! implemented `SessionApi` at the top of the stack and *scripted every verdict*, so no
@@ -12,29 +13,29 @@
 //! clock, driven forward one armed deadline at a time, so a session that takes twelve
 //! seconds of scripted time finishes in microseconds of real time.
 //!
-//! **The glue below is deliberately dumb, and B6 replaces it.** Command ids are minted in
-//! submission order when a block opens, every region but `Output` is dropped (DESIGN's
-//! echo exclusion, which B2 decision 2 promised would be a caller's one-line filter), and
-//! `take_replies` is drained after each advance and written back to the transport. It is
-//! not a component: no service, no controller, and nothing new in `acter-core`.
-//! Correlation and the integration grace period need the queue of submitted commands,
-//! which is B6's to own (spec B3.5, decision 8).
+//! **The glue is gone, and that is what B6 delivered.** This file used to carry fifty
+//! lines of scaffolding — command ids minted at `BlockStarted`, every region but `Output`
+//! dropped, `take_replies` drained and written back — which B3.5 deliberately kept dumb
+//! and named as B6's to promote (spec B3.5, decision 8). All of it is now
+//! `SessionService`, so what is left here is a driver: a clock to advance, lines to
+//! submit, keys to press, and the events that came back. The same transcripts and very
+//! nearly the same assertions, against a real component instead of test scaffolding,
+//! which is the strongest regression net the promotion could have had.
 
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use acter_core::{
-    Announcement, BoundaryEvent, BoundaryTracker, Clock, CommandId, EventSink, ExitCode, LineId,
-    LineRevision, PacingConfig, ReadMode, Region, Screen, SessionActor, SessionEvent, SessionInput,
-    TerminalEngine, Timer, Transport, Wake,
+    Announcement, Clock, CommandId, EventSink, ExitCode, Key, KeyAck, KeyPress, PacingConfig,
+    ReadMode, SessionApi, SessionEvent, SessionId, SessionService, Timer, Transport,
+    TransportError,
 };
 use acter_term::AlacrittyEngine;
 use acter_transports::{
     Chunking, FakeShell, ScriptedTransport, SessionTranscript, TranscriptShell, Unmarked,
 };
-use tokio::sync::mpsc::{Receiver, channel};
+use tokio::sync::mpsc::Sender;
 use tokio::sync::oneshot;
 use tokio::task::yield_now;
 
@@ -44,12 +45,19 @@ use tokio::task::yield_now;
 const COLUMNS: u16 = 80;
 const SCREEN_LINES: u16 = 24;
 
-/// Read buffering, large enough that no test observes back-pressure.
-const READS: usize = 1024;
+/// The one session every test drives.
+const SESSION: SessionId = SessionId(1);
+
+/// The grace period these tests run under. Two hundred milliseconds rather than the
+/// shipped five seconds, so a session that is going to be flagged is flagged inside the
+/// scripted time each case already runs for. That the default is five seconds is
+/// `PacingConfig`'s own test to pin; what is under test here is what a flagged session
+/// then does.
+const GRACE: Duration = Duration::from_millis(200);
 
 /// Time moves only when a test says so — B1.5's fake clock, shared by the transport's
-/// scripted delays and the actor's pacing deadlines, so the two are ordered against each
-/// other exactly as they would be against a real one.
+/// scripted delays, the service's grace period and the actor's pacing deadlines, so all
+/// three are ordered against each other exactly as they would be against a real one.
 #[derive(Default)]
 struct FakeClock {
     now: Mutex<Duration>,
@@ -113,35 +121,75 @@ impl Recorder {
     fn events(&self) -> Vec<SessionEvent> {
         self.0.lock().expect("recorder poisoned").clone()
     }
+
+    fn len(&self) -> usize {
+        self.0.lock().expect("recorder poisoned").len()
+    }
 }
 
-/// One whole session: transport, engine, tracker, actor, and the glue between them.
+/// What a test can still see of the transport after the service took ownership of it.
+///
+/// The service owns its transport by construction — `Transport` is `Send` and not `Sync`
+/// with `&mut self` on every method — so a test that wants to know what was written to
+/// the far end has to arrange it on the way in. This is that arrangement, and nothing
+/// more: a decorator that copies what passes through.
+#[derive(Default)]
+struct FarEnd {
+    written: Mutex<Vec<u8>>,
+    /// A clone of the channel the transport delivers reads on, so the driver below can
+    /// tell "the session has gone quiet" from "the pump has not caught up yet".
+    reads: Mutex<Option<Sender<Vec<u8>>>>,
+}
+
+impl FarEnd {
+    fn written(&self) -> Vec<u8> {
+        self.written.lock().expect("far end poisoned").clone()
+    }
+
+    /// Reads produced but not yet consumed by the service.
+    fn unread(&self) -> usize {
+        match &*self.reads.lock().expect("far end poisoned") {
+            Some(reads) => reads.max_capacity() - reads.capacity(),
+            None => 0,
+        }
+    }
+}
+
+struct Recording {
+    inner: ScriptedTransport,
+    far_end: Arc<FarEnd>,
+}
+
+impl Transport for Recording {
+    fn start(&mut self, bytes: Sender<Vec<u8>>) {
+        *self.far_end.reads.lock().expect("far end poisoned") = Some(bytes.clone());
+        self.inner.start(bytes);
+    }
+
+    fn write(&mut self, bytes: &[u8]) -> Result<(), TransportError> {
+        self.far_end
+            .written
+            .lock()
+            .expect("far end poisoned")
+            .extend_from_slice(bytes);
+        self.inner.write(bytes)
+    }
+
+    fn interrupt(&mut self) -> Result<(), TransportError> {
+        self.inner.interrupt()
+    }
+
+    fn resize(&mut self, columns: u16, screen_lines: u16) -> Result<(), TransportError> {
+        self.inner.resize(columns, screen_lines)
+    }
+}
+
+/// One whole session, and the handle a test drives it by.
 struct Pipeline {
     clock: Arc<FakeClock>,
-    transport: ScriptedTransport,
-    reads: Receiver<Vec<u8>>,
-    engine: AlacrittyEngine,
-    tracker: BoundaryTracker,
-    actor: SessionActor,
     events: Arc<Recorder>,
-    /// B6's job, done here in one line: ids in submission order, minted where the block
-    /// opens.
-    next_id: u32,
-    open: Option<CommandId>,
-    /// Whether shell integration was ever observed. B6 turns this into the session state
-    /// and its grace period; here it only says whether the tracker ever saw a marker.
-    integrated: bool,
-    /// What has been done with each line of the running command: `false` once some of its
-    /// text has been forwarded, `true` if it was rewritten and its final text is still
-    /// owed. Kept across regions on purpose — the engine settles a block's lines while
-    /// the region is still `Output`, including the prompt row the echo was written onto,
-    /// and it is knowing that row's id that keeps the echo out of the command's output.
-    lines: HashMap<LineId, bool>,
-    /// The last line whose text was forwarded, so consecutive lines are separated the way
-    /// the pacing policy counts them.
-    last_line: Option<LineId>,
-    render_at: Option<Duration>,
-    pacing_at: Option<Duration>,
+    far_end: Arc<FarEnd>,
+    session: SessionService,
 }
 
 impl Pipeline {
@@ -156,187 +204,93 @@ impl Pipeline {
     fn over(shell: Box<dyn FakeShell>, chunking: Chunking) -> Self {
         let clock = Arc::new(FakeClock::default());
         let events = Arc::new(Recorder::default());
-        let mut transport = ScriptedTransport::with_shell(shell, chunking, clock.clone());
-        let (sender, reads) = channel(READS);
-        transport.start(sender);
+        let far_end = Arc::new(FarEnd::default());
+        let transport = Recording {
+            inner: ScriptedTransport::with_shell(shell, chunking, clock.clone()),
+            far_end: Arc::clone(&far_end),
+        };
+        let session = SessionService::start(
+            Box::new(transport),
+            Box::new(AlacrittyEngine::new(COLUMNS, SCREEN_LINES)),
+            Arc::clone(&clock) as Arc<dyn Clock>,
+            PacingConfig {
+                integration_grace: GRACE,
+                ..PacingConfig::default()
+            },
+        );
+        session.attach_session(SESSION, Arc::clone(&events) as Arc<dyn EventSink>);
 
         Self {
-            actor: SessionActor::new(PacingConfig::default(), clock.clone(), events.clone()),
             clock,
-            transport,
-            reads,
-            engine: AlacrittyEngine::new(COLUMNS, SCREEN_LINES),
-            tracker: BoundaryTracker::new(),
             events,
-            next_id: 0,
-            open: None,
-            integrated: false,
-            lines: HashMap::new(),
-            last_line: None,
-            render_at: None,
-            pacing_at: None,
+            far_end,
+            session,
         }
     }
 
     /// Submits a line the way the frontend's edit field would.
-    fn submit(&mut self, line: &str) {
-        self.transport
-            .write(format!("{line}\n").as_bytes())
-            .expect("the session is open");
+    fn submit(&mut self, line: &str) -> CommandId {
+        self.session.submit_command(SESSION, line).command_id
     }
 
-    /// One read, all the way through: bytes to items, items to boundary events, boundary
-    /// events to the actor — and the engine's device-query answers back to the transport.
-    fn feed(&mut self, bytes: &[u8]) {
-        let items = self.engine.advance(bytes);
-        for event in self.tracker.observe(items) {
-            match event {
-                BoundaryEvent::MarkersObserved => self.integrated = true,
-                BoundaryEvent::BlockStarted => {
-                    self.next_id += 1;
-                    let command_id = CommandId(self.next_id);
-                    self.open = Some(command_id);
-                    self.last_line = None;
-                    self.dispatch(SessionInput::CommandStarted { command_id });
-                }
-                BoundaryEvent::Line {
-                    region,
-                    id,
-                    text,
-                    revision,
-                } => {
-                    if let Some(text) = self.due(id, text, revision)
-                        && region == Region::Output
-                    {
-                        self.output(id, text);
-                    }
-                }
-                BoundaryEvent::BlockEnded { exit } => {
-                    if let Some(command_id) = self.open.take() {
-                        self.lines.clear();
-                        self.dispatch(SessionInput::CommandEnded {
-                            command_id,
-                            // A marker with no usable code still ended the command. Which
-                            // exit code an interrupted command deserves is B6's and A6's;
-                            // stranding the session in "running" is the one answer that
-                            // is certainly wrong.
-                            exit_code: exit.unwrap_or(ExitCode(0)),
-                        });
-                    }
-                }
-                BoundaryEvent::ScreenChanged(Screen::Alternate) => {
-                    self.dispatch(SessionInput::AltScreenEntered);
-                }
-                BoundaryEvent::ScreenChanged(Screen::Normal) => {
-                    self.dispatch(SessionInput::AltScreenLeft);
-                }
-            }
-        }
-
-        // `take_replies`' first consumer: an emulator does not answer a device query
-        // itself, and a program that asked one waits forever if nobody writes the answer
-        // back.
-        let replies = self.engine.take_replies();
-        if !replies.is_empty() {
-            self.transport.write(&replies).expect("the session is open");
-        }
-    }
-
-    /// The text this item owes the speech path, if any: an append always, a settlement
-    /// only when it is the line's first or last word, a rewrite never (DESIGN's separate
-    /// paths — the buffer applies all three, speech does not).
-    fn due(&mut self, id: LineId, text: String, revision: LineRevision) -> Option<String> {
-        match revision {
-            LineRevision::Appended => {
-                self.lines.insert(id, false);
-                Some(text)
-            }
-            LineRevision::Rewritten => {
-                self.lines.insert(id, true);
-                None
-            }
-            // Owed when the line was rewritten since its last word, and when it was never
-            // seen at all — which is how a line that scrolled out of the screen area
-            // inside a single read arrives, settled and complete, having never appended.
-            LineRevision::Settled => self.lines.remove(&id).unwrap_or(true).then_some(text),
-        }
-    }
-
-    /// Forwards one line's text as output, separated from the line before it. The
-    /// separator is the glue's, not the engine's: a line item carries no line ending, and
-    /// the pacing policy counts lines.
-    fn output(&mut self, id: LineId, text: String) {
-        let separated = match self.last_line {
-            Some(last) if last == id => text,
-            None => text,
-            Some(_) => format!("\n{text}"),
-        };
-        self.last_line = Some(id);
-        self.dispatch(SessionInput::Output { text: separated });
-    }
-
-    fn dispatch(&mut self, input: SessionInput) {
-        self.actor.handle(input);
-        self.reschedule();
-    }
-
-    fn reschedule(&mut self) {
-        let requests = self.actor.take_requests();
-        let now = self.clock.now();
-        self.render_at = wake(self.render_at, requests.render, now);
-        self.pacing_at = wake(self.pacing_at, requests.pacing, now);
+    /// Presses Ctrl+C the way the frontend will once A3.2 lands: the keystroke, not the
+    /// meaning, and not the byte.
+    fn press_ctrl_c(&mut self) -> KeyAck {
+        self.session.send_key(
+            SESSION,
+            KeyPress {
+                key: Key::Char('c'),
+                ctrl: true,
+                shift: false,
+                alt: false,
+            },
+        )
     }
 
     /// Runs the session forward to `at`, one deadline at a time — whichever of the
-    /// transport's scripted waits, the rendering tick and the pacing window comes first.
+    /// transport's scripted waits, the grace period, the rendering tick and the pacing
+    /// window comes first.
     ///
-    /// One at a time because both sides arm their next deadline only once the current one
+    /// One at a time because every side arms its next deadline only once the current one
     /// has fired: jumping straight to `at` would deliver one step of a repeating sequence
     /// and leave every announcement it should have provoked in the future.
     async fn run_until(&mut self, at: u64) {
         let target = Duration::from_millis(at);
         loop {
-            self.drain().await;
-            let next = [self.clock.next_deadline(), self.render_at, self.pacing_at]
-                .into_iter()
-                .flatten()
-                .min();
-            let Some(next) = next.filter(|next| *next <= target) else {
+            self.settle().await;
+            let Some(next) = self.clock.next_deadline().filter(|next| *next <= target) else {
                 break;
             };
-
             self.clock.advance_to(next.max(self.clock.now()));
-            // Bytes first, then the deadlines: output landing exactly on a pacing
-            // window arrived before the window closed, which is what a real reader would
-            // have seen too.
-            self.drain().await;
-            if self.render_at.is_some_and(|render| render <= next) {
-                self.render_at = None;
-                self.actor.wake_render();
-                self.reschedule();
-            }
-            if self.pacing_at.is_some_and(|pacing| pacing <= next) {
-                self.pacing_at = None;
-                self.actor.wake_pacing();
-                self.reschedule();
-            }
+            self.settle().await;
         }
         self.clock.set_now(target);
     }
 
-    /// Feeds everything the transport has produced, up to the point where its emission
-    /// loop is parked on its next timer.
-    async fn drain(&mut self) {
+    /// Yields until the session has nothing left to do at the current instant: every read
+    /// the far end produced has been consumed, and no more events are coming out.
+    ///
+    /// The tasks are all in memory and only ever run because this test advanced the clock
+    /// or submitted something, so quiescence really is quiescence rather than a guess at
+    /// a delay — and the bound turns a wedged session into a legible failure instead of a
+    /// hung suite.
+    async fn settle(&mut self) {
         let mut quiet = 0;
-        while quiet < 2 {
+        let mut seen = self.events.len();
+        for _ in 0..100_000 {
             yield_now().await;
-            let mut produced = false;
-            while let Ok(chunk) = self.reads.try_recv() {
-                self.feed(&chunk);
-                produced = true;
+            let events = self.events.len();
+            if events == seen && self.far_end.unread() == 0 {
+                quiet += 1;
+                if quiet == 16 {
+                    return;
+                }
+            } else {
+                quiet = 0;
+                seen = events;
             }
-            quiet = if produced { 0 } else { quiet + 1 };
         }
+        panic!("the session never went quiet; saw {:?}", self.events());
     }
 
     fn events(&self) -> Vec<SessionEvent> {
@@ -360,6 +314,14 @@ impl Pipeline {
     /// this way rather than as event equality: see [`Substance`].
     fn substance(&self) -> Substance {
         let mut blocks: Vec<Block> = Vec::new();
+        let find = |blocks: &mut Vec<Block>, command_id: CommandId, what: &str| -> usize {
+            blocks
+                .iter()
+                .position(|block: &Block| block.command_id == command_id)
+                .unwrap_or_else(|| {
+                    panic!("{what} for a command that never started: {command_id:?}")
+                })
+        };
         for event in self.events() {
             match event {
                 SessionEvent::CommandStarted { command_id } => blocks.push(Block {
@@ -369,32 +331,34 @@ impl Pipeline {
                 }),
                 SessionEvent::Output {
                     command_id, text, ..
-                } => match blocks
-                    .iter_mut()
-                    .find(|block| block.command_id == command_id)
-                {
-                    Some(block) => block.output.push_str(&text),
-                    None => panic!("output for a command that never started: {command_id:?}"),
-                },
+                } => {
+                    let at = find(&mut blocks, command_id, "output");
+                    blocks[at].output.push_str(&text);
+                }
                 SessionEvent::CommandFinished {
                     command_id,
                     exit_code,
                     ..
-                } => match blocks
-                    .iter_mut()
-                    .find(|block| block.command_id == command_id)
-                {
-                    Some(block) => block.exit_code = Some(exit_code),
-                    None => panic!("a command finished that never started: {command_id:?}"),
-                },
+                } => {
+                    let at = find(&mut blocks, command_id, "a command finished that");
+                    blocks[at].exit_code = Some(exit_code);
+                }
                 _ => {}
             }
         }
         Substance {
-            integrated: self.integrated,
+            unintegrated: self.unintegrated(),
             blocks,
             announcements: self.announcements(),
         }
+    }
+
+    /// Whether this session was flagged as having no shell integration. The observable
+    /// form of what the glue used to keep as a boolean of its own: the service owns the
+    /// integration state now, and this is what it says about it out loud.
+    fn unintegrated(&self) -> bool {
+        self.events()
+            .contains(&SessionEvent::IntegrationUnavailable)
     }
 
     fn announcements(&self) -> Vec<Announcement> {
@@ -408,14 +372,6 @@ impl Pipeline {
     }
 }
 
-fn wake(current: Option<Duration>, requested: Wake, now: Duration) -> Option<Duration> {
-    match requested {
-        Wake::Unchanged => current,
-        Wake::Clear => None,
-        Wake::After(after) => Some(now + after),
-    }
-}
-
 /// What a session said, independent of how its bytes arrived.
 ///
 /// **Not the event stream, and deliberately not.** Replaying a fixture one byte at a
@@ -423,13 +379,13 @@ fn wake(current: Option<Duration>, requested: Wake, now: Duration) -> Option<Dur
 /// so a byte-at-a-time read produces many more `Appended` revisions than one whole read
 /// does. That is correct behavior rather than a defect, so claiming event equality would
 /// be claiming something false. What must be identical is this — the concatenated output
-/// text per command, the block structure, the exit codes, whether markers were
-/// recognized at all, and what was said out loud. That is B2's cardinal property (text
-/// is never lost) plus B3's marker recognition, asserted across the whole fixture suite
+/// text per command, the block structure, the exit codes, whether the session was flagged
+/// unintegrated, and what was said out loud. That is B2's cardinal property (text is
+/// never lost) plus B3's marker recognition, asserted across the whole fixture suite
 /// (spec B3.6, decision 3).
 #[derive(Debug, PartialEq, Eq)]
 struct Substance {
-    integrated: bool,
+    unintegrated: bool,
     blocks: Vec<Block>,
     announcements: Vec<Announcement>,
 }
@@ -450,7 +406,8 @@ fn loaded(name: &str) -> SessionTranscript {
     SessionTranscript::load(fixture(name)).unwrap_or_else(|why| panic!("{name}: {why}"))
 }
 
-/// Every test submits exactly one command, so the id the glue mints is always the first.
+/// Every test submits exactly one command, so the id the service mints is always the
+/// first.
 fn started() -> SessionEvent {
     SessionEvent::CommandStarted {
         command_id: CommandId(1),
@@ -507,7 +464,10 @@ async fn a_command_produces_its_output_and_nothing_the_shell_said_around_it() {
             }),
         ]
     );
-    assert!(pipeline.integrated, "the markers were observed");
+    assert!(
+        !pipeline.unintegrated(),
+        "the markers arrived, so the grace period passed without a word"
+    );
 }
 
 /// The verdict is no longer scripted: thirty lines of real text measured by the real
@@ -591,10 +551,12 @@ async fn entering_the_alternate_screen_reaches_the_actor_in_stream_order() {
     );
 }
 
-/// An interrupt cancels the sequence in flight and closes the block with a marker that
-/// carries no exit code at all.
+/// An interrupting *line* — the `stop` A3.1 shipped, typed like any other command. It
+/// cancels the sequence in flight and closes the block with a marker carrying no exit
+/// code at all, and because nobody asked the transport to interrupt, that block ended:
+/// the service says finished, not stopped.
 #[tokio::test]
-async fn an_interrupt_ends_the_running_command_without_inventing_a_failure() {
+async fn an_interrupting_line_ends_the_running_command_without_inventing_a_failure() {
     let mut pipeline = Pipeline::start(SessionTranscript::builtin());
     pipeline.run_until(0).await;
 
@@ -619,6 +581,42 @@ async fn an_interrupt_ends_the_running_command_without_inventing_a_failure() {
     );
 }
 
+/// The user-facing interrupt, end to end for the first time: a keystroke the frontend
+/// reports, the keybinding policy, `Transport::interrupt`, the far end's own interrupt
+/// rule, a `D` with no exit code — and, because the service knows it asked, an event that
+/// says stopped rather than "finished, exit code 0" (spec B6, decision 8).
+#[tokio::test]
+async fn pressing_ctrl_c_stops_the_running_command_and_says_so() {
+    let mut pipeline = Pipeline::start(SessionTranscript::builtin());
+    pipeline.run_until(0).await;
+
+    pipeline.submit("forever");
+    pipeline.run_until(3_000).await;
+    assert!(pipeline.events().contains(&started()));
+
+    assert_eq!(pipeline.press_ctrl_c(), KeyAck::Applied);
+    pipeline.run_until(4_000).await;
+
+    let events = pipeline.events();
+    assert!(
+        events.contains(&SessionEvent::CommandInterrupted {
+            command_id: CommandId(1)
+        }),
+        "{events:?}"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, SessionEvent::CommandFinished { .. })),
+        "a stopped command is never also reported as finished: {events:?}"
+    );
+    assert_eq!(
+        pipeline.press_ctrl_c(),
+        KeyAck::NothingToActOn,
+        "and with the command over there is nothing left to stop"
+    );
+}
+
 /// DESIGN's reliability model, one test per case. First: a marker cut in half by a read
 /// boundary, which is the case an event-level fake structurally cannot produce.
 ///
@@ -634,7 +632,10 @@ async fn a_marker_split_across_two_reads_is_still_one_marker() {
     pipeline.submit("small");
     pipeline.run_until(1_000).await;
 
-    assert!(pipeline.integrated, "the markers were recognized in pieces");
+    assert!(
+        !pipeline.unintegrated(),
+        "the markers were recognized in pieces"
+    );
     assert_eq!(
         pipeline.substance().blocks,
         vec![Block {
@@ -703,36 +704,77 @@ async fn a_command_that_never_ends_announces_that_it_is_still_running() {
     );
 }
 
-/// A shell with no integration at all. Every line is unstructured, so no command block
-/// ever opens and the session never claims to be integrated — DESIGN's reliability case
-/// 2, which B6 turns into the grace period.
+/// DESIGN's reliability case 2, which is **Decided** and until B6 happened nowhere: a
+/// shell with no integration at all is flagged, announced, and every command in it
+/// degrades to case 1 — patience announcement, manual buffer review, no auto-read.
+///
+/// This test used to assert the opposite. It asserted that an unmarked session produces
+/// *zero* events, and its message called that correct: "with no block, there is no
+/// command to report". That was true of the glue and is not shippable as the default
+/// backend — it is a silent terminal with an empty buffer — so the service opens a
+/// command at submission and closes it at the next one (spec B6, decision 10).
 ///
 /// It is the *built-in* shell with its markers taken away, not a transcript that answers
 /// only the handful of lines somebody thought to write down: integration missing is
 /// something that happens to a working shell (spec B3.6, decision 4).
 #[tokio::test]
-async fn a_session_with_no_markers_never_reports_a_command_or_integration() {
+async fn a_session_with_no_markers_degrades_honestly_instead_of_going_silent() {
     let mut pipeline = Pipeline::over(
         Box::new(Unmarked::new(TranscriptShell::builtin())),
         Chunking::Whole,
     );
-    pipeline.run_until(0).await;
 
-    pipeline.submit("small");
-    pipeline.run_until(2_000).await;
+    pipeline.run_until(500).await;
+    assert_eq!(
+        pipeline.events(),
+        vec![SessionEvent::IntegrationUnavailable],
+        "the session says what happened to it before anything else happens"
+    );
 
-    assert!(!pipeline.integrated, "no marker ever arrived");
+    pipeline.submit("forever");
+    pipeline.run_until(14_000).await;
+
+    assert_eq!(
+        pipeline.events().first(),
+        Some(&SessionEvent::IntegrationUnavailable)
+    );
     assert!(
-        pipeline.events().is_empty(),
-        "with no block, there is no command to report: {:?}",
+        pipeline.events().contains(&SessionEvent::CommandStarted {
+            command_id: CommandId(1)
+        }),
+        "the submission is the boundary, so the command the user typed exists: {:?}",
         pipeline.events()
+    );
+    assert!(
+        pipeline.rendered().contains("still working"),
+        "and its output reaches the buffer, which is the whole of manual review: {:?}",
+        pipeline.rendered()
+    );
+    assert!(
+        pipeline.rendered().contains("forever"),
+        "echo exclusion is lost with the markers, so the echoed line is in the buffer too"
+    );
+    assert!(
+        pipeline
+            .announcements()
+            .contains(&Announcement::StillRunning),
+        "patience still fires — that is what degrading to case 1 means: {:?}",
+        pipeline.announcements()
+    );
+    assert!(
+        !pipeline
+            .announcements()
+            .iter()
+            .any(|announcement| matches!(announcement, Announcement::ReadAloud { .. })),
+        "and nothing is read aloud: {:?}",
+        pipeline.announcements()
     );
 }
 
 /// The loop `TerminalEngine::take_replies` was built for, closed for the first time: a
-/// program asks where the cursor is, the engine formats the answer, and the glue writes
-/// it back to the transport, which records it. Drop it and the program waits forever,
-/// which for this product is a session that has simply gone quiet.
+/// program asks where the cursor is, the engine formats the answer, and the service
+/// writes it back to the transport, which records it. Drop it and the program waits
+/// forever, which for this product is a session that has simply gone quiet.
 #[tokio::test]
 async fn a_device_query_is_answered_back_to_the_transport() {
     let mut pipeline = Pipeline::start(loaded("device_query.json"));
@@ -741,7 +783,7 @@ async fn a_device_query_is_answered_back_to_the_transport() {
     pipeline.submit("where");
     pipeline.run_until(1_000).await;
 
-    let written = String::from_utf8_lossy(pipeline.transport.written()).into_owned();
+    let written = String::from_utf8_lossy(&pipeline.far_end.written()).into_owned();
     let answer = written
         .strip_prefix("where\n")
         .expect("the submitted line comes first");
@@ -751,34 +793,23 @@ async fn a_device_query_is_answered_back_to_the_transport() {
     );
 }
 
-/// A resize is accepted by the transport and recorded, which is the whole observable
-/// effect a scripted session can have: the grid it would reflow belongs to the engine.
-#[tokio::test]
-async fn a_resize_reaches_the_transport() {
-    let mut pipeline = Pipeline::start(SessionTranscript::builtin());
-    pipeline.run_until(0).await;
-
-    pipeline.engine.resize(100, 30);
-    pipeline
-        .transport
-        .resize(100, 30)
-        .expect("the session is open");
-
-    assert_eq!(pipeline.transport.last_resize(), Some((100, 30)));
-}
-
-/// One replayable session: a far end, and the lines submitted to it with the scripted
-/// moment each is given to answer by.
+/// One replayable session: a far end, how long to let it settle before anything is typed,
+/// and the lines submitted to it with the scripted moment each is given to answer by.
 struct Case {
     name: &'static str,
     far_end: &'static str,
+    /// Scripted time to run before the first submission. Zero for a shell that announces
+    /// itself, because its markers arrive with its first prompt; past the grace period
+    /// for one that does not, so the session has resolved before the user types — which
+    /// is also the order a person experiences, since the announcement comes first.
+    warmup: u64,
     submissions: &'static [(&'static str, u64)],
 }
 
 impl Case {
     async fn replay(&self, chunking: Chunking) -> Substance {
         let mut pipeline = Pipeline::over(far_end(self.far_end), chunking);
-        pipeline.run_until(0).await;
+        pipeline.run_until(self.warmup).await;
         for (line, until) in self.submissions {
             pipeline.submit(line);
             pipeline.run_until(*until).await;
@@ -803,81 +834,97 @@ const CASES: &[Case] = &[
     Case {
         name: "a small answer",
         far_end: "builtin",
+        warmup: 0,
         submissions: &[("small", 1_000)],
     },
     Case {
         name: "a flood",
         far_end: "builtin",
+        warmup: 0,
         submissions: &[("big", 1_000)],
     },
     Case {
         name: "a failure with an exit code",
         far_end: "builtin",
+        warmup: 0,
         submissions: &[("fail", 1_000)],
     },
     Case {
         name: "three phases with quiescent gaps",
         far_end: "builtin",
+        warmup: 0,
         submissions: &[("slow", 6_000)],
     },
     Case {
         name: "an announcement long enough to be read by size",
         far_end: "builtin",
+        warmup: 0,
         submissions: &[("speech", 1_000)],
     },
     Case {
         name: "a sampled trickle",
         far_end: "builtin",
+        warmup: 0,
         submissions: &[("tail", 100_000)],
     },
     Case {
         name: "a flood then a trickle",
         far_end: "builtin",
+        warmup: 0,
         submissions: &[("burst", 60_000)],
     },
     Case {
         name: "a full-screen program",
         far_end: "builtin",
+        warmup: 0,
         submissions: &[("nano", 10_000)],
     },
     Case {
         name: "a command interrupted while it runs",
         far_end: "builtin",
+        warmup: 0,
         submissions: &[("forever", 3_000), ("stop", 4_000)],
     },
     Case {
         name: "an unrecognized line",
         far_end: "builtin",
+        warmup: 0,
         submissions: &[("nothing scripted this", 1_000)],
     },
     Case {
         name: "a far end with no integration",
         far_end: "unmarked builtin",
+        warmup: 500,
         submissions: &[("small", 2_000)],
     },
     Case {
         name: "alt_screen.json",
         far_end: "alt_screen.json",
+        warmup: 0,
         submissions: &[("nano", 1_000)],
     },
     Case {
         name: "captured_prompt.json",
         far_end: "captured_prompt.json",
+        warmup: 0,
         submissions: &[("hello", 1_000)],
     },
     Case {
         name: "device_query.json",
         far_end: "device_query.json",
+        warmup: 0,
         submissions: &[("where", 1_000)],
     },
     Case {
         name: "forged_marker.json",
         far_end: "forged_marker.json",
+        warmup: 0,
         submissions: &[("forge", 2_000)],
     },
     Case {
         name: "no_end_marker.json",
         far_end: "no_end_marker.json",
+        warmup: 0,
         submissions: &[("hang", 11_000)],
     },
 ];
@@ -893,7 +940,7 @@ const CASES: &[Case] = &[
 ///
 /// What it asserts is [`Substance`], not the event stream: byte-at-a-time reads produce
 /// many more `Appended` revisions, which is correct, so event equality would be a false
-/// claim. Text, blocks, exit codes, marker recognition and speech are what must not move.
+/// claim. Text, blocks, exit codes, integration and speech are what must not move.
 #[tokio::test]
 async fn every_session_says_the_same_thing_when_every_byte_is_its_own_read() {
     for case in CASES {
@@ -913,21 +960,32 @@ async fn every_session_says_the_same_thing_when_every_byte_is_its_own_read() {
 ///
 /// A block with nothing in it counts — the default rule opens and closes one without
 /// saying a word, and that block *is* the substance being compared. The one exception
-/// states itself: a far end with no integration produces no blocks at all, which is
-/// DESIGN's reliability case 2 rather than a case that failed to run.
+/// states itself: a far end with no integration is flagged rather than trusted, and its
+/// one block is the degraded one the submission opened, which never closes structurally
+/// and so has no exit code to report (spec B6, decision 10).
 #[tokio::test]
 async fn every_case_in_the_suite_actually_produces_a_session() {
     for case in CASES {
         let substance = case.replay(Chunking::Bytes(1)).await;
 
         if case.far_end == "unmarked builtin" {
-            assert!(!substance.integrated, "{}: {substance:?}", case.name);
-            assert!(substance.blocks.is_empty(), "{}: {substance:?}", case.name);
+            assert!(substance.unintegrated, "{}: {substance:?}", case.name);
+            assert_eq!(substance.blocks.len(), 1, "{}: {substance:?}", case.name);
+            assert!(
+                !substance.blocks[0].output.is_empty(),
+                "{}: a degraded session still puts its text in the buffer: {substance:?}",
+                case.name
+            );
+            assert_eq!(
+                substance.blocks[0].exit_code, None,
+                "{}: and a command that never ends structurally has no code to report",
+                case.name
+            );
             continue;
         }
 
         assert!(
-            substance.integrated,
+            !substance.unintegrated,
             "{} never recognized a marker: {substance:?}",
             case.name
         );

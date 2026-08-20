@@ -219,6 +219,21 @@ to the byte path.
    command — stranding a session in "running" remains the one answer that is certainly
    wrong (B2) — and reports `ExitCode(0)`, unchanged from the glue.
 
+   **Amended during implementation: this needs a third `SessionInput`.** The spec says
+   "the service emits `CommandInterrupted`", and the service emits nothing directly — the
+   actor owns the sink, and it has to, because it is holding unflushed rendered text that
+   must reach the buffer *before* anything is said about the command. Sending the event
+   past the actor would put the announcement ahead of the text it is about, which is the
+   one ordering invariant DESIGN states in the frontend's terms. So `SessionInput` gains
+   `CommandInterrupted { command_id }` beside decision 9's two, and the actor closes the
+   command the same way it closes a finished one — the policy's last word on the
+   remainder, the render flush, then the terminal event — with no `Failed`, because the
+   exit code of a process the user stopped carries nothing worth announcing.
+
+   Adding a variant to `SessionInput::CommandEnded` instead (`exit_code: Option<..>`) was
+   rejected on this decision's own grounds: it would re-overload absence, which is exactly
+   the ambiguity this decision exists to remove.
+
 9. **The integration grace period becomes real, and the actor keeps `SessionState`.**
 
    `PacingConfig` gains `integration_grace`. `SessionInput` gains `MarkersObserved` and
@@ -258,8 +273,49 @@ to the byte path.
     - **Echo exclusion is lost.** With no regions there is no C..D to cut, so the shell's
       echo of the submitted line appears in the output. Unavoidable without markers; it is
       a stated cost of honest degradation, not a defect.
-    - **No exit codes.** A command that never ends structurally has none to report.
+    - **No exit codes.** A command that never ends structurally has none to report. On the
+      wire that is `ExitCode(0)` — the silent value, the same one decision 8 gives a bare
+      `D` — because `CommandFinished` carries a code and the frontend announces only
+      nonzero ones. Nothing claims the command succeeded; nothing is said at all.
     - **Late recovery is free**, per decision 9.
+
+    **Amended during implementation, in three places.** Each is a case the rule above does
+    not reach, and each was answered the way this decision answers everything else: the
+    honest degradation, not the silent one.
+
+    1. **An interrupt is a boundary too.** With no markers there is no `D` coming, ever,
+       so a command stopped with Ctrl+C would stay open until the next submission and the
+       stop would be announced minutes later, or never. In a session with no boundaries
+       the interrupt *is* the boundary: the service closes the open command as soon as it
+       has asked the transport to stop it. Waiting for a confirmation that cannot arrive
+       is the silent-terminal failure this decision exists to prevent, and the service is
+       reporting what it did rather than what the far end did — which is what decision 8
+       already established `CommandInterrupted` means.
+
+    2. **A line submitted while integration is still `Pending`.** The rule opens a command
+       at submission only once integration has *resolved* to `Unintegrated`, so a line
+       typed inside the grace period has no command to occupy and its output is dropped
+       until the period expires. That cost is real and it is bounded: it is at most the
+       first command of a session that is already degrading, and it is the mirror image of
+       the cost decision 9 already accepts in the other direction ("a late detection costs
+       one command's boundaries and then recovers"). It is also rare by construction —
+       markers arrive with the shell's *first prompt*, before any submission, so a session
+       that is still `Pending` when the user types is one that is going to be flagged
+       anyway. What the service does add is the cheap half: when the grace period expires
+       with a submitted id no block ever claimed, that command opens then, so everything
+       arriving from that instant on has somewhere to go. Only the most recent such id,
+       since the shell is serial.
+
+    3. **A recovering session adopts its degraded command rather than orphaning it.** When
+       a late marker recovers the session (decision 9) while a degraded command is open,
+       the `BlockStarted` that follows is that same command finally announcing itself. It
+       keeps the id the ack already gave the frontend instead of minting a fresh one, so
+       the buffer block the user is looking at — the one headed with the line they typed —
+       goes on to receive the real output and the real exit code. Closing it and opening a
+       second one beside it would leave the labelled block empty and the full one
+       unlabelled, which is a worse answer than the ambiguity it avoids. The tracker never
+       nests blocks, so an already-open command at `BlockStarted` can only ever be this
+       case.
 
 11. **The unintegrated announcement is a `SessionEvent`, not an `Announcement`.**
 
@@ -308,6 +364,14 @@ to the byte path.
     a name to a shell plus a chunking, and the set of nameable simulated profiles is now
     the product of the two rather than a list of files somebody wrote. That is a larger
     payoff than this decision originally claimed, at the same few lines of cost.
+
+    **As implemented**, that product is four names — `builtin`, `builtin-by-byte`,
+    `unmarked`, `unmarked-by-byte` — and anything else is taken as a path to a transcript,
+    read whole. A forged marker stays a transcript and so stays a path, correctly: forging
+    one is something a program does. A name that is neither in the table nor loadable as a
+    file is a startup panic naming what was asked for and listing the table, because a
+    manual accessibility run that quietly tested the wrong session would be worse than one
+    that did not start.
 
 ## Deliverables
 
@@ -372,6 +436,23 @@ to the byte path.
   its assertions only; the far end it degrades is the full built-in shell, which is what
   makes "every command degrades to case 1" assertable over more than one scripted line.
 - Nothing sleeps or reads the real clock, per B3.5 acceptance criterion 2.
+
+**What the promotion did to `pipeline.rs`, beyond replacing the glue.** Four things, none
+of them a change of subject:
+
+- The suite runs with `integration_grace` at 200ms rather than the shipped five seconds,
+  so a session that is going to be flagged is flagged inside the scripted time each case
+  already runs for. That the default is five seconds is `PacingConfig`'s own test to pin.
+- `Substance`'s `integrated` flag was the glue's own boolean and is now `unintegrated`,
+  read off `SessionEvent::IntegrationUnavailable` — the same claim, made from an
+  observable rather than from test scaffolding.
+- The unmarked case in the replay suite gains a warm-up before its first submission, so it
+  exercises the degraded path rather than the amendment above; the suite's exception branch
+  now asserts one degraded block with output and no exit code, instead of no blocks at all.
+- `a_resize_reaches_the_transport` is deleted rather than rewritten. It asserted
+  `ScriptedTransport::last_resize`, which that crate's own unit tests already pin, and the
+  service exposes no resize path for it to go through — `SessionApi` has no resize until
+  something asks for one.
 
 ## Acceptance criteria
 
