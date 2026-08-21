@@ -59,6 +59,15 @@ const READS: usize = 1024;
 /// one line at a time and every entry here is one keystroke or one submitted line.
 const REQUESTS: usize = 64;
 
+/// What a terminal sends when the user presses Enter: a carriage return.
+///
+/// Not a line feed, and this is not cosmetic. A real shell on a pseudoconsole **echoes a
+/// line feed and never runs the line** — it is still waiting for the Enter that never
+/// came — so with `\n` here every command in a real session would appear to be accepted
+/// and then silently do nothing. The scripted far end hid it by accepting either byte,
+/// which is why it took a real shell to find (spec B4).
+const ENTER: char = '\r';
+
 /// One session: the [`SessionApi`] the routers hold, and the handle on the two tasks
 /// behind it.
 ///
@@ -385,7 +394,7 @@ impl Pump {
                 line: line.to_owned(),
             });
         }
-        self.write(format!("{line}\n").as_bytes());
+        self.write(format!("{line}{ENTER}").as_bytes());
         self.settle_running();
     }
 
@@ -1055,7 +1064,7 @@ mod tests {
         session.advance_to(1_000).await;
 
         assert_eq!(session.started(), vec![first, second]);
-        assert_eq!(session.written(), "one\ntwo\n");
+        assert_eq!(session.written(), "one\rtwo\r");
     }
 
     /// The shell's own activity, or a forged `C`. A block genuinely opened and its
@@ -1076,6 +1085,22 @@ mod tests {
             "the text reached the buffer: {:?}",
             session.rendered()
         );
+    }
+
+    /// What the far end is told when the user presses Enter, pinned as bytes.
+    ///
+    /// A carriage return, because that is what a terminal sends and what a real shell
+    /// acts on: a bare line feed is echoed and then ignored, so a session would accept
+    /// every command and run none of them. Found against a real `cmd.exe` in B4, and
+    /// invisible until then because the scripted far end takes either byte as a line
+    /// ending.
+    #[tokio::test]
+    async fn a_submitted_line_ends_with_what_a_terminal_sends_for_enter() {
+        let session = Session::start().await;
+
+        session.submit("git status").await;
+
+        assert_eq!(session.written(), "git status\r");
     }
 
     /// The hole B6's decision 3 accepted, closed. It used to be that an id no block

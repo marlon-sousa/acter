@@ -12,10 +12,10 @@
 use std::env;
 use std::sync::Arc;
 
-use acter_core::{Clock, PacingConfig, SessionApi, SessionService};
+use acter_core::{Clock, PacingConfig, SessionApi, SessionService, Transport};
 use acter_term::AlacrittyEngine;
 use acter_transports::{
-    Chunking, FakeShell, ScriptedTransport, SessionTranscript, TranscriptShell, Unmarked,
+    Chunking, FakeShell, LocalPty, ScriptedTransport, SessionTranscript, TranscriptShell, Unmarked,
 };
 use tauri::{Builder, generate_context, generate_handler};
 
@@ -25,9 +25,24 @@ use crate::adapters::SystemClock;
 /// a path to a transcript JSON. Unset means the built-in transcript, read whole.
 const TRANSCRIPT_ENV: &str = "ACTER_TRANSCRIPT";
 
+/// The environment variable naming a real shell to run instead of a scripted session:
+/// a program for `LocalPty` to spawn, `cmd.exe` or `powershell.exe` for instance. Unset
+/// runs the scripted far end, which is still what an ordinary launch gets.
+///
+/// **Not the profile machinery, and not convergence** (spec B4, decision 9). Choosing a
+/// transport by profile, and making a real one the default, is convergence's. What this
+/// buys now is that B4 can be *heard*: a manual accessibility run needs a way to say
+/// which session it is testing, which is the same reason `ACTER_TRANSCRIPT` exists.
+///
+/// What is heard is a real shell with no shell integration, because nothing injects the
+/// markers until B5 — so every command in such a session degrades exactly as DESIGN's
+/// reliability case 2 says it should, and that is the honest state of the product today.
+const SHELL_ENV: &str = "ACTER_SHELL";
+
 /// The emulated screen the engine keeps. Eighty by twenty-four, the same as the
 /// automated suite uses, so a manual session scrolls where the tests say it scrolls.
-/// A real transport reports the size it actually has, which is B4's.
+/// A real transport is opened at this size too, so the emulator and the far end agree
+/// from the first byte; a window-driven resize is still nobody's yet.
 const COLUMNS: u16 = 80;
 const SCREEN_LINES: u16 = 24;
 
@@ -81,20 +96,35 @@ pub fn run() {
         .expect("failed to start the Acter window");
 }
 
-/// The one session: a scripted far end on a real pipeline.
+/// The one session: a far end on a real pipeline.
 pub(crate) fn session() -> SessionService {
-    let (shell, chunking) = far_end();
     let clock: Arc<dyn Clock> = Arc::new(SystemClock::new());
     SessionService::start(
-        Box::new(ScriptedTransport::with_shell(
-            shell,
-            chunking,
-            Arc::clone(&clock),
-        )),
+        transport(Arc::clone(&clock)),
         Box::new(AlacrittyEngine::new(COLUMNS, SCREEN_LINES)),
         clock,
         PacingConfig::default(),
     )
+}
+
+/// Which far end this launch talks to: a real shell if `ACTER_SHELL` names one, and the
+/// scripted session otherwise.
+///
+/// A shell that cannot be started is a loud failure carrying the sentence `LocalPty`
+/// wrote, for the same reason a transcript that cannot be loaded is one: a window that
+/// opens onto a session that will never say anything is worse than one that does not
+/// open, and worst of all for a user who cannot see that it is empty.
+fn transport(clock: Arc<dyn Clock>) -> Box<dyn Transport> {
+    match env::var(SHELL_ENV) {
+        Ok(program) => Box::new(
+            LocalPty::spawn(&program, &[], COLUMNS, SCREEN_LINES)
+                .unwrap_or_else(|why| panic!("{why}")),
+        ),
+        Err(_) => {
+            let (shell, chunking) = far_end();
+            Box::new(ScriptedTransport::with_shell(shell, chunking, clock))
+        }
+    }
 }
 
 /// Resolves `ACTER_TRANSCRIPT` to a far end and a delivery strategy.
