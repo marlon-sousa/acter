@@ -555,9 +555,75 @@ the answer to "what should we do now?".
     recognized, whole or arriving a byte at a time. Two tests pin it and nothing needed
     fixing in `acter-term`. The fake's delivery stays atomic, as pinned.
 
+    **And a third defect, the one that mattered most: a bare line feed is not Enter.**
+    `SessionService` wrote `"{line}
+"`; a real shell echoes that and never runs the line,
+    so every command in a real session was accepted and then silently did nothing. The
+    manual NVDA pass is what surfaced it — the echo reached the buffer and no output ever
+    followed — and the scripted far end had hidden it by taking either byte as a line
+    ending. The domain now writes a carriage return, which is what a terminal sends when
+    Enter is pressed, pinned by a service test on the bytes and by a real-shell test that
+    asserts a line feed is echoed and *not* run.
+
+    Two further findings are filed as their own entries rather than fixed here: **B4.1**,
+    an interrupt that does not stop a running program while the app says it did, and
+    **B4.2**, text that scrolled away being emitted into the buffer a second time.
+
     Real-shell tests are `#[ignore]`d and run in their own `real-shell (Windows)` CI job,
     so `cargo test --workspace` spawns no process and stays independent of what is
     installed on a machine.
+
+22.1. B4.1, an interrupt that interrupts. Spec: none yet → specify first. **An iteration
+    entry from B4's manual NVDA pass**, and the most serious thing that pass found.
+
+    `LocalPty::interrupt` writes `0x03` into the pseudoconsole, the byte arrives, and a
+    program that is genuinely running **does not stop**: measured against `ping -n 20`,
+    four further replies arrived over the five seconds after the interrupt. What makes it
+    worse than a missing feature is what the layers above do with it. An unintegrated
+    session treats the interrupt as the command's boundary (B6 decision 10's amendment),
+    so Acter emits `CommandInterrupted` and the frontend says **`command stopped` while
+    the program keeps producing output** — a claim a user cannot see to be false. Heard
+    exactly that way through NVDA on 2026-08-21.
+
+    It was invisible until a real shell ran a real program. B4's own first interrupt test
+    drove `pause`, which ends on *any* keypress, so it passed whether or not the interrupt
+    meant anything; it has been renamed to say only what it proves, and
+    `an_interrupt_stops_a_running_program` now states the requirement, is skipped by name
+    in the `real-shell (Windows)` job, and is the test this entry has to turn green.
+
+    Two mechanisms to choose between when this is specified. **A new process group plus
+    `GenerateConsoleCtrlEvent`**: spawn the shell with `CREATE_NEW_PROCESS_GROUP` and send
+    `CTRL_BREAK_EVENT` to its group, which is the one console control event that can be
+    sent across processes without sharing a console — but `portable-pty` does not expose
+    creation flags today, so it means either a patch upstream or spawning the console side
+    directly. **Or writing a key event rather than a byte**: the pseudoconsole translates
+    input into key records, and what a real terminal delivers for `Ctrl+C` is a key event
+    with the control modifier set rather than the bare control character. The second is
+    the smaller change if it works, and the first is the one that certainly works.
+    Whichever lands, the honest interim is also worth considering: until an interrupt can
+    be shown to have *taken effect*, saying `command stopped` is saying more than is
+    known.
+
+22.2. B4.2, text that scrolled away must not be said twice. Spec: none yet → specify
+    first. **Also from B4's manual pass**, and reachable in any session long enough to
+    scroll.
+
+    A row that leaves the screen area is settled by the extractor with its final text, and
+    the pump forwards a settled line when it has no record of having forwarded it already
+    — which is the right rule for a line that scrolled past inside a single read. But the
+    pump's per-line record is cleared at every command boundary (`Pump::close` empties
+    `lines`), and in an unintegrated session *every submission* is a boundary. So a row
+    still on screen from before the current command, scrolling away during it, arrives as
+    a settled line nobody has a record of and is emitted **again**, into the current
+    command's output. Heard as `ping` output in which each reply appears twice, and as
+    cmd.exe's startup banner reappearing in the middle of a command's output.
+
+    The fix is not obvious enough to pick here, which is why this is an entry rather than
+    a patch: the record could outlive the block (it is keyed by `LineId`, which is
+    session-global and never reused), or settling could be ignored for lines whose text
+    was already forwarded, or the boundary could stop clearing what the engine still
+    considers live. Each has a different answer for the case the current rule exists to
+    serve — a line that scrolls past inside one read, never having appended.
 
 23. B5, PowerShell adapter. Spec: none yet → specify first. Scope sketch: OSC 133
     injection snippet; record the first golden transcripts as fixtures, in B2's format

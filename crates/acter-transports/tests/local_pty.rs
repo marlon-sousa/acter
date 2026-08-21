@@ -38,6 +38,10 @@ const SHELL: &str = "cmd.exe";
 /// genuine hang is reported as one rather than sitting there.
 const PATIENCE: Duration = Duration::from_secs(20);
 
+/// What `SessionService` writes when the user presses Enter, restated here so this suite
+/// submits exactly what the product submits.
+const ENTER: char = '\r';
+
 /// `PacingConfig::quiescence`'s default, restated here because this file measures against
 /// it: silence this long is what turns accumulated output into a chunk, and therefore what
 /// decides whether a gap in the byte stream is audible at all.
@@ -72,9 +76,14 @@ impl Shell {
         }
     }
 
+    /// Submits the way `SessionService` does: the line, then a carriage return.
+    ///
+    /// Deliberately the same bytes as the domain writes, so this suite exercises the
+    /// shipped terminator. It is not a detail — see
+    /// [`a_line_feed_is_not_enter_and_a_carriage_return_is`].
     fn submit(&mut self, line: &str) {
         self.pty
-            .write(format!("{line}\r\n").as_bytes())
+            .write(format!("{line}{ENTER}").as_bytes())
             .expect("the line reaches the shell");
     }
 
@@ -144,15 +153,17 @@ async fn a_submitted_line_comes_back_echoed() {
     );
 }
 
-/// The interrupt, as a control byte in the data stream (spec B4, decision 4).
+/// The interrupt **reaches** the far end as a control byte in the data stream, and the
+/// shell goes on working afterwards (spec B4, decision 4).
 ///
-/// `pause` waits for a keypress forever; the interrupt is what ends it. The assertion is
-/// that the shell comes back to a prompt and answers again — "it stopped" is only
-/// observable as "it is listening once more", which is the same thing the domain above
-/// concludes from the bytes that follow.
+/// Named for exactly what it proves and no more. `pause` ends on *any* keypress, so this
+/// says the byte arrived and the session survived it — **not** that a running program was
+/// stopped. That stronger claim is
+/// [`an_interrupt_stops_a_running_program`], which does not pass today: see the roadmap
+/// entry B4.1.
 #[tokio::test]
 #[ignore = "spawns a real shell"]
-async fn an_interrupt_stops_a_command_that_would_not_have_ended() {
+async fn an_interrupt_reaches_the_shell_and_the_session_survives_it() {
     let mut shell = Shell::start();
 
     shell.submit("pause");
@@ -324,4 +335,99 @@ fn report(what: &str, command: &str, gaps: &[Duration], bytes: usize, straddled:
     );
     println!("    gaps at or over the {QUIESCENCE:?} quiescence window: {over_quiescence}");
     println!("    of those, with a line left unfinished across the gap: {straddled}");
+}
+
+/// **The defect a real shell found, pinned.**
+///
+/// The domain used to write a bare line feed. A pseudoconsole echoes it and the shell
+/// never runs the line — it is still waiting for an Enter that never came — so every
+/// command in a real session was accepted and then silently did nothing. It was invisible
+/// against the scripted far end, whose line discipline takes either byte as a line
+/// ending, and it is what a manual NVDA session against `cmd.exe` surfaced: the echo
+/// reached the buffer and no output ever followed.
+///
+/// Both halves are asserted, because the interesting one is the negative: a line feed
+/// alone is echoed and *not run*.
+#[tokio::test]
+#[ignore = "spawns a real shell"]
+async fn a_line_feed_is_not_enter_and_a_carriage_return_is() {
+    for (terminator, runs) in [('\n', false), (ENTER, true)] {
+        let mut shell = Shell::start();
+        shell.until(">").await;
+
+        shell
+            .pty
+            .write(format!("echo ran-it{terminator}").as_bytes())
+            .expect("the write reaches the shell");
+
+        let mut seen = String::new();
+        let started = Instant::now();
+        while started.elapsed() < Duration::from_secs(3) {
+            let Ok(Some(read)) =
+                tokio::time::timeout(Duration::from_secs(1), shell.reads.recv()).await
+            else {
+                break;
+            };
+            shell.answer(&read);
+            seen.push_str(&String::from_utf8_lossy(&read));
+        }
+
+        // The echo comes back either way. What says the shell *ran* the line is the word
+        // appearing a second time, on an output line of its own.
+        let ran = seen.matches("ran-it").count() >= 2;
+        assert_eq!(
+            ran,
+            runs,
+            "terminator {terminator:?}: expected the shell to {} — what came back was {seen:?}",
+            if runs {
+                "run the line"
+            } else {
+                "echo the line and wait"
+            }
+        );
+    }
+}
+
+/// **The requirement, and it does not hold today** — roadmap entry B4.1.
+///
+/// Writing `0x03` into the pseudoconsole does not stop a program that is genuinely
+/// running: measured here, four further `ping` replies arrive over the five seconds after
+/// the interrupt. What makes that serious rather than merely missing is what the layers
+/// above do with it — an unintegrated session treats the interrupt as the command's
+/// boundary, so Acter announces `command stopped` while the program keeps going, which is
+/// a claim a user cannot see to be false.
+///
+/// It was invisible until a real shell ran a real program: `pause` ends on any keypress,
+/// so the test beside this one passes whether or not an interrupt means anything.
+///
+/// Skipped in the `real-shell (Windows)` CI job by name rather than deleted, so the
+/// requirement is written down, runnable, and impossible to lose.
+#[tokio::test]
+#[ignore = "known gap, roadmap B4.1: 0x03 does not stop a running program on ConPTY"]
+async fn an_interrupt_stops_a_running_program() {
+    let mut shell = Shell::start();
+    shell.until(">").await;
+
+    shell.submit("ping -n 20 127.0.0.1");
+    shell.until("Reply from").await;
+
+    shell.pty.interrupt().expect("the interrupt is delivered");
+
+    // Anything arriving from here on is the program still going.
+    let mut after = String::new();
+    let started = Instant::now();
+    while started.elapsed() < Duration::from_secs(5) {
+        let Ok(Some(read)) = tokio::time::timeout(Duration::from_secs(2), shell.reads.recv()).await
+        else {
+            break;
+        };
+        shell.answer(&read);
+        after.push_str(&String::from_utf8_lossy(&read));
+    }
+
+    assert_eq!(
+        after.matches("Reply from").count(),
+        0,
+        "the program was still running after the interrupt: {after:?}"
+    );
 }

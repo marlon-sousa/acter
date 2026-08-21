@@ -185,7 +185,8 @@ decisions 6, 7 and 8 rather than reopened.
 - `crates/acter-transports/src/lib.rs` — the re-export.
 - `crates/acter-transports/tests/local_pty.rs` — new: the real-shell tests and the read
   timing measurement, all `#[ignore]`d.
-- `crates/acter-term/` — the truncated-sequence test, plus a fix if it fails.
+- `crates/acter-term/src/alacritty_engine.rs` — the two truncated-sequence tests. No fix
+  was needed: vte recovers.
 - `crates/acter-app/src/container.rs` — the `ACTER_SHELL` branch.
 - `.github/workflows/ci.yml` — the `real-shell (Windows)` job.
 - `docs/ROADMAP.md` — entry 22 flipped to Done; the read-timing finding recorded.
@@ -230,6 +231,29 @@ Engine, in `acter-term`:
 6. **Accessibility checklist in the PR body**: a real shell heard through `ACTER_SHELL`,
    including that its lack of shell integration is announced once and that its output
    still reaches the buffer.
+
+## What the manual pass found, and what became of it
+
+Three defects, none of them reachable against a scripted far end. Two are fixed here; two
+are filed, because they are not this component's.
+
+- **A bare line feed is not Enter** — fixed here. `SessionService` wrote `"{line}
+"`, and
+  a real shell echoes that and never runs the line, so every command in a real session was
+  accepted and silently did nothing. The domain now writes a carriage return, which is
+  what a terminal sends. Pinned at both levels: the service asserts the bytes, and the
+  real-shell suite asserts that a line feed is echoed and *not run* while a carriage
+  return runs.
+- **A shell that exited did not end the session** — fixed here, decision 3's amendment.
+- **An interrupt does not stop a running program** — filed as roadmap **B4.1**, and it is
+  the serious one: the layers above treat the interrupt as a boundary, so Acter says
+  `command stopped` while the program keeps going. `LocalPty::interrupt` still ships,
+  because the byte does reach the far end and the port needs an implementer; what does not
+  ship is any claim that it works. The requirement is written as a test, skipped by name
+  in CI.
+- **Text that scrolled away is emitted twice** — filed as roadmap **B4.2**. It is the
+  pump's per-line record being cleared at a command boundary while the engine still
+  considers the row live, which is `acter-core`'s to answer rather than this adapter's.
 
 ## Out of scope
 

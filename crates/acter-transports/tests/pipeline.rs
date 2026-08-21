@@ -804,8 +804,10 @@ async fn a_device_query_is_answered_back_to_the_transport() {
     pipeline.run_until(1_000).await;
 
     let written = String::from_utf8_lossy(&pipeline.far_end.written()).into_owned();
+    // A carriage return is what the domain sends for Enter, and what a real shell acts
+    // on: a bare line feed is echoed and never run (spec B4).
     let answer = written
-        .strip_prefix("where\n")
+        .strip_prefix("where\r")
         .expect("the submitted line comes first");
     assert!(
         answer.starts_with('\x1b') && answer.ends_with('R'),
