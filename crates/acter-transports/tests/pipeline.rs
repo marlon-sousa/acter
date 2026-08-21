@@ -551,20 +551,25 @@ async fn entering_the_alternate_screen_reaches_the_actor_in_stream_order() {
     );
 }
 
-/// An interrupting *line* — the `stop` A3.1 shipped, typed like any other command. It
-/// cancels the sequence in flight and closes the block with a marker carrying no exit
-/// code at all, and because nobody asked the transport to interrupt, that block ended:
-/// the service says finished, not stopped.
+/// An interrupting *line*: a far end that treats some submitted line as an interrupt,
+/// the way A3.1's `stop` did before A3.2 gave the user a real key and retired it from the
+/// shipped transcript. It cancels the sequence in flight and closes the block with a
+/// marker carrying no exit code at all, and because nobody asked the transport to
+/// interrupt, that block ended: the service says finished, not stopped.
+///
+/// The far end is a fixture rather than the built-in shell, because this is the pipe's
+/// behavior and not a scenario the product ships — but it is behavior a real shell can
+/// still produce, so it keeps its test.
 #[tokio::test]
 async fn an_interrupting_line_ends_the_running_command_without_inventing_a_failure() {
-    let mut pipeline = Pipeline::start(SessionTranscript::builtin());
+    let mut pipeline = Pipeline::start(loaded("interrupting_line.json"));
     pipeline.run_until(0).await;
 
-    pipeline.submit("forever");
+    pipeline.submit("hang");
     pipeline.run_until(3_000).await;
     assert!(pipeline.events().contains(&started()));
 
-    pipeline.submit("stop");
+    pipeline.submit("halt");
     pipeline.run_until(4_000).await;
 
     let events = pipeline.events();
@@ -878,9 +883,9 @@ const CASES: &[Case] = &[
     },
     Case {
         name: "a command interrupted while it runs",
-        far_end: "builtin",
+        far_end: "interrupting_line.json",
         warmup: 0,
-        submissions: &[("forever", 3_000), ("stop", 4_000)],
+        submissions: &[("hang", 3_000), ("halt", 4_000)],
     },
     Case {
         name: "an unrecognized line",

@@ -747,7 +747,13 @@ mod tests {
         session.write("\u{3}");
 
         let answer = texts(&session.reads().await);
-        assert!(answer.contains(&"^C\r\n".to_owned()), "got: {answer:?}");
+        // The rule restores the normal screen before acknowledging, so a full-screen
+        // program the user interrupted does not leave the session believing it is still
+        // up (spec A3.2, decision 9). What matters here is that the rule was reached.
+        assert!(
+            answer.iter().any(|said| said.ends_with("^C\r\n")),
+            "got: {answer:?}"
+        );
         assert!(
             answer.contains(&"\x1b]133;D\x07".to_owned()),
             "an interrupted command ends with no exit code to report: {answer:?}"
@@ -770,7 +776,13 @@ mod tests {
         session.transport.interrupt().expect("the session is open");
 
         let answer = texts(&session.reads().await);
-        assert!(answer.contains(&"^C\r\n".to_owned()), "got: {answer:?}");
+        // The rule restores the normal screen before acknowledging, so a full-screen
+        // program the user interrupted does not leave the session believing it is still
+        // up (spec A3.2, decision 9). What matters here is that the rule was reached.
+        assert!(
+            answer.iter().any(|said| said.ends_with("^C\r\n")),
+            "got: {answer:?}"
+        );
         assert!(
             answer.contains(&"\x1b]133;D\x07".to_owned()),
             "an interrupted command ends with no exit code to report: {answer:?}"

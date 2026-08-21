@@ -5,7 +5,7 @@
 import { Channel, invoke } from '@tauri-apps/api/core';
 
 import type { BackendApi } from '../ports/backend_api';
-import type { SessionEvent, SubmitAck } from '../protocol';
+import type { KeyAck, KeyPress, SessionEvent, SubmitAck } from '../protocol';
 
 // Phase 1 has one session, connected automatically at startup (decision 9).
 const SESSION_ID = 1;
@@ -19,5 +19,9 @@ export class TauriBackend implements BackendApi {
 
   submitCommand(line: string): Promise<SubmitAck> {
     return invoke<SubmitAck>('submit_command', { sessionId: SESSION_ID, line });
+  }
+
+  sendKey(key: KeyPress): Promise<KeyAck> {
+    return invoke<KeyAck>('send_key', { sessionId: SESSION_ID, key });
   }
 }

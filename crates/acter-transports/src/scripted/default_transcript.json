@@ -336,30 +336,12 @@
       ]
     },
     {
-      "match": "stop",
-      "interrupts": true,
-      "steps": [
-        {
-          "payload": {
-            "text": "^C\r\n"
-          }
-        },
-        {
-          "payload": {
-            "marker": {
-              "kind": "D"
-            }
-          }
-        }
-      ]
-    },
-    {
       "match": "\u0003",
       "interrupts": true,
       "steps": [
         {
           "payload": {
-            "text": "^C\r\n"
+            "text": "\u001b[?1049l^C\r\n"
           }
         },
         {

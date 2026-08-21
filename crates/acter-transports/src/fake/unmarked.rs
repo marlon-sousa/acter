@@ -164,7 +164,6 @@ mod tests {
             "tail",
             "burst",
             "speech",
-            "stop",
             "nothing scripted this",
         ] {
             scripts.push(shell.answer(&line(scenario)));
@@ -209,11 +208,13 @@ mod tests {
     #[test]
     fn line_discipline_and_interrupts_pass_straight_through() {
         let mut shell = builtin();
-        let mut pending = b"small\nsto".to_vec();
+        let mut pending = b"small\nhal".to_vec();
 
         assert_eq!(shell.accept(&mut pending), [line("small")]);
-        assert_eq!(pending, b"sto");
-        assert!(shell.interrupts(&line("stop")));
+        assert_eq!(pending, b"hal");
+        // The interrupt the shipped product actually sends: Ctrl+C reaches the far
+        // end as this byte, not as a line somebody typed (spec A3.2, decision 8).
+        assert!(shell.interrupts(&Submission::new(vec![0x03], false)));
         assert!(!shell.interrupts(&line("small")));
     }
 }

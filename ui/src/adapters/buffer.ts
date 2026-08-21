@@ -62,4 +62,15 @@ export class BufferDom implements BufferView {
   containsFocus(): boolean {
     return this.region.contains(document.activeElement);
   }
+
+  // A document selection counts only when it is non-empty and actually anchored in
+  // this region; a range selected somewhere else on the page is not the buffer's, and
+  // treating it as one would swallow an interrupt the user meant.
+  hasSelection(): boolean {
+    const selection = window.getSelection();
+    if (selection === null || selection.isCollapsed) {
+      return false;
+    }
+    return selection.anchorNode !== null && this.region.contains(selection.anchorNode);
+  }
 }

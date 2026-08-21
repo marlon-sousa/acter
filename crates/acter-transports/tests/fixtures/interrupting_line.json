@@ -1,0 +1,34 @@
+{
+  "on_start": [
+    { "payload": { "marker": { "kind": "A" } } },
+    { "payload": { "text": "acter> " } },
+    { "payload": { "marker": { "kind": "B" } } }
+  ],
+  "rules": [
+    {
+      "match": "hang",
+      "steps": [
+        { "payload": { "marker": { "kind": "C" } } },
+        {
+          "delay": { "min_ms": 250, "max_ms": 250 },
+          "payload": { "text": "still working\r\n" },
+          "repeat": "forever"
+        }
+      ]
+    },
+    {
+      "match": "halt",
+      "interrupts": true,
+      "steps": [
+        { "payload": { "text": "^C\r\n" } },
+        { "payload": { "marker": { "kind": "D" } } }
+      ]
+    }
+  ],
+  "default": {
+    "steps": [
+      { "payload": { "marker": { "kind": "C" } } },
+      { "payload": { "marker": { "kind": "D", "exit_code": 0 } } }
+    ]
+  }
+}
