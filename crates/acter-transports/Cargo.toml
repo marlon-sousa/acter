@@ -8,6 +8,7 @@ license.workspace = true
 [dependencies]
 # The port this crate implements, plus the `Clock` port every scripted delay waits on.
 acter-core = { path = "../acter-core" }
+portable-pty = "0.9"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # The scripted transport spawns its own emission loop, as `SystemClock` spawns its own
@@ -18,7 +19,10 @@ tokio = { version = "1", features = ["rt", "sync"] }
 # The full-pipeline test replays a transcript through the real terminal engine. A
 # dev-dependency only: nothing in this crate's library touches an emulator.
 acter-term = { path = "../acter-term" }
-tokio = { version = "1", features = ["macros", "rt", "sync"] }
+# "time" and "rt-multi-thread" are the real-shell tests' alone (tests/local_pty.rs): they
+# drive a process nobody scripted, so they need a real timeout to fail on rather than a
+# fake clock to advance, and a reading thread that can make progress while the test awaits.
+tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "sync", "time"] }
 
 [lints]
 workspace = true

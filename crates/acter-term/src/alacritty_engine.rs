@@ -242,6 +242,66 @@ mod tests {
         lines(items).into_iter().map(|(_, text, _)| text).collect()
     }
 
+    /// A sequence the far end never finished, which is what an interrupt produces: a
+    /// program killed mid-write can put `ESC ] 1 3 3 ; D` on the wire with no terminator,
+    /// and the shell then prints `^C` and draws a fresh prompt behind it.
+    ///
+    /// The danger is a parser that accumulates to the *next* terminator: it would swallow
+    /// the `^C` and the new prompt's `A` into the abandoned sequence, and a listener would
+    /// hear a command that never ends followed by a prompt that never comes. So what is
+    /// pinned here is recovery — the next prompt's markers are still recognized — rather
+    /// than any particular fate for the truncated one, which is genuinely lost and whose
+    /// loss the tracker already survives (spec B4, decision 8).
+    #[test]
+    fn a_sequence_an_interrupt_cut_short_does_not_swallow_the_prompt_after_it() {
+        let mut engine = AlacrittyEngine::new(40, 5);
+
+        // The abandoned `D`, no terminator, then exactly what a shell does next.
+        let items = engine
+            .advance(b"\x1b]133;D^C\r\n\x1b]133;A\x07prompt$ \x1b]133;B\x07next\r\n\x1b]133;C\x07");
+
+        let markers: Vec<&TerminalItem> = items
+            .iter()
+            .filter(|item| matches!(item, TerminalItem::Marker(_)))
+            .collect();
+        assert_eq!(
+            markers,
+            vec![
+                &marker(Osc133Marker::PromptStart),
+                &marker(Osc133Marker::CommandStart),
+                &marker(Osc133Marker::OutputStart),
+            ],
+            "the prompt after the truncated sequence is recognized in full: {items:?}"
+        );
+    }
+
+    /// The same shape one byte at a time, because an interrupt lands wherever it lands and
+    /// the truncation and the recovery can be split across reads.
+    #[test]
+    fn a_truncated_sequence_recovers_the_same_way_arriving_byte_by_byte() {
+        let mut engine = AlacrittyEngine::new(40, 5);
+        let stream: &[u8] =
+            b"\x1b]133;D^C\r\n\x1b]133;A\x07prompt$ \x1b]133;B\x07next\r\n\x1b]133;C\x07";
+
+        let mut markers = Vec::new();
+        for byte in stream {
+            for item in engine.advance(&[*byte]) {
+                if let TerminalItem::Marker(found) = item {
+                    markers.push(found);
+                }
+            }
+        }
+
+        assert_eq!(
+            markers,
+            vec![
+                Osc133Marker::PromptStart,
+                Osc133Marker::CommandStart,
+                Osc133Marker::OutputStart,
+            ]
+        );
+    }
+
     #[test]
     fn the_marker_cycle_arrives_as_one_ordered_stream() {
         let mut engine = AlacrittyEngine::new(40, 5);

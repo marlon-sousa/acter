@@ -501,64 +501,64 @@ the answer to "what should we do now?".
     its seven spec files were red. The runner now writes the built-in transcript with
     every delay replaced by a deterministic 20 ms, which is T2 decision 8's requirement
     met where faking actually lives since B3.5.
-22. B4, local transport. Spec: none yet → specify first. **Next in lane 2.** Scope
-    sketch: LocalPty on ConPTY + blocking-reader thread; real-shell integration test in a
-    separate CI job. `Transport` already exists by now (B3.5), so this is a second implementer,
-    not a new seam — `interrupt` included, which B6 added to the port and which over a
-    local ConPTY is a control byte in the data stream rather than the channel request SSH
-    will need.
-    **Also carries read timing** (raised 2026-08-19, filed here by B6). The fake pipe
-    simulates the far end's timing but not the gap *between the reads of one delivery*:
-    `Chunking` cuts a delivery and pushes every read with no clock advance, so under
-    `Bytes(1)` a two-hundred-and-fifty-byte flood lands at one instant. The suite therefore
-    proves that cutting never loses text and never breaks a marker, and says nothing about
-    a line whose halves arrive on either side of the half-second quiescence window. B4 is
-    the natural moment because ConPTY makes real read timing observable, so the fake's
-    model can be built against a pattern somebody measured rather than guessed. It is not
-    free: `Chunking` is a pure policy today, and spacing reads apart either puts the clock
-    inside it or splits the concept in two — and the natural implementation would let an
-    interrupt cancel a command *mid-delivery*, halfway through a marker, which is a
-    behavior change deserving a decision made in the open. B6's accessibility matrix found
-    no line announced before it was finished, so nothing promotes this ahead of B4.
+22. **Done** — B4, local transport. Spec:
+    [b4-local-transport.md](specs/b4-local-transport.md). `LocalPty` is the second
+    implementer of a seam that has worked since B3.5: a real shell on a real Windows
+    pseudoconsole, `portable-pty` behind it, a blocking reader on a thread of its own
+    where one read is one send, and `interrupt` as `0x03` in the data stream. It names no
+    shell — the program to spawn is the caller's, because which shell to run is
+    `ShellAdapter`'s knowledge and therefore B5's. `ACTER_SHELL` selects one in the app so
+    the entry can be *heard*; it is not the profile machinery and not convergence, and
+    what it runs is an unintegrated session, because nothing injects markers until B5.
 
-    **The three answers, agreed in conversation 2026-08-21** and pinned here so the spec
-    starts from them rather than reopening them.
+    **Two defects found by running it, neither reachable against a scripted far end.**
 
-    *Read timing: measure before modelling.* No model lands speculatively. B4 instruments
-    the real reader and records what it saw — a build log, a large listing, a program that
-    dribbles — as a finding in its PR body, and the fake's model, if any, lands in that
-    same PR built against those numbers. The expectation to prove or disprove is that
-    ConPTY hands over whatever is in its buffer, so gaps cluster *between* program writes,
-    which `DelayRange` already models, and within-write gaps are microseconds. If that is
-    what the measurement says, adding nothing and writing down why is the correct outcome.
-    And the defect this is really about is not the transport's: a line whose halves
-    straddle the quiescence window is read as half a sentence by
-    `policies::autoread`, which the transport only makes reachable. The policy question —
-    should quiescence flush a *trailing partial line*, or hold it until it ends — is a
-    DESIGN question, not B4's, and B4's measurement is what should inform it. Recorded as
-    an open question rather than answered here.
+    *A shell that exited did not end the session.* A pseudoconsole stays open, and its
+    reader stays blocked, for as long as anything holds the master — the child exiting
+    does not close it. So the read channel never closed, the pump never stopped, and the
+    app would have gone on accepting commands into a session with nothing at the far end,
+    saying nothing about it. Fixed by a thread that waits on the shell and then drops the
+    master, which is what makes the blocking read return; `resize` on a session whose
+    shell has gone now answers `Closed` rather than reporting success against a
+    pseudoconsole that no longer exists. Found by the real-shell test that asserts a
+    session ends, which is the only thing that could have found it.
 
-    *What that does to `Chunking`: split the concept.* `Chunking` stays pure and keeps its
-    meaning, where the cuts fall. The gap goes on the pipe, which already holds the
-    `Clock` and the seeded roll, as a `read_gap: DelayRange` beside `chunking` — reusing
-    that type for its sampling, its `is_instant()` fast path and its deterministic roll,
-    defaulting to instant so every existing fixture keeps the meaning it has today. A
-    clock inside the policy would cost the purity its own module doc claims, which is what
-    makes `Chunking` a free dimension every fixture can be crossed with.
+    *A real shell will not start until a device query is answered.* The first thing
+    `cmd.exe` puts on the wire is `ESC [ 6 n`, a cursor-position report request, and it
+    draws no prompt until something answers. B3 decision 4 built the reply path on
+    reasoning about programs that wait forever; this is the first evidence that a *shell*
+    is one of them, before it has said anything at all. Nothing needed fixing — the
+    engine answers, and `SessionService` already writes the answer back — but the
+    real-shell harness has to do the same, and that is now written down where the next
+    person to drive a transport by hand will find it.
 
-    *Interrupt mid-delivery: no, and answer the real question instead.* The fake's delivery
-    stays atomic; making it divisible would give every interrupt fixture a
-    timing-dependent result, which is what B3.6 removed from this crate on purpose. The
-    question ConPTY genuinely raises is the truncated sequence: a program killed mid-write
-    can emit `ESC ] 1 3 3 ; D` with no terminator, followed by the shell's `^C` and a new
-    prompt beginning with its own `A`. A parser accumulating to the next terminator would
-    swallow both. There is no coverage of this today —
-    `acter-term/tests/vte_unhandled_osc.rs` covers unrecognized-but-*complete* OSCs — so
-    B4 carries one test that an unterminated OSC 133 followed by `^C` and the next prompt
-    still recognizes that prompt's `A`; if vte swallows it, the fix is bounded OSC
-    accumulation in `acter-term`. Note the interaction with B6.1: a lost `D` leaves the
-    block open, but the next block now claims by echo, so the mis-attribution no longer
-    compounds across the session.
+    **The read-timing measurement, and what it decided.** On this machine, `dir /s
+    C:\Windows\System32` produced 25,407 reads and 2.4 MB with a median gap of **188
+    microseconds**, a p99 of 348 and a maximum of 3.2 ms — **no gap reached the 500 ms
+    quiescence window**. `ping -n 4` produced 8 reads with three gaps over a second, which
+    are the pauses *between* the program's own writes and are exactly what `DelayRange`
+    already models. So the expectation the pin recorded held, and **no `read_gap` landed**:
+    within a flood the reads are microseconds apart, and `Chunking` pushing them at one
+    instant is a fair model of that. `Chunking` is untouched and still pure.
+
+    **And evidence for the partial-line question**, which was the reason the timing
+    mattered. The measurement also counted gaps at or over the quiescence window arriving
+    while a line was still unfinished — the shape that would make speech read half a
+    sentence. Over both streams that count was **zero**: a local shell writes whole lines,
+    and the long gaps fall between lines rather than inside one. So the DESIGN question —
+    should quiescence flush a trailing partial line — stays open but is **not urgent**,
+    and it should be revisited when SSH exists, since a network can split a write where a
+    pseudoconsole does not.
+
+    **The truncated-sequence question is closed.** An interrupt can leave `ESC ] 1 3 3 ; D`
+    with no terminator, and vte recovers: the next prompt's `A`, `B` and `C` are all
+    recognized, whole or arriving a byte at a time. Two tests pin it and nothing needed
+    fixing in `acter-term`. The fake's delivery stays atomic, as pinned.
+
+    Real-shell tests are `#[ignore]`d and run in their own `real-shell (Windows)` CI job,
+    so `cargo test --workspace` spawns no process and stays independent of what is
+    installed on a machine.
+
 23. B5, PowerShell adapter. Spec: none yet → specify first. Scope sketch: OSC 133
     injection snippet; record the first golden transcripts as fixtures, in B2's format
     — so a captured real session is replayable as a fake session.
