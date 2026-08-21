@@ -28,7 +28,7 @@ use std::time::Duration;
 
 use acter_core::{
     Announcement, Clock, CommandId, EventSink, ExitCode, Key, KeyAck, KeyPress, PacingConfig,
-    ReadMode, SessionApi, SessionEvent, SessionId, SessionService, Timer, Transport,
+    SessionApi, SessionEvent, SessionId, SessionService, Timer, Transport,
     TransportError,
 };
 use acter_term::AlacrittyEngine;
@@ -327,7 +327,7 @@ impl Pipeline {
                 SessionEvent::CommandStarted { command_id } => blocks.push(Block {
                     command_id,
                     output: String::new(),
-                    exit_code: None,
+                    closed: false,
                 }),
                 SessionEvent::Output {
                     command_id, text, ..
@@ -335,13 +335,9 @@ impl Pipeline {
                     let at = find(&mut blocks, command_id, "output");
                     blocks[at].output.push_str(&text);
                 }
-                SessionEvent::CommandFinished {
-                    command_id,
-                    exit_code,
-                    ..
-                } => {
+                SessionEvent::CommandFinished { command_id } => {
                     let at = find(&mut blocks, command_id, "a command finished that");
-                    blocks[at].exit_code = Some(exit_code);
+                    blocks[at].closed = true;
                 }
                 _ => {}
             }
@@ -390,12 +386,18 @@ struct Substance {
     announcements: Vec<Announcement>,
 }
 
-/// One command block: what it was called, everything it said, and how it ended.
+/// One command block: what it was called, everything it said, and whether it ended.
+///
+/// It recorded the exit code until A6 took that off `CommandFinished`. A success has no
+/// code on the wire at all now, so `Some(ExitCode(0))` is not a thing a block can
+/// observe; what these tests were really distinguishing is a block the markers closed
+/// from one that never closed, which is what `closed` says. A failure's code is still
+/// checked, on the `Announcement::Failed` that carries it.
 #[derive(Debug, PartialEq, Eq)]
 struct Block {
     command_id: CommandId,
     output: String,
-    exit_code: Option<ExitCode>,
+    closed: bool,
 }
 
 fn fixture(name: &str) -> PathBuf {
@@ -418,15 +420,14 @@ fn output(text: &str) -> SessionEvent {
     SessionEvent::Output {
         command_id: CommandId(1),
         text: text.to_owned(),
-        read_mode: ReadMode::Quiet,
     }
 }
 
-fn finished(exit_code: i32) -> SessionEvent {
+/// Takes no exit code since A6: closing a block and reporting a failure are two events,
+/// and the code rides `Announcement::Failed`.
+fn finished() -> SessionEvent {
     SessionEvent::CommandFinished {
         command_id: CommandId(1),
-        exit_code: ExitCode(exit_code),
-        read_mode: ReadMode::Quiet,
     }
 }
 
@@ -458,7 +459,7 @@ async fn a_command_produces_its_output_and_nothing_the_shell_said_around_it() {
         vec![
             started(),
             output("hello from acter"),
-            finished(0),
+            finished(),
             announce(Announcement::ReadAloud {
                 text: "hello from acter".to_owned()
             }),
@@ -490,7 +491,7 @@ async fn a_flood_is_announced_by_size_because_the_policy_measured_it() {
         pipeline.rendered().ends_with("line 30"),
         "every line reaches the buffer even when none of it is read aloud"
     );
-    assert!(pipeline.events().contains(&finished(0)));
+    assert!(pipeline.events().contains(&finished()));
 }
 
 #[tokio::test]
@@ -506,7 +507,7 @@ async fn a_failing_command_carries_its_exit_code_out_of_the_marker() {
         vec![
             started(),
             output("error: the command reported a problem"),
-            finished(2),
+            finished(),
             announce(Announcement::ReadAloud {
                 text: "error: the command reported a problem".to_owned()
             }),
@@ -542,7 +543,7 @@ async fn entering_the_alternate_screen_reaches_the_actor_in_stream_order() {
         Some(&SessionEvent::AltScreenEntered),
         "the switch is placed before the repaint that shared its read"
     );
-    assert!(position(&SessionEvent::AltScreenLeft) < position(&finished(0)));
+    assert!(position(&SessionEvent::AltScreenLeft) < position(&finished()));
     assert!(
         pipeline.rendered().contains("GNU nano 7.2")
             && pipeline.rendered().contains("editing a file"),
@@ -569,7 +570,7 @@ async fn an_interrupting_line_ends_the_running_command_without_inventing_a_failu
 
     let events = pipeline.events();
     assert!(
-        events.contains(&finished(0)),
+        events.contains(&finished()),
         "the block closed: {events:?}"
     );
     assert!(
@@ -641,7 +642,7 @@ async fn a_marker_split_across_two_reads_is_still_one_marker() {
         vec![Block {
             command_id: CommandId(1),
             output: "hello from acter".to_owned(),
-            exit_code: Some(ExitCode(0)),
+            closed: true,
         }],
         "one block, opened and closed by markers nobody ever received whole"
     );
@@ -661,7 +662,7 @@ async fn a_forged_command_end_closes_the_block_and_what_follows_is_not_output() 
 
     let events = pipeline.events();
     assert_eq!(
-        events.iter().filter(|event| **event == finished(0)).count(),
+        events.iter().filter(|event| **event == finished()).count(),
         1,
         "the real marker that followed found no open block: {events:?}"
     );
@@ -976,9 +977,9 @@ async fn every_case_in_the_suite_actually_produces_a_session() {
                 "{}: a degraded session still puts its text in the buffer: {substance:?}",
                 case.name
             );
-            assert_eq!(
-                substance.blocks[0].exit_code, None,
-                "{}: and a command that never ends structurally has no code to report",
+            assert!(
+                !substance.blocks[0].closed,
+                "{}: and a command that never ends structurally never closes",
                 case.name
             );
             continue;

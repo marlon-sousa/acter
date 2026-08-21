@@ -1,5 +1,8 @@
 //! Entity/value: shared IPC protocol value types — identity, correlation, and the
-//! verdict/state enums carried across the frontend wire. Pure data, no behavior.
+//! state enums carried across the frontend wire. Pure data, no behavior.
+//!
+//! The autoread verdict used to live here too. A6 took it off the wire, so it moved to
+//! [`crate::entities::read_mode`], which is not a protocol module.
 
 use serde::{Deserialize, Serialize};
 use specta::Type;
@@ -20,18 +23,6 @@ pub struct CommandId(pub u32);
 /// Process exit status. Nonzero is a failure, announced distinctly from success.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Type)]
 pub struct ExitCode(pub i32);
-
-/// The read verdict computed backend-side by the pacing policy and carried on every
-/// announcement-bearing event. The frontend obeys it and never re-measures.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
-pub enum ReadMode {
-    /// Small enough to read aloud automatically via the live region.
-    Auto,
-    /// Over threshold: announced as "too big to read"; a beep signals completion.
-    TooBig,
-    /// Suppressed (e.g. the babble guard tripped); accumulates silently in the buffer.
-    Quiet,
-}
 
 /// Rendering mode over the one live session. Phase 1 only ever emits
 /// [`Mode::NonInteractive`]; the interactive variant is defined so Phase 2 is additive.
@@ -81,10 +72,6 @@ mod tests {
     #[test]
     fn unit_enums_serialize_as_their_variant_name() {
         assert_eq!(
-            serde_json::to_value(ReadMode::TooBig).unwrap(),
-            json!("TooBig")
-        );
-        assert_eq!(
             serde_json::to_value(Mode::NonInteractive).unwrap(),
             json!("NonInteractive")
         );
@@ -96,11 +83,6 @@ mod tests {
 
     #[test]
     fn unit_enums_round_trip_every_variant() {
-        for mode in [ReadMode::Auto, ReadMode::TooBig, ReadMode::Quiet] {
-            let back: ReadMode =
-                serde_json::from_value(serde_json::to_value(mode).unwrap()).unwrap();
-            assert_eq!(mode, back);
-        }
         for mode in [Mode::NonInteractive, Mode::Interactive] {
             let back: Mode = serde_json::from_value(serde_json::to_value(mode).unwrap()).unwrap();
             assert_eq!(mode, back);

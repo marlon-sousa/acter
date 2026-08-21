@@ -9,7 +9,8 @@
 
 use std::time::Duration;
 
-use crate::{PacingConfig, PacingState, ReadMode};
+use crate::entities::ReadMode;
+use crate::{PacingConfig, PacingState};
 
 /// The size of a span of extracted grid text, trailing whitespace trimmed per line.
 /// `chars` counts the trimmed line content plus one separator between each pair of
@@ -22,7 +23,7 @@ pub struct TextSize {
 
 /// What the pacing policy decided to do about a chunk (or the command's remainder).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PacingAction {
+pub(crate) enum PacingAction {
     /// Nothing to announce: still accumulating, or suppressed by the babble guard.
     None,
     /// Read this chunk aloud under the given verdict.
@@ -36,9 +37,9 @@ pub enum PacingAction {
 /// The result of one policy call: what to do now, and when to be woken next (a
 /// duration from `at`, not an absolute time — the caller owns the clock).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PacingOutcome {
-    pub action: PacingAction,
-    pub wake_after: Option<Duration>,
+pub(crate) struct PacingOutcome {
+    pub(crate) action: PacingAction,
+    pub(crate) wake_after: Option<Duration>,
 }
 
 /// Measures extracted grid text: line count and char count with each line's trailing
@@ -55,7 +56,7 @@ pub fn measure(text: &str) -> TextSize {
 
 /// The dual-limit threshold: over `max_lines` or over `max_chars`, whichever is
 /// exceeded first.
-pub fn verdict(size: TextSize, config: &PacingConfig) -> ReadMode {
+pub(crate) fn verdict(size: TextSize, config: &PacingConfig) -> ReadMode {
     if size.lines > config.max_lines || size.chars > config.max_chars {
         ReadMode::TooBig
     } else {
@@ -69,7 +70,7 @@ pub fn verdict(size: TextSize, config: &PacingConfig) -> ReadMode {
 /// arrived and asks to be woken at the sooner of the quiescence window and the
 /// still-pending patience deadline (see [`next_wake`]) — flushing itself happens in
 /// [`on_wake`], once a real gap is observed.
-pub fn on_output(
+pub(crate) fn on_output(
     state: PacingState,
     config: &PacingConfig,
     size: TextSize,
@@ -153,7 +154,7 @@ fn next_wake(state: PacingState, config: &PacingConfig, at: Duration) -> Duratio
 /// guard; or the patience deadline reached while output is still fresh — an
 /// uninterrupted run of unread output `patience` long — which fires the "still running"
 /// announcement at most once per command.
-pub fn on_wake(
+pub(crate) fn on_wake(
     state: PacingState,
     config: &PacingConfig,
     unspoken: TextSize,
@@ -200,7 +201,7 @@ pub fn on_wake(
 /// The command ended: flush whatever remains unspoken under the size policy alone.
 /// The babble guard does not apply here — it throttles repetitive chunks *within* a
 /// running command, not the final reading of what it produced. No wake follows.
-pub fn on_command_end(
+pub(crate) fn on_command_end(
     state: PacingState,
     config: &PacingConfig,
     unspoken: TextSize,

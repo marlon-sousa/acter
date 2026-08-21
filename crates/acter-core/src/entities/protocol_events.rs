@@ -3,14 +3,15 @@
 //! One envelope flows down the per-session Tauri Channel, so a variant needs no
 //! `session_id` — the channel is the session identity. Internally tagged on `type`,
 //! so specta emits a discriminated union the frontend compiler forces exhaustive
-//! handling of. Producers arrive incrementally: A3's fake backend emits the command
-//! trio; alt-screen, title, still-running, and connection variants are defined now
-//! (both-modes protocol, implemented as a subset) and produced when their sources land.
+//! handling of. Producers arrive incrementally: the command trio, the alt-screen pair
+//! and the announcement event have producers; title and connection variants are defined
+//! now (both-modes protocol, implemented as a subset) and produced when their sources
+//! land.
 
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
-use crate::{CommandId, ConnectionState, ExitCode, ReadMode};
+use crate::{CommandId, ConnectionState, ExitCode};
 
 /// Everything the backend streams to the frontend about one session.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
@@ -18,26 +19,24 @@ use crate::{CommandId, ConnectionState, ExitCode, ReadMode};
 pub enum SessionEvent {
     /// The command block opened: its output region has begun (OSC 133 C).
     CommandStarted { command_id: CommandId },
-    /// A coalesced quiescent chunk of output, tagged with the read verdict to obey.
-    Output {
-        command_id: CommandId,
-        text: String,
-        read_mode: ReadMode,
-    },
-    /// The command block closed (OSC 133 D): exit code plus the verdict for the remainder.
-    CommandFinished {
-        command_id: CommandId,
-        exit_code: ExitCode,
-        read_mode: ReadMode,
-    },
+    /// A coalesced quiescent chunk of output. Rendering only: it says what to put in
+    /// the buffer and never what to say about it. Whether any of it is spoken is a
+    /// separate [`Announce`](SessionEvent::Announce) (A6).
+    Output { command_id: CommandId, text: String },
+    /// The command block closed (OSC 133 D).
+    ///
+    /// Carries no exit code. A nonzero one arrives as `Announce { Failed }`, after the
+    /// remainder of the output, which is the order a listener needs: the error text
+    /// first, the verdict about it second. A successful command's code is therefore not
+    /// on the wire at all — nothing read it, and the frontend must not speak it (A6
+    /// decision 2). A later feature wanting the code adds a shape for it deliberately.
+    CommandFinished { command_id: CommandId },
     /// The command was stopped before it ended on its own. Terminal: no
     /// `CommandFinished` follows. Distinct from `CommandFinished` on purpose — the exit
     /// code of a process the user stopped carries no information worth announcing, and
     /// inferring "stopped" from a conventional code (130 on Unix, `0xC000013A` on
     /// Windows) would mis-announce a program that genuinely exits with it.
     CommandInterrupted { command_id: CommandId },
-    /// Patience announcement: output has flowed for the whole window with no end marker.
-    CommandStillRunning { command_id: CommandId },
     /// The startup grace period elapsed with no shell-integration markers: this session
     /// has no command boundaries and every command in it degrades to patience-only
     /// behavior (DESIGN's reliability case 2).
@@ -109,17 +108,11 @@ mod tests {
             SessionEvent::Output {
                 command_id: CommandId(1),
                 text: "hello".to_owned(),
-                read_mode: ReadMode::Auto,
             },
             SessionEvent::CommandFinished {
                 command_id: CommandId(1),
-                exit_code: ExitCode(0),
-                read_mode: ReadMode::Quiet,
             },
             SessionEvent::CommandInterrupted {
-                command_id: CommandId(1),
-            },
-            SessionEvent::CommandStillRunning {
                 command_id: CommandId(1),
             },
             SessionEvent::IntegrationUnavailable,
@@ -172,7 +165,6 @@ mod tests {
         let event = SessionEvent::Output {
             command_id: CommandId(3),
             text: "line".to_owned(),
-            read_mode: ReadMode::TooBig,
         };
         assert_eq!(
             serde_json::to_value(&event).unwrap(),
@@ -180,7 +172,6 @@ mod tests {
                 "type": "Output",
                 "command_id": 3,
                 "text": "line",
-                "read_mode": "TooBig",
             })
         );
     }

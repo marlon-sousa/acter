@@ -112,27 +112,39 @@ the answer to "what should we do now?".
    announcements rather than before each one, so a lone announcement is not delayed at
    all and only a burst's second and later items wait; that is the thing to re-check if
    B1's pacing ever emits announcements faster than the drain.
-10. A6, announcement protocol cleanup. Spec: none yet → specify first. **Depends on B1.5**
-    (lane 2), which introduces `SessionEvent::Announce` additively and leaves the shapes
-    it supersedes in place: A2's exhaustiveness guard fails `tsc` until every variant is
-    handled, so a protocol *addition* cannot be split across two PRs, while a *removal*
-    can wait. This entry pays that debt: retire `Output.read_mode`, `CommandStillRunning`
-    and the failure-via-`CommandFinished.exit_code` path, and migrate the A3 fake onto
-    `Announce` so the frontend stops having two ways to be told to speak. Until it lands,
-    that duplication is real and deliberate — recorded in B1.5's decision 10 rather than
-    left to be discovered in review.
+10. **Done** — A6, announcement protocol cleanup. Spec:
+    [a6-announcement-protocol-cleanup.md](specs/a6-announcement-protocol-cleanup.md).
+    Retired the three shapes B1.5 superseded and left standing: `read_mode` on `Output`
+    and `CommandFinished`, the `CommandStillRunning` event, and the exit code on
+    `CommandFinished`. The fake migration this entry was scoped for never happened
+    because B6 deleted the fake first, so what landed was the removal half only.
 
-    **The fake migration this entry planned is no longer part of it** (updated by B6,
-    2026-08-20). The plan above was written when `FakeSessionService` was the default
-    backend and would have needed migrating onto `Announce` for the span between A6 and
-    B6. B6 landed first and deleted it: there is exactly one session service now, it emits
-    `Announce` already, and nothing scripts a verdict anywhere in the tree. So what remains
-    here is only the removal half — retire `Output.read_mode`, `CommandStillRunning` and
-    the failure-via-`CommandFinished.exit_code` path from the protocol, the actor and the
-    frontend — which is smaller than the entry was scoped for and no longer has a deadline
-    attached to it. Note that the actor still sets `Output.read_mode: Quiet` on every
-    rendering event as a vestigial field, and the frontend still has two ways to be told to
-    speak; that duplication is what this entry pays off.
+    Cheaper than it looked, because the deleted code was already unreachable: every
+    producer set `ReadMode::Quiet`, so the frontend's `Auto`/`TooBig` branches never ran
+    against the real backend and `Announce` was doing all the speaking. Nothing a
+    listener hears changed, and no pinned string differs from before by diff.
+
+    Three things worth knowing downstream. **`ReadMode` survives as a domain value**
+    (`entities/read_mode.rs`, `pub(crate)`): it is the autoread policy's verdict, used
+    about forty times, and only the wire field was vestigial — `PacingAction`,
+    `PacingOutcome`, `verdict` and the three transition functions followed it down the
+    visibility ladder, since nothing outside the crate used them. **A successful
+    command's exit code is no longer on the wire at all**, since success sends no
+    announcement and `Announcement::Failed` is now the only carrier; a later feature
+    wanting the code — an "exit code" query, the code in a block's accessible name —
+    adds a shape for it deliberately rather than relying on one nobody read. And
+    **render-before-announce is now an ordering between two events** rather than inside
+    one handler, so it became the backend's invariant to keep and is pinned by a
+    service-level test.
+
+    `IntegrationUnavailable` and the alt-screen pair were deliberately left alone.
+    They have no `Announce` counterpart, so retiring them would mean inventing
+    `Announcement` variants — an addition, inside a PR whose point is deletion — and
+    they carry no `command_id`, so folding them in would force `Announce::command_id`
+    to become optional and weaken the type for every announcement. B6 decision 11
+    reached this already; A6's decision 6 confirms it and writes down the rule that
+    decides such cases: a non-`Announce` event is redundant only when an `Announce`
+    already fires on the same trigger and yields the same string.
 11. A3.2, the `Ctrl+C` interrupt surface. Spec: none yet → specify first. **Unblocked by
    B6** (lane 2), and rescoped to frontend work only. The input-model question A3.1 left
    open — stated in that spec's "The open question this spec deliberately does not bet on"

@@ -103,33 +103,27 @@ export class AppController {
         break;
       case 'Output':
         this.ensureBlock(event.command_id);
-        // Render-before-announce invariant (pinned by spec A5.2): append to the buffer
-        // BEFORE announcing. The announcer's deferred drain guarantees the live region
-        // mutates after this synchronous append, so spoken text is always already in the
-        // buffer.
+        // Rendering only, and nothing is said here: since A6 this event carries no
+        // verdict, so whether any of this text is spoken arrives as its own `Announce`.
+        // The render-before-announce invariant (spec A5.2) still holds and is now the
+        // backend's to keep — it emits this event before the `Announce` about it, and
+        // the per-session channel delivers in order, so the text is in the buffer before
+        // anything speaks it.
         this.buffer.appendOutput(event.command_id, event.text);
-        if (event.read_mode === 'Auto') {
-          this.announcer.announce(event.text);
-        } else if (event.read_mode === 'TooBig') {
-          this.tooBig.add(event.command_id);
-          this.announcer.announce(tooBigMessage(lineCount(event.text)));
-        }
-        // Quiet: appended to the buffer, no speech.
         break;
       case 'CommandFinished':
         this.ensureBlock(event.command_id);
-        if (event.read_mode === 'TooBig') {
-          this.tooBig.add(event.command_id);
-        }
-        // Nothing is said here about the exit code. Speaking is its own event since
-        // B1.5, and the backend sends `Announce { Failed }` after this one — after the
-        // remainder of the output has been read, which is the order a listener needs:
-        // the error text first, the verdict about it second. Announcing here as well
-        // (an A3-era leftover, found in B6's manual pass) said it twice and said it
-        // first, ahead of the line it was about.
+        // Nothing is said here about the exit code, and since A6 the event carries no
+        // code to say. A failure arrives as `Announce { Failed }` after this one —
+        // after the remainder of the output has been read, which is the order a
+        // listener needs: the error text first, the verdict about it second.
+        // Announcing here as well (an A3-era leftover, found in B6's manual pass) said
+        // it twice and said it first, ahead of the line it was about.
+        //
         // Beep if this command ever carried a too-big verdict: "you were told it is
-        // too big; the beep tells you it is done." A fully auto-read success gets no
-        // extra finish speech — its output was already read.
+        // too big; the beep tells you it is done." That verdict now reaches us only
+        // through `Announce { TooBig }`, which is what arms `tooBig`. A fully auto-read
+        // success gets no extra finish speech — its output was already read.
         if (this.tooBig.has(event.command_id)) {
           this.beep.beep();
         }
@@ -144,9 +138,6 @@ export class AppController {
         this.announcer.announce(commandStoppedMessage);
         this.tooBig.delete(event.command_id);
         this.openBlocks.delete(event.command_id);
-        break;
-      case 'CommandStillRunning':
-        this.announcer.announce(patienceMessage);
         break;
       case 'IntegrationUnavailable':
         // Session-scoped, like the alt-screen pair: it carries no command id because it
@@ -216,10 +207,4 @@ export class AppController {
       this.editField.focus();
     }
   }
-}
-
-// The chunk's line count, computed frontend-side for the too-big phrasing only — the
-// verdict was already made backend-side (decision 2); this is not re-measuring.
-function lineCount(text: string): number {
-  return text.split('\n').length;
 }
