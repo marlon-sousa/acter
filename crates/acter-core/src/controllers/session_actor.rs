@@ -19,11 +19,11 @@ use std::time::Duration;
 
 use tokio::sync::mpsc;
 
-use crate::entities::UnspokenText;
+use crate::entities::{ReadMode, UnspokenText};
 use crate::policies::{PacingAction, measure, on_command_end, on_output, on_wake};
 use crate::{
     Announcement, Clock, CommandId, EventSink, ExitCode, Integration, Mode, PacingConfig,
-    PacingState, ReadMode, SessionEvent, SessionState, Timer,
+    PacingState, SessionEvent, SessionState, Timer,
 };
 
 /// A domain fact the actor is told about. Deliberately not bytes: extraction, OSC 133
@@ -278,11 +278,7 @@ impl SessionActor {
     }
 
     fn command_ended(&mut self, command_id: CommandId, exit_code: ExitCode) {
-        let Some(outcome) = self.close(SessionEvent::CommandFinished {
-            command_id,
-            exit_code,
-            read_mode: ReadMode::Quiet,
-        }) else {
+        let Some(outcome) = self.close(SessionEvent::CommandFinished { command_id }) else {
             return;
         };
         self.apply(outcome);
@@ -374,13 +370,9 @@ impl SessionActor {
         }
         let text = std::mem::take(&mut active.unrendered);
         let command_id = active.id;
-        self.sink.send(SessionEvent::Output {
-            command_id,
-            text,
-            // Render-only. The verdict rides an `Announce`; this field is vestigial and
-            // is retired by A6.
-            read_mode: ReadMode::Quiet,
-        });
+        // Render-only: the verdict rides an `Announce` (A6 retired the field that used
+        // to duplicate it here).
+        self.sink.send(SessionEvent::Output { command_id, text });
     }
 
     fn announce(&self, announcement: Announcement) {
@@ -610,7 +602,6 @@ mod tests {
             Some(&SessionEvent::Output {
                 command_id: CommandId(1),
                 text: "text\n".to_owned(),
-                read_mode: ReadMode::Quiet,
             }),
             "rendering carries no verdict: the verdict rides an Announce"
         );

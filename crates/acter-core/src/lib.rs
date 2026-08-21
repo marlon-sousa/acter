@@ -13,12 +13,13 @@ mod services;
 pub use controllers::{Requests, SessionActor, SessionInput, Wake};
 pub use entities::{
     Announcement, CommandId, ConnectionState, ExitCode, Integration, Key, KeyAck, KeyPress, LineId,
-    LineRevision, Mode, Osc133Marker, PacingConfig, PacingState, ReadMode, Screen, SessionEvent,
-    SessionId, SessionIntent, SessionState, SubmitAck, TerminalItem,
+    LineRevision, Mode, Osc133Marker, PacingConfig, PacingState, Screen, SessionEvent, SessionId,
+    SessionIntent, SessionState, SubmitAck, TerminalItem,
 };
-pub use policies::{
-    BoundaryEvent, BoundaryTracker, PacingAction, PacingOutcome, Region, TextSize, intent_for,
-    measure, on_command_end, on_output, on_wake, verdict,
-};
+// The pacing verdict is domain-internal since A6: `ReadMode` no longer crosses the wire,
+// so the items whose signatures mention it — `PacingAction`, `PacingOutcome`, `verdict`
+// and the three transition functions — are `pub(crate)` in `policies` and reached
+// through that module rather than re-exported here. Nothing outside this crate used them.
+pub use policies::{BoundaryEvent, BoundaryTracker, Region, TextSize, intent_for, measure};
 pub use ports::{Clock, EventSink, SessionApi, TerminalEngine, Timer, Transport, TransportError};
 pub use services::SessionService;

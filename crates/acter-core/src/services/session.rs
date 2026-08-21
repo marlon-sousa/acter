@@ -568,7 +568,7 @@ mod tests {
     use tokio::sync::oneshot;
     use tokio::task::yield_now;
 
-    use crate::{Announcement, Key, Osc133Marker, ReadMode, TerminalItem, TransportError};
+    use crate::{Announcement, Key, Osc133Marker, TerminalItem, TransportError};
 
     use super::*;
 
@@ -839,6 +839,48 @@ mod tests {
         }
     }
 
+    // --- Render before announce -----------------------------------------------------
+
+    /// A5.2 pinned this inside the frontend controller, where one handler appended to
+    /// the buffer and then spoke. A6 took the verdict off `Output`, so the ordering is
+    /// now between two events and belongs to whoever emits them: the rendering event
+    /// covering a span must precede the `Announce` about it, because the per-session
+    /// channel delivers in order and the listener must never be read text the buffer
+    /// does not have yet.
+    #[tokio::test]
+    async fn the_text_is_rendered_before_anything_is_said_about_it() {
+        let session = Session::start().await;
+
+        session.submit("small").await;
+        session
+            .emit(command(1, "small", "hello from acter", Some(0)))
+            .await;
+        session.advance_to(1_000).await;
+
+        let events = session.events();
+        let rendered_at = events
+            .iter()
+            .position(|event| matches!(event, SessionEvent::Output { .. }))
+            .unwrap_or_else(|| panic!("nothing was rendered: {events:?}"));
+        let spoken_at = events
+            .iter()
+            .position(|event| {
+                matches!(
+                    event,
+                    SessionEvent::Announce {
+                        announcement: Announcement::ReadAloud { .. },
+                        ..
+                    }
+                )
+            })
+            .unwrap_or_else(|| panic!("nothing was read aloud: {events:?}"));
+
+        assert!(
+            rendered_at < spoken_at,
+            "the span was spoken before it was rendered: {events:?}"
+        );
+    }
+
     // --- Correlation ----------------------------------------------------------------
 
     #[tokio::test]
@@ -968,11 +1010,9 @@ mod tests {
         session.advance_to(1_000).await;
 
         assert!(
-            session.events().contains(&SessionEvent::CommandFinished {
-                command_id,
-                exit_code: ExitCode(0),
-                read_mode: ReadMode::Quiet,
-            }),
+            session
+                .events()
+                .contains(&SessionEvent::CommandFinished { command_id }),
             "{:?}",
             session.events()
         );
@@ -1128,13 +1168,18 @@ mod tests {
             "the block that opened is the command that was submitted, not a second one"
         );
         assert!(
-            session.events().contains(&SessionEvent::CommandFinished {
-                command_id,
-                exit_code: ExitCode(2),
-                read_mode: ReadMode::Quiet,
-            }),
-            "the exit code came back with the markers: {:?}",
+            session
+                .events()
+                .contains(&SessionEvent::CommandFinished { command_id }),
+            "the block closed on the markers: {:?}",
             session.events()
+        );
+        assert!(
+            session.announcements().contains(&Announcement::Failed {
+                exit_code: ExitCode(2)
+            }),
+            "and the exit code came back with them, on its only carrier now: {:?}",
+            session.announcements()
         );
         assert_eq!(
             session.rendered(),
@@ -1176,11 +1221,9 @@ mod tests {
 
         assert_eq!(session.started(), vec![first, second]);
         assert!(
-            session.events().contains(&SessionEvent::CommandFinished {
-                command_id: first,
-                exit_code: ExitCode(0),
-                read_mode: ReadMode::Quiet,
-            }),
+            session
+                .events()
+                .contains(&SessionEvent::CommandFinished { command_id: first }),
             "the previous command closed when the next line was submitted: {:?}",
             session.events()
         );

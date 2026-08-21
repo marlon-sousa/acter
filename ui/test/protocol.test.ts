@@ -37,13 +37,11 @@ function describeEvent(event: SessionEvent): string {
     case 'CommandStarted':
       return `started ${event.command_id}`;
     case 'Output':
-      return `output ${event.command_id} (${event.read_mode}): ${event.text}`;
+      return `output ${event.command_id}: ${event.text}`;
     case 'CommandFinished':
-      return `finished ${event.command_id} exit ${event.exit_code} (${event.read_mode})`;
+      return `finished ${event.command_id}`;
     case 'CommandInterrupted':
       return `interrupted ${event.command_id}`;
-    case 'CommandStillRunning':
-      return `still running ${event.command_id}`;
     case 'IntegrationUnavailable':
       return 'integration unavailable';
     case 'AltScreenEntered':
@@ -63,21 +61,11 @@ function describeEvent(event: SessionEvent): string {
 
 describe('protocol bindings', () => {
   it('discriminates every SessionEvent variant on `type`', () => {
-    const output: SessionEvent = {
-      type: 'Output',
-      command_id: 1,
-      text: 'hello',
-      read_mode: 'Auto',
-    };
-    expect(describeEvent(output)).toBe('output 1 (Auto): hello');
+    const output: SessionEvent = { type: 'Output', command_id: 1, text: 'hello' };
+    expect(describeEvent(output)).toBe('output 1: hello');
 
-    const finished: SessionEvent = {
-      type: 'CommandFinished',
-      command_id: 1,
-      exit_code: 0,
-      read_mode: 'Quiet',
-    };
-    expect(describeEvent(finished)).toBe('finished 1 exit 0 (Quiet)');
+    const finished: SessionEvent = { type: 'CommandFinished', command_id: 1 };
+    expect(describeEvent(finished)).toBe('finished 1');
 
     const altScreen: SessionEvent = { type: 'AltScreenEntered' };
     expect(describeEvent(altScreen)).toBe('alt-screen entered');

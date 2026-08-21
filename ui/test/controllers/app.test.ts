@@ -126,12 +126,17 @@ describe('submit', () => {
 });
 
 describe('event rendering (decision 2)', () => {
-  it('Output/Auto appends the text and announces it', async () => {
+  it('Output appends the text, and the ReadAloud about it speaks it', async () => {
     const { backend, buffer, announcer, controller } = makeApp();
     await controller.attach();
 
     backend.emit({ type: 'CommandStarted', command_id: 1 });
-    backend.emit({ type: 'Output', command_id: 1, text: 'hello from acter', read_mode: 'Auto' });
+    backend.emit({ type: 'Output', command_id: 1, text: 'hello from acter' });
+    backend.emit({
+      type: 'Announce',
+      command_id: 1,
+      announcement: { kind: 'ReadAloud', text: 'hello from acter' },
+    });
 
     expect(buffer.appended).toEqual([{ commandId: 1, text: 'hello from acter' }]);
     expect(announcer.announcements).toEqual(['hello from acter']);
@@ -165,30 +170,43 @@ describe('event rendering (decision 2)', () => {
     await controller.attach();
 
     backend.emit({ type: 'CommandStarted', command_id: 1 });
-    backend.emit({ type: 'Output', command_id: 1, text: 'hello', read_mode: 'Auto' });
+    // Two events now, in the order the backend sends them: A6 moved this invariant from
+    // "append before announcing inside one handler" to "the render event before the
+    // announce about it". The channel delivers in order, so obeying that order is enough.
+    backend.emit({ type: 'Output', command_id: 1, text: 'hello' });
+    backend.emit({
+      type: 'Announce',
+      command_id: 1,
+      announcement: { kind: 'ReadAloud', text: 'hello' },
+    });
 
     expect(order).toEqual(['buffer', 'announce']);
   });
 
-  it('Output/TooBig appends the text and announces the line count phrasing', async () => {
+  it('a too-big chunk is appended whole and announced by its line count', async () => {
     const { backend, buffer, announcer, controller } = makeApp();
     await controller.attach();
     const text = Array.from({ length: 40 }, (_, i) => `line ${i + 1}`).join('\n');
 
     backend.emit({ type: 'CommandStarted', command_id: 1 });
-    backend.emit({ type: 'Output', command_id: 1, text, read_mode: 'TooBig' });
+    backend.emit({ type: 'Output', command_id: 1, text });
+    backend.emit({
+      type: 'Announce',
+      command_id: 1,
+      announcement: { kind: 'TooBig', lines: 40 },
+    });
 
     expect(buffer.appended).toEqual([{ commandId: 1, text }]);
     expect(announcer.announcements).toEqual([tooBigMessage(40)]);
     expect(announcer.announcements[0]).toBe('40 lines arrived, too big to read');
   });
 
-  it('Output/Quiet appends the text but announces nothing', async () => {
+  it('an Output with no announcement after it appends and says nothing', async () => {
     const { backend, buffer, announcer, controller } = makeApp();
     await controller.attach();
 
     backend.emit({ type: 'CommandStarted', command_id: 1 });
-    backend.emit({ type: 'Output', command_id: 1, text: 'still working', read_mode: 'Quiet' });
+    backend.emit({ type: 'Output', command_id: 1, text: 'still working' });
 
     expect(buffer.appended).toEqual([{ commandId: 1, text: 'still working' }]);
     expect(announcer.announcements).toEqual([]);
@@ -199,8 +217,13 @@ describe('event rendering (decision 2)', () => {
     await controller.attach();
 
     backend.emit({ type: 'CommandStarted', command_id: 1 });
-    backend.emit({ type: 'Output', command_id: 1, text: 'hello from acter', read_mode: 'Auto' });
-    backend.emit({ type: 'CommandFinished', command_id: 1, exit_code: 0, read_mode: 'Auto' });
+    backend.emit({ type: 'Output', command_id: 1, text: 'hello from acter' });
+    backend.emit({
+      type: 'Announce',
+      command_id: 1,
+      announcement: { kind: 'ReadAloud', text: 'hello from acter' },
+    });
+    backend.emit({ type: 'CommandFinished', command_id: 1 });
 
     expect(announcer.announcements).toEqual(['hello from acter']);
     expect(beep.beeps).toBe(0);
@@ -216,13 +239,13 @@ describe('event rendering (decision 2)', () => {
     await controller.attach();
 
     backend.emit({ type: 'CommandStarted', command_id: 1 });
-    backend.emit({ type: 'Output', command_id: 1, text: 'error: boom', read_mode: 'Quiet' });
+    backend.emit({ type: 'Output', command_id: 1, text: 'error: boom' });
     backend.emit({
       type: 'Announce',
       command_id: 1,
       announcement: { kind: 'ReadAloud', text: 'error: boom' },
     });
-    backend.emit({ type: 'CommandFinished', command_id: 1, exit_code: 2, read_mode: 'Quiet' });
+    backend.emit({ type: 'CommandFinished', command_id: 1 });
     backend.emit({
       type: 'Announce',
       command_id: 1,
@@ -241,7 +264,7 @@ describe('event rendering (decision 2)', () => {
     await controller.attach();
 
     backend.emit({ type: 'CommandStarted', command_id: 1 });
-    backend.emit({ type: 'CommandFinished', command_id: 1, exit_code: 2, read_mode: 'Quiet' });
+    backend.emit({ type: 'CommandFinished', command_id: 1 });
 
     expect(announcer.announcements).toEqual([]);
   });
@@ -251,13 +274,18 @@ describe('event rendering (decision 2)', () => {
     await controller.attach();
 
     backend.emit({ type: 'CommandStarted', command_id: 1 });
-    backend.emit({ type: 'Output', command_id: 1, text: 'phase one', read_mode: 'Auto' });
+    backend.emit({ type: 'Output', command_id: 1, text: 'phase one' });
+    backend.emit({
+      type: 'Announce',
+      command_id: 1,
+      announcement: { kind: 'ReadAloud', text: 'phase one' },
+    });
     backend.emit({ type: 'CommandInterrupted', command_id: 1 });
 
     expect(announcer.announcements).toEqual(['phase one', commandStoppedMessage]);
     expect(announcer.announcements[1]).toBe('command stopped');
     // The block was closed, so a later event for the same id opens a fresh one.
-    backend.emit({ type: 'Output', command_id: 1, text: 'late', read_mode: 'Auto' });
+    backend.emit({ type: 'Output', command_id: 1, text: 'late' });
     expect(buffer.opened).toEqual([
       { commandId: 1, commandLine: '' },
       { commandId: 1, commandLine: '' },
@@ -269,7 +297,12 @@ describe('event rendering (decision 2)', () => {
     await controller.attach();
 
     backend.emit({ type: 'CommandStarted', command_id: 1 });
-    backend.emit({ type: 'Output', command_id: 1, text: 'a\nb', read_mode: 'TooBig' });
+    backend.emit({ type: 'Output', command_id: 1, text: 'a\nb' });
+    backend.emit({
+      type: 'Announce',
+      command_id: 1,
+      announcement: { kind: 'TooBig', lines: 2 },
+    });
     backend.emit({ type: 'CommandInterrupted', command_id: 1 });
 
     // The beep answers "your too-big output finished"; a stop already has a spoken
@@ -282,9 +315,14 @@ describe('event rendering (decision 2)', () => {
     const { backend, beep, controller } = makeApp();
     await controller.attach();
 
-    backend.emit({ type: 'Output', command_id: 1, text: 'a\nb', read_mode: 'TooBig' });
+    backend.emit({ type: 'Output', command_id: 1, text: 'a\nb' });
+    backend.emit({
+      type: 'Announce',
+      command_id: 1,
+      announcement: { kind: 'TooBig', lines: 2 },
+    });
     backend.emit({ type: 'CommandInterrupted', command_id: 1 });
-    backend.emit({ type: 'CommandFinished', command_id: 1, exit_code: 0, read_mode: 'Auto' });
+    backend.emit({ type: 'CommandFinished', command_id: 1 });
 
     expect(beep.beeps).toBe(0);
   });
@@ -294,19 +332,37 @@ describe('event rendering (decision 2)', () => {
     await controller.attach();
 
     backend.emit({ type: 'CommandStarted', command_id: 1 });
-    backend.emit({ type: 'Output', command_id: 1, text: 'a\nb', read_mode: 'TooBig' });
-    backend.emit({ type: 'Output', command_id: 1, text: 'trickle', read_mode: 'Auto' });
-    backend.emit({ type: 'CommandFinished', command_id: 1, exit_code: 0, read_mode: 'Auto' });
+    backend.emit({ type: 'Output', command_id: 1, text: 'a\nb' });
+    backend.emit({
+      type: 'Announce',
+      command_id: 1,
+      announcement: { kind: 'TooBig', lines: 2 },
+    });
+    backend.emit({ type: 'Output', command_id: 1, text: 'trickle' });
+    backend.emit({
+      type: 'Announce',
+      command_id: 1,
+      announcement: { kind: 'ReadAloud', text: 'trickle' },
+    });
+    backend.emit({ type: 'CommandFinished', command_id: 1 });
 
     expect(beep.beeps).toBe(1);
   });
 
-  it('beeps when the finish verdict itself is too-big', async () => {
+  // The remainder flushed at the end of a command can itself be too big. That verdict
+  // used to ride `CommandFinished.read_mode`; since A6 it is an `Announce` the backend
+  // sends before closing the block, and it must still arm the beep.
+  it('beeps when the verdict on the final remainder is too-big', async () => {
     const { backend, beep, controller } = makeApp();
     await controller.attach();
 
     backend.emit({ type: 'CommandStarted', command_id: 1 });
-    backend.emit({ type: 'CommandFinished', command_id: 1, exit_code: 0, read_mode: 'TooBig' });
+    backend.emit({
+      type: 'Announce',
+      command_id: 1,
+      announcement: { kind: 'TooBig', lines: 900 },
+    });
+    backend.emit({ type: 'CommandFinished', command_id: 1 });
 
     expect(beep.beeps).toBe(1);
   });
@@ -316,25 +372,23 @@ describe('event rendering (decision 2)', () => {
     await controller.attach();
 
     // Command 1 is too-big and beeps.
-    backend.emit({ type: 'Output', command_id: 1, text: 'a\nb', read_mode: 'TooBig' });
-    backend.emit({ type: 'CommandFinished', command_id: 1, exit_code: 0, read_mode: 'Auto' });
+    backend.emit({ type: 'Output', command_id: 1, text: 'a\nb' });
+    backend.emit({
+      type: 'Announce',
+      command_id: 1,
+      announcement: { kind: 'TooBig', lines: 2 },
+    });
+    backend.emit({ type: 'CommandFinished', command_id: 1 });
     // Command 2 is plain; it must not beep.
-    backend.emit({ type: 'Output', command_id: 2, text: 'ok', read_mode: 'Auto' });
-    backend.emit({ type: 'CommandFinished', command_id: 2, exit_code: 0, read_mode: 'Auto' });
+    backend.emit({ type: 'Output', command_id: 2, text: 'ok' });
+    backend.emit({
+      type: 'Announce',
+      command_id: 2,
+      announcement: { kind: 'ReadAloud', text: 'ok' },
+    });
+    backend.emit({ type: 'CommandFinished', command_id: 2 });
 
     expect(beep.beeps).toBe(1);
-  });
-
-  it('CommandStillRunning announces the patience string', async () => {
-    const { backend, announcer, controller } = makeApp();
-    await controller.attach();
-
-    backend.emit({ type: 'CommandStillRunning', command_id: 1 });
-
-    expect(announcer.announcements).toEqual([patienceMessage]);
-    expect(announcer.announcements[0]).toBe(
-      'long command running, output is accumulating in the buffer',
-    );
   });
 
   it('AltScreenEntered and AltScreenLeft announce the pinned strings', async () => {
@@ -384,7 +438,7 @@ describe('event rendering (decision 2)', () => {
     await controller.attach();
 
     // No submit happened; an Output races in first.
-    backend.emit({ type: 'Output', command_id: 7, text: 'orphan chunk', read_mode: 'Auto' });
+    backend.emit({ type: 'Output', command_id: 7, text: 'orphan chunk' });
 
     expect(buffer.opened).toEqual([{ commandId: 7, commandLine: '' }]);
     expect(buffer.appended).toEqual([{ commandId: 7, text: 'orphan chunk' }]);
@@ -414,7 +468,7 @@ describe('event rendering (decision 2)', () => {
     await controller.submit();
 
     backend.emit({ type: 'CommandStarted', command_id: 1 });
-    backend.emit({ type: 'Output', command_id: 1, text: 'hello from acter', read_mode: 'Auto' });
+    backend.emit({ type: 'Output', command_id: 1, text: 'hello from acter' });
 
     expect(buffer.opened).toEqual([{ commandId: 1, commandLine: 'small' }]);
   });
@@ -453,7 +507,7 @@ describe('Announce (B1.5): speech is its own event', () => {
     await controller.attach();
 
     backend.emit({ type: 'CommandStarted', command_id: 1 });
-    backend.emit({ type: 'Output', command_id: 1, text: 'hello\n', read_mode: 'Quiet' });
+    backend.emit({ type: 'Output', command_id: 1, text: 'hello\n' });
     backend.emit({
       type: 'Announce',
       command_id: 1,
@@ -471,7 +525,7 @@ describe('Announce (B1.5): speech is its own event', () => {
     backend.emit({ type: 'CommandStarted', command_id: 1 });
     // Past the threshold the backend does not hold the text, so the count cannot be
     // re-derived here even in principle — it is carried.
-    backend.emit({ type: 'Output', command_id: 1, text: 'y\ny\n', read_mode: 'Quiet' });
+    backend.emit({ type: 'Output', command_id: 1, text: 'y\ny\n' });
     backend.emit({
       type: 'Announce',
       command_id: 1,
@@ -494,12 +548,7 @@ describe('Announce (B1.5): speech is its own event', () => {
     });
     expect(beep.beeps).toBe(0);
 
-    backend.emit({
-      type: 'CommandFinished',
-      command_id: 1,
-      exit_code: 0,
-      read_mode: 'Quiet',
-    });
+    backend.emit({ type: 'CommandFinished', command_id: 1 });
     expect(beep.beeps).toBe(1);
   });
 
@@ -557,7 +606,7 @@ describe('Announce (B1.5): speech is its own event', () => {
       announcement: { kind: 'OutputContinues' },
     });
     for (const text of ['still\n', 'coming\n']) {
-      backend.emit({ type: 'Output', command_id: 1, text, read_mode: 'Quiet' });
+      backend.emit({ type: 'Output', command_id: 1, text });
     }
 
     expect(buffer.appended).toEqual([

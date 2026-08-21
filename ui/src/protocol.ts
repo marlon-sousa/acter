@@ -93,26 +93,26 @@ export type Mode =
 /**  Full terminal pass-through for ncurses/full-screen programs. */
 "Interactive";
 
-/**
- *  The read verdict computed backend-side by the pacing policy and carried on every
- *  announcement-bearing event. The frontend obeys it and never re-measures.
- */
-export type ReadMode = 
-/**  Small enough to read aloud automatically via the live region. */
-"Auto" | 
-/**  Over threshold: announced as "too big to read"; a beep signals completion. */
-"TooBig" | 
-/**  Suppressed (e.g. the babble guard tripped); accumulates silently in the buffer. */
-"Quiet";
-
 /**  Everything the backend streams to the frontend about one session. */
 export type SessionEvent = 
 /**  The command block opened: its output region has begun (OSC 133 C). */
 { type: "CommandStarted"; command_id: CommandId } | 
-/**  A coalesced quiescent chunk of output, tagged with the read verdict to obey. */
-{ type: "Output"; command_id: CommandId; text: string; read_mode: ReadMode } | 
-/**  The command block closed (OSC 133 D): exit code plus the verdict for the remainder. */
-{ type: "CommandFinished"; command_id: CommandId; exit_code: ExitCode; read_mode: ReadMode } | 
+/**
+ *  A coalesced quiescent chunk of output. Rendering only: it says what to put in
+ *  the buffer and never what to say about it. Whether any of it is spoken is a
+ *  separate [`Announce`](SessionEvent::Announce) (A6).
+ */
+{ type: "Output"; command_id: CommandId; text: string } | 
+/**
+ *  The command block closed (OSC 133 D).
+ * 
+ *  Carries no exit code. A nonzero one arrives as `Announce { Failed }`, after the
+ *  remainder of the output, which is the order a listener needs: the error text
+ *  first, the verdict about it second. A successful command's code is therefore not
+ *  on the wire at all — nothing read it, and the frontend must not speak it (A6
+ *  decision 2). A later feature wanting the code adds a shape for it deliberately.
+ */
+{ type: "CommandFinished"; command_id: CommandId } | 
 /**
  *  The command was stopped before it ended on its own. Terminal: no
  *  `CommandFinished` follows. Distinct from `CommandFinished` on purpose — the exit
@@ -121,8 +121,6 @@ export type SessionEvent =
  *  Windows) would mis-announce a program that genuinely exits with it.
  */
 { type: "CommandInterrupted"; command_id: CommandId } | 
-/**  Patience announcement: output has flowed for the whole window with no end marker. */
-{ type: "CommandStillRunning"; command_id: CommandId } | 
 /**
  *  The startup grace period elapsed with no shell-integration markers: this session
  *  has no command boundaries and every command in it degrades to patience-only

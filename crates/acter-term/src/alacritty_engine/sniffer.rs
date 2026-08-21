@@ -43,7 +43,7 @@ impl Sniffer {
 
     /// Drains what the byte just parsed produced, in order.
     pub(super) fn drain(&mut self) -> Vec<Signal> {
-        self.signals.drain(..).collect()
+        std::mem::take(&mut self.signals)
     }
 }
 
