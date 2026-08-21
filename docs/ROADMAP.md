@@ -520,6 +520,45 @@ the answer to "what should we do now?".
     interrupt cancel a command *mid-delivery*, halfway through a marker, which is a
     behavior change deserving a decision made in the open. B6's accessibility matrix found
     no line announced before it was finished, so nothing promotes this ahead of B4.
+
+    **The three answers, agreed in conversation 2026-08-21** and pinned here so the spec
+    starts from them rather than reopening them.
+
+    *Read timing: measure before modelling.* No model lands speculatively. B4 instruments
+    the real reader and records what it saw — a build log, a large listing, a program that
+    dribbles — as a finding in its PR body, and the fake's model, if any, lands in that
+    same PR built against those numbers. The expectation to prove or disprove is that
+    ConPTY hands over whatever is in its buffer, so gaps cluster *between* program writes,
+    which `DelayRange` already models, and within-write gaps are microseconds. If that is
+    what the measurement says, adding nothing and writing down why is the correct outcome.
+    And the defect this is really about is not the transport's: a line whose halves
+    straddle the quiescence window is read as half a sentence by
+    `policies::autoread`, which the transport only makes reachable. The policy question —
+    should quiescence flush a *trailing partial line*, or hold it until it ends — is a
+    DESIGN question, not B4's, and B4's measurement is what should inform it. Recorded as
+    an open question rather than answered here.
+
+    *What that does to `Chunking`: split the concept.* `Chunking` stays pure and keeps its
+    meaning, where the cuts fall. The gap goes on the pipe, which already holds the
+    `Clock` and the seeded roll, as a `read_gap: DelayRange` beside `chunking` — reusing
+    that type for its sampling, its `is_instant()` fast path and its deterministic roll,
+    defaulting to instant so every existing fixture keeps the meaning it has today. A
+    clock inside the policy would cost the purity its own module doc claims, which is what
+    makes `Chunking` a free dimension every fixture can be crossed with.
+
+    *Interrupt mid-delivery: no, and answer the real question instead.* The fake's delivery
+    stays atomic; making it divisible would give every interrupt fixture a
+    timing-dependent result, which is what B3.6 removed from this crate on purpose. The
+    question ConPTY genuinely raises is the truncated sequence: a program killed mid-write
+    can emit `ESC ] 1 3 3 ; D` with no terminator, followed by the shell's `^C` and a new
+    prompt beginning with its own `A`. A parser accumulating to the next terminator would
+    swallow both. There is no coverage of this today —
+    `acter-term/tests/vte_unhandled_osc.rs` covers unrecognized-but-*complete* OSCs — so
+    B4 carries one test that an unterminated OSC 133 followed by `^C` and the next prompt
+    still recognizes that prompt's `A`; if vte swallows it, the fix is bounded OSC
+    accumulation in `acter-term`. Note the interaction with B6.1: a lost `D` leaves the
+    block open, but the next block now claims by echo, so the mis-attribution no longer
+    compounds across the session.
 23. B5, PowerShell adapter. Spec: none yet → specify first. Scope sketch: OSC 133
     injection snippet; record the first golden transcripts as fixtures, in B2's format
     — so a captured real session is replayable as a fake session.
