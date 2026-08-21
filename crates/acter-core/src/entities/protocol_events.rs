@@ -18,7 +18,21 @@ use crate::{CommandId, ConnectionState, ExitCode};
 #[serde(tag = "type")]
 pub enum SessionEvent {
     /// The command block opened: its output region has begun (OSC 133 C).
-    CommandStarted { command_id: CommandId },
+    ///
+    /// `command_line` is what the shell echoed for this block (the B..C region), which
+    /// is the shell itself saying which line it read. The frontend prefers it over the
+    /// optimistic heading it put on the block when the submission was acked, so an id
+    /// that drifted can no longer put the wrong words on a block (spec B6.1, decision 1).
+    ///
+    /// `None` is a real state and not a missing value: an unintegrated session has no
+    /// B..C region at all, a shell may emit `C` with nothing echoed before it, and an
+    /// echo the service could not read apart from the prompt it was written after is
+    /// deliberately reported as unknown. The frontend's answer to `None` is to keep the
+    /// heading it has.
+    CommandStarted {
+        command_id: CommandId,
+        command_line: Option<String>,
+    },
     /// A coalesced quiescent chunk of output. Rendering only: it says what to put in
     /// the buffer and never what to say about it. Whether any of it is spoken is a
     /// separate [`Announce`](SessionEvent::Announce) (A6).
@@ -104,6 +118,11 @@ mod tests {
         vec![
             SessionEvent::CommandStarted {
                 command_id: CommandId(1),
+                command_line: Some("git status".to_owned()),
+            },
+            SessionEvent::CommandStarted {
+                command_id: CommandId(1),
+                command_line: None,
             },
             SessionEvent::Output {
                 command_id: CommandId(1),
@@ -188,6 +207,25 @@ mod tests {
                 "type": "Announce",
                 "command_id": 7,
                 "announcement": { "kind": "TooBig", "lines": 120 },
+            })
+        );
+    }
+
+    /// An echo the service could not read is `null` on the wire rather than an absent
+    /// field or an empty string: the frontend branches on it, and "the shell did not tell
+    /// us" has to be distinguishable from "the shell echoed nothing at all".
+    #[test]
+    fn an_unknown_command_line_is_null() {
+        assert_eq!(
+            serde_json::to_value(SessionEvent::CommandStarted {
+                command_id: CommandId(4),
+                command_line: None,
+            })
+            .unwrap(),
+            json!({
+                "type": "CommandStarted",
+                "command_id": 4,
+                "command_line": null,
             })
         );
     }

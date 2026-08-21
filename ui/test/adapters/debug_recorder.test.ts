@@ -94,7 +94,7 @@ describe('installDebugRecorder in a debug build', () => {
         .map((entry) => entry.what);
     });
 
-    backend.emit({ type: 'CommandStarted', command_id: 1 });
+    backend.emit({ type: 'CommandStarted', command_id: 1, command_line: null });
 
     expect(seenWhileHandling).toEqual(['CommandStarted']);
   });
@@ -122,7 +122,7 @@ describe('installDebugRecorder in a debug build', () => {
     const backend = new FakeBackend();
     const wrapped = installDebugRecorder(backend);
     await wrapped.attachSession(() => {});
-    backend.emit({ type: 'CommandStarted', command_id: 1 });
+    backend.emit({ type: 'CommandStarted', command_id: 1, command_line: null });
     backend.emit({ type: 'CommandFinished', command_id: 1 });
 
     const seqs = debugWindow()
@@ -136,7 +136,7 @@ describe('installDebugRecorder in a debug build', () => {
     const backend = new FakeBackend();
     const wrapped = installDebugRecorder(backend);
     await wrapped.attachSession(() => {});
-    backend.emit({ type: 'CommandStarted', command_id: 1 });
+    backend.emit({ type: 'CommandStarted', command_id: 1, command_line: null });
 
     debugWindow().__acterDebug!.entries().length = 0;
 

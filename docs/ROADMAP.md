@@ -536,31 +536,47 @@ the answer to "what should we do now?".
     needs something in a profile's shell-adapter slot to be "selectable like any real
     shell" as DESIGN Decided.
 
-24. B6.1, correlation that cannot drift. Spec: none yet → specify first. **An iteration
-    entry from B6's manual NVDA pass**, not a planned step. B6's decision 3 accepted one
-    hole knowingly: an id submitted for a line that never opens a block stays queued and
-    the next block claims it. Driving the matrix with NVDA showed the consequence is worse
-    than that wording admits — the queue does not recover, so from that point on *every*
-    block in the session carries the previous command's heading, and a listener hears
-    every answer under the question before it. The trigger there was the built-in
-    transcript's `stop` rule, which consumes a submitted line to model an interrupt and so
-    mints an id for something that is a keystroke in the shipped product; A3.2 removes
-    that particular trigger, but not the hole. Two candidate fixes, to choose between when
-    this is specified:
-    **Headings from the shell's own echo.** The tracker already labels the B..C region as
-    `Region::CommandLine` — that is the shell saying which line it read — so the pump can
-    carry that text on `CommandStarted` and the frontend can use it as the block heading
-    instead of the optimistic one from the ack. A drifted id then still routes output to
-    a consistent block; what it can no longer do is put the wrong words on it.
-    **Retire ids consumed by a full-screen program.** Text typed while the alternate
-    screen is up was input to that program and was never a command line, so those ids can
-    be retired when the alternate screen is left. Narrow, principled, and it closes the
-    one case that is reachable today without A3.2.
-    What must **not** be done is the obvious rule — retire the queue at the next prompt.
-    A real shell draws its prompt before it reads a line a fast typist already sent, so
-    that rule loses the second of two quickly-typed commands, which is exactly what
-    `blocks_claim_submitted_ids_in_the_order_they_were_submitted` forbids. The reasoning
-    is written out in B6's spec under decision 3.
+24. **Done** — B6.1, correlation that cannot drift. Spec:
+    [b6.1-correlation-that-cannot-drift.md](specs/b6.1-correlation-that-cannot-drift.md).
+    **An iteration entry from B6's manual NVDA pass**, not a planned step. B6's decision 3
+    accepted one hole knowingly: an id submitted for a line that never opens a block
+    stayed queued and the next block claimed it, and the queue never recovered — so from
+    the first drift onward every block carried the previous command's heading and a
+    listener heard every answer under the question before it.
+
+    The fix is the shell's own echo, and it turned out to answer both halves rather than
+    the labelling half the roadmap expected. `CommandStarted` now carries
+    `command_line: Option<String>`, read from the B..C region the tracker already labels,
+    and the frontend prefers it over the optimistic heading from the submit ack. On top of
+    that, the pump keeps each queued id's submitted text, and an echo matching a *later*
+    submission retires the ones before it: phase 1's shell is serial and reads lines in
+    order, so a shell running a later line has already disposed of the earlier ones as
+    something other than command lines. That is positive evidence, unlike the rule B6
+    forbade — retiring at the next prompt infers from a marker's *absence*, and a real
+    shell draws its prompt before it reads a line a fast typist already sent, which is
+    what `blocks_claim_submitted_ids_in_the_order_they_were_submitted` exists to forbid.
+    Matching is exact after trimming and never fuzzy, so a shell that echoes something
+    else falls back to B6's claim from the front with an honest heading on top of it.
+
+    **The alternate-screen candidate was not taken**, and needs no separate entry: the
+    echo rule retires those ids at the next real command whatever consumed them, and a
+    second rule would have added a race of its own (a line submitted between a program
+    exiting and the pump reading `AltScreenLeft` is a real command line). Two triggers
+    beyond the retired `stop` rule are named in the spec as the reachable ones against a
+    real shell, and the second — a line the shell reads but does not run, which is what an
+    unterminated quote does — is why the narrow rule would not have been enough.
+
+    Three consequences worth knowing downstream. **A rewritten echo can report `None`**:
+    a rewrite carries the whole row including the prompt, so the prompt is stripped from
+    the front of it and an unexplained row is reported as unknown rather than guessed —
+    which is the case a real PSReadLine redraw will exercise first when B5 lands.
+    **`send_key` can answer `nothing running to stop` again after a drift**, because
+    `settle_running` counts queued ids and a queue that could never drain reported
+    "running" forever. And **a retired id's buffer block is left standing** with the
+    heading the user typed and no output: the user did type that line and it did produce
+    nothing, and an event meaning "this never ran" would be new protocol surface plus a
+    pinned string, decided in the open with a listener present rather than as a side
+    effect.
 
 ## Convergence (requires B4, B5 and B6 all Done)
 

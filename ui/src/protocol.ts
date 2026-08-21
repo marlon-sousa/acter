@@ -95,8 +95,21 @@ export type Mode =
 
 /**  Everything the backend streams to the frontend about one session. */
 export type SessionEvent = 
-/**  The command block opened: its output region has begun (OSC 133 C). */
-{ type: "CommandStarted"; command_id: CommandId } | 
+/**
+ *  The command block opened: its output region has begun (OSC 133 C).
+ * 
+ *  `command_line` is what the shell echoed for this block (the B..C region), which
+ *  is the shell itself saying which line it read. The frontend prefers it over the
+ *  optimistic heading it put on the block when the submission was acked, so an id
+ *  that drifted can no longer put the wrong words on a block (spec B6.1, decision 1).
+ * 
+ *  `None` is a real state and not a missing value: an unintegrated session has no
+ *  B..C region at all, a shell may emit `C` with nothing echoed before it, and an
+ *  echo the service could not read apart from the prompt it was written after is
+ *  deliberately reported as unknown. The frontend's answer to `None` is to keep the
+ *  heading it has.
+ */
+{ type: "CommandStarted"; command_id: CommandId; command_line: string | null } | 
 /**
  *  A coalesced quiescent chunk of output. Rendering only: it says what to put in
  *  the buffer and never what to say about it. Whether any of it is spoken is a
