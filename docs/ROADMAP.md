@@ -180,21 +180,57 @@ the answer to "what should we do now?".
     deleted: a far end that treats a line as an interrupt is the pipe's behavior and a
     real shell can still produce it, even though the product no longer ships a scenario
     that does.
-    **The accessibility checklist is only partly agent-observed, and the PR body says
-    which items are which.** The screen-readers bridge dropped mid-run and could not be
-    restarted from inside the session. One item was driven under NVDA 2026.1.1 and its
-    `Ctrl+C` did not take effect; the same keystroke, sent as a real key press through
-    the embedded WebDriver, stopped the command and spoke `command stopped`, so the
-    application path is proven and the reader path is not. That is left as an open
-    question against the run rather than as a defect against the software, and it is the
-    first thing to settle when the bridge is back.
-12. A4, completion path. Spec: none yet → specify first. Scope sketch: fake
+    **The accessibility checklist was driven under NVDA 2026.1.1** through the
+    screen-readers bridge as the `user` persona, silent capture: six items agent-observed
+    and passing, the seventh (no beep on a stopped command) human-only, because the
+    bridge captures speech and braille rather than audio. The alt-screen promise is kept
+    end to end — `nano`, then `Ctrl+C`, gives `interactive program ended` and
+    `command stopped` as two utterances 277 ms apart, which is A5.2's drain spacing doing
+    its job — and the heading after three interrupts in one session is still the command's
+    own, which is the retired `stop` rule's drift trigger being gone rather than merely
+    argued about.
+    **One finding, and it belongs to the reader rather than to this diff: NVDA's browse
+    mode consumes `Ctrl+C`.** With no selection in the results buffer NVDA answers "no
+    selection" from its own copy command and the keystroke never reaches the application,
+    so the command keeps running. Every item above was therefore observed in focus mode.
+    Filed as A5.3; it is not recorded as a defect here, because a mode owning a key is
+    the artifact CLAUDE.md names rather than a fault in the software under test.
+12. A5.3, stopping from browse mode, and what a listener hears around a stop. Spec:
+    none yet → specify first. **An iteration entry from A3.2's NVDA pass**, and the first
+    one whose subject is a keystroke Acter never receives.
+    **The finding.** NVDA's browse mode binds `Ctrl+C` to its own copy command. In the
+    results buffer with no selection it answers "no selection" and consumes the key, so
+    the interrupt never reaches the application and the running command keeps running.
+    A3.2's decision 5 — `Ctrl+C` interrupts from either area — therefore holds in focus
+    mode only, and the results buffer is precisely where NVDA lands in browse mode. With
+    a selection the same key does the right thing, because copying the selection is what
+    DESIGN asks the buffer for; it is the no-selection half that is unreachable.
+    Not a defect in A3.2 and deliberately not recorded as one: a reader owning a key is
+    a mode artifact, and the keystroke Acter does receive it handles correctly.
+    **Why it needs a decision rather than a fix.** The obvious answer is a second,
+    browse-safe binding for the interrupt, and DESIGN Decided that bindings are
+    configurable and global — so choosing one is a DESIGN conversation, and the natural
+    candidate is layer 1 (`Ctrl+Shift+letter`), which browse mode does not take and which
+    DESIGN already reserves for "you are talking to Acter". Against that: an interrupt is
+    the one command whose muscle memory is universal, and teaching a second key for it in
+    one focus area is its own cost. Worth weighing is whether the buffer should be a
+    browse-mode document at all while a command is running.
+    **It also carries a smaller observation from the same run**, which is B6's behavior
+    rather than A3.2's and was simply first heard here: after a stop, the accumulated
+    unspoken output is flushed and read *after* `command stopped`, ending with the far
+    end's `^C` echo. So a listener hears the verdict, then the backlog it was about —
+    the reverse of the order A6 decision 2 established for a failure, where the text
+    comes first and the verdict second. Whether an interrupt should follow that same
+    rule, or whether the backlog should be dropped rather than read, is the second
+    question this entry has to answer.
+
+13. A4, completion path. Spec: none yet → specify first. Scope sketch: fake
     completion provider, Tab handling in the edit field, completion announcement.
-13. A5.3 and onward — iteration entries appear here as NVDA findings arrive.
+14. A5.4 and onward — iteration entries appear here as NVDA findings arrive.
 
 ## Status board — lane 2: domain (pure Rust; may start anytime, parallel to lane 1)
 
-14. **Done** — B1, foundations. Spec: [b1-foundations.md](specs/b1-foundations.md).
+15. **Done** — B1, foundations. Spec: [b1-foundations.md](specs/b1-foundations.md).
     `acter-core` gained `entities/session_state.rs` (mode/integration/screen state
     machine, with integration recovery from `Unintegrated`) and
     `policies/autoread.rs` (the quiescence/patience/babble-guard pacing policy,
@@ -202,7 +238,7 @@ the answer to "what should we do now?".
     out). No driven-port traits and no `Clock` — deliberately deferred to the next
     lane-2 entry (spec deviation recorded in the spec itself). 40 new table tests,
     no fakes.
-15. **Done** — B1.1, pacing policy review fixes. Spec:
+16. **Done** — B1.1, pacing policy review fixes. Spec:
     [b1-foundations.md](specs/b1-foundations.md) (amended in the same PR — no new spec).
     Merged as PR #11 (2026-08-16). Five defects found reviewing PR #10, all in
     `policies::autoread`: the babble guard tripped one chunk early and swallowed that
@@ -220,7 +256,7 @@ the answer to "what should we do now?".
     time — A2 defined it for exactly this case and the frontend already renders it —
     and it keeps `PacingAction::None` meaning only "nothing to emit". Seven new tests
     (47 in `acter-core`, up from 40).
-16. **Done** — B1.5, session actor and the `Clock` port. Spec:
+17. **Done** — B1.5, session actor and the `Clock` port. Spec:
     [b1.5-session-actor.md](specs/b1.5-session-actor.md). Placed ahead of B2 by
     decision: B1 shipped a pacing
     policy with no caller, so its whole scheduling contract (`wake_after`, and the
@@ -251,7 +287,7 @@ the answer to "what should we do now?".
     production `SystemClock` adapter landed here rather than being deferred to the entry
     that first spawns an actor — that is B6 or convergence, and leaving `Clock` on main
     for months with only a test fake behind it is the very shape B1 refused to create.
-17. **Done** — B2, the command-block boundary tracker. Spec:
+18. **Done** — B2, the command-block boundary tracker. Spec:
     [b2-boundary-tracker.md](specs/b2-boundary-tracker.md). Merged as PR #16.
     `BoundaryTracker` turns the
     ordered stream of text and OSC 133 markers into command blocks and labelled regions
@@ -271,7 +307,7 @@ the answer to "what should we do now?".
     (a new dev-dependency): never panics, blocks are balanced and never nest,
     `MarkersObserved` latches once, and above all **text is never lost** — for this
     product, silently dropping output is the cardinal defect.
-18. B3, terminal engine. **Done.** Spec:
+19. B3, terminal engine. **Done.** Spec:
     [b3-terminal-engine.md](specs/b3-terminal-engine.md). Scope: acter-term
     wrapping alacritty_terminal behind TerminalEngine; text extraction + alt-screen
     detection tests; **OSC 133 recognition**, moved here from B2 by decision, feeding
@@ -320,7 +356,7 @@ the answer to "what should we do now?".
     count to read back; the emulator's history is a staging area, and the user's scrollback
     is the buffer this stream feeds. And a block end retires a line's id while *keeping* the
     row's text, so a frozen row stays quiet until it actually changes.
-19. B3.5, the `Transport` port and the scripted byte-level fake. **Done.** Spec:
+20. B3.5, the `Transport` port and the scripted byte-level fake. **Done.** Spec:
     [b3.5-scripted-transport.md](specs/b3.5-scripted-transport.md).
     Delivers `ports/driven/transport.rs` (push reads onto a caller-supplied channel, the
     end of a session being that channel closing rather than an error variant; `write` and
@@ -381,7 +417,7 @@ the answer to "what should we do now?".
     `fail` is `D;1`, `burst`/`forever`/`tail` are byte timing), and DESIGN's "the scripted
     fake session is a permanent supported session kind" survives unchanged — the
     scenarios are permanent; only the altitude they are expressed at was wrong.
-20. B3.6, the fake shell and the fake pipe. **Done.** Spec:
+21. B3.6, the fake shell and the fake pipe. **Done.** Spec:
     [b3.6-fake-shell.md](specs/b3.6-fake-shell.md).
     A refactor of one adapter crate, with `acter-core` untouched. `ScriptedTransport`
     fused two things — what the far end *says* and how its bytes *arrive* — and this
@@ -418,7 +454,7 @@ the answer to "what should we do now?".
     default backend and runs the first real accessibility matrix against these fixtures,
     so landing the split afterwards would author them twice. B6 adds only `interrupt` to
     this crate, so going first costs it nothing.
-21. B6, real SessionService. **Done.** Spec:
+22. B6, real SessionService. **Done.** Spec:
     [b6-session-service.md](specs/b6-session-service.md).
     `acter-core`'s first service owns a session end to end: two tasks, the pump one of
     them, owning the transport, the engine, the tracker and the correlation queue, with
@@ -468,7 +504,7 @@ the answer to "what should we do now?".
     its seven spec files were red. The runner now writes the built-in transcript with
     every delay replaced by a deterministic 20 ms, which is T2 decision 8's requirement
     met where faking actually lives since B3.5.
-22. B4, local transport. Spec: none yet → specify first. **Next in lane 2.** Scope
+23. B4, local transport. Spec: none yet → specify first. **Next in lane 2.** Scope
     sketch: LocalPty on ConPTY + blocking-reader thread; real-shell integration test in a
     separate CI job. `Transport` already exists by now (B3.5), so this is a second implementer,
     not a new seam — `interrupt` included, which B6 added to the port and which over a
@@ -487,7 +523,7 @@ the answer to "what should we do now?".
     interrupt cancel a command *mid-delivery*, halfway through a marker, which is a
     behavior change deserving a decision made in the open. B6's accessibility matrix found
     no line announced before it was finished, so nothing promotes this ahead of B4.
-23. B5, PowerShell adapter. Spec: none yet → specify first. Scope sketch: OSC 133
+24. B5, PowerShell adapter. Spec: none yet → specify first. Scope sketch: OSC 133
     injection snippet; record the first golden transcripts as fixtures, in B2's format
     — so a captured real session is replayable as a fake session.
     **Also carries EOF** (filed here by B6, decision 6). `SessionIntent` ships with
@@ -503,7 +539,7 @@ the answer to "what should we do now?".
     needs something in a profile's shell-adapter slot to be "selectable like any real
     shell" as DESIGN Decided.
 
-24. B6.1, correlation that cannot drift. Spec: none yet → specify first. **An iteration
+25. B6.1, correlation that cannot drift. Spec: none yet → specify first. **An iteration
     entry from B6's manual NVDA pass**, not a planned step. B6's decision 3 accepted one
     hole knowingly: an id submitted for a line that never opens a block stays queued and
     the next block claims it. Driving the matrix with NVDA showed the consequence is worse
