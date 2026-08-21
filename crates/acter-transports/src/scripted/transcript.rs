@@ -484,7 +484,7 @@ mod tests {
         let default = transcript.rule_for("something nobody ever scripted");
 
         for scenario in [
-            "small", "big", "fail", "slow", "forever", "nano", "tail", "burst", "speech", "stop",
+            "small", "big", "fail", "slow", "forever", "nano", "tail", "burst", "speech",
         ] {
             assert_ne!(
                 transcript.rule_for(scenario),

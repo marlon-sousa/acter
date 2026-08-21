@@ -2,7 +2,12 @@
 // backend's SessionEvent stream into the buffer, live region, and beep. Framework-free:
 // sees only the BackendApi port and the view ports.
 
-import type { Announcement, CommandId, SessionEvent } from '../protocol';
+import type {
+  Announcement,
+  CommandId,
+  KeyPress,
+  SessionEvent,
+} from '../protocol';
 import type { AnnouncerView } from '../ports/announcer_view';
 import type { BackendApi } from '../ports/backend_api';
 import type { BeepView } from '../ports/beep_view';
@@ -37,9 +42,23 @@ export function tooBigMessage(lineCount: number): string {
 export function failureMessage(exitCode: number): string {
   return `command failed, exit code ${exitCode}`;
 }
+// The two answers to a keystroke that only the frontend can voice (A3.2 decision 7).
+// `Applied` is deliberately absent: CommandInterrupted already says `command stopped`,
+// and it says it when the interrupt took effect rather than when it was accepted.
+//
+// A3.1 decision 6 named this one: the typed `stop` had no honest way to say it, because
+// the only surface that could justify the words is a key with an ack to report them.
+export const nothingToStopMessage = 'nothing running to stop';
+// Unreachable while Ctrl+C is both the only key reported and the only key bound. It is
+// still spoken, because the first thing a second reported key must not do is vanish.
+export const unboundKeyMessage = 'that key does nothing here';
 
 function assertNever(event: never): never {
   throw new Error(`unhandled SessionEvent variant: ${JSON.stringify(event)}`);
+}
+
+function assertNeverAck(ack: never): never {
+  throw new Error(`unhandled KeyAck variant: ${JSON.stringify(ack)}`);
 }
 
 function assertNeverAnnouncement(announcement: never): never {
@@ -206,5 +225,43 @@ export class AppController {
     if (this.buffer.containsFocus()) {
       this.editField.focus();
     }
+  }
+
+  /**
+   * Report a keystroke the frontend chose not to handle, and say what came back.
+   *
+   * The key travels, never the meaning: the binding table is the domain's, so this
+   * method knows nothing about interrupting and needs no change when a second binding
+   * arrives (spec A3.2 decision 1).
+   */
+  async reportKey(press: KeyPress): Promise<void> {
+    const ack = await this.backend.sendKey(press);
+    switch (ack) {
+      case 'Applied':
+        // Nothing: the session speaks for itself when the intent lands.
+        break;
+      case 'NothingToActOn':
+        this.announcer.announce(nothingToStopMessage);
+        break;
+      case 'Unbound':
+        this.announcer.announce(unboundKeyMessage);
+        break;
+      default:
+        assertNeverAck(ack);
+    }
+  }
+
+  /**
+   * Whether the edit field is holding a selection — the question that decides whether
+   * the platform still owns a keystroke rather than the session.
+   *
+   * Only the edit field is asked, because only the edit field reports keystrokes at all
+   * (DESIGN's layer 2: the interrupt belongs there and nowhere else). It is asked here
+   * rather than read off the document because an input's selection is not the
+   * document's — `window.getSelection()` cannot see one — which is why this is a view
+   * question rather than a DOM one.
+   */
+  editFieldHasSelection(): boolean {
+    return this.editField.hasSelection();
   }
 }

@@ -64,6 +64,18 @@ pub fn run() {
         builder.plugin(init())
     };
 
+    // The frontend's debug event recorder, gated the same way and for the same reason
+    // (spec A3.2, decision 12). This injects one flag before any page script runs; the
+    // frontend reads it and, only then, wraps its backend and installs the reader at
+    // `window.__acterDebug`. A release build injects nothing, so the recorder is not
+    // merely disabled there — it is never constructed.
+    #[cfg(debug_assertions)]
+    let builder = builder.plugin(
+        tauri::plugin::Builder::<tauri::Wry>::new("acter-debug")
+            .js_init_script("window.__ACTER_DEBUG__ = true;".to_owned())
+            .build(),
+    );
+
     builder
         .run(generate_context!())
         .expect("failed to start the Acter window");

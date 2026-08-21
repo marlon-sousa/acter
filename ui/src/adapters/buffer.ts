@@ -62,4 +62,5 @@ export class BufferDom implements BufferView {
   containsFocus(): boolean {
     return this.region.contains(document.activeElement);
   }
+
 }

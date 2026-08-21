@@ -20,4 +20,11 @@ export class EditFieldDom implements EditFieldView {
   isFocused(): boolean {
     return document.activeElement === this.input;
   }
+
+  // An input's own selection, which is not the document's: window.getSelection() does
+  // not report a range inside a text field at all, which is why this question is asked
+  // of each area rather than once at the document level.
+  hasSelection(): boolean {
+    return this.input.selectionStart !== this.input.selectionEnd;
+  }
 }

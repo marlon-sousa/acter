@@ -3,7 +3,13 @@
 
 import { describe, expect, it } from 'vitest';
 
-import type { CommandId, SessionEvent, SubmitAck } from '../../src/protocol';
+import type {
+  CommandId,
+  KeyAck,
+  KeyPress,
+  SessionEvent,
+  SubmitAck,
+} from '../../src/protocol';
 import type { AnnouncerView } from '../../src/ports/announcer_view';
 import type { BackendApi } from '../../src/ports/backend_api';
 import type { BeepView } from '../../src/ports/beep_view';
@@ -16,9 +22,11 @@ import {
   altScreenLeftMessage,
   commandStoppedMessage,
   failureMessage,
+  nothingToStopMessage,
   outputContinuesMessage,
   patienceMessage,
   tooBigMessage,
+  unboundKeyMessage,
 } from '../../src/controllers/app';
 
 class FakeBackend implements BackendApi {
@@ -33,6 +41,14 @@ class FakeBackend implements BackendApi {
   submitCommand(line: string): Promise<SubmitAck> {
     this.submitted.push(line);
     return Promise.resolve({ command_id: this.nextId++ });
+  }
+  /** What the next sendKey answers; the backend owns the binding table, so a test
+   * chooses the answer rather than the meaning. */
+  keyAck: KeyAck = 'Applied';
+  keysSent: KeyPress[] = [];
+  sendKey(key: KeyPress): Promise<KeyAck> {
+    this.keysSent.push(key);
+    return Promise.resolve(this.keyAck);
   }
   /** Push an event as the backend would over the Channel. */
   emit(event: SessionEvent): void {
@@ -56,6 +72,10 @@ class FakeEditField implements EditFieldView {
   }
   isFocused(): boolean {
     return this.focused;
+  }
+  selected = false;
+  hasSelection(): boolean {
+    return this.selected;
   }
 }
 
@@ -614,5 +634,73 @@ describe('Announce (B1.5): speech is its own event', () => {
       { commandId: 1, text: 'coming\n' },
     ]);
     expect(announcer.announcements).toEqual([outputContinuesMessage]);
+  });
+});
+
+// The keystroke the frontend does not consume, and the two answers only it can voice.
+// What a key *means* is the backend's table, so these choose the ack rather than the
+// meaning — which is the whole point of reporting a key instead of an intent.
+describe('reportKey (A3.2)', () => {
+  const ctrlC: KeyPress = {
+    key: { Char: 'c' },
+    ctrl: true,
+    shift: false,
+    alt: false,
+  };
+
+  it('reports the keystroke as pressed', async () => {
+    const { backend, controller } = makeApp();
+
+    await controller.reportKey(ctrlC);
+
+    expect(backend.keysSent).toEqual([ctrlC]);
+  });
+
+  it('says nothing when the intent was applied: the session speaks for itself', async () => {
+    const { backend, announcer, controller } = makeApp();
+    backend.keyAck = 'Applied';
+
+    await controller.reportKey(ctrlC);
+
+    expect(announcer.announcements).toEqual([]);
+  });
+
+  it('says there is nothing to stop when nothing was running', async () => {
+    const { backend, announcer, controller } = makeApp();
+    backend.keyAck = 'NothingToActOn';
+
+    await controller.reportKey(ctrlC);
+
+    expect(announcer.announcements).toEqual([nothingToStopMessage]);
+  });
+
+  // Unreachable while Ctrl+C is both the only key reported and the only key bound. It is
+  // tested anyway: the failure it guards against is a second reported key going silent.
+  it('says an unbound key did nothing rather than going silent', async () => {
+    const { backend, announcer, controller } = makeApp();
+    backend.keyAck = 'Unbound';
+
+    await controller.reportKey(ctrlC);
+
+    expect(announcer.announcements).toEqual([unboundKeyMessage]);
+  });
+});
+
+// DESIGN's layer 2, the half the frontend enforces: the session hears a keystroke only
+// while the edit field has focus and holds no selection. Focus is enforced by the
+// keyboard adapter listening on the field itself, so what is left here is the selection.
+describe('editFieldHasSelection (A3.2)', () => {
+  it('is true when the edit field holds a selection', () => {
+    const { editField, controller } = makeApp();
+    editField.selected = true;
+
+    expect(controller.editFieldHasSelection()).toBe(true);
+  });
+
+  it('is false with only a caret', () => {
+    const { editField, controller } = makeApp();
+    editField.selected = false;
+
+    expect(controller.editFieldHasSelection()).toBe(false);
   });
 });

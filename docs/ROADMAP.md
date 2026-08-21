@@ -145,24 +145,82 @@ the answer to "what should we do now?".
     reached this already; A6's decision 6 confirms it and writes down the rule that
     decides such cases: a non-`Announce` event is redundant only when an `Announce`
     already fires on the same trigger and yields the same string.
-11. A3.2, the `Ctrl+C` interrupt surface. Spec: none yet → specify first. **Unblocked by
-   B6** (lane 2), and rescoped to frontend work only. The input-model question A3.1 left
-   open — stated in that spec's "The open question this spec deliberately does not bet on"
-   — is answered in the direction DESIGN's **Decided** edit-field ownership already
-   pointed: the field is 100% local and the shell sees no bytes until Enter, so an
-   interrupt is never "a key that reaches the pty". It is a report to the session about a
-   key the frontend chose not to handle, and the backend decides what it means.
-   What remains is entirely in `ui/`: notice `Ctrl+C` in the keyboard adapter, consume it
-   locally **when there is a selection** (that is the native copy, and it must never reach
-   the backend), otherwise call `send_key` with the `KeyPress` and say something about the
-   `KeyAck` that comes back. Three answers to word: `Applied` needs nothing said — the
-   `CommandInterrupted` event already speaks — while `NothingToActOn` and `Unbound` are
-   the two cases only the frontend can voice, and A3.1 decision 6 named the first of them
-   as the thing the typed `stop` had no honest way to say. `BackendApi`, `TauriBackend`
-   and the pinned strings are the surface; the invoke, the keybinding policy and the
-   transport method all exist and are tested.
-   Until it lands the promise stays unkept: A3's alt-screen string already tells the user
-   to press Ctrl+C to return to the prompt.
+11. **Done** — A3.2, the `Ctrl+C` interrupt surface. Spec:
+    [a3.2-ctrl-c-interrupt.md](specs/a3.2-ctrl-c-interrupt.md). The key the alt-screen
+    string has been promising since A3 now exists. The frontend reports a keystroke and
+    never an intent — `AppController.reportKey(KeyPress)` over a new
+    `BackendApi.sendKey`, with the word "interrupt" appearing nowhere in `ui/src/` as a
+    method or type name — because B6 decision 4 put the binding table behind the port so
+    a new binding stays a backend change with no frontend release.
+    **The selection branch had to be per view, not per document.** DESIGN's layer 2
+    makes contextual keys keep their native meaning per focus, and the two areas cannot
+    answer the same way: an `<input>`'s own selection is invisible to
+    `window.getSelection()`, so a single document-level check would be wrong in exactly
+    the place DESIGN spells the rule out. Both view ports gained `hasSelection()`, and
+    the controller asks whichever area has focus. Amended during implementation: the
+    guard is the adapter's single decision over a public `focusedAreaHasSelection()`
+    rather than living inside `reportKey`, because `preventDefault()` must be decided
+    synchronously and `reportKey` is async — asking twice would have split one rule
+    across two modules.
+    Two pinned strings, both answers only the frontend can voice: `nothing running to
+    stop` (the words A3.1 decision 6 said the typed `stop` had no honest way to say) and
+    `that key does nothing here`. `Applied` deliberately says nothing — `CommandInterrupted`
+    already speaks, and it speaks when the interrupt landed rather than when it was accepted.
+    **Two data changes rode along, both of which the key makes correct for the first
+    time.** The typed `stop` rule left the built-in transcript: it modelled an interrupt
+    by consuming a submitted line, which is what mints an id for something that is a
+    keystroke in the shipped product, and it was B6.1's one reachable drift trigger.
+    B6.1 still owns the hole. And the transcript's `0x03` rule now restores the normal
+    screen before acknowledging, so interrupting `nano` genuinely returns to the prompt
+    instead of leaving the session believing the alternate screen is up — half-keeping
+    that promise is worse than not making it, since the user was told to press the key.
+    It is safe only because `SessionActor` compares the next `SessionState` against the
+    current one, so a leave that changes nothing emits no `AltScreenLeft`.
+    `pipeline.rs`'s interrupting-line coverage moved to a fixture rather than being
+    deleted: a far end that treats a line as an interrupt is the pipe's behavior and a
+    real shell can still produce it, even though the product no longer ships a scenario
+    that does.
+    **The accessibility checklist was driven under NVDA 2026.1.1** through the
+    screen-readers bridge as the `user` persona, silent capture: six items agent-observed
+    and passing, the seventh (no beep on a stopped command) human-only, because the
+    bridge captures speech and braille rather than audio. The alt-screen promise is kept
+    end to end — `nano`, then `Ctrl+C`, gives `interactive program ended` and
+    `command stopped` as two utterances 277 ms apart, which is A5.2's drain spacing doing
+    its job — and the heading after three interrupts in one session is still the command's
+    own, which is the retired `stop` rule's drift trigger being gone rather than merely
+    argued about.
+    **The pass reversed one of this entry's own decisions.** NVDA's browse mode binds
+    `Ctrl+C` to its own copy command: in the results buffer with no selection it answers
+    "no selection" and the keystroke never reaches the application at all. The spec had
+    extended the interrupt into the buffer, filling a silence DESIGN left; that binding
+    turned out to be one that cannot be pressed, which is worse than none because it reads
+    as an interrupt the user can rely on. **The interrupt now belongs to the edit field
+    and to nowhere else, written into DESIGN's layer 2 in this PR** — where a keystroke
+    rule belongs — together with the half implementers keep getting wrong: reader mode is
+    not detectable from a frontend and must not be attempted, because browse mode simply
+    does not deliver the key. The frontend enforces the focus half by construction, with
+    the listener bound to the edit field element rather than to `document`.
+
+    **And the pass found a defect that had nothing to do with this entry: no too-big
+    command had ever beeped.** The frontend fires the completion beep on the ending event
+    for any command a `TooBig` armed, and `SessionActor::close` emitted the ending before
+    applying the policy's last word — so the arming verdict always arrived one event too
+    late. Two lines in `acter-core`, and it also fixes what the same run first heard as a
+    wording oddity: the accumulated output being read out *after* `command stopped`. The
+    restored rule is A6 decision 2's, generalised — an announcement about text that
+    arrived during a command precedes the event saying the command ended. Pinned by two
+    actor tests, both confirmed to fail against the old order before the fix was kept, and
+    by the two `pipeline.rs` sequences whose expectations had encoded the bug.
+
+    **A debug event recorder ships with it**, decided in conversation because that defect
+    cost an afternoon and an ad-hoc `AudioContext` monkey-patch to find: it was never
+    audible, it was an *ordering* bug, and ordering is what neither the DOM nor the live
+    region keeps. It is a decorator over `BackendApi` recording the real stream as it
+    arrives — not a protocol variant, which would put tooling on the wire, and not a second
+    channel, which could not be interleaved with the first after the fact. Gated exactly as
+    T2 gated the embedded WebDriver, so a release build injects no flag and constructs no
+    recorder. `big.spec.ts` now reads the tape and asserts the beep's arming order, which
+    is the recorder earning its place on the day it landed.
 12. A4, completion path. Spec: none yet → specify first. Scope sketch: fake
     completion provider, Tab handling in the edit field, completion announcement.
 13. A5.3 and onward — iteration entries appear here as NVDA findings arrive.

@@ -297,7 +297,7 @@ mod tests {
         let unknown = said(&shell.answer(&line("something nobody ever scripted")));
 
         for scenario in [
-            "small", "big", "fail", "slow", "forever", "nano", "tail", "burst", "speech", "stop",
+            "small", "big", "fail", "slow", "forever", "nano", "tail", "burst", "speech",
         ] {
             assert_ne!(
                 said(&shell.answer(&line(scenario))),

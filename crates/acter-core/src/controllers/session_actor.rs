@@ -278,10 +278,9 @@ impl SessionActor {
     }
 
     fn command_ended(&mut self, command_id: CommandId, exit_code: ExitCode) {
-        let Some(outcome) = self.close(SessionEvent::CommandFinished { command_id }) else {
+        if !self.close(SessionEvent::CommandFinished { command_id }) {
             return;
-        };
-        self.apply(outcome);
+        }
         if exit_code.0 != 0 {
             self.announce(Announcement::Failed { exit_code });
         }
@@ -292,24 +291,37 @@ impl SessionActor {
     /// `Failed`: the exit code of a process the user stopped carries nothing worth
     /// announcing, and the frontend already has one thing to say about a stop.
     fn command_interrupted(&mut self, command_id: CommandId) {
-        let Some(outcome) = self.close(SessionEvent::CommandInterrupted { command_id }) else {
+        if !self.close(SessionEvent::CommandInterrupted { command_id }) {
             return;
-        };
-        self.apply(outcome);
+        }
         self.retire();
     }
 
-    /// What both endings share: the policy's last word on the remainder, everything
-    /// reaching the buffer before anything is said about it, and then the terminal
-    /// event. `None` when no command was running, which is a fact about the far end
-    /// rather than an error — a `D` with no open block is DESIGN's reliability case 3.
-    fn close(&mut self, terminal: SessionEvent) -> Option<PacingAction> {
-        let active = self.active.as_mut()?;
+    /// What both endings share, in the order a listener needs: the policy's last word on
+    /// the remainder, everything reaching the buffer before anything is said about it,
+    /// whatever there was to say — and only then the terminal event.
+    ///
+    /// **The last word comes before the ending, and that ordering is load-bearing.** The
+    /// remainder is text that arrived *during* this command, so an announcement about it
+    /// describes something that happened before the command ended and belongs before the
+    /// event that says so; this is the same rule A6 decision 2 applied to `Failed`, which
+    /// follows the output it is a verdict on. Emitting the ending first also silently
+    /// broke the completion beep, which the frontend fires on the ending for any command
+    /// a `TooBig` had armed — the arming verdict arrived one event too late, every time,
+    /// so no too-big command ever beeped (found in A3.2's manual pass).
+    ///
+    /// `false` when no command was running, which is a fact about the far end rather than
+    /// an error — a `D` with no open block is DESIGN's reliability case 3.
+    fn close(&mut self, terminal: SessionEvent) -> bool {
+        let Some(active) = self.active.as_mut() else {
+            return false;
+        };
         let (pacing, outcome) = on_command_end(active.pacing, &self.config, active.unspoken.size());
         active.pacing = pacing;
         self.flush_render();
+        self.apply(outcome.action);
         self.sink.send(terminal);
-        Some(outcome.action)
+        true
     }
 
     /// The command is over: nothing accumulates for it and neither timer has anything
@@ -922,6 +934,83 @@ mod tests {
                 .iter()
                 .any(|announcement| matches!(announcement, Announcement::ReadAloud { .. })),
             "and case 1 is no auto-read"
+        );
+    }
+
+    // --- The order an ending is reported in ---------------------------------------
+
+    /// The defect this pins was found by ear, not by a test: **no too-big command ever
+    /// beeped.** The frontend fires the completion beep on the ending event for any
+    /// command a `TooBig` armed, and the ending used to be emitted before the verdict
+    /// about the remainder — so the arming always arrived one event too late and the
+    /// beep never fired at all.
+    ///
+    /// The rule the fix restores is A6 decision 2's, applied to every last word rather
+    /// than only to `Failed`: an announcement about text that arrived *during* a command
+    /// describes something that happened before the command ended, so it is emitted
+    /// before the event saying it ended.
+    #[test]
+    fn the_last_word_on_a_command_is_said_before_the_event_that_ends_it() {
+        let (mut actor, _clock, sink) = actor();
+        started(&mut actor);
+        // Comfortably past the auto-read threshold, so the remainder ends as `TooBig`.
+        for line in 0..40 {
+            output(&mut actor, &format!("line {line}\n"));
+        }
+
+        ended(&mut actor, 1, 0);
+
+        let events = sink.events();
+        let verdict = events
+            .iter()
+            .position(|event| {
+                matches!(
+                    event,
+                    SessionEvent::Announce {
+                        announcement: Announcement::TooBig { .. },
+                        ..
+                    }
+                )
+            })
+            .unwrap_or_else(|| panic!("the remainder was announced at all: {events:?}"));
+        let ending = events
+            .iter()
+            .position(|event| matches!(event, SessionEvent::CommandFinished { .. }))
+            .expect("the command ended");
+
+        assert!(
+            verdict < ending,
+            "the verdict about the remainder precedes the ending, or the beep it arms \
+             fires against a command that has not been armed yet: {events:?}"
+        );
+    }
+
+    /// The same ordering on the other ending, which is what a listener hears after
+    /// pressing Ctrl+C: the output that had accumulated, and then `command stopped`.
+    /// Reversed, the session announces a verdict about text it has not read out yet.
+    #[test]
+    fn a_stop_reads_the_accumulated_output_before_saying_it_stopped() {
+        let (mut actor, _clock, sink) = actor();
+        started(&mut actor);
+        output(&mut actor, "one last line\n");
+
+        actor.handle(SessionInput::CommandInterrupted {
+            command_id: CommandId(1),
+        });
+
+        let events = sink.events();
+        let spoken = events
+            .iter()
+            .position(|event| matches!(event, SessionEvent::Announce { .. }))
+            .unwrap_or_else(|| panic!("the remainder was announced: {events:?}"));
+        let stopped = events
+            .iter()
+            .position(|event| matches!(event, SessionEvent::CommandInterrupted { .. }))
+            .expect("the stop is reported");
+
+        assert!(
+            spoken < stopped,
+            "the accumulated output is spoken before the stop is: {events:?}"
         );
     }
 
