@@ -16,7 +16,7 @@ class StubController {
   toggled = 0;
   escaped = 0;
   submitted = 0;
-  /** What the focused area answers about a selection; the adapter's one input. */
+  /** What the edit field answers about a selection; the adapter's one input. */
   selection = false;
 
   submit(): Promise<void> {
@@ -29,7 +29,7 @@ class StubController {
   escapeToEditField(): void {
     this.escaped += 1;
   }
-  focusedAreaHasSelection(): boolean {
+  editFieldHasSelection(): boolean {
     return this.selection;
   }
   reportKey(press: KeyPress): Promise<void> {
@@ -46,8 +46,8 @@ class StubController {
   }
 }
 
-/** A keydown as the document sees it, and whether anything called preventDefault. */
-function press(
+function keydown(
+  target: EventTarget,
   key: string,
   modifiers: { ctrl?: boolean; shift?: boolean; alt?: boolean } = {},
 ): boolean {
@@ -59,7 +59,7 @@ function press(
     bubbles: true,
     cancelable: true,
   });
-  document.dispatchEvent(event);
+  target.dispatchEvent(event);
   return event.defaultPrevented;
 }
 
@@ -67,20 +67,24 @@ function press(
 // test would leave every earlier test's listener attached, and a stale one calling
 // preventDefault would answer for the one under test. So it is bound once and the stub
 // is reset instead.
-document.body.innerHTML = '<form id="command-form"></form>';
+document.body.innerHTML =
+  '<form id="command-form"><input id="command-input"></form><div id="results"></div>';
 const controller = new StubController();
+const editField = document.getElementById('command-input') as HTMLInputElement;
+const results = document.getElementById('results') as HTMLElement;
 bindKeys(
   controller as unknown as AppController,
   document.getElementById('command-form') as HTMLFormElement,
+  editField,
 );
 
 beforeEach(() => {
   controller.reset();
 });
 
-describe('Ctrl+C (A3.2)', () => {
+describe('Ctrl+C from the edit field (A3.2)', () => {
   it('reports the keystroke and prevents the empty native copy', () => {
-    const prevented = press('c', { ctrl: true });
+    const prevented = keydown(editField, 'c', { ctrl: true });
 
     expect(controller.reported).toEqual([
       { key: { Char: 'c' }, ctrl: true, shift: false, alt: false },
@@ -91,17 +95,17 @@ describe('Ctrl+C (A3.2)', () => {
   // The half of DESIGN's layer 2 sentence that never reaches the backend: over a
   // selection this is the platform's copy, so the key is neither reported nor prevented
   // — preventing it would break the copy just as surely as reporting it would.
-  it('leaves the native copy alone when the focused area holds a selection', () => {
+  it('leaves the native copy alone when the field holds a selection', () => {
     controller.selection = true;
 
-    const prevented = press('c', { ctrl: true });
+    const prevented = keydown(editField, 'c', { ctrl: true });
 
     expect(controller.reported).toEqual([]);
     expect(prevented).toBe(false);
   });
 
-  it('does not report a plain c, which is text the edit field owns', () => {
-    press('c');
+  it('does not report a plain c, which is text the field owns', () => {
+    keydown(editField, 'c');
 
     expect(controller.reported).toEqual([]);
   });
@@ -109,22 +113,45 @@ describe('Ctrl+C (A3.2)', () => {
   // Layer 1 is Acter's own and reserved rather than free. Reporting it would have the
   // session answer "unbound" for a key that is already spoken for.
   it('does not report Ctrl+Shift+C or Ctrl+Alt+C', () => {
-    press('C', { ctrl: true, shift: true });
-    press('c', { ctrl: true, alt: true });
+    keydown(editField, 'C', { ctrl: true, shift: true });
+    keydown(editField, 'c', { ctrl: true, alt: true });
 
     expect(controller.reported).toEqual([]);
   });
 });
 
+// The rule DESIGN states and this adapter enforces by construction: only the edit field
+// carries the listener, so a keystroke anywhere else is not the session's to hear. In the
+// results buffer Ctrl+C is the screen reader's own copy command — in NVDA's browse mode
+// it never reaches the page at all — and a binding that cannot be pressed is worse than
+// no binding.
+describe('Ctrl+C outside the edit field', () => {
+  it('is not reported from the results buffer', () => {
+    const prevented = keydown(results, 'c', { ctrl: true });
+
+    expect(controller.reported).toEqual([]);
+    expect(prevented).toBe(false);
+  });
+
+  it('is not reported from the document at large', () => {
+    const prevented = keydown(document, 'c', { ctrl: true });
+
+    expect(controller.reported).toEqual([]);
+    expect(prevented).toBe(false);
+  });
+});
+
 describe('the keys the frontend keeps', () => {
-  it('F6 toggles the focus area and is prevented', () => {
-    expect(press('F6')).toBe(true);
+  // F6 and Escape are Acter's own and belong to the whole window, so unlike Ctrl+C they
+  // are still heard wherever focus happens to be.
+  it('F6 toggles the focus area and is prevented, from anywhere', () => {
+    expect(keydown(results, 'F6')).toBe(true);
     expect(controller.toggled).toBe(1);
     expect(controller.reported).toEqual([]);
   });
 
   it('Escape returns to the edit field', () => {
-    press('Escape');
+    keydown(results, 'Escape');
 
     expect(controller.escaped).toBe(1);
     expect(controller.reported).toEqual([]);

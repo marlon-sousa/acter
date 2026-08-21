@@ -458,10 +458,12 @@ async fn a_command_produces_its_output_and_nothing_the_shell_said_around_it() {
         vec![
             started(),
             output("hello from acter"),
-            finished(),
+            // The last word on the output comes before the event that ends the command:
+            // it describes text that arrived while the command was running (spec A3.2).
             announce(Announcement::ReadAloud {
                 text: "hello from acter".to_owned()
             }),
+            finished(),
         ]
     );
     assert!(
@@ -506,10 +508,13 @@ async fn a_failing_command_carries_its_exit_code_out_of_the_marker() {
         vec![
             started(),
             output("error: the command reported a problem"),
-            finished(),
+            // The error text, then the ending, then the verdict about it. A6 decision 2
+            // put `Failed` after the output it judges; A3.2 put the last word on that
+            // output before the ending, for the same reason.
             announce(Announcement::ReadAloud {
                 text: "error: the command reported a problem".to_owned()
             }),
+            finished(),
             announce(Announcement::Failed {
                 exit_code: ExitCode(2)
             }),

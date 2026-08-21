@@ -13,7 +13,7 @@
 
 import { browser, expect } from '@wdio/globals';
 
-import { submitCommand } from '../helpers';
+import { pressCtrlC, submitCommand } from '../helpers';
 
 // Everything the live region has said, accumulated. The region empties itself on an idle
 // timer (A3's browse-mode rule), so sampling `textContent` at the end can miss an
@@ -41,28 +41,15 @@ function spoken(): Promise<string[]> {
   );
 }
 
-// The keystroke, sent the way the embedded WebDriver can send it. Its synthesized events
-// are untrusted, exactly as `helpers.ts` records for Enter, so this dispatches the
-// keydown the adapter listens for rather than relying on native key handling. Everything
-// from the document listener onward is the app's own code path.
-async function pressCtrlC(): Promise<void> {
-  await browser.execute(() => {
-    document.dispatchEvent(
-      new KeyboardEvent('keydown', {
-        key: 'c',
-        ctrlKey: true,
-        bubbles: true,
-        cancelable: true,
-      }),
-    );
-  });
-}
-
 // The text accumulated under a command's h2, or null while no such block exists.
+//
+// The *most recent* block with that heading: these cases share one app instance, so a
+// name submitted more than once has several blocks and only the newest is the live one.
+// Reading the oldest would have this report a long-finished command as "not growing".
 function blockTextOf(command: string): Promise<string | null> {
   return browser.execute((name: string) => {
     const headings = Array.from(document.querySelectorAll('#results h2'));
-    const own = headings.find((el) => el.textContent === name);
+    const own = headings.reverse().find((el) => el.textContent === name);
     return own?.nextElementSibling?.textContent ?? null;
   }, command);
 }
@@ -116,6 +103,42 @@ describe('Ctrl+C: stopping a running command', () => {
       async () =>
         (await spoken()).some((said) => said.includes('nothing running to stop')),
       { timeout: 10_000, timeoutMsg: 'an idle Ctrl+C said nothing at all' },
+    );
+  });
+
+  // DESIGN layer 2, the half A3.2's NVDA pass forced into words: the interrupt belongs
+  // to the edit field and nowhere else. In the results buffer Ctrl+C is the screen
+  // reader's own copy command — NVDA answers it in browse mode and it never reaches the
+  // page — so a listener binding here would be one that cannot be pressed. The app must
+  // not act on it even when it is delivered, which is what this dispatches.
+  it('does not stop anything when the key arrives outside the edit field', async () => {
+    await recordAnnouncements();
+    await submitCommand('forever');
+    await waitUntilRunning('forever');
+
+    await browser.execute(() => {
+      document.getElementById('results')?.dispatchEvent(
+        new KeyboardEvent('keydown', {
+          key: 'c',
+          ctrlKey: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    });
+
+    // Nothing said, and — the decisive half — the command is still producing.
+    const before = await blockTextOf('forever');
+    await browser.pause(1000);
+    expect(await blockTextOf('forever')).not.toBe(before);
+    expect(await spoken()).not.toContain('command stopped');
+
+    // And the edit field still can, so this is a rule about where the key lands rather
+    // than a session that had already stopped listening.
+    await pressCtrlC();
+    await browser.waitUntil(
+      async () => (await spoken()).some((said) => said.includes('command stopped')),
+      { timeout: 10_000, timeoutMsg: 'the edit field could not stop it either' },
     );
   });
 

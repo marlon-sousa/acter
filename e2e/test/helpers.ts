@@ -20,3 +20,37 @@ export async function submitCommand(text: string): Promise<void> {
     document.querySelector('form')?.requestSubmit();
   });
 }
+
+// Ctrl+C as the app must receive it: on the edit field, which is the only element that
+// listens for it (DESIGN layer 2 — the session hears a keystroke only while that field
+// has focus). The embedded WebDriver's synthesized key events are untrusted, exactly as
+// recorded above for Enter, so this dispatches the keydown the adapter listens for;
+// everything from that listener onward is the app's own code path.
+//
+// Aiming it at the field rather than at `document` is the point of the helper: a
+// document-level dispatch would pass even if the app had bound the key globally, which is
+// precisely the thing DESIGN forbids.
+export async function pressCtrlC(): Promise<void> {
+  await browser.execute(() => {
+    document.getElementById('command-input')?.dispatchEvent(
+      new KeyboardEvent('keydown', {
+        key: 'c',
+        ctrlKey: true,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+  });
+}
+
+/** The debug recorder's tape: what crossed the port, in arrival order (spec A3.2). */
+export function debugTape(): Promise<Array<{ kind: string; what: string }>> {
+  return browser.execute(
+    () =>
+      (
+        window as unknown as {
+          __acterDebug?: { entries(): Array<{ kind: string; what: string }> };
+        }
+      ).__acterDebug?.entries() ?? [],
+  );
+}

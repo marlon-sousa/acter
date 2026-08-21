@@ -95,10 +95,6 @@ class FakeBuffer implements BufferView {
   containsFocus(): boolean {
     return this.focused;
   }
-  selected = false;
-  hasSelection(): boolean {
-    return this.selected;
-  }
 }
 
 class FakeAnnouncer implements AnnouncerView {
@@ -178,7 +174,6 @@ describe('event rendering (decision 2)', () => {
       },
       focus: () => {},
       containsFocus: () => false,
-      hasSelection: () => false,
     };
     const announcer: AnnouncerView = {
       announce: () => {
@@ -691,43 +686,21 @@ describe('reportKey (A3.2)', () => {
   });
 });
 
-// The per-focus half of DESIGN's layer 2 rule. The controller answers which area's
-// selection counts; the keyboard adapter uses the answer to leave the native copy alone.
-describe('focusedAreaHasSelection (A3.2)', () => {
-  it('asks the edit field when the edit field has focus', () => {
-    const { editField, buffer, controller } = makeApp();
-    editField.focused = true;
-    editField.selected = true;
-    // A stale selection in the other area must not answer for the focused one.
-    buffer.selected = false;
-
-    expect(controller.focusedAreaHasSelection()).toBe(true);
-  });
-
-  it('asks the buffer when the buffer has focus', () => {
-    const { editField, buffer, controller } = makeApp();
-    editField.focused = false;
-    editField.selected = true;
-    buffer.focused = true;
-    buffer.selected = false;
-
-    expect(controller.focusedAreaHasSelection()).toBe(false);
-  });
-
-  it('reports no selection when focus is in neither area', () => {
-    const { editField, buffer, controller } = makeApp();
-    editField.focused = false;
-    buffer.focused = false;
-    buffer.selected = true;
-
-    expect(controller.focusedAreaHasSelection()).toBe(false);
-  });
-
-  it('reports the focused area holding a selection', () => {
+// DESIGN's layer 2, the half the frontend enforces: the session hears a keystroke only
+// while the edit field has focus and holds no selection. Focus is enforced by the
+// keyboard adapter listening on the field itself, so what is left here is the selection.
+describe('editFieldHasSelection (A3.2)', () => {
+  it('is true when the edit field holds a selection', () => {
     const { editField, controller } = makeApp();
-    editField.focused = true;
+    editField.selected = true;
+
+    expect(controller.editFieldHasSelection()).toBe(true);
+  });
+
+  it('is false with only a caret', () => {
+    const { editField, controller } = makeApp();
     editField.selected = false;
 
-    expect(controller.focusedAreaHasSelection()).toBe(false);
+    expect(controller.editFieldHasSelection()).toBe(false);
   });
 });

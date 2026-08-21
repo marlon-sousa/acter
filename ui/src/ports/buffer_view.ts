@@ -27,9 +27,4 @@ export interface BufferView {
    */
   focus(): void;
   containsFocus(): boolean;
-  /**
-   * Whether the buffer currently holds a selected range, asked for the same reason as
-   * on the edit field: a `Ctrl+C` over a selection is the native copy.
-   */
-  hasSelection(): boolean;
 }

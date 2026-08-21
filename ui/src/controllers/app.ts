@@ -252,21 +252,16 @@ export class AppController {
   }
 
   /**
-   * Whether the area that has focus is holding a selection — the question that decides
-   * whether the platform still owns a keystroke rather than the session.
+   * Whether the edit field is holding a selection — the question that decides whether
+   * the platform still owns a keystroke rather than the session.
    *
-   * DESIGN's keystroke map makes contextual keys keep their native meaning *per focus*,
-   * so this asks the focused area rather than the document: an input's selection is not
-   * the document's, and `window.getSelection()` cannot see one. Whichever area has
-   * focus answers for itself; with focus in neither there is no native copy to protect.
+   * Only the edit field is asked, because only the edit field reports keystrokes at all
+   * (DESIGN's layer 2: the interrupt belongs there and nowhere else). It is asked here
+   * rather than read off the document because an input's selection is not the
+   * document's — `window.getSelection()` cannot see one — which is why this is a view
+   * question rather than a DOM one.
    */
-  focusedAreaHasSelection(): boolean {
-    if (this.editField.isFocused()) {
-      return this.editField.hasSelection();
-    }
-    if (this.buffer.containsFocus()) {
-      return this.buffer.hasSelection();
-    }
-    return false;
+  editFieldHasSelection(): boolean {
+    return this.editField.hasSelection();
   }
 }

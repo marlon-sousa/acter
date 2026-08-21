@@ -177,6 +177,22 @@ per-profile (muscle memory must not change between sessions).
    text interaction (Ctrl+C copies selection, Ctrl+A selects all, arrows navigate).
    Edit field: command-line editing; Ctrl+C with a selection copies, without a
    selection interrupts the running command.
+
+   **The interrupt belongs to the edit field and to nowhere else — Decided.** This was
+   already implied by naming it only there, and A3.2 showed the implication needs saying
+   out loud: in the results buffer with nothing selected, Ctrl+C does not interrupt and
+   Acter does nothing with it at all. The reason is not symmetry, it is that the key is
+   not ours to take. Where the buffer lives, a screen reader is in its own browse mode
+   and Ctrl+C is *its* copy command: NVDA answers "no selection" itself and the keystroke
+   never reaches the application. A binding that cannot be pressed is worse than no
+   binding, because it reads as an interrupt the user can rely on.
+
+   **Consequence for implementers: the session hears a keystroke only while the edit
+   field has focus and holds no selection.** Screen-reader mode is deliberately not part
+   of that test. Browse versus focus mode is the reader's own state, invisible to a web
+   frontend and carried by no event, and it does not need detecting: browse mode does not
+   deliver the key in the first place. So the rule has two owners, and only the second
+   half is ours to enforce. Do not attempt to detect the reader's mode.
 3. **Interactive mode passes everything that isn't layer 1 to the app**, including
    plain Ctrl+C (SIGINT via PTY), Alt combos (Meta keys), and Escape.
 
