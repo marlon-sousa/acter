@@ -323,8 +323,12 @@ impl Pipeline {
         };
         for event in self.events() {
             match event {
-                SessionEvent::CommandStarted { command_id } => blocks.push(Block {
+                SessionEvent::CommandStarted {
                     command_id,
+                    command_line,
+                } => blocks.push(Block {
+                    command_id,
+                    command_line,
                     output: String::new(),
                     closed: false,
                 }),
@@ -395,6 +399,9 @@ struct Substance {
 #[derive(Debug, PartialEq, Eq)]
 struct Block {
     command_id: CommandId,
+    /// The heading the frontend would put on this block: what the far end echoed, read
+    /// out of the byte stream by the real engine and tracker (spec B6.1, decision 1).
+    command_line: Option<String>,
     output: String,
     closed: bool,
 }
@@ -408,10 +415,12 @@ fn loaded(name: &str) -> SessionTranscript {
 }
 
 /// Every test submits exactly one command, so the id the service mints is always the
-/// first.
-fn started() -> SessionEvent {
+/// first. The command line is the one the far end echoed back — every caller here submits
+/// a line a shell reads, so it is the line that was submitted (spec B6.1, decision 1).
+fn started(command_line: &str) -> SessionEvent {
     SessionEvent::CommandStarted {
         command_id: CommandId(1),
+        command_line: Some(command_line.to_owned()),
     }
 }
 
@@ -456,7 +465,7 @@ async fn a_command_produces_its_output_and_nothing_the_shell_said_around_it() {
     assert_eq!(
         pipeline.events(),
         vec![
-            started(),
+            started("small"),
             output("hello from acter"),
             // The last word on the output comes before the event that ends the command:
             // it describes text that arrived while the command was running (spec A3.2).
@@ -506,7 +515,7 @@ async fn a_failing_command_carries_its_exit_code_out_of_the_marker() {
     assert_eq!(
         pipeline.events(),
         vec![
-            started(),
+            started("fail"),
             output("error: the command reported a problem"),
             // The error text, then the ending, then the verdict about it. A6 decision 2
             // put `Failed` after the output it judges; A3.2 put the last word on that
@@ -541,7 +550,7 @@ async fn entering_the_alternate_screen_reaches_the_actor_in_stream_order() {
             .unwrap_or_else(|| panic!("expected {wanted:?} in {events:?}"))
     };
 
-    assert_eq!(events.first(), Some(&started()));
+    assert_eq!(events.first(), Some(&started("nano")));
     assert_eq!(
         events.get(1),
         Some(&SessionEvent::AltScreenEntered),
@@ -572,7 +581,7 @@ async fn an_interrupting_line_ends_the_running_command_without_inventing_a_failu
 
     pipeline.submit("hang");
     pipeline.run_until(3_000).await;
-    assert!(pipeline.events().contains(&started()));
+    assert!(pipeline.events().contains(&started("hang")));
 
     pipeline.submit("halt");
     pipeline.run_until(4_000).await;
@@ -599,7 +608,7 @@ async fn pressing_ctrl_c_stops_the_running_command_and_says_so() {
 
     pipeline.submit("forever");
     pipeline.run_until(3_000).await;
-    assert!(pipeline.events().contains(&started()));
+    assert!(pipeline.events().contains(&started("forever")));
 
     assert_eq!(pipeline.press_ctrl_c(), KeyAck::Applied);
     pipeline.run_until(4_000).await;
@@ -647,10 +656,11 @@ async fn a_marker_split_across_two_reads_is_still_one_marker() {
         pipeline.substance().blocks,
         vec![Block {
             command_id: CommandId(1),
+            command_line: Some("small".to_owned()),
             output: "hello from acter".to_owned(),
             closed: true,
         }],
-        "one block, opened and closed by markers nobody ever received whole"
+        "one block, opened and closed by markers nobody ever received whole, headed by an          echo delivered one byte at a time"
     );
 }
 
@@ -747,7 +757,10 @@ async fn a_session_with_no_markers_degrades_honestly_instead_of_going_silent() {
     );
     assert!(
         pipeline.events().contains(&SessionEvent::CommandStarted {
-            command_id: CommandId(1)
+            command_id: CommandId(1),
+            // No markers means no B..C region, so there is no echo to read and the
+            // frontend keeps the heading its own ack gave the block.
+            command_line: None,
         }),
         "the submission is the boundary, so the command the user typed exists: {:?}",
         pipeline.events()

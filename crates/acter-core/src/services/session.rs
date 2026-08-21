@@ -126,6 +126,7 @@ impl SessionService {
                 running: Arc::clone(&running),
                 integration: Integration::Pending,
                 submitted: VecDeque::new(),
+                echo: Echo::default(),
                 open: None,
                 interrupted: false,
                 lines: HashMap::new(),
@@ -154,6 +155,9 @@ impl SessionApi for SessionService {
     /// needs it before anything has run: it opens the buffer block with it. Correlation
     /// is then the pump's queue of these, claimed at `BlockStarted` (spec B6,
     /// decision 3).
+    ///
+    /// Which block claims a queued id is settled by what the shell echoes for it
+    /// (spec B6.1, decision 3), so the text travels with the id.
     ///
     /// A full or closed request channel still returns the ack: the id was minted, and an
     /// invoke's contract is to answer immediately. A closed one means the session has
@@ -255,8 +259,13 @@ struct Pump {
     /// (decision 10). Both copies are driven by the same two facts and the pump is the
     /// source of both, so they cannot come to disagree.
     integration: Integration,
-    /// Ids minted at submission and not yet claimed by a block, oldest first.
-    submitted: VecDeque<CommandId>,
+    /// Submissions minted and not yet claimed by a block, oldest first. Each carries the
+    /// line it was minted for, because the shell's echo of a line is what identifies the
+    /// submission it is running (spec B6.1, decision 3).
+    submitted: VecDeque<Submitted>,
+    /// What the shell has echoed since the last prompt: the B..C region, read as it
+    /// arrives so it is complete by the time the block opens.
+    echo: Echo,
     open: Option<CommandId>,
     /// Whether an interrupt was asked for and the command it was aimed at has not closed
     /// yet. What tells a stopped command from a finished one, since the exit code cannot
@@ -321,6 +330,10 @@ impl Pump {
                     text,
                     revision,
                 } => {
+                    // The echo is read before anything else looks at the line, and it is
+                    // read from every region: what the prompt put on a row is what tells
+                    // a rewrite of that row apart from the command line on it.
+                    self.echo.observe(region, &text, revision);
                     // `due` runs for every line whatever region it fell in: the
                     // bookkeeping it keeps is what tells the echo's row from the
                     // output's later on.
@@ -365,9 +378,12 @@ impl Pump {
     async fn submit(&mut self, command_id: CommandId, line: &str) {
         if self.integration == Integration::Unintegrated {
             self.close(None).await;
-            self.open(command_id);
+            self.open(command_id, None);
         } else {
-            self.submitted.push_back(command_id);
+            self.submitted.push_back(Submitted {
+                id: command_id,
+                line: line.to_owned(),
+            });
         }
         self.write(format!("{line}\n").as_bytes());
         self.settle_running();
@@ -394,12 +410,15 @@ impl Pump {
 
     /// A command's output region opened.
     ///
+    /// Whatever the shell echoed for this block is taken here whether it is used or not:
+    /// it belongs to the block that just opened, and leaving it behind would offer it to
+    /// the next one.
+    ///
     /// Two edges, answered rather than discovered. **The queue is empty**: the shell's
     /// own activity, or a forged `C`. A block genuinely opened and its output has to go
     /// somewhere, so a fresh id is minted and it is treated as a real command — dropping
-    /// it would lose text. **A submission never opened a block**: its id stays queued and
-    /// this block claims it. Phase 1's shell is serial, so the queue is short, and a
-    /// timeout that retired an unclaimed id would be guessing (decision 3).
+    /// it would lose text. **A submission never opened a block**: see [`Pump::claim`],
+    /// which is where B6.1 changed B6's answer.
     ///
     /// And one more, which only a recovering session reaches: a command is **already
     /// open** here. The tracker never nests blocks, so that can only be a command this
@@ -409,22 +428,56 @@ impl Pump {
     /// frontend: the buffer block the user is looking at goes on to receive the real
     /// output and the real exit code, rather than being orphaned beside a second one.
     async fn block_started(&mut self) {
+        let echoed = self.echo.take();
         if self.open.is_some() {
             self.last_line = None;
             return;
         }
-        let command_id = self
-            .submitted
-            .pop_front()
-            .unwrap_or_else(|| CommandId(self.next_id.fetch_add(1, Ordering::SeqCst)));
-        self.open(command_id);
+        let command_id = self.claim(echoed.as_deref());
+        self.open(command_id, echoed);
         self.settle_running();
     }
 
-    fn open(&mut self, command_id: CommandId) {
+    /// Which submission this block is running.
+    ///
+    /// The front of the queue, unless the shell's own echo says otherwise. An echo that
+    /// matches a *later* submission is the shell stating which line it read, and phase
+    /// 1's shell is serial and reads lines in the order they were written — so the ones
+    /// before it were already disposed of as something other than command lines: into a
+    /// full-screen program, into a continuation, into a password prompt. They are not
+    /// pending, they are over, and they are retired here (spec B6.1, decision 3).
+    ///
+    /// That is evidence, not the guess B6's decision 3 refused: retiring at the next
+    /// prompt infers from a marker's *absence* that a line will never run, and a real
+    /// shell draws its prompt before it reads the line a fast typist already sent.
+    /// Matching is exact after trimming and never fuzzy, so a shell that echoes something
+    /// else — or nothing — falls back to B6's claim from the front, and two identical
+    /// submissions match at the front, which is right: the older one is running.
+    ///
+    /// With nothing queued at all, a fresh id: a block genuinely opened and its output
+    /// has to go somewhere.
+    fn claim(&mut self, echoed: Option<&str>) -> CommandId {
+        if let Some(echoed) = echoed
+            && let Some(index) = self
+                .submitted
+                .iter()
+                .position(|submitted| submitted.line.trim() == echoed)
+        {
+            self.submitted.drain(..index);
+        }
+        self.submitted
+            .pop_front()
+            .map(|submitted| submitted.id)
+            .unwrap_or_else(|| CommandId(self.next_id.fetch_add(1, Ordering::SeqCst)))
+    }
+
+    fn open(&mut self, command_id: CommandId, command_line: Option<String>) {
         self.open = Some(command_id);
         self.last_line = None;
-        self.send(SessionInput::CommandStarted { command_id });
+        self.send(SessionInput::CommandStarted {
+            command_id,
+            command_line,
+        });
     }
 
     /// Closes whatever command is open, as finished or as stopped.
@@ -468,7 +521,8 @@ impl Pump {
             && let Some(latest) = self.submitted.pop_back()
         {
             self.submitted.clear();
-            self.open(latest);
+            // No echo: a session with no markers has no B..C region for one to be in.
+            self.open(latest.id, None);
         }
         self.settle_running();
     }
@@ -544,6 +598,90 @@ impl Pump {
     /// happens only when the session is being torn down.
     fn send(&self, input: SessionInput) {
         let _ = self.inputs.send(input);
+    }
+}
+
+/// A submitted line waiting for the block that will run it.
+///
+/// The line travels with the id because the shell's echo of a line is the only thing
+/// that identifies *which* submission a block is running (spec B6.1, decision 3).
+struct Submitted {
+    id: CommandId,
+    line: String,
+}
+
+/// The command line the shell echoed, read as it arrives.
+///
+/// The B..C region is the shell saying which line it read, and it is the only honest
+/// source for a block's heading: the text the frontend put there at submission time is an
+/// optimistic guess that a drifted id can attach to the wrong block (spec B6.1,
+/// decision 1).
+///
+/// Reading it is three rules. An **append** carries only the delta the extractor
+/// computed, so the prompt the echo was written after is already excluded and the deltas
+/// simply accumulate. Anything **else** carries the whole row, prompt included — the row
+/// the prompt was drawn on is the row the echo is written onto — so the prompt this type
+/// watched being drawn is stripped from the front of it, and if it does not match, the
+/// command line becomes **unknown**: a heading that might contain the prompt is worse
+/// than no correction at all.
+///
+/// Everything resets on a line outside the command-line region, which is what separates
+/// one command's echo from the next: between two commands the tracker reports `Output`,
+/// then `Unstructured`, then `Prompt`. Two command-line rows with no prompt between them
+/// accumulate together, which is the right answer for a continuation line — the block's
+/// command line genuinely is both rows.
+#[derive(Default)]
+struct Echo {
+    /// What the prompt region put on the row the echo is being written onto.
+    prompt: String,
+    /// The command line so far, or `None` once something unreadable happened to it.
+    text: Option<String>,
+}
+
+impl Echo {
+    fn observe(&mut self, region: Region, text: &str, revision: LineRevision) {
+        match region {
+            Region::CommandLine => match revision {
+                LineRevision::Appended => {
+                    if let Some(echoed) = self.text.as_mut() {
+                        echoed.push_str(text);
+                    }
+                }
+                // The whole row, so the prompt has to come off the front of it.
+                LineRevision::Rewritten | LineRevision::Settled => {
+                    self.text = text.strip_prefix(self.prompt.as_str()).map(str::to_owned);
+                }
+            },
+            // A new prompt is a new command line, and what it draws is the prefix the
+            // echo will be written after.
+            Region::Prompt => {
+                self.text = Some(String::new());
+                match revision {
+                    LineRevision::Appended => self.prompt.push_str(text),
+                    LineRevision::Rewritten | LineRevision::Settled => {
+                        self.prompt = text.to_owned();
+                    }
+                }
+            }
+            // Output, or text belonging to no block at all: whatever was echoed before it
+            // belonged to a command that has already opened.
+            Region::Output | Region::Unstructured => {
+                self.text = Some(String::new());
+                self.prompt.clear();
+            }
+        }
+    }
+
+    /// The command line for the block that just opened, and a clean slate for the next.
+    ///
+    /// Trimming is normalization and not interpretation: a row is padded with the spaces
+    /// the grid holds. A line that trims away to nothing is a shell that echoed nothing,
+    /// which is not a command line either.
+    fn take(&mut self) -> Option<String> {
+        let text = self.text.take().map(|text| text.trim().to_owned());
+        self.text = Some(String::new());
+        self.prompt.clear();
+        text.filter(|text| !text.is_empty())
     }
 }
 
@@ -768,7 +906,18 @@ mod tests {
             self.events()
                 .into_iter()
                 .filter_map(|event| match event {
-                    SessionEvent::CommandStarted { command_id } => Some(command_id),
+                    SessionEvent::CommandStarted { command_id, .. } => Some(command_id),
+                    _ => None,
+                })
+                .collect()
+        }
+
+        /// What the frontend would put on each block, in order.
+        fn headings(&self) -> Vec<Option<String>> {
+            self.events()
+                .into_iter()
+                .filter_map(|event| match event {
+                    SessionEvent::CommandStarted { command_line, .. } => Some(command_line),
                     _ => None,
                 })
                 .collect()
@@ -813,6 +962,14 @@ mod tests {
             id: LineId(id),
             text: text.to_owned(),
             revision: LineRevision::Appended,
+        }
+    }
+
+    fn rewritten(id: u64, text: &str) -> TerminalItem {
+        TerminalItem::Line {
+            id: LineId(id),
+            text: text.to_owned(),
+            revision: LineRevision::Rewritten,
         }
     }
 
@@ -921,24 +1078,215 @@ mod tests {
         );
     }
 
-    /// The one place mis-attribution can hide, accepted knowingly: an id no block claimed
-    /// stays queued and the next block takes it. A timeout that retired it would be
-    /// guessing, and guessing wrong is what DESIGN's reliability model exists to avoid.
+    /// The hole B6's decision 3 accepted, closed. It used to be that an id no block
+    /// claimed stayed queued and the next block took it — and the queue never recovered,
+    /// so from that point on every answer was heard under the question before it.
+    ///
+    /// The shell's own echo settles it: it says which line it is running, that line's id
+    /// is claimed, and the line the shell has already disposed of is retired (spec B6.1,
+    /// decision 3).
     #[tokio::test]
-    async fn an_unclaimed_id_is_taken_by_the_next_block() {
+    async fn an_id_the_shell_never_read_is_retired_by_the_echo_of_the_one_it_did() {
         let session = Session::start().await;
 
-        let first = session.submit("never runs").await;
-        let second = session.submit("runs").await;
+        let never_read = session.submit("typed into something else").await;
+        let read = session.submit("runs").await;
         session.emit(command(1, "runs", "output", Some(0))).await;
         session.advance_to(1_000).await;
 
         assert_eq!(
             session.started(),
-            vec![first],
-            "the queue is claimed from the front, so the second id is still waiting"
+            vec![read],
+            "the block is the line the shell echoed, not the one before it"
         );
-        assert_ne!(first, second, "the ids were still minted apart");
+        assert_eq!(session.rendered(), "output", "and its output went under it");
+
+        // The queue recovered rather than staying one behind: the next command is its
+        // own, not the retired one.
+        let next = session.submit("after").await;
+        session.emit(command(3, "after", "more", Some(0))).await;
+        session.advance_to(2_000).await;
+
+        assert_eq!(session.started(), vec![read, next]);
+        assert!(
+            !session.started().contains(&never_read),
+            "the id the shell never read is claimed by no block at all: {:?}",
+            session.started()
+        );
+    }
+
+    /// The fallback, unchanged from B6: an echo that identifies no submission decides
+    /// nothing and the block claims the front of the queue. Exact matching is the whole
+    /// point — a shell that rewrote the line beyond recognition must not be able to
+    /// retire an id on a resemblance.
+    #[tokio::test]
+    async fn an_echo_that_matches_nothing_claims_the_front_of_the_queue() {
+        let session = Session::start().await;
+
+        let first = session.submit("one").await;
+        session.submit("two").await;
+        session
+            .emit(command(1, "something else entirely", "output", Some(0)))
+            .await;
+        session.advance_to(1_000).await;
+
+        assert_eq!(session.started(), vec![first]);
+    }
+
+    /// Retiring is also what unsticks the answer to a keystroke: `send_key` reads whether
+    /// anything is outstanding, and a queue that can never drain reports "running"
+    /// forever — so `Ctrl+C` could never again say there is nothing to stop.
+    #[tokio::test]
+    async fn a_session_that_retired_an_id_can_say_there_is_nothing_to_stop() {
+        let session = Session::start().await;
+
+        session.submit("typed into something else").await;
+        session.submit("runs").await;
+        session.emit(command(1, "runs", "output", Some(0))).await;
+        session.advance_to(1_000).await;
+
+        assert_eq!(session.press(ctrl('c')).await, KeyAck::NothingToActOn);
+    }
+
+    // --- The block's heading --------------------------------------------------------
+
+    /// Decision 1: the heading is what the shell echoed. The frontend's optimistic text
+    /// makes the block appear the instant Enter is pressed; this is what has the last
+    /// word on it.
+    #[tokio::test]
+    async fn a_block_is_headed_by_the_line_the_shell_echoed() {
+        let session = Session::start().await;
+
+        session.submit("git status").await;
+        session
+            .emit(command(1, "git status", "on branch main", Some(0)))
+            .await;
+        session.advance_to(1_000).await;
+
+        assert_eq!(
+            session.headings(),
+            vec![Some("git status".to_owned())],
+            "{:?}",
+            session.events()
+        );
+    }
+
+    /// The echo arrives as the extractor's deltas, which a far end can spread across as
+    /// many reads as it likes.
+    #[tokio::test]
+    async fn an_echo_that_arrives_in_pieces_is_one_command_line() {
+        let session = Session::start().await;
+
+        session.submit("git status").await;
+        session
+            .emit(vec![
+                marker(Osc133Marker::PromptStart),
+                line(1, "> "),
+                marker(Osc133Marker::CommandStart),
+                line(1, "git "),
+            ])
+            .await;
+        session
+            .emit(vec![
+                line(1, "status"),
+                marker(Osc133Marker::OutputStart),
+                line(2, "on branch main"),
+            ])
+            .await;
+        session.advance_to(1_000).await;
+
+        assert_eq!(session.headings(), vec![Some("git status".to_owned())]);
+    }
+
+    /// A rewrite carries the whole row, prompt included — the prompt is drawn on the row
+    /// the echo is written onto — so the prompt this session watched being drawn comes
+    /// off the front of it (decision 2).
+    #[tokio::test]
+    async fn a_rewritten_echo_is_stripped_of_the_prompt_it_was_written_after() {
+        let session = Session::start().await;
+
+        session.submit("git status").await;
+        session
+            .emit(vec![
+                marker(Osc133Marker::PromptStart),
+                line(1, "> "),
+                marker(Osc133Marker::CommandStart),
+                rewritten(1, "> git status"),
+                marker(Osc133Marker::OutputStart),
+                line(2, "on branch main"),
+            ])
+            .await;
+        session.advance_to(1_000).await;
+
+        assert_eq!(session.headings(), vec![Some("git status".to_owned())]);
+    }
+
+    /// And when the prompt does not explain the row, the command line is unknown rather
+    /// than guessed: a heading that might carry the prompt inside it is worse than the
+    /// one the frontend already has.
+    #[tokio::test]
+    async fn a_rewritten_echo_the_prompt_does_not_explain_is_unknown() {
+        let session = Session::start().await;
+
+        session.submit("git status").await;
+        session
+            .emit(vec![
+                marker(Osc133Marker::PromptStart),
+                line(1, "> "),
+                marker(Osc133Marker::CommandStart),
+                rewritten(1, "PS C:\\acter> git status"),
+                marker(Osc133Marker::OutputStart),
+                line(2, "on branch main"),
+            ])
+            .await;
+        session.advance_to(1_000).await;
+
+        assert_eq!(session.headings(), vec![None]);
+    }
+
+    /// A shell that emits `C` with nothing echoed before it: there is no command line to
+    /// report, and an empty one would say the shell told us it was running nothing.
+    #[tokio::test]
+    async fn a_block_with_no_echo_has_no_command_line() {
+        let session = Session::start().await;
+
+        session.submit("quiet").await;
+        session
+            .emit(vec![
+                marker(Osc133Marker::PromptStart),
+                line(1, "> "),
+                marker(Osc133Marker::CommandStart),
+                marker(Osc133Marker::OutputStart),
+                line(2, "output"),
+                marker(Osc133Marker::CommandEnd(Some(ExitCode(0)))),
+            ])
+            .await;
+        session.advance_to(1_000).await;
+
+        assert_eq!(session.headings(), vec![None]);
+    }
+
+    /// One command's echo is never the next one's: the prompt between them starts the
+    /// command line over, so a block that opens with nothing echoed says nothing rather
+    /// than repeating the command before it.
+    #[tokio::test]
+    async fn an_echo_never_carries_over_to_the_next_block() {
+        let session = Session::start().await;
+
+        session.submit("first").await;
+        session.emit(command(1, "first", "output", Some(0))).await;
+        session
+            .emit(vec![
+                marker(Osc133Marker::PromptStart),
+                line(3, "> "),
+                marker(Osc133Marker::CommandStart),
+                marker(Osc133Marker::OutputStart),
+                line(4, "more"),
+            ])
+            .await;
+        session.advance_to(1_000).await;
+
+        assert_eq!(session.headings(), vec![Some("first".to_owned()), None]);
     }
 
     /// DESIGN's echo exclusion, which B2 promised would be a caller's one-line filter:

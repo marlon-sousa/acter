@@ -73,6 +73,9 @@ export class AppController {
   // Commands that have carried a too-big chunk, so the completion beep fires on their
   // finish. View state the frontend legitimately owns (decision 2).
   private readonly tooBig = new Set<CommandId>();
+  // Commands whose heading came from the shell's own echo, so the optimistic heading
+  // from a submit ack never overwrites it (spec B6.1, decision 1).
+  private readonly echoed = new Set<CommandId>();
 
   constructor(
     private readonly backend: BackendApi,
@@ -95,10 +98,18 @@ export class AppController {
     // The block appears immediately, tagged with the id from the ack (ARCHITECTURE
     // round-trip); later events append under it.
     const ack = await this.backend.submitCommand(text);
-    // Always set the command line authoritatively: an event (CommandStarted/Output)
-    // can arrive over the Channel before this ack resolves and open the block with an
-    // empty heading, so openBlock updates it here rather than being gated out.
-    this.buffer.openBlock(ack.command_id, text);
+    // Set the command line here too: an event (CommandStarted/Output) can arrive over
+    // the Channel before this ack resolves and open the block with an empty heading, so
+    // openBlock updates it rather than being gated out.
+    //
+    // Unless the shell has already said what this block is running. That is the one
+    // heading the frontend must not overwrite: this text is what the user typed, which
+    // is only a guess about which block will run it, and the whole of B6.1 is that a
+    // drifted id must not be able to put the wrong words on a block.
+    this.buffer.openBlock(
+      ack.command_id,
+      this.echoed.has(ack.command_id) ? '' : text,
+    );
     this.openBlocks.add(ack.command_id);
     this.editField.clear();
   }
@@ -106,6 +117,19 @@ export class AppController {
   // Ensure a block exists for an event's command id, opening one with an empty heading
   // if the submit ack has not arrived yet (a scripting race). Never overwrites a line
   // already set: openBlock ignores an empty line for an existing block.
+  // Put the shell's own words on the block: `command_line` is read from the echo the
+  // shell wrote for this block, so it says what is running rather than what was typed
+  // (spec B6.1, decision 1). `null` means the shell did not say — an unintegrated
+  // session, or an echo the backend would not guess at — and the heading the submit ack
+  // gave the block stands.
+  private headByTheEcho(commandId: CommandId, commandLine: string | null): void {
+    if (commandLine === null || commandLine === '') {
+      return;
+    }
+    this.echoed.add(commandId);
+    this.buffer.openBlock(commandId, commandLine);
+  }
+
   private ensureBlock(commandId: CommandId): void {
     if (!this.openBlocks.has(commandId)) {
       this.buffer.openBlock(commandId, '');
@@ -119,6 +143,7 @@ export class AppController {
         // A submit already opened the block; a started event with no block (e.g. a
         // scripting race) opens one lazily with an empty heading.
         this.ensureBlock(event.command_id);
+        this.headByTheEcho(event.command_id, event.command_line);
         break;
       case 'Output':
         this.ensureBlock(event.command_id);
@@ -148,6 +173,7 @@ export class AppController {
         }
         this.tooBig.delete(event.command_id);
         this.openBlocks.delete(event.command_id);
+        this.echoed.delete(event.command_id);
         break;
       case 'CommandInterrupted':
         // Terminal, like CommandFinished: same cleanup, but deliberately no beep. The
@@ -157,6 +183,7 @@ export class AppController {
         this.announcer.announce(commandStoppedMessage);
         this.tooBig.delete(event.command_id);
         this.openBlocks.delete(event.command_id);
+        this.echoed.delete(event.command_id);
         break;
       case 'IntegrationUnavailable':
         // Session-scoped, like the alt-screen pair: it carries no command id because it

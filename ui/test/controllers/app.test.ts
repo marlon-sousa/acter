@@ -38,9 +38,25 @@ class FakeBackend implements BackendApi {
     this.onEvent = onEvent;
     return Promise.resolve();
   }
+  /** Hold acks back, so an event can be delivered while a submission is still in
+   * flight — the race that decides which heading a block ends up with. */
+  deferAcks = false;
+  private held: Array<() => void> = [];
   submitCommand(line: string): Promise<SubmitAck> {
     this.submitted.push(line);
-    return Promise.resolve({ command_id: this.nextId++ });
+    const ack: SubmitAck = { command_id: this.nextId++ };
+    if (!this.deferAcks) {
+      return Promise.resolve(ack);
+    }
+    return new Promise((resolve) => {
+      this.held.push(() => resolve(ack));
+    });
+  }
+  releaseAcks(): void {
+    for (const release of this.held) {
+      release();
+    }
+    this.held = [];
   }
   /** What the next sendKey answers; the backend owns the binding table, so a test
    * chooses the answer rather than the meaning. */
@@ -145,12 +161,68 @@ describe('submit', () => {
   });
 });
 
+describe('the block heading (spec B6.1)', () => {
+  it("heads the block with the command line the shell echoed", async () => {
+    const { backend, buffer, controller } = makeApp();
+    await controller.attach();
+
+    backend.emit({
+      type: 'CommandStarted',
+      command_id: 1,
+      command_line: 'git status',
+    });
+
+    expect(buffer.opened).toEqual([
+      // Opened lazily with no heading, then headed by what the shell said it is
+      // running. An id that drifted can no longer put the wrong words on a block.
+      { commandId: 1, commandLine: '' },
+      { commandId: 1, commandLine: 'git status' },
+    ]);
+  });
+
+  it('leaves the heading alone when the shell did not say', async () => {
+    const { backend, editField, buffer, controller } = makeApp();
+    await controller.attach();
+    editField.text = 'git status';
+
+    await controller.submit();
+    backend.emit({ type: 'CommandStarted', command_id: 1, command_line: null });
+
+    expect(buffer.opened).toEqual([{ commandId: 1, commandLine: 'git status' }]);
+  });
+
+  it('never lets a late submit ack overwrite a heading the shell gave', async () => {
+    const { backend, editField, buffer, controller } = makeApp();
+    await controller.attach();
+    editField.text = 'what the user typed';
+    backend.deferAcks = true;
+
+    const submitting = controller.submit();
+    backend.emit({
+      type: 'CommandStarted',
+      command_id: 1,
+      command_line: 'what the shell read',
+    });
+    backend.releaseAcks();
+    await submitting;
+
+    expect(buffer.opened).toEqual([
+      { commandId: 1, commandLine: '' },
+      { commandId: 1, commandLine: 'what the shell read' },
+      // The ack still opens its block — that is what makes one appear the instant Enter
+      // is pressed — but with no heading of its own to impose: an empty line leaves an
+      // existing block's heading exactly as it is.
+      { commandId: 1, commandLine: '' },
+    ]);
+  });
+});
+
 describe('event rendering (decision 2)', () => {
   it('Output appends the text, and the ReadAloud about it speaks it', async () => {
     const { backend, buffer, announcer, controller } = makeApp();
     await controller.attach();
 
-    backend.emit({ type: 'CommandStarted', command_id: 1 });
+    backend.emit({ type: 'CommandStarted', command_id: 1, command_line: null });
     backend.emit({ type: 'Output', command_id: 1, text: 'hello from acter' });
     backend.emit({
       type: 'Announce',
@@ -189,7 +261,7 @@ describe('event rendering (decision 2)', () => {
     );
     await controller.attach();
 
-    backend.emit({ type: 'CommandStarted', command_id: 1 });
+    backend.emit({ type: 'CommandStarted', command_id: 1, command_line: null });
     // Two events now, in the order the backend sends them: A6 moved this invariant from
     // "append before announcing inside one handler" to "the render event before the
     // announce about it". The channel delivers in order, so obeying that order is enough.
@@ -208,7 +280,7 @@ describe('event rendering (decision 2)', () => {
     await controller.attach();
     const text = Array.from({ length: 40 }, (_, i) => `line ${i + 1}`).join('\n');
 
-    backend.emit({ type: 'CommandStarted', command_id: 1 });
+    backend.emit({ type: 'CommandStarted', command_id: 1, command_line: null });
     backend.emit({ type: 'Output', command_id: 1, text });
     backend.emit({
       type: 'Announce',
@@ -225,7 +297,7 @@ describe('event rendering (decision 2)', () => {
     const { backend, buffer, announcer, controller } = makeApp();
     await controller.attach();
 
-    backend.emit({ type: 'CommandStarted', command_id: 1 });
+    backend.emit({ type: 'CommandStarted', command_id: 1, command_line: null });
     backend.emit({ type: 'Output', command_id: 1, text: 'still working' });
 
     expect(buffer.appended).toEqual([{ commandId: 1, text: 'still working' }]);
@@ -236,7 +308,7 @@ describe('event rendering (decision 2)', () => {
     const { backend, announcer, beep, controller } = makeApp();
     await controller.attach();
 
-    backend.emit({ type: 'CommandStarted', command_id: 1 });
+    backend.emit({ type: 'CommandStarted', command_id: 1, command_line: null });
     backend.emit({ type: 'Output', command_id: 1, text: 'hello from acter' });
     backend.emit({
       type: 'Announce',
@@ -258,7 +330,7 @@ describe('event rendering (decision 2)', () => {
     const { backend, announcer, beep, controller } = makeApp();
     await controller.attach();
 
-    backend.emit({ type: 'CommandStarted', command_id: 1 });
+    backend.emit({ type: 'CommandStarted', command_id: 1, command_line: null });
     backend.emit({ type: 'Output', command_id: 1, text: 'error: boom' });
     backend.emit({
       type: 'Announce',
@@ -283,7 +355,7 @@ describe('event rendering (decision 2)', () => {
     const { backend, announcer, controller } = makeApp();
     await controller.attach();
 
-    backend.emit({ type: 'CommandStarted', command_id: 1 });
+    backend.emit({ type: 'CommandStarted', command_id: 1, command_line: null });
     backend.emit({ type: 'CommandFinished', command_id: 1 });
 
     expect(announcer.announcements).toEqual([]);
@@ -293,7 +365,7 @@ describe('event rendering (decision 2)', () => {
     const { backend, buffer, announcer, controller } = makeApp();
     await controller.attach();
 
-    backend.emit({ type: 'CommandStarted', command_id: 1 });
+    backend.emit({ type: 'CommandStarted', command_id: 1, command_line: null });
     backend.emit({ type: 'Output', command_id: 1, text: 'phase one' });
     backend.emit({
       type: 'Announce',
@@ -316,7 +388,7 @@ describe('event rendering (decision 2)', () => {
     const { backend, beep, announcer, controller } = makeApp();
     await controller.attach();
 
-    backend.emit({ type: 'CommandStarted', command_id: 1 });
+    backend.emit({ type: 'CommandStarted', command_id: 1, command_line: null });
     backend.emit({ type: 'Output', command_id: 1, text: 'a\nb' });
     backend.emit({
       type: 'Announce',
@@ -351,7 +423,7 @@ describe('event rendering (decision 2)', () => {
     const { backend, beep, controller } = makeApp();
     await controller.attach();
 
-    backend.emit({ type: 'CommandStarted', command_id: 1 });
+    backend.emit({ type: 'CommandStarted', command_id: 1, command_line: null });
     backend.emit({ type: 'Output', command_id: 1, text: 'a\nb' });
     backend.emit({
       type: 'Announce',
@@ -376,7 +448,7 @@ describe('event rendering (decision 2)', () => {
     const { backend, beep, controller } = makeApp();
     await controller.attach();
 
-    backend.emit({ type: 'CommandStarted', command_id: 1 });
+    backend.emit({ type: 'CommandStarted', command_id: 1, command_line: null });
     backend.emit({
       type: 'Announce',
       command_id: 1,
@@ -469,7 +541,7 @@ describe('event rendering (decision 2)', () => {
     // before the submit ack resolves, lazily opening the block with an empty heading.
     const { backend, buffer, editField, controller } = makeApp();
     await controller.attach();
-    backend.emit({ type: 'CommandStarted', command_id: 1 });
+    backend.emit({ type: 'CommandStarted', command_id: 1, command_line: null });
 
     editField.text = 'small';
     await controller.submit();
@@ -487,7 +559,7 @@ describe('event rendering (decision 2)', () => {
     editField.text = 'small';
     await controller.submit();
 
-    backend.emit({ type: 'CommandStarted', command_id: 1 });
+    backend.emit({ type: 'CommandStarted', command_id: 1, command_line: null });
     backend.emit({ type: 'Output', command_id: 1, text: 'hello from acter' });
 
     expect(buffer.opened).toEqual([{ commandId: 1, commandLine: 'small' }]);
@@ -526,7 +598,7 @@ describe('Announce (B1.5): speech is its own event', () => {
     const { backend, buffer, announcer, controller } = makeApp();
     await controller.attach();
 
-    backend.emit({ type: 'CommandStarted', command_id: 1 });
+    backend.emit({ type: 'CommandStarted', command_id: 1, command_line: null });
     backend.emit({ type: 'Output', command_id: 1, text: 'hello\n' });
     backend.emit({
       type: 'Announce',
@@ -542,7 +614,7 @@ describe('Announce (B1.5): speech is its own event', () => {
     const { backend, buffer, announcer, controller } = makeApp();
     await controller.attach();
 
-    backend.emit({ type: 'CommandStarted', command_id: 1 });
+    backend.emit({ type: 'CommandStarted', command_id: 1, command_line: null });
     // Past the threshold the backend does not hold the text, so the count cannot be
     // re-derived here even in principle — it is carried.
     backend.emit({ type: 'Output', command_id: 1, text: 'y\ny\n' });
@@ -560,7 +632,7 @@ describe('Announce (B1.5): speech is its own event', () => {
     const { backend, beep, controller } = makeApp();
     await controller.attach();
 
-    backend.emit({ type: 'CommandStarted', command_id: 1 });
+    backend.emit({ type: 'CommandStarted', command_id: 1, command_line: null });
     backend.emit({
       type: 'Announce',
       command_id: 1,
@@ -576,7 +648,7 @@ describe('Announce (B1.5): speech is its own event', () => {
     const { backend, announcer, controller } = makeApp();
     await controller.attach();
 
-    backend.emit({ type: 'CommandStarted', command_id: 1 });
+    backend.emit({ type: 'CommandStarted', command_id: 1, command_line: null });
     backend.emit({
       type: 'Announce',
       command_id: 1,
@@ -590,7 +662,7 @@ describe('Announce (B1.5): speech is its own event', () => {
     const { backend, announcer, controller } = makeApp();
     await controller.attach();
 
-    backend.emit({ type: 'CommandStarted', command_id: 1 });
+    backend.emit({ type: 'CommandStarted', command_id: 1, command_line: null });
     backend.emit({
       type: 'Announce',
       command_id: 1,
@@ -605,7 +677,7 @@ describe('Announce (B1.5): speech is its own event', () => {
     const { backend, announcer, controller } = makeApp();
     await controller.attach();
 
-    backend.emit({ type: 'CommandStarted', command_id: 1 });
+    backend.emit({ type: 'CommandStarted', command_id: 1, command_line: null });
     backend.emit({
       type: 'Announce',
       command_id: 1,
@@ -619,7 +691,7 @@ describe('Announce (B1.5): speech is its own event', () => {
     const { backend, buffer, announcer, controller } = makeApp();
     await controller.attach();
 
-    backend.emit({ type: 'CommandStarted', command_id: 1 });
+    backend.emit({ type: 'CommandStarted', command_id: 1, command_line: null });
     backend.emit({
       type: 'Announce',
       command_id: 1,

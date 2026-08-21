@@ -32,8 +32,13 @@ use crate::{
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SessionInput {
     /// A command's output region has begun.
+    ///
+    /// `command_line` is the echo the service read for this block, carried through
+    /// unchanged: what the shell said it is running, or `None` when it did not say
+    /// (spec B6.1, decision 1).
     CommandStarted {
         command_id: CommandId,
+        command_line: Option<String>,
     },
     /// Text arrived for the running command. An empty chunk is not output and must not
     /// move the quiescence deadline (B1.1), which the policy enforces.
@@ -192,7 +197,10 @@ impl SessionActor {
     /// One domain fact.
     pub fn handle(&mut self, input: SessionInput) {
         match input {
-            SessionInput::CommandStarted { command_id } => self.command_started(command_id),
+            SessionInput::CommandStarted {
+                command_id,
+                command_line,
+            } => self.command_started(command_id, command_line),
             SessionInput::Output { text } => self.output(&text),
             SessionInput::CommandEnded {
                 command_id,
@@ -245,9 +253,14 @@ impl SessionActor {
         self.requests.pacing = wake_from(outcome.wake_after);
     }
 
-    fn command_started(&mut self, command_id: CommandId) {
+    /// The echo passes straight through: reading it is the pump's, and the actor decides
+    /// nothing about it — it owns the event, not the correlation.
+    fn command_started(&mut self, command_id: CommandId, command_line: Option<String>) {
         self.active = Some(ActiveCommand::new(command_id, self.clock.now()));
-        self.sink.send(SessionEvent::CommandStarted { command_id });
+        self.sink.send(SessionEvent::CommandStarted {
+            command_id,
+            command_line,
+        });
     }
 
     fn output(&mut self, text: &str) {
@@ -519,6 +532,7 @@ mod tests {
     fn started(actor: &mut SessionActor) {
         actor.handle(SessionInput::CommandStarted {
             command_id: CommandId(1),
+            command_line: None,
         });
         let _ = actor.take_requests();
     }
@@ -535,6 +549,26 @@ mod tests {
             command_id: CommandId(command_id),
             exit_code: ExitCode(exit_code),
         });
+    }
+
+    /// The actor is a conduit for the echo and nothing more: reading it is the service's,
+    /// and nothing here inspects, trims or substitutes it (spec B6.1, decision 1).
+    #[test]
+    fn the_echoed_command_line_reaches_the_frontend_unchanged() {
+        let (mut actor, _clock, sink) = actor();
+
+        actor.handle(SessionInput::CommandStarted {
+            command_id: CommandId(1),
+            command_line: Some("git status".to_owned()),
+        });
+
+        assert_eq!(
+            sink.events(),
+            vec![SessionEvent::CommandStarted {
+                command_id: CommandId(1),
+                command_line: Some("git status".to_owned()),
+            }]
+        );
     }
 
     // --- The scheduling contract ------------------------------------------------
@@ -722,6 +756,7 @@ mod tests {
 
         actor.handle(SessionInput::CommandStarted {
             command_id: CommandId(2),
+            command_line: None,
         });
         let _ = actor.take_requests();
         output(&mut actor, "fresh\n");
@@ -1121,6 +1156,7 @@ mod tests {
         inputs
             .send(SessionInput::CommandStarted {
                 command_id: CommandId(1),
+                command_line: None,
             })
             .expect("actor is running");
         inputs
