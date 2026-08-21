@@ -28,8 +28,7 @@ use std::time::Duration;
 
 use acter_core::{
     Announcement, Clock, CommandId, EventSink, ExitCode, Key, KeyAck, KeyPress, PacingConfig,
-    SessionApi, SessionEvent, SessionId, SessionService, Timer, Transport,
-    TransportError,
+    SessionApi, SessionEvent, SessionId, SessionService, Timer, Transport, TransportError,
 };
 use acter_term::AlacrittyEngine;
 use acter_transports::{
@@ -569,10 +568,7 @@ async fn an_interrupting_line_ends_the_running_command_without_inventing_a_failu
     pipeline.run_until(4_000).await;
 
     let events = pipeline.events();
-    assert!(
-        events.contains(&finished()),
-        "the block closed: {events:?}"
-    );
+    assert!(events.contains(&finished()), "the block closed: {events:?}");
     assert!(
         !pipeline
             .announcements()

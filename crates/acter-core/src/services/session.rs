@@ -1175,11 +1175,9 @@ mod tests {
             session.events()
         );
         assert!(
-            session
-                .announcements()
-                .contains(&Announcement::Failed {
-                    exit_code: ExitCode(2)
-                }),
+            session.announcements().contains(&Announcement::Failed {
+                exit_code: ExitCode(2)
+            }),
             "and the exit code came back with them, on its only carrier now: {:?}",
             session.announcements()
         );
