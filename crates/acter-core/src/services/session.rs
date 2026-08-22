@@ -280,12 +280,22 @@ struct Pump {
     /// yet. What tells a stopped command from a finished one, since the exit code cannot
     /// (decision 8).
     interrupted: bool,
-    /// What has been done with each line of the running command: `false` once some of
-    /// its text has been forwarded, `true` if it was rewritten and its final text is
-    /// still owed. Kept across regions on purpose — the engine settles a block's lines
-    /// while the region is still `Output`, including the prompt row the echo was written
-    /// onto, and it is knowing that row's id that keeps the echo out of the command's
-    /// output.
+    /// What has been done with each line seen so far: `false` once some of its text has
+    /// been forwarded, `true` if it was rewritten and its final text is still owed. Kept
+    /// across regions on purpose — the engine settles a block's lines while the region is
+    /// still `Output`, including the prompt row the echo was written onto, and it is
+    /// knowing that row's id that keeps the echo out of the command's output.
+    ///
+    /// Kept across *blocks* too, which is B4.2: without markers the engine is never told
+    /// a boundary happened, so a row still on screen from a finished command keeps its id
+    /// and settles with its full text partway through the next one. Forgetting it is what
+    /// made that settlement look like a line nobody had ever seen.
+    ///
+    /// It cannot grow without bound: every id the engine emits as `Appended` is eventually
+    /// emitted as `Settled` — by scrolling out of the screen area, by being swallowed as a
+    /// continuation, at a block boundary, on a screen change or resize, or on staging
+    /// saturation — and [`Pump::due`] removes the entry then. What this holds is the lines
+    /// currently live on screen.
     lines: HashMap<LineId, bool>,
     /// The last line whose text was forwarded, so consecutive lines are separated the way
     /// the pacing policy counts them.
@@ -503,7 +513,12 @@ impl Pump {
         let Some(command_id) = self.open.take() else {
             return;
         };
-        self.lines.clear();
+        // Every line still on record had its text forwarded to the block that is closing:
+        // a rewrite only ever reaches `due` for a line that appended first. So nothing
+        // here is owed to anyone any more, and saying so is what stops a row of this
+        // command settling into the *next* one when no marker ever freezes it (B4.2).
+        // Clearing instead would leave those settlements looking like lines never seen.
+        self.lines.values_mut().for_each(|owed| *owed = false);
         self.last_line = None;
         let stopped = exit.is_none() && self.interrupted;
         self.interrupted = false;
@@ -571,6 +586,9 @@ impl Pump {
             // Owed when the line was rewritten since its last word, and when it was never
             // seen at all — which is how a line that scrolled out of the screen area
             // inside a single read arrives, settled and complete, having never appended.
+            // The default is only honest because the record outlives the block: a line
+            // whose text went to an earlier block is on record as owing nothing, rather
+            // than being indistinguishable from one nobody has seen (B4.2).
             LineRevision::Settled => self.lines.remove(&id).unwrap_or(true).then_some(text),
         }
     }
@@ -936,6 +954,18 @@ mod tests {
                 .collect()
         }
 
+        /// Each `Output` event's text in order, so what one block received can be told
+        /// apart from the stream as a whole — which [`Session::rendered`] concatenates.
+        fn outputs(&self) -> Vec<String> {
+            self.events()
+                .into_iter()
+                .filter_map(|event| match event {
+                    SessionEvent::Output { text, .. } => Some(text),
+                    _ => None,
+                })
+                .collect()
+        }
+
         fn rendered(&self) -> String {
             self.events()
                 .iter()
@@ -983,6 +1013,16 @@ mod tests {
             id: LineId(id),
             text: text.to_owned(),
             revision: LineRevision::Rewritten,
+        }
+    }
+
+    /// A row leaving the screen area, carrying its whole final text — what the engine
+    /// emits for any live line that scrolls out, whichever command put it there.
+    fn settled(id: u64, text: &str) -> TerminalItem {
+        TerminalItem::Line {
+            id: LineId(id),
+            text: text.to_owned(),
+            revision: LineRevision::Settled,
         }
     }
 
@@ -1603,6 +1643,135 @@ mod tests {
                 .contains(&SessionEvent::CommandFinished { command_id: first }),
             "the previous command closed when the next line was submitted: {:?}",
             session.events()
+        );
+    }
+
+    /// **B4.2, written from the capture that found it.** A session that had run
+    /// `dir /s C:\Windows\System32` and then `ping -n 20`: the finished `dir`'s rows are
+    /// still live in the engine, because without markers nothing ever freezes them, and
+    /// they scroll off the emulated screen one at a time as `ping`'s replies push them
+    /// up. Each arrived settled, carrying its whole text, into the block the user was
+    /// reading.
+    ///
+    /// One old row per new line of output is the signature, and it is what makes the
+    /// buffer unreadable: nothing in the block says which lines the command produced.
+    #[tokio::test]
+    async fn a_finished_commands_rows_do_not_settle_into_the_next_block() {
+        let session = Session::with_config(quick_grace()).await;
+        session.advance_to(300).await;
+
+        session.submit("dir /s").await;
+        session
+            .emit(vec![line(1, "fms.dll.mui"), line(2, "mlang.dll.mui")])
+            .await;
+        session.advance_to(1_000).await;
+
+        session.submit("ping").await;
+        session
+            .emit(vec![
+                line(3, "reply one"),
+                settled(1, "fms.dll.mui"),
+                line(4, "reply two"),
+                settled(2, "mlang.dll.mui"),
+            ])
+            .await;
+        session.advance_to(2_000).await;
+
+        assert_eq!(
+            session.outputs(),
+            vec![
+                "fms.dll.mui\nmlang.dll.mui".to_owned(),
+                "reply one\nreply two".to_owned(),
+            ],
+            "the second block holds its own output and nothing the first one left on \
+             screen: {:?}",
+            session.outputs()
+        );
+    }
+
+    /// The case that decides between demoting the record at a boundary and merely keeping
+    /// it. A row rewritten before the boundary is on record as still owing its final
+    /// text; kept as-is, that text would be paid to whichever block happened to be open
+    /// when the row scrolled out.
+    #[tokio::test]
+    async fn a_row_rewritten_before_the_boundary_does_not_settle_into_the_next_block() {
+        let session = Session::with_config(quick_grace()).await;
+        session.advance_to(300).await;
+
+        session.submit("first").await;
+        session
+            .emit(vec![
+                line(1, "downloading"),
+                rewritten(1, "downloading done"),
+            ])
+            .await;
+        session.advance_to(1_000).await;
+
+        session.submit("second").await;
+        session
+            .emit(vec![
+                line(2, "its own output"),
+                settled(1, "downloading done"),
+            ])
+            .await;
+        session.advance_to(2_000).await;
+
+        assert_eq!(
+            session.outputs(),
+            vec!["downloading".to_owned(), "its own output".to_owned()],
+            "what the first block was owed stopped being owed when it closed: {:?}",
+            session.outputs()
+        );
+    }
+
+    /// And the case the "never seen means still owed" default exists for, which the fix
+    /// must not take with it: a line that scrolled out of the screen area inside a single
+    /// read arrives settled and complete, having never appended, and is this block's own
+    /// output.
+    #[tokio::test]
+    async fn a_line_first_seen_settled_inside_the_open_block_is_still_forwarded() {
+        let session = Session::with_config(quick_grace()).await;
+        session.advance_to(300).await;
+
+        session.submit("noisy").await;
+        session
+            .emit(vec![
+                line(1, "still on screen"),
+                settled(2, "scrolled past inside one read"),
+            ])
+            .await;
+        session.advance_to(1_000).await;
+
+        assert_eq!(
+            session.outputs(),
+            vec!["still on screen\nscrolled past inside one read".to_owned()],
+            "dropping a settlement nobody has a record of would lose output: {:?}",
+            session.outputs()
+        );
+    }
+
+    /// An integrated session is unaffected, and the ordering is why: the engine settles a
+    /// block's lines *before* the `D` that closes it, so their records are spent by the
+    /// time the boundary is applied and there is nothing left to demote.
+    #[tokio::test]
+    async fn an_integrated_block_renders_only_its_own_output() {
+        let session = Session::start().await;
+
+        session.submit("first").await;
+        session
+            .emit(command(1, "first", "first output", Some(0)))
+            .await;
+        session.submit("second").await;
+        session
+            .emit(command(3, "second", "second output", Some(0)))
+            .await;
+        session.advance_to(2_000).await;
+
+        assert_eq!(
+            session.outputs(),
+            vec!["first output".to_owned(), "second output".to_owned()],
+            "echo exclusion still decides what a marked block contains: {:?}",
+            session.outputs()
         );
     }
 
