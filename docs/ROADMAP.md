@@ -673,9 +673,11 @@ the answer to "what should we do now?".
     with an invented exit code. The amendment existed only to make the announcement timely,
     and there is no longer an announcement to be timely about.
 
-22.2. B4.2, text that scrolled away must not be said twice. Spec: none yet → specify
-    first. **Also from B4's manual pass**, and reachable in any session long enough to
-    scroll.
+22.2. **Done** — B4.2, text that scrolled away must not be said twice. Spec:
+    [b4.2-scrolled-text-not-said-twice.md](specs/b4.2-scrolled-text-not-said-twice.md).
+    **Also from B4's manual pass**, and reachable in any session long enough to scroll.
+    Sequenced ahead of its number as the most severe open defect, which the capture below
+    is what established.
 
     A row that leaves the screen area is settled by the extractor with its final text, and
     the pump forwards a settled line when it has no record of having forwarded it already
@@ -710,6 +712,56 @@ the answer to "what should we do now?".
     was already forwarded, or the boundary could stop clearing what the engine still
     considers live. Each has a different answer for the case the current rule exists to
     serve — a line that scrolls past inside one read, never having appended.
+
+    **What it turned out to be, and the half this entry did not have.** The cleared record
+    is only one of two causes. The other is that the extractor is **never told a boundary
+    happened** without markers: `AlacrittyEngine::place` calls `Extractor::settle_block`
+    only on `Osc133Marker::CommandEnd`, so a real `cmd.exe`'s on-screen rows keep their
+    ids and their text across submissions indefinitely, and go on settling one at a time
+    into whatever block is open when they scroll out. That is why the capture shows one
+    old row per new line of output.
+
+    **What was decided, and what it cost.** `Pump::close` demotes its record instead of
+    clearing it: every remaining entry is set to "text already forwarded". The choice is
+    forced by there being nowhere else to put such a line — `SessionInput::Output` carries
+    text and no `LineId`, so a line from a closed block can only go to the open block,
+    which is the defect, or nowhere. Demotion rather than merely keeping the record is what
+    also covers a row *rewritten* before the boundary, whose entry says its final text is
+    still owed; a test pins that difference, and it fails under the plain-keep variant.
+    `unwrap_or(true)` stays, and the demotion is what makes it honest: with the record kept,
+    "no record" means only "never seen", which is what the default assumes. One line of
+    behavior change in `session.rs`, four service tests, `acter-term` untouched.
+
+    Two things worth carrying forward. The map cannot grow without bound, which is the
+    obvious objection to keeping it: every id emitted as `Appended` is eventually emitted
+    as `Settled` on some path and `due` removes it then, so it holds the lines live on
+    screen and nothing more. And an *integrated* session was never affected, because
+    `place` pushes `settle_block`'s items before the `CommandEnd` marker — the records are
+    spent before the boundary is applied.
+
+    **Measured rather than reasoned, and one new fact about nesting.** The premise the fix
+    rests on — that the extractor re-emits a finished command's rows as `Settled` with
+    their full text — was read out of `extractor.rs`, and the service tests could not check
+    it because they feed `TerminalItem`s to a fake engine. It is now pinned twice more: at
+    the pipeline layer against a real `AlacrittyEngine`, and in a new `real_session.rs`
+    running the whole stack with nothing faked at all — real pseudoconsole, real `cmd.exe`,
+    real engine, real service, real clock. Both reproduce the capture's interleaving on the
+    parent commit.
+
+    That last suite also settles the nested-shell question, which was open as a worry
+    rather than a finding: `sh` in an Alpine container inside `cmd.exe` mangles its buffer
+    **by this same mechanism and no other**, failing identically before the fix and clean
+    after it. Worth carrying forward because a nested shell is the one regime that can
+    never be integrated — markers are injected into the shell Acter launches, and a
+    container's shell is on the far side of that injection point, so no amount of 22.5
+    reaches it. Whatever 22.5 does to the marker-less population, nested sessions stay in
+    it permanently, and manual buffer review stays the only way to read them.
+
+    **Left open on purpose:** having the pump signal the engine so `settle_block` runs at
+    an unintegrated boundary too. That fixes it at the source rather than declining to
+    forward the consequences, and it is the better shape, but it is a `TerminalEngine` port
+    change and 22.5 is about to change how many sessions are marker-less at all. Revisit
+    after 22.5; recorded in the spec as rejected-for-now rather than rejected.
 
 22.3. B4.3, a shell that exited sometimes sends one more read. Spec: none yet → specify
     first. **Found while implementing B4.1, and pre-existing** — B4.1 neither caused it
