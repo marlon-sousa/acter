@@ -836,6 +836,19 @@ the answer to "what should we do now?".
     block, B6.1's `CommandStarted { command_line }` *consumes* the echo as the heading text
     instead of forwarding it as output.
 
+    **Measured in a real session, 2026-08-22, and it is exactly what this entry
+    predicted.** Driving a real `cmd.exe` through NVDA, every block shows the submitted
+    line twice: once as the heading, which is the frontend's own ack — `CommandStarted`
+    carries `command_line: None` without markers — and again as the block's first content
+    line, which is ConPTY echoing what was written to it. `Pump::wants` cannot tell them
+    apart, because an unintegrated session has no `Region::CommandLine` to reject: every
+    row is `Unstructured`, and decision 10's rule is "every line, echo included". So a user
+    hears each command they run twice, in every real shell session, today. That is the
+    standing cost of leaving this entry open, and it is the same duplication this entry
+    already proposes to remove for free by having the submission open the block and
+    `CommandStarted { command_line }` consume the echo as the heading text.
+
+
     *When a submission must not open a block, which is the whole difficulty.* Enter is not
     always a command: it can be a response to a prompt, a keystroke fed to a running
     program, or a password. Alt-screen state is a reliable negative for `vim` and `less`
@@ -1193,6 +1206,102 @@ the answer to "what should we do now?".
     Whichever is chosen, it needs a real listen before it is believed: this is a judgement
     about repetition and comfort across many commands in a row, which no unit test can
     answer and one command cannot either.
+
+22.10. An interrupt can release a backlog of submitted lines into one block. Spec: none
+    yet → specify first. **Found by the user 2026-08-22**, driving a real `cmd.exe`
+    session while the agent observed through NVDA in live capture.
+
+    Reproduced with `docker run -t alpine` — deliberately `-t` and not `-i`, which gives
+    the container a tty but never attaches its stdin. The container stays up (measured:
+    still running ten minutes later, so it is not the case of a shell taking EOF and
+    exiting), the docker client holds the terminal, and `cmd.exe` is still the thing
+    reading the console. Two `ls` lines submitted in that state are consumed by nothing.
+    Acter opens a block for each of them, per decision 10, and both stay empty.
+
+    Ctrl+C then tears the client down, and `cmd.exe` drains the backlog and runs both
+    queued lines at once. Their echoes and their output therefore arrive *after* both
+    blocks were opened, so all of it lands in whichever block is open last. Measured: the
+    first `ls` heading has nothing under it at all, and the second holds two prompts, two
+    echoes, an error and a fifty-three entry listing — announced as `60 lines arrived, too
+    big to read`, thirty-six seconds after the first Enter.
+
+    **The silence while those lines sat unread is accepted, and is not the defect.** Ruled
+    by the user 2026-08-22: typing at a far end that is not accepting input should be
+    quiet. So the gap found while investigating — `patience` is evaluated against
+    `continuous_since` and its own doc says "the patience window elapsed with no quiescent
+    gap", so a command emitting zero bytes never enters that path at all — is recorded here
+    as understood rather than as something to fix. Do not re-open it as a defect.
+
+    What is the defect is the shape of what arrives when the backlog is released: a heading
+    with nothing beneath it, and its sibling holding two commands' worth of echo and
+    output. A user reviewing that buffer cannot tell which output belongs to which thing
+    they typed. That is the same failure mode B4.2 was about, reached by a different road,
+    and it is why this is filed as a defect rather than as an oddity of a misused flag.
+
+    **The wanted behaviour is not ours to invent — a real terminal already defines it.**
+    Named by the user 2026-08-22 from the case they know: over `ssh`, with a foreground
+    program running, typing `ls` three times and then pressing Ctrl+C discards all three.
+    They are never executed. That is POSIX tty behaviour rather than a shell's courtesy —
+    with `ISIG` set and `NOFLSH` clear, the INTR character flushes the terminal's input
+    queue — and it is precisely the rule that would have made this session behave: the two
+    queued `ls` lines would have been thrown away by the interrupt instead of run by it.
+
+    So the target is stated before any mechanism: **an interrupt discards input that has
+    been submitted and not yet consumed.** That is a better answer than anything about
+    block attribution, because it removes the backlog rather than deciding where to file
+    it, and because it is what a user coming from any other terminal already expects.
+
+    **What must be measured before specifying, and it may be the whole difficulty.** Acter
+    writes a submitted line to the pty master immediately, so by the time Ctrl+C is pressed
+    the bytes are already in ConPTY's input buffer, not in anything Acter still owns.
+    Whether a pseudoconsole master can flush its client's pending input at all is unknown
+    here and is the first thing to establish. Two measurements, both cheap from
+    `real_session.rs`, which already drives the whole stack over a real pseudoconsole:
+    whether a stock Windows console plus `cmd.exe` discards typed-ahead input on Ctrl+C
+    natively — because if Windows does not do this at all, matching `ssh` may not be
+    reachable and the entry becomes a smaller one about block shape — and, if it does, what
+    B4.1's interrupt path would have to call to get it, given B4.1 already measured that
+    `0x03` alone does not interrupt.
+
+    **If the flush is reachable, this stops being 22.4's problem.** No empty block would
+    exist, because nothing would arrive late to fill the wrong one. If it is not reachable,
+    the fallback is 22.4's question in another form — a submission opening a block only
+    once there is evidence the far end read it, which is 22.4's echo test — and the two
+    should then be settled together rather than separately.
+
+22.11. A device-query reply can reach the user's command line, and its bytes can reach the
+    buffer. Spec: none yet → specify first. **Found by the user 2026-08-22**, in the same
+    session as 22.10 and visible in the same capture.
+
+    The buffer contains, as literal readable text, `C:\Users\marlo>^[[24;5Rls` followed by
+    `'s not recognized as an internal or external command,`. `ESC[24;5R` is a Cursor
+    Position Report — the *answer* to a `ESC[6n` query, and on a twenty-four row screen row
+    24 column 5 is where the cursor was. Acter generates that answer itself, in
+    `TerminalEngine::take_replies`, and writes it back to the transport: the loop B3
+    decision 4 built, and the one `local_pty.rs` records as the reason a real `cmd.exe`
+    starts at all.
+
+    Two distinct faults, worth separating because they have different fixes.
+
+    **The reply reached the far end's input rather than the program that asked for it.**
+    With the docker client holding the tty and `cmd.exe` reading the console, Acter's write
+    landed in the console input buffer ahead of the user's keystrokes, so the submitted
+    line became `^[[24;5Rls` and the shell rejected it. The user's command did not run.
+    This is a race, not a formatting mistake: the reply is correct, it is written to the
+    right place, and it is read by the wrong reader. The visible result is an error message
+    naming something the user never typed.
+
+    **The escape bytes are rendered, and therefore spoken.** Whatever put them there,
+    `^[[24;5R` sits in the buffer as text a screen reader reads out character by character.
+    The emulator did not consume them because they arrived as an *echo of input* rather
+    than as a program's output — which is a general hazard, not one about this sequence.
+
+    Not yet known, and cheap to measure before specifying: whether this needs a far end
+    that holds a tty without reading stdin, or whether any sufficiently slow consumer will
+    do; and whether the same race can drop a reply into a command line the user has
+    half-typed rather than in front of a submitted one. Both are reachable from
+    `real_session.rs`, which already drives the whole stack over a real pseudoconsole.
+
 
 23. B5, PowerShell adapter. Spec: none yet → specify first. Scope sketch: OSC 133
     injection snippet; record the first golden transcripts as fixtures, in B2's format
