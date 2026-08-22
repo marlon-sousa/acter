@@ -941,6 +941,25 @@ the answer to "what should we do now?".
     better: while the interrupt still closed the block, a second Ctrl+C did report nothing
     to stop, and now nothing ever does.
 
+    **And the completion beep is the worst of them, raised by the user 2026-08-22.** The
+    beep is bound to `CommandFinished`, which an unintegrated session emits from `close`,
+    which runs at the *next submission*. Its whole job is "the too-big output you were
+    warned about has finished" — so in a real shell session it can only reach the user
+    after they have already given up waiting for it. Run something too big to read, hear
+    the warning, wait; it finishes in silence; wait longer; eventually conclude it is hung
+    or done and type something else — and only then does the beep arrive, reporting a
+    completion that happened at an unknown earlier time. **That is the same defect class
+    B4.1 just removed**: a signal fired at a moment when what it claims cannot be known.
+    `command stopped` claimed a stop it could not observe; this beep invents the timing of
+    a completion.
+
+    The same call also invents an exit code. `close(None)` with nothing outstanding reports
+    `ExitCode(0)`, so `command failed, exit code N` can never fire in a real shell session
+    either — every command reports success whatever it did. That is a knowing consequence
+    of decision 10 rather than a new defect, but it belongs in the same list, because the
+    three together are what "unintegrated" actually costs a user today and the cost was
+    never written down in one place.
+
     That matters because it undercuts B4.1's own reasoning. That entry removed the stop
     announcement on the grounds that the shell's own output is the answer, and kept
     `nothing running to stop` on the grounds that with nothing running there is no shell
