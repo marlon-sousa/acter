@@ -1061,3 +1061,57 @@ async fn a_completed_command_in_an_unintegrated_session_is_never_read_aloud() {
         pipeline.announcements()
     );
 }
+
+/// B4.2, at the layer where it actually happens: the real `AlacrittyEngine` scrolling a
+/// real grid, rather than `TerminalItem`s handed to a fake.
+///
+/// The service-level tests pin the pump's rule. They cannot pin the premise that rule
+/// rests on, which is that the extractor really does re-emit a *previous* command's rows
+/// as `Settled` while the next one is running. Nothing ever tells it a boundary happened
+/// — `place` calls `settle_block` only on a `D` marker, and an unmarked shell sends none
+/// — so its on-screen rows keep their ids and their text across the submission. Every
+/// new row then pushes one of them above the view, and it arrives complete in whichever
+/// block is open.
+///
+/// `big` is thirty lines on a twenty-four line screen, so the rows still live when it
+/// finishes are `big`'s. `small` is one line plus a prompt and an echo: enough scrolling
+/// to drag several of them over the boundary, one per new row, which is the signature the
+/// user's capture showed.
+#[tokio::test]
+async fn a_finished_commands_rows_do_not_scroll_into_the_next_block() {
+    let mut pipeline = Pipeline::over(
+        Box::new(Unmarked::new(TranscriptShell::builtin())),
+        Chunking::Whole,
+    );
+
+    pipeline.run_until(500).await;
+    pipeline.submit("big");
+    pipeline.run_until(3_000).await;
+    pipeline.submit("small");
+    pipeline.run_until(6_000).await;
+
+    let substance = pipeline.substance();
+    let [flood, after] = &substance.blocks[..] else {
+        panic!("two submissions, two blocks: {substance:?}");
+    };
+
+    let flooded: Vec<&str> = flood.output.lines().map(str::trim_end).collect();
+    for row in 1..=30 {
+        let expected = format!("line {row}");
+        assert!(
+            flooded.contains(&expected.as_str()),
+            "the flood's own block keeps every row it produced, and lost {expected:?}: \
+             {flooded:?}"
+        );
+    }
+    assert!(
+        after.output.contains("hello from acter"),
+        "the second block still has its own output: {:?}",
+        after.output
+    );
+    assert!(
+        !after.output.contains("line "),
+        "and none of the first command's, however much the screen scrolled under it: {:?}",
+        after.output
+    );
+}

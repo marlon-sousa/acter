@@ -88,3 +88,13 @@ jobs:
         run: >
           cargo test -p acter-transports --test local_pty --
           --ignored --nocapture --test-threads=1
+      - name: Real-session tests
+        # The whole stack against a real shell: `real_session.rs`, `#[ignore]`d for the
+        # same reason and named separately because the step above targets one test file
+        # by name. The nested case wants a Linux container and this runner has no Linux
+        # daemon, so it detects that and skips itself — which is why this step is not
+        # conditional on Docker: what runs here is the `cmd.exe` case, and the nested one
+        # is run by hand on a machine that has one.
+        run: >
+          cargo test -p acter-transports --test real_session --
+          --ignored --nocapture --test-threads=1
