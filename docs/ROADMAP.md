@@ -923,6 +923,40 @@ the answer to "what should we do now?".
     whether it is overridable, since a user with a configured pager may want it honoured
     and the answer must not be Acter silently discarding their configuration.
 
+22.8. B4.8, a real shell session thinks a command is always running. Spec: none yet →
+    specify first. **Found by the user's manual pass on B4.1, 2026-08-22**, and a direct
+    consequence of that entry.
+
+    `Pump::open` is cleared in exactly one place, `close`, and only two callers reach it: a
+    `D` marker, which an unintegrated session never receives, and the next submission. So
+    from the first submitted line onwards `open.is_some()` is true continuously, and
+    `settle_running` therefore reports a running command for the entire life of a real
+    shell session.
+
+    Three consequences. Ctrl+C at an idle prompt is accepted and writes `0x03` to a shell
+    with nothing to interrupt — harmless, since `cmd` simply redraws its prompt, but not
+    what was intended. `KeyAck::NothingToActOn` is unreachable, and with it the pinned
+    string **`nothing running to stop`**, which therefore cannot be heard in the one kind
+    of session where a user most needs it. And B4.1 made the second worse rather than
+    better: while the interrupt still closed the block, a second Ctrl+C did report nothing
+    to stop, and now nothing ever does.
+
+    That matters because it undercuts B4.1's own reasoning. That entry removed the stop
+    announcement on the grounds that the shell's own output is the answer, and kept
+    `nothing running to stop` on the grounds that with nothing running there is no shell
+    output to hear. The second half is now unreachable in a real shell, so the pair is no
+    longer coherent — either the string is honest and must be made reachable, or it is
+    dead and should go.
+
+    **The hard part is that knowing a command ended is exactly what markers are for.**
+    Without them there is no event to close on, which is why decision 10 made the next
+    submission the boundary in the first place. So the candidate answers all involve
+    inferring an ending rather than being told of one: quiescence past some threshold, a
+    prompt recognised in the output, or the partial `A`/`B` integration that 22.5 measured
+    as available in cmd — which would give a real prompt signal and close the block
+    honestly. That makes this entry a likely beneficiary of 22.5 rather than independent
+    work, and it should be specified after it.
+
 23. B5, PowerShell adapter. Spec: none yet → specify first. Scope sketch: OSC 133
     injection snippet; record the first golden transcripts as fixtures, in B2's format
     — so a captured real session is replayable as a fake session.
