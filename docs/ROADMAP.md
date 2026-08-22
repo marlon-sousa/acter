@@ -800,6 +800,35 @@ the answer to "what should we do now?".
     that happens to have a reliable prompt signal. That is a domain decision rather than an
     adapter one, and it should be settled before any code.
 
+22.6. B4.6, does an interrupt survive a proxied shell? Spec: none yet → specify first.
+    **Raised by the user 2026-08-22**, immediately after B4.1 landed, and it bounds what
+    B4.1 may be read as claiming.
+
+    B4.1's mechanism is the transitive inheritance of a Windows console attribute — Acter
+    to shell to program. `docker run -it` breaks that chain at the first link: `docker.exe`
+    is a client, and the shell inside the container is not its child but the container
+    runtime's, in another process tree and, for a Linux container, another kernel inside a
+    VM. Nothing `SetConsoleCtrlHandler` does reaches it. The same is true of anything else
+    that proxies a shell rather than spawning one: `ssh`, `wsl`, `kubectl exec`.
+
+    What *should* carry the interrupt there is the byte itself. With `-t` the client
+    allocates a TTY in the container and forwards stdin over the API stream, so `0x03`
+    arrives as data and the container's own line discipline turns it into `SIGINT` — the
+    Unix mechanism `local.rs` already documents for its non-Windows arm. If that holds,
+    nothing needs to change and this entry closes as a measurement.
+
+    **The specific way it can fail, and why it needs measuring rather than reasoning.** It
+    depends on whether `docker.exe` clears `ENABLE_PROCESSED_INPUT` on its console. If it
+    does, the byte passes through as data and the program in the container stops. If it does
+    not, ConPTY turns `0x03` into a console control event aimed at the *client*, and what
+    dies is the docker client — detaching or killing the container — rather than the program
+    inside. From Acter's side those two outcomes are indistinguishable: output stops either
+    way. That is precisely the shape of the confound that cost B4.1 four disproven
+    mechanisms, so it gets measured on a machine with Docker rather than argued about.
+
+    Not measurable on the development machine as of 2026-08-22 — Docker is not installed —
+    which is itself why this is an entry and not a paragraph in the B4.1 spec.
+
 23. B5, PowerShell adapter. Spec: none yet → specify first. Scope sketch: OSC 133
     injection snippet; record the first golden transcripts as fixtures, in B2's format
     — so a captured real session is replayable as a fake session.
