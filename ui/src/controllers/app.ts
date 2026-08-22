@@ -22,7 +22,6 @@ export const patienceMessage =
 export const altScreenEnteredMessage =
   'this program needs interactive mode, which is not available yet. Press Ctrl+C to return to the prompt';
 export const altScreenLeftMessage = 'interactive program ended';
-export const commandStoppedMessage = 'command stopped';
 // This session's shell never announced itself, so there are no command boundaries in it:
 // nothing is read aloud, output still accumulates in the buffer for review, and long
 // commands are still announced as running. The wording says what the user has to do
@@ -43,8 +42,14 @@ export function failureMessage(exitCode: number): string {
   return `command failed, exit code ${exitCode}`;
 }
 // The two answers to a keystroke that only the frontend can voice (A3.2 decision 7).
-// `Applied` is deliberately absent: CommandInterrupted already says `command stopped`,
-// and it says it when the interrupt took effect rather than when it was accepted.
+// `Applied` is still deliberately absent, for a different reason since B4.1: an interrupt
+// that was accepted has an answer coming from the far end, and it is a better answer than
+// anything Acter could say. The shell's prompt reappearing is read by autoread like any
+// other output, and it is evidence rather than a claim — so Acter says nothing of its own
+// about a stop, exactly as `CommandFinished` has carried no verdict since A6.
+//
+// `nothingToStopMessage` stays, and the same reasoning is why: with nothing running there
+// is no shell output coming, so silence would be the only answer the user got.
 //
 // A3.1 decision 6 named this one: the typed `stop` had no honest way to say it, because
 // the only surface that could justify the words is a key with an ack to report them.
@@ -176,11 +181,13 @@ export class AppController {
         this.echoed.delete(event.command_id);
         break;
       case 'CommandInterrupted':
-        // Terminal, like CommandFinished: same cleanup, but deliberately no beep. The
-        // beep answers "the too-big output you were warned about has finished"; a
-        // stopped command already has a spoken answer (A3.1 decision 7).
+        // Terminal, like CommandFinished, and silent like it too: the block bookkeeping
+        // happens and nothing is announced (B4.1). What the user hears is the shell's own
+        // prompt coming back, read as ordinary output — evidence from the far end rather
+        // than a claim Acter makes about a signal it only asked for. No beep either: the
+        // beep answers "the too-big output you were warned about has finished", and a
+        // command that was stopped never finished.
         this.ensureBlock(event.command_id);
-        this.announcer.announce(commandStoppedMessage);
         this.tooBig.delete(event.command_id);
         this.openBlocks.delete(event.command_id);
         this.echoed.delete(event.command_id);

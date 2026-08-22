@@ -374,7 +374,7 @@ impl Pump {
     async fn request(&mut self, request: Request) {
         match request {
             Request::Submit { command_id, line } => self.submit(command_id, &line).await,
-            Request::Interrupt => self.interrupt().await,
+            Request::Interrupt => self.interrupt(),
         }
     }
 
@@ -403,18 +403,22 @@ impl Pump {
     /// Remembering is the point: `BlockEnded { exit: None }` is either a bare `D` or a
     /// prompt reappearing mid-block, so the exit code cannot say whether a command was
     /// stopped. What the service just did can (decision 8).
-    async fn interrupt(&mut self) {
+    ///
+    /// **It closes nothing, in any session.** B6 amended decision 10 so that an interrupt
+    /// was itself the boundary in an unintegrated session, which made the stop timely to
+    /// announce; B4.1 removed the announcement, and with it the amendment's only reason.
+    /// What a close would cost is measured: the actor drops output that arrives while no
+    /// command is active, so output arriving after a close is discarded — not rendered, not
+    /// spoken — and what arrives after a working interrupt is the shell's own prompt
+    /// coming back. That prompt is the whole answer the user gets, so closing here would
+    /// leave silence, which is indistinguishable from a hung session. The block stays
+    /// open, the prompt flows into it as ordinary output, and the next submission closes
+    /// it — as stopped, because `interrupted` is still set.
+    fn interrupt(&mut self) {
         self.interrupted = true;
         // A failed interrupt means the far end is already gone, which the closing read
         // channel is about to say properly.
         let _ = self.transport.interrupt();
-        // With no markers there is no `D` coming, ever, so the command would stay open
-        // until the next submission and the stop would be announced minutes after the key
-        // was pressed. In a session with no boundaries, the interrupt is the boundary
-        // (amendment to decision 10, recorded in the spec).
-        if self.integration == Integration::Unintegrated {
-            self.close(None).await;
-        }
     }
 
     /// A command's output region opened.
@@ -1617,18 +1621,104 @@ mod tests {
         assert_eq!(session.rendered(), "output after the flag");
     }
 
-    /// With no markers there is no `D` coming, so waiting for one would mean announcing
-    /// the stop at the next submission — minutes later, or never.
+    /// **B4.1, and the reason B6 decision 10's amendment came back out.** An interrupt in
+    /// a session with no markers does not close the command: the block stays open, so the
+    /// prompt coming back has somewhere to land and a second Ctrl+C still has something
+    /// to aim at.
+    ///
+    /// The amendment made the interrupt the boundary so the stop could be announced while
+    /// it was still news. Nothing announces it any more — the user hears the shell's own
+    /// prompt — so the only thing a close still does here is throw that prompt away.
     #[tokio::test]
-    async fn an_unintegrated_session_reports_a_stop_when_it_is_asked_for() {
+    async fn an_interrupt_does_not_close_the_command_in_an_unintegrated_session() {
+        let session = Session::with_config(quick_grace()).await;
+        session.advance_to(300).await;
+
+        session.submit("forever").await;
+        session.emit(vec![line(1, "still working")]).await;
+
+        assert_eq!(session.press(ctrl('c')).await, KeyAck::Applied);
+        assert_eq!(session.interrupts(), 1);
+        assert!(
+            !session
+                .events()
+                .iter()
+                .any(|event| matches!(event, SessionEvent::CommandInterrupted { .. })),
+            "the interrupt is not a boundary: {:?}",
+            session.events()
+        );
+        assert_eq!(
+            session.press(ctrl('c')).await,
+            KeyAck::Applied,
+            "and the command is still running, so there is still something to stop"
+        );
+    }
+
+    /// The same rule with markers, where it was never in doubt: the `D` is the boundary,
+    /// and the interrupt only records that one was asked for.
+    #[tokio::test]
+    async fn an_interrupt_does_not_close_the_command_in_an_integrated_session() {
+        let session = Session::start().await;
+
+        session.submit("forever").await;
+        session
+            .emit(vec![marker(Osc133Marker::OutputStart), line(1, "working")])
+            .await;
+
+        assert_eq!(session.press(ctrl('c')).await, KeyAck::Applied);
+        session.advance_to(1_000).await;
+
+        assert!(
+            !session
+                .events()
+                .iter()
+                .any(|event| matches!(event, SessionEvent::CommandInterrupted { .. })),
+            "nothing closed until the block ends: {:?}",
+            session.events()
+        );
+    }
+
+    /// **The regression closing would cause, pinned.** After a working interrupt what the
+    /// far end sends is the shell's prompt coming back, and that prompt is the entire
+    /// answer the user gets about whether the stop took effect — Acter says nothing of its
+    /// own. The actor drops output arriving while no command is active, so a command
+    /// closed by the interrupt would turn that answer into silence.
+    #[tokio::test]
+    async fn output_arriving_after_an_interrupt_still_reaches_the_frontend() {
+        let session = Session::with_config(quick_grace()).await;
+        session.advance_to(300).await;
+
+        session.submit("forever").await;
+        session.emit(vec![line(1, "still working")]).await;
+        session.press(ctrl('c')).await;
+
+        // What a real `cmd.exe` sends after an interrupt that took effect: no `^C`, just
+        // the prompt.
+        session.emit(vec![line(2, r"C:\>")]).await;
+        session.advance_to(1_000).await;
+
+        assert!(
+            session.rendered().contains(r"C:\>"),
+            "the prompt that came back is what the user hears: {:?}",
+            session.rendered()
+        );
+    }
+
+    /// And the boundary that does come reports the truth about it. The next submission
+    /// closes the interrupted command as stopped, not as finished with an invented exit
+    /// code 0 — which is the mis-announcement `CommandInterrupted` exists to prevent.
+    #[tokio::test]
+    async fn the_next_submission_closes_an_interrupted_command_as_stopped() {
         let session = Session::with_config(quick_grace()).await;
         session.advance_to(300).await;
 
         let command_id = session.submit("forever").await;
         session.emit(vec![line(1, "still working")]).await;
+        session.press(ctrl('c')).await;
 
-        assert_eq!(session.press(ctrl('c')).await, KeyAck::Applied);
-        assert_eq!(session.interrupts(), 1);
+        session.submit("next").await;
+        session.advance_to(2_000).await;
+
         assert!(
             session
                 .events()
@@ -1636,10 +1726,13 @@ mod tests {
             "{:?}",
             session.events()
         );
-        assert_eq!(
-            session.press(ctrl('c')).await,
-            KeyAck::NothingToActOn,
-            "and the command is over, so there is nothing left to stop"
+        assert!(
+            !session
+                .events()
+                .iter()
+                .any(|event| matches!(event, SessionEvent::CommandFinished { .. })),
+            "and never also as finished: {:?}",
+            session.events()
         );
     }
 

@@ -85,12 +85,6 @@ jobs:
         # (spec B4, decision 10). `--nocapture` because one of them is a measurement
         # whose printed output is its point, and `--test-threads=1` because several
         # shells writing to pseudoconsoles at once makes a timeout look like a defect.
-        #
-        # `an_interrupt_stops_a_running_program` is skipped by name: it states a
-        # requirement that does not hold yet — 0x03 written into a pseudoconsole does not
-        # stop a running program — and it is kept runnable rather than deleted so the gap
-        # is written down. Remove the skip when roadmap entry B4.1 closes it.
         run: >
           cargo test -p acter-transports --test local_pty --
           --ignored --nocapture --test-threads=1
-          --skip an_interrupt_stops_a_running_program

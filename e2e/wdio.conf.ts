@@ -175,9 +175,16 @@ export const config: WebdriverIO.Config = {
     const configPath = join(configDir, 'transcript.json');
     writeFileSync(configPath, JSON.stringify(fastTranscript()));
 
+    // `ACTER_SHELL` is cleared, not merely left unset. The parent environment is spread
+    // in, and that variable exists precisely so a manual accessibility run can export it —
+    // so a developer who did would have every spec here silently retargeted at a real
+    // `cmd.exe`, where `forever` is not a command and the assertions mean nothing. A
+    // suite that quietly tests a different session than it claims is worse than one that
+    // fails.
     app = spawn(appBinaryPath, [], {
       env: {
         ...process.env,
+        ACTER_SHELL: undefined,
         TAURI_WEBDRIVER_PORT: String(port),
         ACTER_TRANSCRIPT: configPath,
       },

@@ -5,8 +5,15 @@
 // claiming "command stopped" would have been a claim about something Acter did not do.
 // A3.2 is the entry that comment named. The key now exists, so the whole path runs —
 // keyboard adapter, `send_key`, the keybinding policy, `Transport::interrupt`, the far
-// end's own interrupt rule, a `D` with no exit code — and this time Acter did the
-// stopping, so the pinned phrasing is exactly what must be heard.
+// end's own interrupt rule, a `D` with no exit code.
+//
+// **What is heard is nothing, since B4.1.** Acter claimed `command stopped` at the moment
+// it wrote the byte, which is before anything is known: the signal is asynchronous, and
+// the program stops in its own time or not at all. So the claim went, and what a user
+// hears in a real session is the shell's own prompt coming back, read as ordinary output
+// — evidence from the far end rather than a claim Acter makes. This scripted far end has
+// no prompt to send back, so what these cases can observe is the other half: the output
+// genuinely stops, and Acter says nothing over the top of it.
 //
 // The typed `stop` rule is gone from the shipped transcript with this entry, which is
 // also why the second case here no longer has to tiptoe around correlation drift.
@@ -65,7 +72,7 @@ async function waitUntilRunning(command: string): Promise<void> {
 }
 
 describe('Ctrl+C: stopping a running command', () => {
-  it('halts an endless command and says so', async () => {
+  it('halts an endless command, and says nothing of its own about it', async () => {
     await recordAnnouncements();
     await submitCommand('forever');
     // The E2E transcript paces every delivery at 20ms, so the block grows continuously.
@@ -74,14 +81,10 @@ describe('Ctrl+C: stopping a running command', () => {
 
     await pressCtrlC();
 
-    // Acter asked for this interrupt, so this time the pinned phrasing is owed.
-    await browser.waitUntil(
-      async () => (await spoken()).some((said) => said.includes('command stopped')),
-      { timeout: 10_000, timeoutMsg: 'the stop was never announced' },
-    );
-
-    // And the output actually stopped. Sample, wait well past several 20ms intervals,
-    // and sample again — a still-running script would have grown.
+    // The output actually stopped. Sample, wait well past several 20ms intervals, and
+    // sample again — a still-running script would have grown. This is also what the stop
+    // is now waited on *by*: there is no announcement left to synchronise against, which
+    // is the point.
     await browser.waitUntil(
       async () => {
         const settled = await blockTextOf('forever');
@@ -90,6 +93,10 @@ describe('Ctrl+C: stopping a running command', () => {
       },
       { timeout: 10_000, timeoutMsg: 'forever kept producing output after the stop' },
     );
+
+    // And Acter claimed nothing about it (B4.1).
+    const said = await spoken();
+    expect(said.filter((line) => line.includes('command stopped'))).toEqual([]);
   });
 
   // The other answer only the frontend can voice, and the one A3.1 decision 6 said the
@@ -128,16 +135,27 @@ describe('Ctrl+C: stopping a running command', () => {
     });
 
     // Nothing said, and — the decisive half — the command is still producing.
+    //
+    // "Nothing said" is checked against the answers a keystroke can still earn: a key the
+    // app never saw gets neither the idle answer nor the unbound one. The stop itself has
+    // been silent since B4.1, so its absence would prove nothing here.
     const before = await blockTextOf('forever');
     await browser.pause(1000);
     expect(await blockTextOf('forever')).not.toBe(before);
-    expect(await spoken()).not.toContain('command stopped');
+    const said = await spoken();
+    expect(said.filter((line) => line.includes('nothing running to stop'))).toEqual([]);
+    expect(said.filter((line) => line.includes('that key does nothing here'))).toEqual([]);
 
     // And the edit field still can, so this is a rule about where the key lands rather
-    // than a session that had already stopped listening.
+    // than a session that had already stopped listening. What shows it is the output
+    // settling, since there is no announcement to wait for.
     await pressCtrlC();
     await browser.waitUntil(
-      async () => (await spoken()).some((said) => said.includes('command stopped')),
+      async () => {
+        const settled = await blockTextOf('forever');
+        await browser.pause(500);
+        return (await blockTextOf('forever')) === settled;
+      },
       { timeout: 10_000, timeoutMsg: 'the edit field could not stop it either' },
     );
   });

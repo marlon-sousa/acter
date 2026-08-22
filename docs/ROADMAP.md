@@ -573,36 +573,105 @@ the answer to "what should we do now?".
     so `cargo test --workspace` spawns no process and stays independent of what is
     installed on a machine.
 
-22.1. B4.1, an interrupt that interrupts. Spec: none yet → specify first. **An iteration
-    entry from B4's manual NVDA pass**, and the most serious thing that pass found.
+22.1. **Done** — B4.1, an interrupt that interrupts. Spec:
+    [b4.1-interrupt-that-interrupts.md](specs/b4.1-interrupt-that-interrupts.md). **An
+    iteration entry from B4's manual NVDA pass**, and the most serious thing that pass
+    found. Both halves of it are fixed: the interrupt stops a program that is genuinely
+    running, and Acter stops claiming anything about it.
 
-    `LocalPty::interrupt` writes `0x03` into the pseudoconsole, the byte arrives, and a
-    program that is genuinely running **does not stop**: measured against `ping -n 20`,
-    four further replies arrived over the five seconds after the interrupt. What makes it
-    worse than a missing feature is what the layers above do with it. An unintegrated
-    session treats the interrupt as the command's boundary (B6 decision 10's amendment),
-    so Acter emits `CommandInterrupted` and the frontend says **`command stopped` while
-    the program keeps producing output** — a claim a user cannot see to be false. Heard
-    exactly that way through NVDA on 2026-08-21.
+    What landed is one line and two deletions. `LocalPty::spawn` calls
+    `SetConsoleCtrlHandler(NULL, FALSE)` before it spawns the shell, so nothing below
+    Acter inherits a refusal to be interrupted; `Pump::interrupt` stops closing the
+    command; and the frontend's `command stopped` announcement is gone. `INTERRUPT: u8 =
+    0x03` is untouched, `Transport` is unchanged, and Acter enumerates and terminates
+    nothing. `an_interrupt_stops_a_running_program` is green and its `--skip` is out of
+    the `real-shell (Windows)` job.
+
+    The record of what was wrong, kept because the trap below is the reusable part.
+    `LocalPty::interrupt` wrote `0x03` into the pseudoconsole, the byte arrived, and a
+    program that was genuinely running **did not stop**: measured against `ping -n 20`,
+    four further replies over the five seconds after the interrupt. What made it worse
+    than a missing feature is what the layers above did with it. An unintegrated session
+    treated the interrupt as the command's boundary (B6 decision 10's amendment), so Acter
+    emitted `CommandInterrupted` and the frontend said **`command stopped` while the
+    program kept producing output** — a claim a user cannot see to be false. Heard exactly
+    that way through NVDA on 2026-08-21.
 
     It was invisible until a real shell ran a real program. B4's own first interrupt test
     drove `pause`, which ends on *any* keypress, so it passed whether or not the interrupt
-    meant anything; it has been renamed to say only what it proves, and
-    `an_interrupt_stops_a_running_program` now states the requirement, is skipped by name
-    in the `real-shell (Windows)` job, and is the test this entry has to turn green.
+    meant anything; it was renamed to say only what it proves, and
+    `an_interrupt_stops_a_running_program` was written to state the requirement.
 
-    Two mechanisms to choose between when this is specified. **A new process group plus
-    `GenerateConsoleCtrlEvent`**: spawn the shell with `CREATE_NEW_PROCESS_GROUP` and send
-    `CTRL_BREAK_EVENT` to its group, which is the one console control event that can be
-    sent across processes without sharing a console — but `portable-pty` does not expose
-    creation flags today, so it means either a patch upstream or spawning the console side
-    directly. **Or writing a key event rather than a byte**: the pseudoconsole translates
-    input into key records, and what a real terminal delivers for `Ctrl+C` is a key event
-    with the control modifier set rather than the bare control character. The second is
-    the smaller change if it works, and the first is the one that certainly works.
-    Whichever lands, the honest interim is also worth considering: until an interrupt can
-    be shown to have *taken effect*, saying `command stopped` is saying more than is
-    known.
+    Two mechanisms were proposed here before the spike, and neither was needed. **A new
+    process group plus `GenerateConsoleCtrlEvent`**: spawn the shell with
+    `CREATE_NEW_PROCESS_GROUP` and send `CTRL_BREAK_EVENT` to its group, which this entry
+    wrongly called the one console control event that can be sent across processes without
+    sharing a console — but `portable-pty` exposes no creation flags, so it meant either a
+    patch upstream or spawning the console side directly. **Or writing a key event rather
+    than a byte**: the pseudoconsole translates input into key records, and what a real
+    terminal delivers for `Ctrl+C` is a key event with the control modifier set rather than
+    the bare control character. Both were disproven against the rigged baseline below, and
+    the second started working from the one-line change like the bare byte did. The
+    "honest interim" this entry floated — machinery to decide when Acter had earned the
+    words — was answered instead by deleting the words.
+
+    **The answers, agreed in conversation 2026-08-21** and pinned here so the spec started
+    from them rather than reopening them. They come from a spike against a real `cmd.exe` on
+    a real ConPTY, reproducing this entry's own `ping -n 20` case.
+
+    *The mechanism question dissolves: `0x03` is the right byte, and it works.* Measured,
+    counting replies over the five seconds after the interrupt where zero means it took
+    effect: bare `0x03` stops the program and the session survives. Neither mechanism this
+    entry proposed is needed, and `LocalPty::interrupt` is already writing the correct
+    thing. What made it look broken is the state the shell was **spawned with**, not the
+    byte written to it.
+
+    *What was actually wrong: an inherited "ignore Ctrl+C" attribute.*
+    `SetConsoleCtrlHandler(NULL, TRUE)` sets a process attribute that is **inherited by
+    children**, and `CREATE_NEW_PROCESS_GROUP` sets it implicitly for an entire group —
+    which is how process launchers routinely spawn children so they can kill whole trees. A
+    shell spawned while that attribute is set ignores Ctrl+C no matter how correctly the
+    interrupt is encoded, because the target is refusing the signal rather than never
+    receiving it. `SetConsoleCtrlHandler(NULL, FALSE)` before the spawn restores normal
+    processing, and it is the whole fix.
+
+    *The trap, written down because it will recur.* Any measurement of an interrupt is only
+    as good as the process state the shell inherited. A spike run from an agent harness, a
+    CI job, or a launcher that groups its children will measure "the interrupt does nothing"
+    and be wrong about why — and the failure is silent and total, so every candidate
+    mechanism looks equally dead. Four mechanisms were disproven against exactly such a
+    rigged baseline before this was noticed; three of them started working from the one-line
+    change. Before concluding anything about an interrupt, clear the attribute explicitly
+    and measure again. **The general form: a terminal client has no business stopping
+    processes, so a design that reaches for the process table is evidence the measurement
+    is wrong, not evidence the platform is broken.**
+
+    *A correction this entry needs either way.* Its claim that `CTRL_BREAK_EVENT` is "the
+    one console control event that can be sent across processes without sharing a console"
+    is not what the documentation says — "only those processes in the group that share the
+    same console as the calling process receive the signal" — and what it buys over
+    `CTRL_C_EVENT` is the ability to target one group, not to cross a console boundary.
+    Moot now, but it should not sit on the board as fact.
+
+    *The honest interim, answered by deleting the claim.* A working `0x03` is delivered
+    asynchronously — the program is signalled, its handler runs, and it stops in its own
+    time — so at the moment the byte is written nothing is yet known. Rather than build
+    machinery to decide when Acter has earned the words, Acter stops saying them.
+    `CommandInterrupted` no longer announces anything; the user hears the shell's own
+    prompt coming back, read by autoread like any other output. That is the correction A6
+    already made for `CommandFinished`, which since then carries no verdict and speaks only
+    through a separate `Announce`; `CommandInterrupted` was the one terminal event still
+    announcing directly, an A3.1-era leftover of the same shape B6's manual pass removed.
+
+    *And that forces B6 decision 10's amendment back out, for a reason worth recording.*
+    `SessionActor::output` returns early when no command is active, so output arriving after
+    a close is discarded — not rendered, not spoken. An interrupt that closes the command in
+    an unintegrated session therefore throws away the returning prompt, and the user hears
+    *nothing at all*, which is worse than the wrong announcement because silence is
+    indistinguishable from a hung session. So the interrupt stops forcing a boundary; the
+    block stays open and the next submission closes it, as stopped rather than as finished
+    with an invented exit code. The amendment existed only to make the announcement timely,
+    and there is no longer an announcement to be timely about.
 
 22.2. B4.2, text that scrolled away must not be said twice. Spec: none yet → specify
     first. **Also from B4's manual pass**, and reachable in any session long enough to
@@ -618,12 +687,452 @@ the answer to "what should we do now?".
     command's output. Heard as `ping` output in which each reply appears twice, and as
     cmd.exe's startup banner reappearing in the middle of a command's output.
 
+    **Severity, corrected 2026-08-22 by a capture from the user's manual pass, and it is
+    worse than "said twice".** The description above understates it: what interleaves is not
+    a repeat of the current command's own output but content from a *previous* command,
+    line by line, into the current block. Captured while interrupting `ping -n 20` in a
+    session that had earlier run `dir /s C:\Windows\System32` — the `ping` replies arrive
+    alternating with `fms.dll.mui`, `mlang.dll.mui`, `Total Files Listed`,
+    `27253 File(s)` and `5793 Dir(s)`, all of them rows from the finished `dir` scrolling
+    off the emulated screen and being settled with no record of having been forwarded.
+
+    The consequence is that **the buffer becomes unreadable**, which for this product is
+    the most serious failure mode there is: a screen reader user reviewing that block has
+    no way to tell which lines belong to the command they ran. It also blocked a manual
+    accessibility check in B4.1's PR — the tail after an interrupt could not be judged for
+    comfort because everything around it was debris from another command. On present
+    evidence this is the most severe open defect on the board and should be sequenced
+    accordingly, ahead of entries that merely add capability.
+
     The fix is not obvious enough to pick here, which is why this is an entry rather than
     a patch: the record could outlive the block (it is keyed by `LineId`, which is
     session-global and never reused), or settling could be ignored for lines whose text
     was already forwarded, or the boundary could stop clearing what the engine still
     considers live. Each has a different answer for the case the current rule exists to
     serve — a line that scrolls past inside one read, never having appended.
+
+22.3. B4.3, a shell that exited sometimes sends one more read. Spec: none yet → specify
+    first. **Found while implementing B4.1, and pre-existing** — B4.1 neither caused it
+    nor fixed it.
+
+    `a_shell_that_exits_ends_the_session_by_closing_the_channel` is flaky. `cmd /C echo
+    done` runs its command and exits, and the test asserts that the next thing off the
+    read channel is the channel closing; sometimes one more read arrives first —
+    `ESC [ ? 9 0 0 1 l` followed by `ESC [ ? 1 0 0 4 l`, which is ConPTY turning
+    win32-input-mode and focus-event reporting back off as it tears the pseudoconsole
+    down. Measured on 2026-08-22: 7 of 8 runs failed on the pre-B4.1 tree, 1 of 5 on the
+    post-B4.1 tree. The rate difference is unexplained and is itself worth a measurement
+    — it is too large to write off as noise, and B4.1 has no mechanism that should touch
+    this path at all.
+
+    It has never been skipped in CI, so the `real-shell (Windows)` job has presumably been
+    intermittently red for this all along.
+
+    **Whose defect it is has to be decided before anything is written**, and the three
+    candidates have different consequences.
+
+    *The test's expectation.* If a teardown read is a legitimate and ordinary part of the
+    stream, then "the next thing is the close" is simply the wrong assertion, and it should
+    drain to the close instead — which is exactly what
+    `writing_to_a_shell_that_exited_says_the_session_ended` beside it already does. The
+    cheapest answer, and possibly the right one.
+
+    *The domain's handling of those bytes.* They reach the engine as ordinary output
+    arriving after the last command ended. Whether anything is rendered or spoken for them
+    is unmeasured, and that is the half that matters to a user rather than to a test — an
+    escape sequence read aloud at the end of every session would be a real defect that this
+    flake is only the symptom of.
+
+    *The ordering inside `watch`.* The watcher thread drops the master to make the
+    reader's blocking read return; if the reader can still be mid-drain when that happens,
+    the race is the transport's and the fix is in `local.rs` rather than in the test. This
+    is the possibility that would make the flake a genuine bug, and it is the one the rate
+    difference is evidence for.
+
+22.4. B4.4, autoread in a session with no boundaries. Spec: none yet → specify first.
+    **The user's idea, 2026-08-22**, and the gap B4.1's manual pass made concrete: with a
+    real shell, Acter today reads *nothing* aloud, so a user who stops a program hears
+    silence and has to go and review the buffer to learn what happened.
+
+    **This is not a stopgap until B5, and that is the argument for it.** Marker injection
+    only ever reaches the shell Acter spawned. A `docker run -it`, an `ssh`, a `wsl`, a
+    `python` or `node` REPL, a `sudo su` — every nested shell is on the far side of the
+    injection point and can never be marked, however good the adapter above it is. So
+    unmarked regions are a permanent feature of an integrated session, not a phase, and
+    something has to read them.
+
+    **The user's better idea, 2026-08-22, and it may make most of this entry unnecessary.**
+    The structure is not missing — Acter knows exactly when the user pressed Enter, because
+    the edit field is the only way anything is sent. A submission is therefore a strong
+    boundary signal in its own right, and this is *already the rule* in an unintegrated
+    session: `Pump::submit` closes the open block and opens a new one (decision 10). The
+    gap is the other branch. In an integrated session the id is queued in `submitted` and
+    waits for a block that, inside a `docker run -it`, never opens — which is exactly the
+    permanent accepted hole B6.1 was written about.
+
+    So the primary proposal becomes: **extend decision 10's rule to a submission that
+    demonstrably will not be claimed.** It is better than the heuristic below, and it fixes
+    the echo problem for free rather than by suppression — if the submission opens the
+    block, B6.1's `CommandStarted { command_line }` *consumes* the echo as the heading text
+    instead of forwarding it as output.
+
+    *When a submission must not open a block, which is the whole difficulty.* Enter is not
+    always a command: it can be a response to a prompt, a keystroke fed to a running
+    program, or a password. Alt-screen state is a reliable negative for `vim` and `less`
+    and Acter already tracks it, but it covers neither a REPL nor a `[y/N]` prompt. The
+    signal that does is the **echo**: a submitted line that comes back echoed is positive
+    evidence the far end read it as a line, a password never echoes, and a bare Enter into a
+    running `ping` produces no matching echo. That is B6.1's own principle — evidence rather
+    than inference from a marker's absence — and its exact-after-trimming matcher already
+    exists.
+
+    **But DESIGN has already Decided the `y` case, and Decided it the other way.** Under
+    "Edit field ownership", a mid-command prompt is answered in the same edit field, and
+    "because the boundary tracker knows a command is running, the line is delivered as
+    stdin to that program *instead of opening a new command block*" — with the matching
+    history rule that such lines are program input and never enter history. That rule is
+    right for what it was written about: a `y`, a password, a line fed to a REPL.
+
+    It is also exactly why the nested-shell case behaves as it does. Inside a
+    `docker run -it` a command *is* running — docker — so by the Decided rule every line
+    the user types is stdin, opens no block, and lands in the docker block. The rule and
+    the defect are the same rule.
+
+    So this entry cannot be specified without an explicit DESIGN decision, and it must not
+    be taken silently: **the question is whether "a command is running" should stop being
+    the test.** A shell that is proxying further commands is categorically unlike a program
+    consuming an answer, and the difference is observable — a nested shell echoes the line,
+    produces output, and then draws a prompt of its own, which a `y` does not. If that
+    distinction is admitted, the Decided rule narrows to "a line answering a program that
+    is not itself a shell", and history exclusion has to narrow with it.
+
+    **If that lands, what remains of this entry is small**: a nested shell would have real
+    boundaries and would simply use ordinary autoread, and the heuristic below would cover
+    only output with no submission behind it at all.
+
+    The fallback proposal, should the above not hold, is a heuristic and deliberately a
+    dull one: **reuse the pacing policy
+    rather than build a differ.** The machinery already exists — output settles on
+    quiescence, the settled chunk's lines are counted, and a chunk too big to read already
+    earns `tooBigMessage` instead of being spoken. "Time plus size" is what that already
+    is. So the entry is a policy change — stop suppressing autoread where there are no
+    boundaries — plus the one piece of new logic below, not a new subsystem.
+
+    *The echo is the trap, and it fires on every single command.* Without boundaries
+    `Pump::wants` accepts every line, the shell's echo of the submitted line included,
+    because excluding it there would exclude everything (decision 10). So the first short
+    settled chunk after Enter is the user's own typing read back at them. The fix is at
+    hand: Acter knows exactly what it wrote, and B6.1 already built the matcher — `claim`
+    compares the shell's echo to the submitted line, exact after trimming and never fuzzy.
+    Same tool, used to suppress rather than to correlate.
+
+    **And echo suppression is not an unintegrated-session concern, which an earlier draft
+    of this entry got wrong.** Raised by the user 2026-08-22, from the `docker run -it`
+    case. A nested shell does not make the session unintegrated — integration is decided
+    once, for the session, by whether markers ever arrived. What happens is that the
+    proxying command never ends, so no `D` comes, and everything the container produces
+    lands inside that one open `C..D` region. `wants` accepts it, so it is forwarded and
+    read aloud, which is right. But the *container's* echo of each line the user types is
+    in that region too, and DESIGN's echo exclusion cannot help: it excludes the `B..C`
+    region, and this echo is nowhere near it. So the user hears their own typing read back
+    inside any nested shell, in a fully integrated session. The matcher therefore belongs
+    on the forwarding path generally, not on the unintegrated branch of it.
+
+    *What a nested shell costs, for the record, is structure and not speech.* One block for
+    the whole container session, one heading, no per-command boundaries inside it and no
+    exit codes — because the outer shell cannot report on commands it never ran. Delivery
+    and pacing are unaffected, and the babble guard still applies, which is worth checking
+    against a long build inside a container: continuous output is exactly what quiets it.
+
+    *Prompt recognition by shape should be left out, but there is a better kind.* Matching
+    a prompt by its appearance — a trailing `>`, `$` or `#` — is fragile across shells,
+    locales, custom `PROMPT`/`PS1` values and git-decorated prompts, and it fails by hiding
+    output, which is this product's cardinal defect.
+
+    **Researched 2026-08-22, at the user's request, and the survey is one-sided.** No Rust
+    crate does markerless prompt detection: the expect family (`rexpect`, `expectrl`) looks
+    relevant but pushes the problem to the caller — rexpect's own documentation says the
+    tricky part is getting `wait_for_prompt` right, and it is called by hand. VS Code does
+    not do it either; its `WindowsPtyHeuristics` correct marker *positions* on ConPTY, and
+    where markers are absent or unreliable its documented answer is to disable command
+    detection altogether. Warp's blocks likewise come from its own injected escape
+    sequences. Everyone who can inject markers does, and everyone who cannot degrades
+    rather than guesses. The research literature agrees about the difficulty and states it
+    in exactly this entry's terms — a prompt "can vary based on current working directories
+    or subshells" — and the published heuristic is a list of about 140 known commands plus
+    the symbols `$`, `#` and `>`.
+
+    **But every one of those tools is a passive observer, and Acter is not.** They watch a
+    terminal the user types into directly, which is why they need to ask what a prompt
+    *looks like*. Acter owns the edit field: it knows the exact text of every line it
+    submitted, exactly when it was sent, and that nothing else could have been typed. That
+    admits a much stronger definition — **a prompt is the text that was on the row when we
+    submitted, reappearing when the command ends** — which is an anchor rather than a
+    pattern, and therefore survives custom prompts, non-English output, `ssh`, `docker` and
+    subshells without knowing anything about their shape. The failure mode to *measure* is
+    the dynamic prompt: a timestamp, a git branch, or a `cd` that legitimately changes the
+    directory portion between draws. A stable-suffix match may cover it; that is a
+    measurement, not an assumption.
+
+    Recognising prompts *properly* is still what OSC 133 is, and 22.5 is where cmd gets it
+    for the top-level shell. The anchor approach is for what injection can never reach.
+
+    *It does not relitigate B4.1.* Reading the shell's own text aloud is evidence, the same
+    category as autoread everywhere else; `command stopped` was a claim about something
+    Acter could not observe. The distinction is the whole of B4.1 and it is preserved here.
+
+    Sequencing: **after 22.2**, or the duplicate-line defect means duplicates get spoken.
+
+22.5. B4.5, cmd.exe can carry OSC 133 A and B. Spec: none yet → specify first.
+    **Sequencing note, 2026-08-22: this has become the keystone of the 22.x cluster.**
+    22.4 wants a real boundary to replace its heuristic, 22.7's pager decision is easier
+    once prompts are known, 22.8 needs a completion signal, and 22.9 needs a prompt region
+    to read. All four lean on markers that this entry shows are already available in cmd
+    for one environment variable. That argues for taking it before B5 rather than after,
+    which is not the order the board's numbering implies.
+    **Measured 2026-08-22** while answering whether cmd is unintegrated by necessity. It is
+    not.
+
+    `cmd.exe`'s `PROMPT` understands `$e` as ESC, so the prompt itself can carry markers.
+    Setting `prompt $e]133;A$e\$P$G$e]133;B$e\` put exactly this on the wire, read back off
+    a real pseudoconsole: `ESC ]133;A ESC \`, then the drawn prompt, then
+    `ESC ]133;B ESC \`. So the prompt region and the start of the typed command are both
+    markable in cmd today, with no dependency and no injection beyond an environment
+    variable.
+
+    **What cmd cannot do is C and D.** It has no post-execution hook, and `PROMPT` is
+    evaluated only when the prompt is drawn — so "output starts here" and "the command
+    ended with this exit code" have nowhere to come from without a third-party layer such
+    as Clink, which is not a dependency this product should take.
+
+    That makes cmd a **partially integrated** shell, which is a state nothing in the domain
+    models yet: `Integration` is `Pending`, `Integrated` or `Unintegrated`, and the tracker
+    assumes regions arrive as a full A/B/C/D cycle. What A and B alone buy is worth having —
+    the prompt is identifiable and the echo region is delimited, so 22.4's echo trap
+    disappears and its heuristic gains a real boundary to work from. What they cannot buy is
+    an exit code, so a verdict stays unavailable and every command in a cmd session still
+    ends without one.
+
+    The open question this entry has to answer first: whether a third integration state
+    earns its complexity, or whether A/B-only is better modelled as an unintegrated session
+    that happens to have a reliable prompt signal. That is a domain decision rather than an
+    adapter one, and it should be settled before any code.
+
+22.6. B4.6, does an interrupt survive a proxied shell? Spec: none yet → specify first.
+    **Raised by the user 2026-08-22**, immediately after B4.1 landed, and it bounds what
+    B4.1 may be read as claiming.
+
+    B4.1's mechanism is the transitive inheritance of a Windows console attribute — Acter
+    to shell to program. `docker run -it` breaks that chain at the first link: `docker.exe`
+    is a client, and the shell inside the container is not its child but the container
+    runtime's, in another process tree and, for a Linux container, another kernel inside a
+    VM. Nothing `SetConsoleCtrlHandler` does reaches it. The same is true of anything else
+    that proxies a shell rather than spawning one: `ssh`, `wsl`, `kubectl exec`.
+
+    What *should* carry the interrupt there is the byte itself. With `-t` the client
+    allocates a TTY in the container and forwards stdin over the API stream, so `0x03`
+    arrives as data and the container's own line discipline turns it into `SIGINT` — the
+    Unix mechanism `local.rs` already documents for its non-Windows arm. If that holds,
+    nothing needs to change and this entry closes as a measurement.
+
+    **The specific way it can fail, and why it needs measuring rather than reasoning.** It
+    depends on whether `docker.exe` clears `ENABLE_PROCESSED_INPUT` on its console. If it
+    does, the byte passes through as data and the program in the container stops. If it does
+    not, ConPTY turns `0x03` into a console control event aimed at the *client*, and what
+    dies is the docker client — detaching or killing the container — rather than the program
+    inside. From Acter's side those two outcomes are indistinguishable: output stops either
+    way. That is precisely the shape of the confound that cost B4.1 four disproven
+    mechanisms, so it gets measured on a machine with Docker rather than argued about.
+
+    Not measurable on the development machine as of 2026-08-22 — Docker is not installed —
+    which is itself why this is an entry and not a paragraph in the B4.1 spec.
+
+22.7. B4.7, the results buffer is the pager. Spec: none yet → specify first.
+    **Measured 2026-08-22**, from the user's `git diff` case, and the cheapest large win
+    available here.
+
+    A screen reader user running `git diff` gets `less`: a program driven by single
+    keypresses with no Enter, which Acter's edit field cannot send, and which — measured —
+    never enters the alternate screen, so Acter cannot even tell it is there. The session
+    goes quiet and the user has no way forward. See the matching DESIGN open question.
+
+    **The buffer is already a better pager than `less` is**, and for this audience it is
+    not close: it is browsable with ordinary reading commands, it has headings and F6
+    navigation, and it does not need a keystroke vocabulary nobody can discover. So the
+    answer is to stop paging: the shell adapter sets `PAGER` and `GIT_PAGER` — and `LESS`
+    where a pager is unavoidable — so tools that respect them write straight into the
+    buffer.
+
+    The obvious objection is already answered by machinery that exists. A fifty-thousand
+    line diff is not read aloud, because the too-big rule refuses it and says so; it
+    accumulates in the buffer, which is exactly where the user wants to review it at their
+    own pace.
+
+    Scope questions for the spec: whether this belongs to the shell adapter or to the
+    profile (it is environment, so probably the adapter, beside the marker injection); and
+    whether it is overridable, since a user with a configured pager may want it honoured
+    and the answer must not be Acter silently discarding their configuration.
+
+22.8. B4.8, a real shell session thinks a command is always running. Spec: none yet →
+    specify first. **Found by the user's manual pass on B4.1, 2026-08-22**, and a direct
+    consequence of that entry.
+
+    `Pump::open` is cleared in exactly one place, `close`, and only two callers reach it: a
+    `D` marker, which an unintegrated session never receives, and the next submission. So
+    from the first submitted line onwards `open.is_some()` is true continuously, and
+    `settle_running` therefore reports a running command for the entire life of a real
+    shell session.
+
+    Three consequences. Ctrl+C at an idle prompt is accepted and writes `0x03` to a shell
+    with nothing to interrupt — harmless, since `cmd` simply redraws its prompt, but not
+    what was intended. `KeyAck::NothingToActOn` is unreachable, and with it the pinned
+    string **`nothing running to stop`**, which therefore cannot be heard in the one kind
+    of session where a user most needs it. And B4.1 made the second worse rather than
+    better: while the interrupt still closed the block, a second Ctrl+C did report nothing
+    to stop, and now nothing ever does.
+
+    **And the completion beep is the worst of them, raised by the user 2026-08-22.** The
+    beep is bound to `CommandFinished`, which an unintegrated session emits from `close`,
+    which runs at the *next submission*. Its whole job is "the too-big output you were
+    warned about has finished" — so in a real shell session it can only reach the user
+    after they have already given up waiting for it. Run something too big to read, hear
+    the warning, wait; it finishes in silence; wait longer; eventually conclude it is hung
+    or done and type something else — and only then does the beep arrive, reporting a
+    completion that happened at an unknown earlier time. **That is the same defect class
+    B4.1 just removed**: a signal fired at a moment when what it claims cannot be known.
+    `command stopped` claimed a stop it could not observe; this beep invents the timing of
+    a completion.
+
+    The same call also invents an exit code. `close(None)` with nothing outstanding reports
+    `ExitCode(0)`, so `command failed, exit code N` can never fire in a real shell session
+    either — every command reports success whatever it did. That is a knowing consequence
+    of decision 10 rather than a new defect, but it belongs in the same list, because the
+    three together are what "unintegrated" actually costs a user today and the cost was
+    never written down in one place.
+
+    **Where the beep should move to, and the user's own rationale is the best one:
+    beep when there is an exit code to read** (2026-08-22).
+
+    Not a timer. Quiescence is not completion — a build that pauses three seconds has not
+    finished — and the beep *claims* something finished, so binding it to silence invents
+    the same fact by another route. A returning prompt is better, being genuine evidence
+    of completion, but it is still inference. An exit code is proof. So the rule is: read
+    on quiescence, because hearing output early costs nothing and hearing is not a claim;
+    beep only where an exit code arrived, because that is the one signal that cannot be
+    wrong.
+
+    It follows that a session which never produces exit codes never beeps, and that is the
+    correct outcome rather than a gap: the beep exists to say "it finished", and there we
+    do not know that it did. Note the consequence for 22.5 — cmd can carry `A` and `B` but
+    never `D`, so a partially integrated cmd session gains prompts and boundaries and still
+    never beeps.
+
+    *And the silence that leaves is much less costly than it first appears* (the user's
+    correction, 2026-08-22, and it withdraws an objection recorded here earlier). "Silence
+    is indistinguishable from a hung session" was written about B4.1's case, where closing
+    the block made the actor **discard** the output — nothing spoken and nothing in the
+    buffer either. It does not carry over to a missing beep. With time-based reading the
+    session is not silent at all: settled chunks are read as they arrive, and the buffer
+    fills live and can be reviewed at any moment. The only residue is output too big to
+    read in a session with no exit code, where the user gets neither speech nor beep — and
+    even there they are not stranded, only unpolled, since the buffer is either growing or
+    it is not and reviewing answers the question. A real cost, a small one, and not enough
+    to justify inventing a completion signal.
+
+    **And exit codes can come from a nested shell, which is the useful half.** Acter's
+    tracker consumes OSC 133 out of the byte stream and neither knows nor cares who emitted
+    it. Acter cannot inject into a container it did not spawn — injection reaches exactly
+    one level, always — but a container whose own shell emits the markers is read normally,
+    exit codes included. That is VS Code's answer to the same wall: its documentation says
+    automatic injection fails in sub-shells and plain ssh sessions and recommends manual
+    installation into the environment's own dotfiles, and it deliberately accepts Final
+    Term/OSC 133 so that integration scripts it did not write still work. Acter should ship
+    the same: a documented snippet for container images and remote dotfiles.
+
+    *Untested hypothesis, flagged rather than assumed.* Markers arriving from inside a
+    container are nested inside the outer shell's still-open `docker run` block, and
+    `block_started` returns early when a block is already open. Reading the code, the first
+    container command would therefore merge into the docker block and its `D` would close
+    it, with every subsequent container command getting a block of its own. That is reasoning,
+    not measurement, and nested marker cycles are exactly the thing that behaves
+    differently in practice — it needs a real container before anyone relies on it.
+
+    That matters because it undercuts B4.1's own reasoning. That entry removed the stop
+    announcement on the grounds that the shell's own output is the answer, and kept
+    `nothing running to stop` on the grounds that with nothing running there is no shell
+    output to hear. The second half is now unreachable in a real shell, so the pair is no
+    longer coherent — either the string is honest and must be made reachable, or it is
+    dead and should go.
+
+    **The hard part is that knowing a command ended is exactly what markers are for.**
+    Without them there is no event to close on, which is why decision 10 made the next
+    submission the boundary in the first place. So the candidate answers all involve
+    inferring an ending rather than being told of one: quiescence past some threshold, a
+    prompt recognised in the output, or the partial `A`/`B` integration that 22.5 measured
+    as available in cmd — which would give a real prompt signal and close the block
+    honestly. That makes this entry a likely beneficiary of 22.5 rather than independent
+    work, and it should be specified after it.
+
+22.9. A silent success says nothing at all. Spec: none yet → specify first. **Found by
+    the user 2026-08-22**, by asking whether the prompt should be re-read as a block's last
+    line. Not a B4 iteration — it is a product question about speech, filed with this
+    cluster because it interacts with 22.4's and 22.8's rules and should be settled
+    alongside them. Re-file it in lane 1 if that fits the board better.
+
+    `Announcement` has five variants — `ReadAloud`, `TooBig`, `StillRunning`,
+    `OutputContinues`, `Failed` — and there is no success. The frontend states the reason:
+    "a fully auto-read success gets no extra finish speech — its output was already read"
+    (A6, and right as far as it goes).
+
+    **It stops being right when there was no output.** `cd projects`, `mkdir foo`,
+    `git add .`, `export X=1`, `touch file`: `CommandStarted`, `CommandFinished`, nothing
+    read, no beep, and therefore **complete silence**. The user learns neither that it ran,
+    nor that it succeeded, nor that the shell is ready again. A sighted user gets all three
+    from the prompt returning; an Acter user gets nothing, and this is a large fraction of
+    ordinary shell use.
+
+    Note that echo exclusion is what removes the prompt: block content is `C..D`, and the
+    prompt is `Region::Prompt`. That exclusion exists to stop the command line being
+    duplicated under its own heading, which is a good reason — but it takes the prompt with
+    it, and the prompt was carrying the completion signal.
+
+    **The answer, argued by the user 2026-08-22 and agreed: read the prompt, always.** The
+    decisive point is not that terminal users are used to hearing it, though they are. It
+    is that **echo exclusion was never about the prompt at all.** There are three non-output
+    regions and the filter lumps them together, but DESIGN's stated reason — "so the command
+    line is never duplicated under its h2" — applies to `Region::CommandLine` alone, the
+    B..C echo of what the user typed. `Region::Prompt` was excluded as collateral, because
+    the rule is written as "Output only" rather than "not the echo". Nobody ever argued the
+    prompt should go; it fell inside a net aimed at something else.
+
+    That makes the change precise rather than a new feature. `Pump::wants` becomes
+    `region == Region::Output || region == Region::Prompt` for an integrated session, still
+    excluding `Region::CommandLine`, which is the only thing echo exclusion needed to
+    exclude.
+
+    The timing falls out for free. The prompt arrives immediately after `D` and before the
+    user has typed anything, so reading it in stream order *is* the completion signal, in
+    the position a listener wants it. It does not need retro-fitting as the previous
+    block's last line — it is simply the next thing that arrives. And the user's framing is
+    the right one: the prompt is not a command's output, it is the session's punctuation,
+    and a screen reader user has more use for audible punctuation than a sighted one
+    because they cannot glance to re-orient.
+
+    Two alternatives are recorded as rejected. *A success announcement* fired when nothing
+    was read: a new pinned string that says strictly less than the prompt does. *Reading the
+    prompt only when the block produced no output*: proposed here first, and worse — it
+    makes the session's rhythm conditional on what the last command happened to print, so
+    the punctuation a listener is orienting by would come and go.
+
+    **The one thing to measure before believing it**: a decorated prompt. `oh-my-posh`, a
+    git-branch prompt or a timestamped one can be long, and heard after every command that
+    may genuinely be noise where `C:\Users\marlo>` is not. That is a profile concern rather
+    than a reason not to do it, but the listen has to happen with a realistic prompt and a
+    run of many commands, not one.
+
+    Whichever is chosen, it needs a real listen before it is believed: this is a judgement
+    about repetition and comfort across many commands in a row, which no unit test can
+    answer and one command cannot either.
 
 23. B5, PowerShell adapter. Spec: none yet → specify first. Scope sketch: OSC 133
     injection snippet; record the first golden transcripts as fixtures, in B2's format

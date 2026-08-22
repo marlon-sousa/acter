@@ -15,6 +15,14 @@ serde_json = "1"
 # sleep: "rt" for the spawn, "sync" for the channels it emits and is written to through.
 tokio = { version = "1", features = ["rt", "sync"] }
 
+# One call, in `LocalPty::spawn`: `SetConsoleCtrlHandler(NULL, FALSE)` before the shell is
+# spawned, so the shell does not inherit an "ignore Ctrl+C" attribute from however Acter
+# was launched (spec B4.1, decision 1). Windows-only and one feature only — the Unix arm
+# needs nothing, because a bare `0x03` on a Unix pty is turned into `SIGINT` by the line
+# discipline.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_System_Console"] }
+
 [dev-dependencies]
 # The full-pipeline test replays a transcript through the real terminal engine. A
 # dev-dependency only: nothing in this crate's library touches an emulator.

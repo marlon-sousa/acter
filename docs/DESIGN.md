@@ -379,6 +379,40 @@ Also decided earlier and unchanged:
   bridge, ahead of any frontend work.
 - Alt-screen behavior: announce "interactive mode needed" vs auto-switch (and how to
   announce the switch back).
+- **The two-mode model has no room for sending a single keystroke while staying
+  conversational** (raised 2026-08-22 by the `git diff` case). The Vision section offers
+  non-interactive mode, which has an edit field and submits whole lines on Enter, and
+  interactive mode, which "has no edit field" and passes everything through. A pager wants
+  neither: the user needs to send one `space` to see the next page and then go straight
+  back to reading the buffer, and switching the entire UI into a full-screen rendering to
+  send one byte is the wrong trade. The same shape covers a `[y/N]` that expects a bare
+  keypress, and `q` to quit a pager.
+  If a keystroke can be sent without leaving the conversational view, the buffer needs a
+  rule for what it does to structure, and the answer should be **nothing**: a heading
+  exists to be navigated to and answers "what did I run?", so a keystroke driving a running
+  program earns neither a heading nor an echo line, and whatever it produces appends to the
+  block already open. Twenty presses of `space` through a diff must not produce twenty
+  headings called "space". Note this is a decision Acter can make *without a heuristic* —
+  it knows whether a keystroke arrived as an Enter-submission or as a pass-through, so the
+  category is a fact rather than an inference, and nothing here should be timing-dependent.
+
+- **A program can need keystrokes without ever entering the alternate screen, so
+  alt-screen detection is not sufficient to know that interactive mode is needed** (raised
+  2026-08-22 by the `git diff` case, and measured rather than argued). The Vision section
+  above makes `ESC[?1049h` the signal for "a program needs interactive mode". Git's pager
+  defeats it: git sets `LESS=FRX` when `LESS` is unset, and `-X` suppresses termcap
+  initialisation, so `less` pages without ever touching the alternate screen. Measured
+  against a real `cmd.exe` on a real pseudoconsole: 8 KB of `git diff` output arrived and
+  neither `ESC[?1049h` nor `ESC[?47h` appeared anywhere in the stream. The user then
+  presses space to see the next page, and Acter has no signal at all — no event, no
+  announcement, and a session that has simply gone quiet, which is the failure shape this
+  product can least afford. Two candidate answers, not exclusive: **remove the case** by
+  setting `PAGER`/`GIT_PAGER` so the results buffer is the pager (roadmap 22.7, and much
+  the better answer wherever it applies, since the buffer is browsable and `less` is not);
+  and **detect the state some other way** for programs that page or prompt without alt
+  screen at all — a command that has produced output and then gone silent without ending
+  is the observable shape, and it is the same quiescence signal the pacing policy already
+  computes.
 - Interactive-mode screen reading strategy: how the buffer/grid is exposed to the
   screen reader while a full-screen app runs (review cursor? live row announcements?).
 - Non-visual tab/session navigation UX (switch keys, announcing which session is
