@@ -987,15 +987,52 @@ the answer to "what should we do now?".
     three together are what "unintegrated" actually costs a user today and the cost was
     never written down in one place.
 
-    **Where the beep should move to, raised and half-answered by the user 2026-08-22.**
-    Not to a timer. Quiescence is not completion — a build that pauses for three seconds
-    has not finished — and the beep is a *claim* that something finished, so binding it to
-    silence would be inventing the same fact by a different route. A returning prompt, by
-    contrast, genuinely is completion. So the split is: **read on quiescence, beep only on
-    prompt-return.** Hearing output slightly early costs nothing, because hearing is not a
-    claim; beeping early asserts something false. That makes the beep a consumer of 22.4's
-    anchor-based prompt detection and of 22.5's `A` marker, and it is the reason those two
-    entries are prerequisites for this one rather than neighbours of it.
+    **Where the beep should move to, and the user's own rationale is the best one:
+    beep when there is an exit code to read** (2026-08-22).
+
+    Not a timer. Quiescence is not completion — a build that pauses three seconds has not
+    finished — and the beep *claims* something finished, so binding it to silence invents
+    the same fact by another route. A returning prompt is better, being genuine evidence
+    of completion, but it is still inference. An exit code is proof. So the rule is: read
+    on quiescence, because hearing output early costs nothing and hearing is not a claim;
+    beep only where an exit code arrived, because that is the one signal that cannot be
+    wrong.
+
+    It follows that a session which never produces exit codes never beeps, and that is the
+    correct outcome rather than a gap: the beep exists to say "it finished", and there we
+    do not know that it did. Note the consequence for 22.5 — cmd can carry `A` and `B` but
+    never `D`, so a partially integrated cmd session gains prompts and boundaries and still
+    never beeps.
+
+    *And the silence that leaves is much less costly than it first appears* (the user's
+    correction, 2026-08-22, and it withdraws an objection recorded here earlier). "Silence
+    is indistinguishable from a hung session" was written about B4.1's case, where closing
+    the block made the actor **discard** the output — nothing spoken and nothing in the
+    buffer either. It does not carry over to a missing beep. With time-based reading the
+    session is not silent at all: settled chunks are read as they arrive, and the buffer
+    fills live and can be reviewed at any moment. The only residue is output too big to
+    read in a session with no exit code, where the user gets neither speech nor beep — and
+    even there they are not stranded, only unpolled, since the buffer is either growing or
+    it is not and reviewing answers the question. A real cost, a small one, and not enough
+    to justify inventing a completion signal.
+
+    **And exit codes can come from a nested shell, which is the useful half.** Acter's
+    tracker consumes OSC 133 out of the byte stream and neither knows nor cares who emitted
+    it. Acter cannot inject into a container it did not spawn — injection reaches exactly
+    one level, always — but a container whose own shell emits the markers is read normally,
+    exit codes included. That is VS Code's answer to the same wall: its documentation says
+    automatic injection fails in sub-shells and plain ssh sessions and recommends manual
+    installation into the environment's own dotfiles, and it deliberately accepts Final
+    Term/OSC 133 so that integration scripts it did not write still work. Acter should ship
+    the same: a documented snippet for container images and remote dotfiles.
+
+    *Untested hypothesis, flagged rather than assumed.* Markers arriving from inside a
+    container are nested inside the outer shell's still-open `docker run` block, and
+    `block_started` returns early when a block is already open. Reading the code, the first
+    container command would therefore merge into the docker block and its `D` would close
+    it, with every subsequent container command getting a block of its own. That is reasoning,
+    not measurement, and nested marker cycles are exactly the thing that behaves
+    differently in practice — it needs a real container before anyone relies on it.
 
     That matters because it undercuts B4.1's own reasoning. That entry removed the stop
     announcement on the grounds that the shell's own output is the answer, and kept
