@@ -748,6 +748,14 @@ the answer to "what should we do now?".
     real engine, real service, real clock. Both reproduce the capture's interleaving on the
     parent commit.
 
+    Reading the broken build through NVDA turned up one thing the tests did not, and it
+    matters to 22.4 and 22.9 rather than to this entry: the flood's own announcement said
+    `65 lines arrived, too big to read` where the fixed build says `42 lines arrived`, for
+    the same forty-row command. The stale rows inflate the count the size policy reasons
+    about, so a block could be declared too big to read partly *because* of lines that were
+    never in it. Fixed here as a side effect; worth remembering when what gets announced is
+    revisited.
+
     That last suite also settles the nested-shell question, which was open as a worry
     rather than a finding: `sh` in an Alpine container inside `cmd.exe` mangles its buffer
     **by this same mechanism and no other**, failing identically before the fix and clean
