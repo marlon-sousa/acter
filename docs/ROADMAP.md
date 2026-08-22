@@ -694,6 +694,44 @@ the answer to "what should we do now?".
     considers live. Each has a different answer for the case the current rule exists to
     serve — a line that scrolls past inside one read, never having appended.
 
+22.3. B4.3, a shell that exited sometimes sends one more read. Spec: none yet → specify
+    first. **Found while implementing B4.1, and pre-existing** — B4.1 neither caused it
+    nor fixed it.
+
+    `a_shell_that_exits_ends_the_session_by_closing_the_channel` is flaky. `cmd /C echo
+    done` runs its command and exits, and the test asserts that the next thing off the
+    read channel is the channel closing; sometimes one more read arrives first —
+    `ESC [ ? 9 0 0 1 l` followed by `ESC [ ? 1 0 0 4 l`, which is ConPTY turning
+    win32-input-mode and focus-event reporting back off as it tears the pseudoconsole
+    down. Measured on 2026-08-22: 7 of 8 runs failed on the pre-B4.1 tree, 1 of 5 on the
+    post-B4.1 tree. The rate difference is unexplained and is itself worth a measurement
+    — it is too large to write off as noise, and B4.1 has no mechanism that should touch
+    this path at all.
+
+    It has never been skipped in CI, so the `real-shell (Windows)` job has presumably been
+    intermittently red for this all along.
+
+    **Whose defect it is has to be decided before anything is written**, and the three
+    candidates have different consequences.
+
+    *The test's expectation.* If a teardown read is a legitimate and ordinary part of the
+    stream, then "the next thing is the close" is simply the wrong assertion, and it should
+    drain to the close instead — which is exactly what
+    `writing_to_a_shell_that_exited_says_the_session_ended` beside it already does. The
+    cheapest answer, and possibly the right one.
+
+    *The domain's handling of those bytes.* They reach the engine as ordinary output
+    arriving after the last command ended. Whether anything is rendered or spoken for them
+    is unmeasured, and that is the half that matters to a user rather than to a test — an
+    escape sequence read aloud at the end of every session would be a real defect that this
+    flake is only the symptom of.
+
+    *The ordering inside `watch`.* The watcher thread drops the master to make the
+    reader's blocking read return; if the reader can still be mid-drain when that happens,
+    the race is the transport's and the fix is in `local.rs` rather than in the test. This
+    is the possibility that would make the flake a genuine bug, and it is the one the rate
+    difference is evidence for.
+
 23. B5, PowerShell adapter. Spec: none yet → specify first. Scope sketch: OSC 133
     injection snippet; record the first golden transcripts as fixtures, in B2's format
     — so a captured real session is replayable as a fake session.
