@@ -20,7 +20,6 @@ import {
   altScreenEnteredMessage,
   integrationUnavailableMessage,
   altScreenLeftMessage,
-  commandStoppedMessage,
   failureMessage,
   nothingToStopMessage,
   outputContinuesMessage,
@@ -361,7 +360,10 @@ describe('event rendering (decision 2)', () => {
     expect(announcer.announcements).toEqual([]);
   });
 
-  it('CommandInterrupted announces the stop and closes the block', async () => {
+  // B4.1: the stop is not Acter's to announce. What the user hears is the shell's own
+  // prompt coming back, read as ordinary output — so this event does its bookkeeping and
+  // says nothing at all.
+  it('CommandInterrupted announces nothing and closes the block', async () => {
     const { backend, buffer, announcer, controller } = makeApp();
     await controller.attach();
 
@@ -374,8 +376,7 @@ describe('event rendering (decision 2)', () => {
     });
     backend.emit({ type: 'CommandInterrupted', command_id: 1 });
 
-    expect(announcer.announcements).toEqual(['phase one', commandStoppedMessage]);
-    expect(announcer.announcements[1]).toBe('command stopped');
+    expect(announcer.announcements).toEqual(['phase one']);
     // The block was closed, so a later event for the same id opens a fresh one.
     backend.emit({ type: 'Output', command_id: 1, text: 'late' });
     expect(buffer.opened).toEqual([
@@ -397,10 +398,11 @@ describe('event rendering (decision 2)', () => {
     });
     backend.emit({ type: 'CommandInterrupted', command_id: 1 });
 
-    // The beep answers "your too-big output finished"; a stop already has a spoken
-    // answer, so it must stay silent (A3.1 decision 7).
+    // The beep answers "your too-big output finished", and a command that was stopped
+    // never finished. Nothing is spoken either (B4.1): the too-big warning stands as the
+    // last thing said, and the next thing the user hears is the shell.
     expect(beep.beeps).toBe(0);
-    expect(announcer.announcements.at(-1)).toBe(commandStoppedMessage);
+    expect(announcer.announcements.at(-1)).toBe(tooBigMessage(2));
   });
 
   it('clears the too-big flag on interrupt, so a reused id does not beep later', async () => {

@@ -20,6 +20,10 @@
 //! tidier — chunk boundaries are what DESIGN's reliability cases are about, and this is
 //! where they stop being simulated.
 //!
+//! **It clears the inherited "ignore Ctrl+C" attribute before it spawns.** See
+//! [`allow_ctrl_c_below_us`]: the one line that makes an interrupt mean something, and
+//! the reason it lives here rather than beside [`Transport::interrupt`].
+//!
 //! **Failure to start is not this type's to swallow.** [`LocalPty::spawn`] does the
 //! opening and the spawning and reports a speakable sentence if either fails, the way
 //! `SessionTranscript::load` does: a session that could not start must be a loud failure
@@ -89,6 +93,8 @@ impl LocalPty {
                 format!("Acter could not open a terminal for the shell to run in. {why}")
             })?;
 
+        allow_ctrl_c_below_us();
+
         let mut command = CommandBuilder::new(program);
         command.args(args);
         let child = pty
@@ -121,6 +127,48 @@ impl LocalPty {
             wire: Wire::new(writer),
             reader: Some(reader),
         })
+    }
+}
+
+/// Restores normal Ctrl+C processing for this process, so nothing spawned below it
+/// inherits a refusal to be interrupted (spec B4.1, decision 1).
+///
+/// **This is what makes [`Transport::interrupt`] mean anything**, and it is a property of
+/// the *spawn* rather than of the byte written afterwards. `SetConsoleCtrlHandler(NULL,
+/// TRUE)` sets a process attribute that children inherit, and `CREATE_NEW_PROCESS_GROUP`
+/// sets it implicitly for a whole group — which is how launchers routinely spawn children
+/// so they can kill trees. A shell spawned while it is set ignores Ctrl+C however
+/// correctly the interrupt is encoded, because the target is refusing the signal rather
+/// than never receiving it. Measured against a real `cmd.exe` running `ping -n 20`: four
+/// further replies after the interrupt with the attribute inherited, none at all after
+/// this call.
+///
+/// **The inheritance is transitive, and that is the whole mechanism.** Acter spawns
+/// exactly one process and holds one child: everything the shell launches is on the far
+/// side of the pseudoconsole, with no pid and no handle on this side. The program that
+/// has to receive the interrupt is not the shell but whatever the shell ran, and this
+/// adapter can never touch it — it does not need to, because the attribute passes from
+/// Acter to shell to program on its own. So the fix is not "make the shell accept
+/// Ctrl+C", it is "do not poison the state that everything below us inherits", and our
+/// own process before the spawn is the only place to do it. Acter enumerates and
+/// terminates nothing: that would be doing the kernel's job from the wrong layer, and it
+/// would cost what a real Ctrl+C preserves — handlers running, cleanup happening, the
+/// program choosing its own exit code.
+///
+/// The return value is deliberately dropped. A failure here means interrupts will not
+/// take effect, which is not a reason to refuse to open a session, and there is nothing
+/// truthful to say about it at this point: what the user will observe is a prompt that
+/// does not come back, which the interrupt path already reports by saying nothing.
+///
+/// Nothing to do off Windows: a bare `0x03` on a Unix pty is turned into `SIGINT` by the
+/// line discipline, with no process attribute in the way.
+fn allow_ctrl_c_below_us() {
+    #[cfg(windows)]
+    // SAFETY: a Win32 call taking no pointer we own. Passing a null routine with `FALSE`
+    // asks for the default handler to be restored, which is documented and has no
+    // lifetime attached to it.
+    unsafe {
+        windows_sys::Win32::System::Console::SetConsoleCtrlHandler(None, 0);
     }
 }
 

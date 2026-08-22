@@ -158,9 +158,9 @@ async fn a_submitted_line_comes_back_echoed() {
 ///
 /// Named for exactly what it proves and no more. `pause` ends on *any* keypress, so this
 /// says the byte arrived and the session survived it — **not** that a running program was
-/// stopped. That stronger claim is
-/// [`an_interrupt_stops_a_running_program`], which does not pass today: see the roadmap
-/// entry B4.1.
+/// stopped. That stronger claim is [`an_interrupt_stops_a_running_program`], and
+/// "survives" against a program that had to be *signalled* is
+/// [`a_session_goes_on_working_after_a_real_program_was_stopped`].
 #[tokio::test]
 #[ignore = "spawns a real shell"]
 async fn an_interrupt_reaches_the_shell_and_the_session_survives_it() {
@@ -388,22 +388,21 @@ async fn a_line_feed_is_not_enter_and_a_carriage_return_is() {
     }
 }
 
-/// **The requirement, and it does not hold today** — roadmap entry B4.1.
-///
-/// Writing `0x03` into the pseudoconsole does not stop a program that is genuinely
-/// running: measured here, four further `ping` replies arrive over the five seconds after
-/// the interrupt. What makes that serious rather than merely missing is what the layers
-/// above do with it — an unintegrated session treats the interrupt as the command's
-/// boundary, so Acter announces `command stopped` while the program keeps going, which is
-/// a claim a user cannot see to be false.
+/// **The requirement B4.1 closed**: an interrupt stops a program that is genuinely
+/// running, and what makes it work is in `LocalPty::spawn` rather than in the byte.
 ///
 /// It was invisible until a real shell ran a real program: `pause` ends on any keypress,
 /// so the test beside this one passes whether or not an interrupt means anything.
 ///
-/// Skipped in the `real-shell (Windows)` CI job by name rather than deleted, so the
-/// requirement is written down, runnable, and impossible to lose.
+/// **This test is only as good as the state the shell was spawned with**, which is the
+/// trap that cost B4.1 four disproven mechanisms. A shell that inherited an "ignore
+/// Ctrl+C" attribute refuses the signal however it is encoded, so before the fix this
+/// failed under any launcher that groups its children, and the failure was silent and
+/// total. It should now pass however this suite was launched — that is precisely what
+/// `LocalPty::spawn` clearing the attribute buys, and therefore a failure here is a real
+/// failure rather than an artifact of the harness.
 #[tokio::test]
-#[ignore = "known gap, roadmap B4.1: 0x03 does not stop a running program on ConPTY"]
+#[ignore = "spawns a real shell"]
 async fn an_interrupt_stops_a_running_program() {
     let mut shell = Shell::start();
     shell.until(">").await;
@@ -430,4 +429,26 @@ async fn an_interrupt_stops_a_running_program() {
         0,
         "the program was still running after the interrupt: {after:?}"
     );
+}
+
+/// The session survives an interrupt that had to *signal* something, not merely one a
+/// program was waiting for.
+///
+/// Its sibling above drives `pause`, which ends on any keypress; this one stops a real
+/// program and then submits another command, so what is proven is that a pseudoconsole
+/// whose program was signalled is still a working session (spec B4.1).
+#[tokio::test]
+#[ignore = "spawns a real shell"]
+async fn a_session_goes_on_working_after_a_real_program_was_stopped() {
+    let mut shell = Shell::start();
+    shell.until(">").await;
+
+    shell.submit("ping -n 20 127.0.0.1");
+    shell.until("Reply from").await;
+
+    shell.pty.interrupt().expect("the interrupt is delivered");
+
+    shell.submit("echo alive-after-a-real-stop");
+    let seen = shell.until("alive-after-a-real-stop").await;
+    assert!(seen.contains("alive-after-a-real-stop"));
 }

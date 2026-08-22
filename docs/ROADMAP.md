@@ -573,38 +573,49 @@ the answer to "what should we do now?".
     so `cargo test --workspace` spawns no process and stays independent of what is
     installed on a machine.
 
-22.1. B4.1, an interrupt that interrupts. Spec: none yet → specify first. **An iteration
-    entry from B4's manual NVDA pass**, and the most serious thing that pass found.
+22.1. **Done** — B4.1, an interrupt that interrupts. Spec:
+    [b4.1-interrupt-that-interrupts.md](specs/b4.1-interrupt-that-interrupts.md). **An
+    iteration entry from B4's manual NVDA pass**, and the most serious thing that pass
+    found. Both halves of it are fixed: the interrupt stops a program that is genuinely
+    running, and Acter stops claiming anything about it.
 
-    `LocalPty::interrupt` writes `0x03` into the pseudoconsole, the byte arrives, and a
-    program that is genuinely running **does not stop**: measured against `ping -n 20`,
-    four further replies arrived over the five seconds after the interrupt. What makes it
-    worse than a missing feature is what the layers above do with it. An unintegrated
-    session treats the interrupt as the command's boundary (B6 decision 10's amendment),
-    so Acter emits `CommandInterrupted` and the frontend says **`command stopped` while
-    the program keeps producing output** — a claim a user cannot see to be false. Heard
-    exactly that way through NVDA on 2026-08-21.
+    What landed is one line and two deletions. `LocalPty::spawn` calls
+    `SetConsoleCtrlHandler(NULL, FALSE)` before it spawns the shell, so nothing below
+    Acter inherits a refusal to be interrupted; `Pump::interrupt` stops closing the
+    command; and the frontend's `command stopped` announcement is gone. `INTERRUPT: u8 =
+    0x03` is untouched, `Transport` is unchanged, and Acter enumerates and terminates
+    nothing. `an_interrupt_stops_a_running_program` is green and its `--skip` is out of
+    the `real-shell (Windows)` job.
+
+    The record of what was wrong, kept because the trap below is the reusable part.
+    `LocalPty::interrupt` wrote `0x03` into the pseudoconsole, the byte arrived, and a
+    program that was genuinely running **did not stop**: measured against `ping -n 20`,
+    four further replies over the five seconds after the interrupt. What made it worse
+    than a missing feature is what the layers above did with it. An unintegrated session
+    treated the interrupt as the command's boundary (B6 decision 10's amendment), so Acter
+    emitted `CommandInterrupted` and the frontend said **`command stopped` while the
+    program kept producing output** — a claim a user cannot see to be false. Heard exactly
+    that way through NVDA on 2026-08-21.
 
     It was invisible until a real shell ran a real program. B4's own first interrupt test
     drove `pause`, which ends on *any* keypress, so it passed whether or not the interrupt
-    meant anything; it has been renamed to say only what it proves, and
-    `an_interrupt_stops_a_running_program` now states the requirement, is skipped by name
-    in the `real-shell (Windows)` job, and is the test this entry has to turn green.
+    meant anything; it was renamed to say only what it proves, and
+    `an_interrupt_stops_a_running_program` was written to state the requirement.
 
-    Two mechanisms to choose between when this is specified. **A new process group plus
-    `GenerateConsoleCtrlEvent`**: spawn the shell with `CREATE_NEW_PROCESS_GROUP` and send
-    `CTRL_BREAK_EVENT` to its group, which is the one console control event that can be
-    sent across processes without sharing a console — but `portable-pty` does not expose
-    creation flags today, so it means either a patch upstream or spawning the console side
-    directly. **Or writing a key event rather than a byte**: the pseudoconsole translates
-    input into key records, and what a real terminal delivers for `Ctrl+C` is a key event
-    with the control modifier set rather than the bare control character. The second is
-    the smaller change if it works, and the first is the one that certainly works.
-    Whichever lands, the honest interim is also worth considering: until an interrupt can
-    be shown to have *taken effect*, saying `command stopped` is saying more than is
-    known.
+    Two mechanisms were proposed here before the spike, and neither was needed. **A new
+    process group plus `GenerateConsoleCtrlEvent`**: spawn the shell with
+    `CREATE_NEW_PROCESS_GROUP` and send `CTRL_BREAK_EVENT` to its group, which this entry
+    wrongly called the one console control event that can be sent across processes without
+    sharing a console — but `portable-pty` exposes no creation flags, so it meant either a
+    patch upstream or spawning the console side directly. **Or writing a key event rather
+    than a byte**: the pseudoconsole translates input into key records, and what a real
+    terminal delivers for `Ctrl+C` is a key event with the control modifier set rather than
+    the bare control character. Both were disproven against the rigged baseline below, and
+    the second started working from the one-line change like the bare byte did. The
+    "honest interim" this entry floated — machinery to decide when Acter had earned the
+    words — was answered instead by deleting the words.
 
-    **The answers, agreed in conversation 2026-08-21** and pinned here so the spec starts
+    **The answers, agreed in conversation 2026-08-21** and pinned here so the spec started
     from them rather than reopening them. They come from a spike against a real `cmd.exe` on
     a real ConPTY, reproducing this entry's own `ping -n 20` case.
 
