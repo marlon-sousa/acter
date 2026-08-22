@@ -759,6 +759,24 @@ the answer to "what should we do now?".
     compares the shell's echo to the submitted line, exact after trimming and never fuzzy.
     Same tool, used to suppress rather than to correlate.
 
+    **And echo suppression is not an unintegrated-session concern, which an earlier draft
+    of this entry got wrong.** Raised by the user 2026-08-22, from the `docker run -it`
+    case. A nested shell does not make the session unintegrated — integration is decided
+    once, for the session, by whether markers ever arrived. What happens is that the
+    proxying command never ends, so no `D` comes, and everything the container produces
+    lands inside that one open `C..D` region. `wants` accepts it, so it is forwarded and
+    read aloud, which is right. But the *container's* echo of each line the user types is
+    in that region too, and DESIGN's echo exclusion cannot help: it excludes the `B..C`
+    region, and this echo is nowhere near it. So the user hears their own typing read back
+    inside any nested shell, in a fully integrated session. The matcher therefore belongs
+    on the forwarding path generally, not on the unintegrated branch of it.
+
+    *What a nested shell costs, for the record, is structure and not speech.* One block for
+    the whole container session, one heading, no per-command boundaries inside it and no
+    exit codes — because the outer shell cannot report on commands it never ran. Delivery
+    and pacing are unaffected, and the babble guard still applies, which is worth checking
+    against a long build inside a container: continuous output is exactly what quiets it.
+
     *Prompt recognition should be left out.* Matching a prompt by shape — a trailing `>`,
     `$` or `#` — is fragile across shells, locales, custom `PROMPT`/`PS1` values and
     git-decorated prompts, and it fails by hiding output, which is this product's cardinal
