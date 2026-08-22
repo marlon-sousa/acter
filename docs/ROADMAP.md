@@ -642,17 +642,25 @@ the answer to "what should we do now?".
     `CTRL_C_EVENT` is the ability to target one group, not to cross a console boundary.
     Moot now, but it should not sit on the board as fact.
 
-    *The honest interim stands, and is the real remaining work.* A working `0x03` is
-    delivered asynchronously: the program is signalled, its handler runs, and it stops in
-    its own time — so at the moment the byte is written nothing is yet known to have
-    happened. In an unintegrated session `Pump::interrupt` writes and immediately closes the
-    command, so `command stopped` is still spoken at *request* time, and a program that
-    handles the signal slowly, or refuses it, is exactly the case where the words are false.
-    The answer is to keep the words and move the moment: close on the first evidence —
-    quiescence after the interrupt — bounded by a short deadline so a command can never
-    hang open. No new event, no new vocabulary for a screen reader user, and the standing
-    claim in `ui/src/controllers/app.ts` that `CommandInterrupted` "says it when the
-    interrupt took effect rather than when it was accepted" becomes true.
+    *The honest interim, answered by deleting the claim.* A working `0x03` is delivered
+    asynchronously — the program is signalled, its handler runs, and it stops in its own
+    time — so at the moment the byte is written nothing is yet known. Rather than build
+    machinery to decide when Acter has earned the words, Acter stops saying them.
+    `CommandInterrupted` no longer announces anything; the user hears the shell's own
+    prompt coming back, read by autoread like any other output. That is the correction A6
+    already made for `CommandFinished`, which since then carries no verdict and speaks only
+    through a separate `Announce`; `CommandInterrupted` was the one terminal event still
+    announcing directly, an A3.1-era leftover of the same shape B6's manual pass removed.
+
+    *And that forces B6 decision 10's amendment back out, for a reason worth recording.*
+    `SessionActor::output` returns early when no command is active, so output arriving after
+    a close is discarded — not rendered, not spoken. An interrupt that closes the command in
+    an unintegrated session therefore throws away the returning prompt, and the user hears
+    *nothing at all*, which is worse than the wrong announcement because silence is
+    indistinguishable from a hung session. So the interrupt stops forcing a boundary; the
+    block stays open and the next submission closes it, as stopped rather than as finished
+    with an invented exit code. The amendment existed only to make the announcement timely,
+    and there is no longer an announcement to be timely about.
 
 22.2. B4.2, text that scrolled away must not be said twice. Spec: none yet → specify
     first. **Also from B4's manual pass**, and reachable in any session long enough to
