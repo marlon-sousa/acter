@@ -827,11 +827,38 @@ the answer to "what should we do now?".
     and pacing are unaffected, and the babble guard still applies, which is worth checking
     against a long build inside a container: continuous output is exactly what quiets it.
 
-    *Prompt recognition should be left out.* Matching a prompt by shape — a trailing `>`,
-    `$` or `#` — is fragile across shells, locales, custom `PROMPT`/`PS1` values and
-    git-decorated prompts, and it fails by hiding output, which is this product's cardinal
-    defect. The time-and-size heuristic degrades the other way: the user hears a little too
-    much. Recognising prompts *properly* is what OSC 133 is, and 22.5 is where cmd gets it.
+    *Prompt recognition by shape should be left out, but there is a better kind.* Matching
+    a prompt by its appearance — a trailing `>`, `$` or `#` — is fragile across shells,
+    locales, custom `PROMPT`/`PS1` values and git-decorated prompts, and it fails by hiding
+    output, which is this product's cardinal defect.
+
+    **Researched 2026-08-22, at the user's request, and the survey is one-sided.** No Rust
+    crate does markerless prompt detection: the expect family (`rexpect`, `expectrl`) looks
+    relevant but pushes the problem to the caller — rexpect's own documentation says the
+    tricky part is getting `wait_for_prompt` right, and it is called by hand. VS Code does
+    not do it either; its `WindowsPtyHeuristics` correct marker *positions* on ConPTY, and
+    where markers are absent or unreliable its documented answer is to disable command
+    detection altogether. Warp's blocks likewise come from its own injected escape
+    sequences. Everyone who can inject markers does, and everyone who cannot degrades
+    rather than guesses. The research literature agrees about the difficulty and states it
+    in exactly this entry's terms — a prompt "can vary based on current working directories
+    or subshells" — and the published heuristic is a list of about 140 known commands plus
+    the symbols `$`, `#` and `>`.
+
+    **But every one of those tools is a passive observer, and Acter is not.** They watch a
+    terminal the user types into directly, which is why they need to ask what a prompt
+    *looks like*. Acter owns the edit field: it knows the exact text of every line it
+    submitted, exactly when it was sent, and that nothing else could have been typed. That
+    admits a much stronger definition — **a prompt is the text that was on the row when we
+    submitted, reappearing when the command ends** — which is an anchor rather than a
+    pattern, and therefore survives custom prompts, non-English output, `ssh`, `docker` and
+    subshells without knowing anything about their shape. The failure mode to *measure* is
+    the dynamic prompt: a timestamp, a git branch, or a `cd` that legitimately changes the
+    directory portion between draws. A stable-suffix match may cover it; that is a
+    measurement, not an assumption.
+
+    Recognising prompts *properly* is still what OSC 133 is, and 22.5 is where cmd gets it
+    for the top-level shell. The anchor approach is for what injection can never reach.
 
     *It does not relitigate B4.1.* Reading the shell's own text aloud is evidence, the same
     category as autoread everywhere else; `command stopped` was a claim about something
@@ -959,6 +986,16 @@ the answer to "what should we do now?".
     of decision 10 rather than a new defect, but it belongs in the same list, because the
     three together are what "unintegrated" actually costs a user today and the cost was
     never written down in one place.
+
+    **Where the beep should move to, raised and half-answered by the user 2026-08-22.**
+    Not to a timer. Quiescence is not completion — a build that pauses for three seconds
+    has not finished — and the beep is a *claim* that something finished, so binding it to
+    silence would be inventing the same fact by a different route. A returning prompt, by
+    contrast, genuinely is completion. So the split is: **read on quiescence, beep only on
+    prompt-return.** Hearing output slightly early costs nothing, because hearing is not a
+    claim; beeping early asserts something false. That makes the beep a consumer of 22.4's
+    anchor-based prompt detection and of 22.5's `A` marker, and it is the reason those two
+    entries are prerequisites for this one rather than neighbours of it.
 
     That matters because it undercuts B4.1's own reasoning. That entry removed the stop
     announcement on the grounds that the shell's own output is the answer, and kept
