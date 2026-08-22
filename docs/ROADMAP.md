@@ -767,9 +767,27 @@ the answer to "what should we do now?".
     evidence the far end read it as a line, a password never echoes, and a bare Enter into a
     running `ping` produces no matching echo. That is B6.1's own principle — evidence rather
     than inference from a marker's absence — and its exact-after-trimming matcher already
-    exists. The open question is whether a `y` answering a prompt should get a block of its
-    own; it echoes like a command, and its output genuinely is its consequence, so the
-    honest answer may be yes.
+    exists.
+
+    **But DESIGN has already Decided the `y` case, and Decided it the other way.** Under
+    "Edit field ownership", a mid-command prompt is answered in the same edit field, and
+    "because the boundary tracker knows a command is running, the line is delivered as
+    stdin to that program *instead of opening a new command block*" — with the matching
+    history rule that such lines are program input and never enter history. That rule is
+    right for what it was written about: a `y`, a password, a line fed to a REPL.
+
+    It is also exactly why the nested-shell case behaves as it does. Inside a
+    `docker run -it` a command *is* running — docker — so by the Decided rule every line
+    the user types is stdin, opens no block, and lands in the docker block. The rule and
+    the defect are the same rule.
+
+    So this entry cannot be specified without an explicit DESIGN decision, and it must not
+    be taken silently: **the question is whether "a command is running" should stop being
+    the test.** A shell that is proxying further commands is categorically unlike a program
+    consuming an answer, and the difference is observable — a nested shell echoes the line,
+    produces output, and then draws a prompt of its own, which a `y` does not. If that
+    distinction is admitted, the Decided rule narrows to "a line answering a program that
+    is not itself a shell", and history exclusion has to narrow with it.
 
     **If that lands, what remains of this entry is small**: a nested shell would have real
     boundaries and would simply use ordinary autoread, and the heuristic below would cover
@@ -878,6 +896,32 @@ the answer to "what should we do now?".
 
     Not measurable on the development machine as of 2026-08-22 — Docker is not installed —
     which is itself why this is an entry and not a paragraph in the B4.1 spec.
+
+22.7. B4.7, the results buffer is the pager. Spec: none yet → specify first.
+    **Measured 2026-08-22**, from the user's `git diff` case, and the cheapest large win
+    available here.
+
+    A screen reader user running `git diff` gets `less`: a program driven by single
+    keypresses with no Enter, which Acter's edit field cannot send, and which — measured —
+    never enters the alternate screen, so Acter cannot even tell it is there. The session
+    goes quiet and the user has no way forward. See the matching DESIGN open question.
+
+    **The buffer is already a better pager than `less` is**, and for this audience it is
+    not close: it is browsable with ordinary reading commands, it has headings and F6
+    navigation, and it does not need a keystroke vocabulary nobody can discover. So the
+    answer is to stop paging: the shell adapter sets `PAGER` and `GIT_PAGER` — and `LESS`
+    where a pager is unavoidable — so tools that respect them write straight into the
+    buffer.
+
+    The obvious objection is already answered by machinery that exists. A fifty-thousand
+    line diff is not read aloud, because the too-big rule refuses it and says so; it
+    accumulates in the buffer, which is exactly where the user wants to review it at their
+    own pace.
+
+    Scope questions for the spec: whether this belongs to the shell adapter or to the
+    profile (it is environment, so probably the adapter, beside the marker injection); and
+    whether it is overridable, since a user with a configured pager may want it honoured
+    and the answer must not be Acter silently discarding their configuration.
 
 23. B5, PowerShell adapter. Spec: none yet → specify first. Scope sketch: OSC 133
     injection snippet; record the first golden transcripts as fixtures, in B2's format
