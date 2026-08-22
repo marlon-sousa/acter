@@ -744,7 +744,39 @@ the answer to "what should we do now?".
     unmarked regions are a permanent feature of an integrated session, not a phase, and
     something has to read them.
 
-    The proposal is a heuristic, and deliberately a dull one: **reuse the pacing policy
+    **The user's better idea, 2026-08-22, and it may make most of this entry unnecessary.**
+    The structure is not missing — Acter knows exactly when the user pressed Enter, because
+    the edit field is the only way anything is sent. A submission is therefore a strong
+    boundary signal in its own right, and this is *already the rule* in an unintegrated
+    session: `Pump::submit` closes the open block and opens a new one (decision 10). The
+    gap is the other branch. In an integrated session the id is queued in `submitted` and
+    waits for a block that, inside a `docker run -it`, never opens — which is exactly the
+    permanent accepted hole B6.1 was written about.
+
+    So the primary proposal becomes: **extend decision 10's rule to a submission that
+    demonstrably will not be claimed.** It is better than the heuristic below, and it fixes
+    the echo problem for free rather than by suppression — if the submission opens the
+    block, B6.1's `CommandStarted { command_line }` *consumes* the echo as the heading text
+    instead of forwarding it as output.
+
+    *When a submission must not open a block, which is the whole difficulty.* Enter is not
+    always a command: it can be a response to a prompt, a keystroke fed to a running
+    program, or a password. Alt-screen state is a reliable negative for `vim` and `less`
+    and Acter already tracks it, but it covers neither a REPL nor a `[y/N]` prompt. The
+    signal that does is the **echo**: a submitted line that comes back echoed is positive
+    evidence the far end read it as a line, a password never echoes, and a bare Enter into a
+    running `ping` produces no matching echo. That is B6.1's own principle — evidence rather
+    than inference from a marker's absence — and its exact-after-trimming matcher already
+    exists. The open question is whether a `y` answering a prompt should get a block of its
+    own; it echoes like a command, and its output genuinely is its consequence, so the
+    honest answer may be yes.
+
+    **If that lands, what remains of this entry is small**: a nested shell would have real
+    boundaries and would simply use ordinary autoread, and the heuristic below would cover
+    only output with no submission behind it at all.
+
+    The fallback proposal, should the above not hold, is a heuristic and deliberately a
+    dull one: **reuse the pacing policy
     rather than build a differ.** The machinery already exists — output settles on
     quiescence, the settled chunk's lines are counted, and a chunk too big to read already
     earns `tooBigMessage` instead of being spoken. "Time plus size" is what that already
