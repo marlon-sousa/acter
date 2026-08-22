@@ -732,6 +732,74 @@ the answer to "what should we do now?".
     is the possibility that would make the flake a genuine bug, and it is the one the rate
     difference is evidence for.
 
+22.4. B4.4, autoread in a session with no boundaries. Spec: none yet → specify first.
+    **The user's idea, 2026-08-22**, and the gap B4.1's manual pass made concrete: with a
+    real shell, Acter today reads *nothing* aloud, so a user who stops a program hears
+    silence and has to go and review the buffer to learn what happened.
+
+    **This is not a stopgap until B5, and that is the argument for it.** Marker injection
+    only ever reaches the shell Acter spawned. A `docker run -it`, an `ssh`, a `wsl`, a
+    `python` or `node` REPL, a `sudo su` — every nested shell is on the far side of the
+    injection point and can never be marked, however good the adapter above it is. So
+    unmarked regions are a permanent feature of an integrated session, not a phase, and
+    something has to read them.
+
+    The proposal is a heuristic, and deliberately a dull one: **reuse the pacing policy
+    rather than build a differ.** The machinery already exists — output settles on
+    quiescence, the settled chunk's lines are counted, and a chunk too big to read already
+    earns `tooBigMessage` instead of being spoken. "Time plus size" is what that already
+    is. So the entry is a policy change — stop suppressing autoread where there are no
+    boundaries — plus the one piece of new logic below, not a new subsystem.
+
+    *The echo is the trap, and it fires on every single command.* Without boundaries
+    `Pump::wants` accepts every line, the shell's echo of the submitted line included,
+    because excluding it there would exclude everything (decision 10). So the first short
+    settled chunk after Enter is the user's own typing read back at them. The fix is at
+    hand: Acter knows exactly what it wrote, and B6.1 already built the matcher — `claim`
+    compares the shell's echo to the submitted line, exact after trimming and never fuzzy.
+    Same tool, used to suppress rather than to correlate.
+
+    *Prompt recognition should be left out.* Matching a prompt by shape — a trailing `>`,
+    `$` or `#` — is fragile across shells, locales, custom `PROMPT`/`PS1` values and
+    git-decorated prompts, and it fails by hiding output, which is this product's cardinal
+    defect. The time-and-size heuristic degrades the other way: the user hears a little too
+    much. Recognising prompts *properly* is what OSC 133 is, and 22.5 is where cmd gets it.
+
+    *It does not relitigate B4.1.* Reading the shell's own text aloud is evidence, the same
+    category as autoread everywhere else; `command stopped` was a claim about something
+    Acter could not observe. The distinction is the whole of B4.1 and it is preserved here.
+
+    Sequencing: **after 22.2**, or the duplicate-line defect means duplicates get spoken.
+
+22.5. B4.5, cmd.exe can carry OSC 133 A and B. Spec: none yet → specify first.
+    **Measured 2026-08-22** while answering whether cmd is unintegrated by necessity. It is
+    not.
+
+    `cmd.exe`'s `PROMPT` understands `$e` as ESC, so the prompt itself can carry markers.
+    Setting `prompt $e]133;A$e\$P$G$e]133;B$e\` put exactly this on the wire, read back off
+    a real pseudoconsole: `ESC ]133;A ESC \`, then the drawn prompt, then
+    `ESC ]133;B ESC \`. So the prompt region and the start of the typed command are both
+    markable in cmd today, with no dependency and no injection beyond an environment
+    variable.
+
+    **What cmd cannot do is C and D.** It has no post-execution hook, and `PROMPT` is
+    evaluated only when the prompt is drawn — so "output starts here" and "the command
+    ended with this exit code" have nowhere to come from without a third-party layer such
+    as Clink, which is not a dependency this product should take.
+
+    That makes cmd a **partially integrated** shell, which is a state nothing in the domain
+    models yet: `Integration` is `Pending`, `Integrated` or `Unintegrated`, and the tracker
+    assumes regions arrive as a full A/B/C/D cycle. What A and B alone buy is worth having —
+    the prompt is identifiable and the echo region is delimited, so 22.4's echo trap
+    disappears and its heuristic gains a real boundary to work from. What they cannot buy is
+    an exit code, so a verdict stays unavailable and every command in a cmd session still
+    ends without one.
+
+    The open question this entry has to answer first: whether a third integration state
+    earns its complexity, or whether A/B-only is better modelled as an unintegrated session
+    that happens to have a reliable prompt signal. That is a domain decision rather than an
+    adapter one, and it should be settled before any code.
+
 23. B5, PowerShell adapter. Spec: none yet → specify first. Scope sketch: OSC 133
     injection snippet; record the first golden transcripts as fixtures, in B2's format
     — so a captured real session is replayable as a fake session.
