@@ -996,7 +996,9 @@ the answer to "what should we do now?".
 
     Sequencing: **after 22.2**, or the duplicate-line defect means duplicates get spoken.
 
-22.5. B4.5, cmd.exe can carry OSC 133 A and B. Spec: none yet → specify first.
+22.5. B4.5, cmd.exe can carry OSC 133 A and B. Spec: none yet → specify first, and its
+    open question is now answered — see "Pinned answers" below, agreed in conversation
+    2026-08-22. Ready to spec.
     **Sequencing note, 2026-08-22: this has become the keystone of the 22.x cluster.**
     22.4 wants a real boundary to replace its heuristic, 22.7's pager decision is easier
     once prompts are known, 22.8 needs a completion signal, and 22.9 needs a prompt region
@@ -1030,6 +1032,63 @@ the answer to "what should we do now?".
     earns its complexity, or whether A/B-only is better modelled as an unintegrated session
     that happens to have a reliable prompt signal. That is a domain decision rather than an
     adapter one, and it should be settled before any code.
+
+    **Measured 2026-08-22, before that question was answered, and it reframes it: against
+    today's domain, A and B alone make a cmd session completely silent.** A real `cmd.exe`
+    started with exactly the PROMPT above, two commands submitted: the frontend received
+    **no events at all** — no `CommandStarted`, no output, an empty buffer, nothing spoken.
+    The absence of `IntegrationUnavailable` is the proof the injection worked, since the
+    session did not fall through to unintegrated when the grace period expired.
+
+    The chain is short and every link is in the tree today. Any marker fires
+    `MarkersObserved` and `Integrated` is absorbing, so one `A` decides the session
+    forever. `BoundaryTracker` emits `BlockStarted` only on `C`, so no block ever opens.
+    The region after `B` stays `CommandLine` for everything that follows, because only `C`
+    moves it to `Output`. And `wants` accepts only `Region::Output` for an integrated
+    session — DESIGN's echo exclusion doing exactly its job — so every line of real output
+    is dropped as if it were an echo. Meanwhile `submit` queues an id for a block that
+    never comes, and `settle_running` reports running forever.
+
+    So the entry's claim that "what A and B alone buy is worth having" holds only if the
+    domain change lands **in the same PR as the injection**. Setting the environment
+    variable against today's domain does not degrade the session, it deletes it, and in
+    this product's cardinal failure mode: text arrives and the user is never told.
+
+    **Pinned answers, agreed in conversation 2026-08-22 — the spec restates these rather
+    than reopening them.**
+
+    - **No third integration state, and no new `wants` arm.** An A/B-only shell is
+      `Integrated`; what differs is that the adapter declares it marks `A` and `B` only.
+      Both alternatives were considered and rejected: a `PartiallyIntegrated` variant adds
+      a branch everywhere integration is consulted for one shell's shortcoming, and
+      modelling it as unintegrated-with-a-prompt-signal keeps today's behaviour but throws
+      away the block structure the markers were injected to buy.
+    - **The only thing genuinely missing is `C`, and it is not a guess.** In a
+      line-oriented shell the echo is the one line the shell read, and Acter knows its
+      exact text. The tracker closes the command-line region at the end of the echoed line
+      and opens the block there, which gives a real `B..C` region for B6.1's heading and a
+      real `Output` region for `wants`.
+    - **`D` is already handled and needs nothing.** `PromptStart` calls `end_open_block`,
+      so the next prompt closes the block with `exit: None` — exactly what an unintegrated
+      session produces today and what the frontend already renders. A verdict stays
+      unavailable in cmd, which is what 22.8 and 22.9 must assume.
+    - **The safety constraint, and it is what the measurement is really about: in a shell
+      known not to emit `C`, a line that cannot be classified must be forwarded, not
+      dropped.** Today's `wants` fails the other way. Whatever the synthetic-`C` rule turns
+      out to be, its failure mode must be a badly-labelled line that is still spoken, never
+      a silent one.
+
+    **Left for the spec**, both narrow. Where the capability declaration lives — it is
+    `ShellAdapter`'s knowledge, which is B5's port, so this entry either takes a minimal
+    version of that flag early or accepts a dependency on B5. And the synthetic-`C` rule's
+    edge cases: a command line long enough to wrap (one `LineId` via the engine's
+    continuation swallowing, so it should already be one line — verify rather than assume),
+    an empty submission, and a command that produces no output at all.
+
+    **Worth stating plainly, since 22.4 landed first: this entry's stakes are lower than
+    when it was written.** The anchor rule now supplies boundaries without markers, so 22.5
+    buys exactness for the outer shell and the prompt region 22.9 wants — not the difference
+    between structure and none.
 
 22.6. B4.6, does an interrupt survive a proxied shell? Spec: none yet → specify first.
     **Raised by the user 2026-08-22**, immediately after B4.1 landed, and it bounds what
