@@ -867,6 +867,12 @@ the answer to "what should we do now?".
     Sequencing: **after 22.2**, or the duplicate-line defect means duplicates get spoken.
 
 22.5. B4.5, cmd.exe can carry OSC 133 A and B. Spec: none yet → specify first.
+    **Sequencing note, 2026-08-22: this has become the keystone of the 22.x cluster.**
+    22.4 wants a real boundary to replace its heuristic, 22.7's pager decision is easier
+    once prompts are known, 22.8 needs a completion signal, and 22.9 needs a prompt region
+    to read. All four lean on markers that this entry shows are already available in cmd
+    for one environment variable. That argues for taking it before B5 rather than after,
+    which is not the order the board's numbering implies.
     **Measured 2026-08-22** while answering whether cmd is unintegrated by necessity. It is
     not.
 

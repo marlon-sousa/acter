@@ -379,6 +379,23 @@ Also decided earlier and unchanged:
   bridge, ahead of any frontend work.
 - Alt-screen behavior: announce "interactive mode needed" vs auto-switch (and how to
   announce the switch back).
+- **The two-mode model has no room for sending a single keystroke while staying
+  conversational** (raised 2026-08-22 by the `git diff` case). The Vision section offers
+  non-interactive mode, which has an edit field and submits whole lines on Enter, and
+  interactive mode, which "has no edit field" and passes everything through. A pager wants
+  neither: the user needs to send one `space` to see the next page and then go straight
+  back to reading the buffer, and switching the entire UI into a full-screen rendering to
+  send one byte is the wrong trade. The same shape covers a `[y/N]` that expects a bare
+  keypress, and `q` to quit a pager.
+  If a keystroke can be sent without leaving the conversational view, the buffer needs a
+  rule for what it does to structure, and the answer should be **nothing**: a heading
+  exists to be navigated to and answers "what did I run?", so a keystroke driving a running
+  program earns neither a heading nor an echo line, and whatever it produces appends to the
+  block already open. Twenty presses of `space` through a diff must not produce twenty
+  headings called "space". Note this is a decision Acter can make *without a heuristic* —
+  it knows whether a keystroke arrived as an Enter-submission or as a pass-through, so the
+  category is a fact rather than an inference, and nothing here should be timing-dependent.
+
 - **A program can need keystrokes without ever entering the alternate screen, so
   alt-screen detection is not sufficient to know that interactive mode is needed** (raised
   2026-08-22 by the `git diff` case, and measured rather than argued). The Vision section
