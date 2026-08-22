@@ -604,6 +604,82 @@ the answer to "what should we do now?".
     be shown to have *taken effect*, saying `command stopped` is saying more than is
     known.
 
+    **The answers, agreed in conversation 2026-08-21** and pinned here so the spec starts
+    from them rather than reopening them. Every mechanism below was measured against a real
+    `cmd.exe` on a real ConPTY, reproducing this entry's own `ping -n 20` case; the numbers
+    are from that spike and are repeated in B4.1's PR body.
+
+    *A correction first: this entry's account of `GenerateConsoleCtrlEvent` was wrong.* It
+    called `CTRL_BREAK_EVENT` "the one console control event that can be sent across
+    processes without sharing a console". The documentation says the opposite — "only those
+    processes in the group that share the same console as the calling process receive the
+    signal" — and what `CTRL_BREAK_EVENT` actually buys over `CTRL_C_EVENT` is the ability
+    to target *one group*, not to cross a console boundary. The correction cuts both ways,
+    because sharing the console turns out to be reachable: `AttachConsole` on the shell's
+    pid joins it, a group id of zero then means every process on that console, and
+    `Child::process_id()` is already exposed by `portable-pty` today. So that mechanism
+    needs no `CREATE_NEW_PROCESS_GROUP`, no creation flags, and no patch to `portable-pty`
+    at all. This entry priced it as the expensive-but-certain option. It is neither.
+
+    *The measurement: four mechanisms do not stop a running program, and one does.* Against
+    `ping -n 20 127.0.0.1`, counting replies over the five seconds after the interrupt,
+    where zero means it took effect.
+
+    - Bare `0x03`, which is what ships today: **four replies**. Reproduces this entry's
+      finding exactly.
+    - A win32-input-mode Ctrl+C key record: **four replies**. Not for want of reaching the
+      far end. ConPTY asks for the mode unprompted — `ESC [ ? 9001 h` is in its startup
+      output, observed — and it parses the record sent back: one delivered at an idle
+      prompt produces a carriage return, a line feed and a fresh prompt, which is cmd
+      cancelling its input line. The key event arrives and is understood. It does not
+      become a console control event for the running child.
+    - `AttachConsole` plus `GenerateConsoleCtrlEvent(CTRL_C_EVENT, 0)`: **five replies**.
+      The attachment is verified rather than assumed — `GetConsoleProcessList` reports
+      three processes on the joined console with the shell's pid among them — and the call
+      returns success.
+    - The same with `CTRL_BREAK_EVENT`: **five replies**.
+    - Terminating the shell's children: **zero replies**, and the session survives, with
+      `echo` round-tripping afterwards.
+
+    *So the mechanism is to stop the shell's children, and the spec must be honest that this
+    is a kill and not a Ctrl+C.* No handler runs in the target, nothing gets a chance to
+    clean up, and the exit code is a termination rather than whatever the program would have
+    chosen. That is a real loss, and it belongs in the spec rather than being discovered
+    later. It is also the only measured way to make this entry's own test pass. Two things
+    the spec decides rather than inherits: whether to walk the whole process tree below the
+    shell or only its direct children — one level was enough for `ping`, but a program that
+    spawns its own children is the case that motivates the question — and what `interrupt`
+    answers when the shell has no children at all, which is the `NothingToActOn` shape the
+    service already has.
+
+    *The honest interim answers itself.* The question was whether to keep saying
+    `command stopped` before an interrupt is known to have taken effect. With a kill it is
+    known: the service terminated the process and can say so on evidence rather than on
+    hope. The words do not change, and no new vocabulary reaches a screen reader user. What
+    changes is that the standing claim in `ui/src/controllers/app.ts` — that
+    `CommandInterrupted` "says it when the interrupt took effect rather than when it was
+    accepted" — becomes true, where in an unintegrated session today it is not.
+
+    *What does not change.* `Transport::interrupt` keeps its signature and its place on the
+    port; every mechanism above lives inside `LocalPty`, which is what the port's own doc
+    comment already promises about SSH. `INTERRUPT: u8 = 0x03` and its unit test
+    `an_interrupt_is_the_single_byte_0x03` pin today's wrong behavior and go. The gate is
+    `an_interrupt_stops_a_running_program` turning green with the `--skip` removed from the
+    `real-shell (Windows)` job in the same PR. No fake-transport test can stand in for it:
+    `pressing_ctrl_c_stops_the_running_command_and_says_so` passes today against a far end
+    with no notion of a process to keep running.
+
+    *One new dependency, and no crate to lean on.* Terminating a child needs `windows-sys`
+    in `acter-transports` — `Win32_System_Diagnostics_ToolHelp` for the process walk,
+    `Win32_System_Threading` for `OpenProcess` and `TerminateProcess`. Nothing off the shelf
+    does this: `command-group` only extends `std::process::Command` and cannot reach inside
+    `portable-pty`'s spawn, and `termwiz` — `portable-pty`'s own sibling, whose
+    documentation advertises `KeyboardEncoding::Win32` against the ConPTY keyboard spec —
+    defines that variant and never implements it, returning a bare `0x03`. Its
+    `KeyCode::encode` is an xterm encoder by its own comment, it returns an empty string for
+    every key-up, and the only place it consults the encoding is one comparison against
+    `CsiU`.
+
 22.2. B4.2, text that scrolled away must not be said twice. Spec: none yet → specify
     first. **Also from B4's manual pass**, and reachable in any session long enough to
     scroll.
