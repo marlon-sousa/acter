@@ -1050,6 +1050,49 @@ the answer to "what should we do now?".
     honestly. That makes this entry a likely beneficiary of 22.5 rather than independent
     work, and it should be specified after it.
 
+22.9. A silent success says nothing at all. Spec: none yet → specify first. **Found by
+    the user 2026-08-22**, by asking whether the prompt should be re-read as a block's last
+    line. Not a B4 iteration — it is a product question about speech, filed with this
+    cluster because it interacts with 22.4's and 22.8's rules and should be settled
+    alongside them. Re-file it in lane 1 if that fits the board better.
+
+    `Announcement` has five variants — `ReadAloud`, `TooBig`, `StillRunning`,
+    `OutputContinues`, `Failed` — and there is no success. The frontend states the reason:
+    "a fully auto-read success gets no extra finish speech — its output was already read"
+    (A6, and right as far as it goes).
+
+    **It stops being right when there was no output.** `cd projects`, `mkdir foo`,
+    `git add .`, `export X=1`, `touch file`: `CommandStarted`, `CommandFinished`, nothing
+    read, no beep, and therefore **complete silence**. The user learns neither that it ran,
+    nor that it succeeded, nor that the shell is ready again. A sighted user gets all three
+    from the prompt returning; an Acter user gets nothing, and this is a large fraction of
+    ordinary shell use.
+
+    Note that echo exclusion is what removes the prompt: block content is `C..D`, and the
+    prompt is `Region::Prompt`. That exclusion exists to stop the command line being
+    duplicated under its own heading, which is a good reason — but it takes the prompt with
+    it, and the prompt was carrying the completion signal.
+
+    Three candidate answers, and the spec has to choose.
+
+    *Always read the prompt as the block's last line.* Needs no new vocabulary and carries
+    the working directory. But every command then ends with the prompt read aloud, which is
+    noise after a command that already read its output, and it is the raw-terminal
+    experience this product exists to improve on.
+
+    *A success announcement*, fired when a command finished having read nothing. Quiet and
+    targeted, but it is a new pinned string and says strictly less than the prompt does.
+
+    *Read the prompt only when the block produced no output.* After `cd projects` the user
+    hears `C:\projects>`, which confirms it ran and says where they now are — more useful
+    than "done" — and nothing is added when output was already read. The risk is a heavily
+    decorated prompt (git branch, timestamp) being long enough to be worse than a fixed
+    phrase.
+
+    Whichever is chosen, it needs a real listen before it is believed: this is a judgement
+    about repetition and comfort across many commands in a row, which no unit test can
+    answer and one command cannot either.
+
 23. B5, PowerShell adapter. Spec: none yet → specify first. Scope sketch: OSC 133
     injection snippet; record the first golden transcripts as fixtures, in B2's format
     — so a captured real session is replayable as a fake session.
