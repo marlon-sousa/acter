@@ -266,15 +266,64 @@ does not arise there.)
 Consequences:
 - **Mid-command prompts** ("Y/n" confirmations): prompt text arrives as output of
   the running command (announced promptly via quiescence — see Output pacing); the
-  user types the answer in the edit field and presses Enter; because the boundary
-  tracker knows a command is running, the line is delivered as stdin to that program
-  instead of opening a new command block. Same field, same rule.
-- **History exclusion:** a line enters history only if it opened a command block
-  (submitted at the prompt). Lines sent while a command runs are program input —
-  answers, passwords, REPL input — and are never saved to history.
+  user types the answer in the edit field and presses Enter; the line is delivered as
+  stdin to that program instead of opening a new command block. Same field, same rule.
+- **What decides that — amended 2026-08-22, and the amendment reverses the original
+  test.** This bullet used to read "because the boundary tracker knows a command is
+  running". That test was wrong in one direction, and the direction matters: a shell
+  proxying further commands is also a command running. So inside `docker run -it`, an
+  `ssh`, a `wsl`, a `sudo su` or a REPL, every line the user typed was stdin by the rule,
+  and a whole nested session collapsed into one block under one heading — no per-command
+  boundaries, no way to jump command to command, nothing to review but a straight read.
+  The rule and that defect were the same rule.
+
+  The test is now **positive evidence that the far end treated the line as a command
+  line**, in two parts, both of which must hold:
+  - **The far end echoed it**, matched exactly after trimming — the same matcher built
+    for correlating a block to the submission that caused it, used here to classify.
+    This is what rules out a password, which never echoes, and a bare Enter into a
+    running program, which produces no matching echo.
+  - **The prompt anchor reappeared**: the text that was on the cursor row at the moment
+    of submission is drawn again once the line's output ends. This is what rules out a
+    `y` at a `[y/N]`, whose prompt does not come back, and what admits a nested shell,
+    whose prompt does. It is an anchor rather than a pattern — it needs to know nothing
+    about what a prompt looks like, so it survives custom prompts, other languages,
+    containers and subshells alike.
+
+  Echo alone is deliberately not enough, and an earlier draft that leaned on it was
+  wrong: a `y` echoes exactly as `ls` does, because Acter writes both to the far end as
+  a line and the console echoes both. Echo proves the line was *read as a line*; only the
+  anchor says what the reader then did with it.
+
+  Where OSC 133 markers reach, the question does not arise — a `B` after a submission is
+  the far end saying the line is a command. The evidence test is the answer for far ends
+  marker injection can never reach, which is every shell past the one Acter spawned.
+- **No evidence means no block**, and that is the direction this rule is permitted to
+  fail in. Absent evidence the line is stdin, exactly as before the amendment. Guessing
+  toward "command" would put an answer — possibly a secret — into a heading and into
+  history; guessing toward "stdin" gives a coarser block with nothing lost, nothing
+  duplicated and order preserved. The buffer must not mangle; structure may be imperfect.
+- **Evidence applies to a region, not to the line that produced it.** It arrives after
+  the fact, so nothing is opened retroactively: the first submission inside an open block
+  that satisfies both parts marks that block's far end as **proxying**, and every later
+  submission inside it opens a block of its own directly. The cost is one misfiled
+  command — the first one run inside a nested shell lands in the block of the command
+  that entered it, and by the history rule below it does not enter history. That is
+  accepted rather than fixed.
+- **The known false positive**, recorded rather than papered over: a program that asks
+  the same question in a loop — a per-file overwrite prompt is the common one — brings
+  its own anchor back and reads as a proxying shell. It costs a block per answer and an
+  answer in history. Passwords stay protected by the echo half of the test.
+- **History exclusion:** a line enters history only if it opened a command block. Lines
+  delivered as stdin are program input — answers, passwords, REPL input — and are never
+  saved to history. The wording is untouched by the amendment above: it was always
+  phrased in terms of opening a block, and only what opens one has changed.
 - **Echo exclusion:** the shell's echo of a submitted line falls between OSC 133
   markers A and C (prompt/echo region); block content is taken from C..D only, so
-  the command line is never duplicated under its h2.
+  the command line is never duplicated under its h2. **Where markers do not reach** —
+  every far end past the injection point, and any unintegrated session — that exclusion
+  cannot fire, and the echo matcher above suppresses the duplicate instead. Two halves of
+  one fact, chosen by whether the region is marked.
 
 ## Output pacing: quiescence, patience, follow mode — **Decided**
 

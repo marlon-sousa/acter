@@ -810,6 +810,8 @@ the answer to "what should we do now?".
     difference is evidence for.
 
 22.4. B4.4, autoread in a session with no boundaries. Spec: none yet → specify first.
+    **Unblocked 2026-08-22**: the DESIGN decision this entry was waiting on is taken (see
+    "Answered" below), and 22.10 has folded into it. Next step here is writing the spec.
     **The user's idea, 2026-08-22**, and the gap B4.1's manual pass made concrete: with a
     real shell, Acter today reads *nothing* aloud, so a user who stops a program hears
     silence and has to go and review the buffer to learn what happened.
@@ -879,9 +881,47 @@ the answer to "what should we do now?".
     distinction is admitted, the Decided rule narrows to "a line answering a program that
     is not itself a shell", and history exclusion has to narrow with it.
 
-    **If that lands, what remains of this entry is small**: a nested shell would have real
-    boundaries and would simply use ordinary autoread, and the heuristic below would cover
-    only output with no submission behind it at all.
+    **Answered 2026-08-22 in a design conversation: yes, and the amendment is in DESIGN
+    under "Edit field ownership".** The test is now positive evidence that the far end
+    treated the line as a command line, in two parts that must both hold — the far end
+    **echoed** it, exact after trimming; and the **prompt anchor** reappeared, the anchor
+    being the text on the cursor row at the moment of submission. Absent evidence the line
+    is stdin, exactly as before, so `y` and passwords are untouched.
+
+    Three things the conversation settled that this entry had wrong or had left open, all
+    now recorded in DESIGN:
+
+    - **Echo alone is not the discriminator**, and the paragraph above saying it is should
+      be read as superseded. A `y` echoes exactly as `ls` does: Acter writes both to the
+      far end as a line and the console echoes both. Echo proves the line was read *as a
+      line* — which is what rules out a password and a bare Enter into `ping` — and the
+      anchor is what says what the reader then did with it.
+    - **Evidence is applied to a region, not to the line that produced it.** It arrives
+      after the fact, and nothing is opened retroactively: the first submission inside an
+      open block that satisfies both parts marks that block's far end as proxying, and
+      every later submission inside it opens its own block directly. One misfiled command
+      is the accepted cost — the first line run inside a nested shell lands in the block of
+      the command that entered it, and does not enter history.
+    - **The known false positive is accepted and written down**: a program asking the same
+      question in a loop brings its own anchor back and reads as a proxying shell. A block
+      per answer, and the answer in history. Passwords stay protected by the echo half.
+
+    **It composes with 22.5 rather than competing with it.** Where OSC 133 reaches, a `B`
+    after a submission is the far end saying the line is a command and the evidence test
+    never runs. So this rule governs only what injection cannot reach, which is what it was
+    designed for and is the permanent population 22.5 cannot shrink.
+
+    **22.10 folds in here.** Measured and ruled: Windows does not discard typed-ahead input
+    on Ctrl+C, a real `cmd.exe` window behaves the same as Acter, and replicating the host
+    console is the right answer where the host console has an answer. What that ruling
+    leaves behind is block shape, which is Acter's own structure and has no cmd equivalent —
+    the empty headings and the block holding two commands' output are exactly what an
+    evidence-gated open removes, since a submission nothing read produces no evidence and
+    therefore no block.
+
+    **What remains of this entry is small**: a nested shell now has real boundaries and uses
+    ordinary autoread, and the heuristic below covers only output with no submission behind
+    it at all.
 
     The fallback proposal, should the above not hold, is a heuristic and deliberately a
     dull one: **reuse the pacing policy
@@ -1207,8 +1247,10 @@ the answer to "what should we do now?".
     about repetition and comfort across many commands in a row, which no unit test can
     answer and one command cannot either.
 
-22.10. An interrupt can release a backlog of submitted lines into one block. Spec: none
-    yet → specify first. **Found by the user 2026-08-22**, driving a real `cmd.exe`
+22.10. **Closed 2026-08-22, not a defect** — an interrupt can release a backlog of
+    submitted lines into one block. No spec and no PR: measured, then ruled by the user
+    against a real `cmd.exe` window, which does the same thing. What remains of it is
+    22.4's. **Found by the user 2026-08-22**, driving a real `cmd.exe`
     session while the agent observed through NVDA in live capture.
 
     Reproduced with `docker run -t alpine` — deliberately `-t` and not `-i`, which gives
@@ -1251,23 +1293,37 @@ the answer to "what should we do now?".
     block attribution, because it removes the backlog rather than deciding where to file
     it, and because it is what a user coming from any other terminal already expects.
 
-    **What must be measured before specifying, and it may be the whole difficulty.** Acter
-    writes a submitted line to the pty master immediately, so by the time Ctrl+C is pressed
-    the bytes are already in ConPTY's input buffer, not in anything Acter still owns.
-    Whether a pseudoconsole master can flush its client's pending input at all is unknown
-    here and is the first thing to establish. Two measurements, both cheap from
-    `real_session.rs`, which already drives the whole stack over a real pseudoconsole:
-    whether a stock Windows console plus `cmd.exe` discards typed-ahead input on Ctrl+C
-    natively — because if Windows does not do this at all, matching `ssh` may not be
-    reachable and the entry becomes a smaller one about block shape — and, if it does, what
-    B4.1's interrupt path would have to call to get it, given B4.1 already measured that
-    `0x03` alone does not interrupt.
+    **Measured 2026-08-22, and the answer closes the entry: Windows does not do this.**
+    The measurement the entry asked for, run from `real_session.rs` over a real
+    pseudoconsole, twice. With `ping -n 20 127.0.0.1` in the foreground and three
+    `echo` lines submitted behind it, Ctrl+C killed `ping` — `Control-C` printed, `^C`
+    echoed — and `cmd.exe` then ran all three. Repeated with the exact shape that opened
+    the entry, `docker run -t --rm alpine sleep 60` holding a tty it never reads and two
+    lines queued behind it: both ran after the interrupt. The block shape came out as the
+    capture described it, two `CommandStarted`/`CommandFinished` pairs with no `Output`
+    between them and a third block holding all three commands' echoes and output.
 
-    **If the flush is reachable, this stops being 22.4's problem.** No empty block would
-    exist, because nothing would arrive late to fill the wrong one. If it is not reachable,
-    the fallback is 22.4's question in another form — a submission opening a block only
-    once there is evidence the far end read it, which is 22.4's echo test — and the two
-    should then be settled together rather than separately.
+    So the POSIX behaviour is not reachable by matching what the platform already does,
+    because the platform does not do it. The only remaining route to a real flush is
+    `AttachConsole` onto the client's console followed by `FlushConsoleInputBuffer`, which
+    means detaching Acter's own console, needs a child pid the transport does not expose,
+    and races the very read it is trying to beat. Not a dependency this product should
+    take.
+
+    **Ruled by the user 2026-08-22, having tested the same sequence in a real `cmd.exe`
+    window: Acter behaved the same, so this is not a defect.** What Acter does with a
+    backlog released by an interrupt is what the console it sits on does with one, and
+    replicating the host console is the right answer where the host console has an
+    answer. The entry is closed rather than specified. Note the limit of that principle,
+    which 22.11 is on the other side of: it applies where Acter is passing through
+    behaviour cmd already has, and not to bytes Acter itself injects.
+
+    **What it leaves behind for 22.4.** The block shape is unchanged by this ruling — the
+    empty headings and the block holding two commands' worth of output are still there,
+    because they are Acter's own structure and cmd has no equivalent to replicate. Per this
+    entry's original framing, that is 22.4's question in another form: a submission opening
+    a block only once there is evidence the far end read it. It is 22.4's to settle, and
+    there is nothing separate left here.
 
 22.11. A device-query reply can reach the user's command line, and its bytes can reach the
     buffer. Spec: none yet → specify first. **Found by the user 2026-08-22**, in the same
@@ -1296,11 +1352,47 @@ the answer to "what should we do now?".
     The emulator did not consume them because they arrived as an *echo of input* rather
     than as a program's output — which is a general hazard, not one about this sequence.
 
-    Not yet known, and cheap to measure before specifying: whether this needs a far end
-    that holds a tty without reading stdin, or whether any sufficiently slow consumer will
-    do; and whether the same race can drop a reply into a command line the user has
-    half-typed rather than in front of a submitted one. Both are reachable from
-    `real_session.rs`, which already drives the whole stack over a real pseudoconsole.
+    **Measured 2026-08-22, and both faults reproduce with no tty-holder and no Docker.**
+    From `real_session.rs`, the far end was
+    `powershell -NoProfile -Command "[Console]::Write([char]27 + '[6n'); Start-Sleep -Seconds 6"`
+    — a slow consumer that emits the query and then simply does not read stdin. That is
+    enough. The answer to the first question is therefore that **any sufficiently slow
+    consumer will do**; the tty-holding container was incidental to the capture, not a
+    precondition, which widens the entry considerably: every device query answered while
+    the asking program is slow to read is a candidate.
+
+    **And it is not a race, which changes the fix.** The corrupted line is not the one
+    that raced the reply. In the measurement the first submission came out clean, and the
+    reply sat *behind* it in the console input queue, un-terminated, because nothing had
+    read it. The **next** submission was then appended onto it, giving
+    `C:\Users\marlo>^[[3;17Recho acter-second-line` followed by
+    `'s not recognized as an internal or external command,` — the same shape as the
+    capture that opened the entry, byte for byte. So once an unread reply is in the queue,
+    corruption of the next submitted line is deterministic rather than probabilistic, and
+    the window is not a scheduling instant but "until something reads it".
+
+    That also explains why B6 decision 2's write ordering does not help. Its rule is that
+    a device-query answer must never *overtake* a submitted line, and the answer never
+    does: it outlives the read that should have consumed it. Ordering writes correctly is
+    orthogonal to a reply nobody claims.
+
+    **The second question needs no measurement — DESIGN already answers it.** A reply
+    cannot land in a command line the user has half-typed, because under "Edit field
+    ownership" the field is 100% local and the far end sees no bytes until Enter. There is
+    no half-typed line at the far end to corrupt. The corruption always lands in front of a
+    whole submitted line, which is what both the capture and the measurement show.
+
+    **The second fault is independent of the first and was present in both runs**, including
+    the one where no command was corrupted: `^[[3;17R` sits in the buffer as literal
+    caret-notation text because it is the console echoing input nobody read. So it is
+    reachable whenever a reply goes unclaimed, whether or not a later submission collides
+    with it.
+
+    **The cmd-fidelity principle that closed 22.10 does not reach this entry**, and the
+    boundary is worth stating since the two were found in one capture. There, Acter was
+    passing through what the host console does with a backlog. Here the bytes are Acter's
+    own: `cmd.exe` never sends a cursor position report into its own input, and no
+    behaviour of the host console is being replicated. This stays a defect.
 
 
 23. B5, PowerShell adapter. Spec: none yet → specify first. Scope sketch: OSC 133
