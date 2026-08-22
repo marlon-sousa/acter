@@ -687,6 +687,23 @@ the answer to "what should we do now?".
     command's output. Heard as `ping` output in which each reply appears twice, and as
     cmd.exe's startup banner reappearing in the middle of a command's output.
 
+    **Severity, corrected 2026-08-22 by a capture from the user's manual pass, and it is
+    worse than "said twice".** The description above understates it: what interleaves is not
+    a repeat of the current command's own output but content from a *previous* command,
+    line by line, into the current block. Captured while interrupting `ping -n 20` in a
+    session that had earlier run `dir /s C:\Windows\System32` — the `ping` replies arrive
+    alternating with `fms.dll.mui`, `mlang.dll.mui`, `Total Files Listed`,
+    `27253 File(s)` and `5793 Dir(s)`, all of them rows from the finished `dir` scrolling
+    off the emulated screen and being settled with no record of having been forwarded.
+
+    The consequence is that **the buffer becomes unreadable**, which for this product is
+    the most serious failure mode there is: a screen reader user reviewing that block has
+    no way to tell which lines belong to the command they ran. It also blocked a manual
+    accessibility check in B4.1's PR — the tail after an interrupt could not be judged for
+    comfort because everything around it was debris from another command. On present
+    evidence this is the most severe open defect on the board and should be sequenced
+    accordingly, ahead of entries that merely add capability.
+
     The fix is not obvious enough to pick here, which is why this is an entry rather than
     a patch: the record could outlive the block (it is keyed by `LineId`, which is
     session-global and never reused), or settling could be ignored for lines whose text
