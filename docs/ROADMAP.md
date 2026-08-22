@@ -1073,21 +1073,39 @@ the answer to "what should we do now?".
     duplicated under its own heading, which is a good reason — but it takes the prompt with
     it, and the prompt was carrying the completion signal.
 
-    Three candidate answers, and the spec has to choose.
+    **The answer, argued by the user 2026-08-22 and agreed: read the prompt, always.** The
+    decisive point is not that terminal users are used to hearing it, though they are. It
+    is that **echo exclusion was never about the prompt at all.** There are three non-output
+    regions and the filter lumps them together, but DESIGN's stated reason — "so the command
+    line is never duplicated under its h2" — applies to `Region::CommandLine` alone, the
+    B..C echo of what the user typed. `Region::Prompt` was excluded as collateral, because
+    the rule is written as "Output only" rather than "not the echo". Nobody ever argued the
+    prompt should go; it fell inside a net aimed at something else.
 
-    *Always read the prompt as the block's last line.* Needs no new vocabulary and carries
-    the working directory. But every command then ends with the prompt read aloud, which is
-    noise after a command that already read its output, and it is the raw-terminal
-    experience this product exists to improve on.
+    That makes the change precise rather than a new feature. `Pump::wants` becomes
+    `region == Region::Output || region == Region::Prompt` for an integrated session, still
+    excluding `Region::CommandLine`, which is the only thing echo exclusion needed to
+    exclude.
 
-    *A success announcement*, fired when a command finished having read nothing. Quiet and
-    targeted, but it is a new pinned string and says strictly less than the prompt does.
+    The timing falls out for free. The prompt arrives immediately after `D` and before the
+    user has typed anything, so reading it in stream order *is* the completion signal, in
+    the position a listener wants it. It does not need retro-fitting as the previous
+    block's last line — it is simply the next thing that arrives. And the user's framing is
+    the right one: the prompt is not a command's output, it is the session's punctuation,
+    and a screen reader user has more use for audible punctuation than a sighted one
+    because they cannot glance to re-orient.
 
-    *Read the prompt only when the block produced no output.* After `cd projects` the user
-    hears `C:\projects>`, which confirms it ran and says where they now are — more useful
-    than "done" — and nothing is added when output was already read. The risk is a heavily
-    decorated prompt (git branch, timestamp) being long enough to be worse than a fixed
-    phrase.
+    Two alternatives are recorded as rejected. *A success announcement* fired when nothing
+    was read: a new pinned string that says strictly less than the prompt does. *Reading the
+    prompt only when the block produced no output*: proposed here first, and worse — it
+    makes the session's rhythm conditional on what the last command happened to print, so
+    the punctuation a listener is orienting by would come and go.
+
+    **The one thing to measure before believing it**: a decorated prompt. `oh-my-posh`, a
+    git-branch prompt or a timestamped one can be long, and heard after every command that
+    may genuinely be noise where `C:\Users\marlo>` is not. That is a profile concern rather
+    than a reason not to do it, but the listen has to happen with a realistic prompt and a
+    run of many commands, not one.
 
     Whichever is chosen, it needs a real listen before it is believed: this is a judgement
     about repetition and comfort across many commands in a row, which no unit test can
