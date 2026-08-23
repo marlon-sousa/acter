@@ -116,8 +116,19 @@ Three ways D can fail to arrive, each with defined behavior:
    host blocks the snippet). Detected at session start: the injected snippet emits
    markers on the first prompt; if none appear within a grace period the session is
    flagged and announced as **unintegrated**, and every command degrades to case 1
-   behavior — patience announcement, manual buffer review, no auto-read. Honest
-   degradation instead of wrong guesses.
+   behavior — patience announcement, manual buffer review, no exit code and no verdict.
+   Honest degradation instead of wrong guesses.
+
+   **Amended 2026-08-22 (B4.4): such a session is still read aloud.** This rule used to
+   end "no auto-read", and that made a real shell silent — everything rendered to the
+   buffer, none of it spoken, so a user had to go and review the buffer to learn what any
+   command did. The honest-degradation argument was written when the alternative was
+   *guessing*: a prompt matched by its shape, output attributed to a command by
+   inference. Repeating text that genuinely arrived is not a guess. It is the same
+   category as autoread everywhere else, and it is the distinction B4.1 turned on when
+   `command stopped` was removed — a claim about something Acter could not observe is a
+   guess, and text that was received is evidence. What degrades is what the session can
+   *conclude*, not whether it speaks.
 3. **Forged markers** (a program printing OSC 133 itself). The boundary tracker must
    be robust to nonsensical transitions (e.g. D with no open command is ignored);
    covered by property tests.
@@ -278,42 +289,52 @@ Consequences:
   The rule and that defect were the same rule.
 
   The test is now **positive evidence that the far end treated the line as a command
-  line**, in two parts, both of which must hold:
-  - **The far end echoed it**, matched exactly after trimming — the same matcher built
-    for correlating a block to the submission that caused it, used here to classify.
-    This is what rules out a password, which never echoes, and a bare Enter into a
-    running program, which produces no matching echo.
-  - **The prompt anchor reappeared**: the text that was on the cursor row at the moment
-    of submission is drawn again once the line's output ends. This is what rules out a
-    `y` at a `[y/N]`, whose prompt does not come back, and what admits a nested shell,
-    whose prompt does. It is an anchor rather than a pattern — it needs to know nothing
-    about what a prompt looks like, so it survives custom prompts, other languages,
-    containers and subshells alike.
+  line**: **the far end echoed it.** Matching is against the accumulated recent output
+  rather than a single chunk, because a pseudoconsole hands over whatever it has and a
+  command line wide enough to wrap may arrive across two line items; the window is
+  bounded by the longest line still waiting, and the match must begin at a word boundary.
+  A password never echoes, and a bare Enter into a running program produces no matching
+  echo, so both stay stdin.
 
-  Echo alone is deliberately not enough, and an earlier draft that leaned on it was
-  wrong: a `y` echoes exactly as `ls` does, because Acter writes both to the far end as
-  a line and the console echoes both. Echo proves the line was *read as a line*; only the
-  anchor says what the reader then did with it.
+  **A second part was specified and then withdrawn before it shipped**, and the reason is
+  worth keeping. It required that the **prompt anchor** — the text on the cursor row at
+  the moment of submission — be drawn again once the line's output ended, which is what
+  tells a nested shell (whose prompt comes back) from a `y` at a `[y/N]` (whose does
+  not). Tracing it against a plain session showed it regresses the commonest thing anyone
+  does: after `cd projects` the prompt is a different string, it never reappears, and the
+  next `dir` would be filed as stdin with no block and no heading — on every `cd`, to
+  protect a case that arises occasionally. There is no third option that keeps both: once
+  a command goes quiet leaving a new row on screen, "the prompt is back" and "the program
+  is asking a question" are indistinguishable without markers, and a changed prompt has no
+  reappearance to offer. The anchor is deferred to the entry that makes it pay, when an
+  integrated session has nested shells that would otherwise get no boundaries at all.
+
+  Until then a `y` echoes and therefore opens a block, which is what an unintegrated
+  session already did — a fix deferred, not a defect introduced. Echo proves the line was
+  *read as a line*; it does not say what the reader then did with it.
 
   Where OSC 133 markers reach, the question does not arise — a `B` after a submission is
   the far end saying the line is a command. The evidence test is the answer for far ends
   marker injection can never reach, which is every shell past the one Acter spawned.
-- **No evidence means no block**, and that is the direction this rule is permitted to
-  fail in. Absent evidence the line is stdin, exactly as before the amendment. Guessing
-  toward "command" would put an answer — possibly a secret — into a heading and into
-  history; guessing toward "stdin" gives a coarser block with nothing lost, nothing
-  duplicated and order preserved. The buffer must not mangle; structure may be imperfect.
-- **Evidence applies to a region, not to the line that produced it.** It arrives after
-  the fact, so nothing is opened retroactively: the first submission inside an open block
-  that satisfies both parts marks that block's far end as **proxying**, and every later
-  submission inside it opens a block of its own directly. The cost is one misfiled
-  command — the first one run inside a nested shell lands in the block of the command
-  that entered it, and by the history rule below it does not enter history. That is
-  accepted rather than fixed.
-- **The known false positive**, recorded rather than papered over: a program that asks
-  the same question in a loop — a per-file overwrite prompt is the common one — brings
-  its own anchor back and reads as a proxying shell. It costs a block per answer and an
-  answer in history. Passwords stay protected by the echo half of the test.
+- **No echo means no block**, and that is the direction this rule is permitted to fail
+  in. A line nobody echoed is stdin, and stays out of history. Guessing toward "command"
+  would put an answer — possibly a secret — into a heading and into history; guessing
+  toward "stdin" gives a coarser buffer with nothing lost, nothing duplicated and order
+  preserved. The buffer must not mangle; structure may be imperfect.
+- **The block opens where the echo arrives, not where Enter was pressed**, and nothing
+  is opened retroactively. Text that arrives before any echo belongs to no command the
+  user submitted — it is the shell's own prompt, or its banner — and gets a block with no
+  heading, which is what a session's first prompt produces. The echo itself stays in the
+  block that was open when the far end wrote it, because that is the row the prompt is
+  on: the buffer then reads the way a terminal transcript does, the prompt with the
+  command typed after it and the output beneath its own heading. Removing the echo
+  instead would mean holding every row back until it was complete, which delays speech
+  and strands text when a far end goes quiet mid-row.
+- **What this fixed, and it is why the rule changed at all.** A submission the far end
+  never read — a `docker run -t` holding a tty it never attaches stdin to — used to open
+  a block immediately, so the user got a heading with nothing under it, and a backlog
+  released later filled whichever block happened to be open last. No echo now means no
+  block, so the headings appear when the lines actually run.
 - **History exclusion:** a line enters history only if it opened a command block. Lines
   delivered as stdin are program input — answers, passwords, REPL input — and are never
   saved to history. The wording is untouched by the amendment above: it was always

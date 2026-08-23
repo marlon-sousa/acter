@@ -139,6 +139,7 @@ impl SessionService {
                 open: None,
                 interrupted: false,
                 lines: HashMap::new(),
+                row: String::new(),
                 last_line: None,
             }
             .run(),
@@ -297,6 +298,14 @@ struct Pump {
     /// saturation — and [`Pump::due`] removes the entry then. What this holds is the lines
     /// currently live on screen.
     lines: HashMap<LineId, bool>,
+    /// The tail of what the far end has appended lately, bounded by [`Pump::window`].
+    ///
+    /// Only [`Pump::boundary`] reads it: the far end's echo of a submitted line is
+    /// recognised from accumulated text rather than from one append, so that a read
+    /// cutting the echo in half cannot move the block boundary, and a command line wide
+    /// enough to wrap is still recognised when its continuation lands on a new line item
+    /// (spec B4.4).
+    row: String,
     /// The last line whose text was forwarded, so consecutive lines are separated the way
     /// the pacing policy counts them.
     last_line: Option<LineId>,
@@ -348,20 +357,7 @@ impl Pump {
                     id,
                     text,
                     revision,
-                } => {
-                    // The echo is read before anything else looks at the line, and it is
-                    // read from every region: what the prompt put on a row is what tells
-                    // a rewrite of that row apart from the command line on it.
-                    self.echo.observe(region, &text, revision);
-                    // `due` runs for every line whatever region it fell in: the
-                    // bookkeeping it keeps is what tells the echo's row from the
-                    // output's later on.
-                    if let Some(text) = self.due(id, text, revision)
-                        && self.wants(region)
-                    {
-                        self.output(id, text);
-                    }
-                }
+                } => self.line(region, id, text, revision).await,
                 BoundaryEvent::BlockEnded { exit } => self.close(exit).await,
                 BoundaryEvent::ScreenChanged(Screen::Alternate) => {
                     self.send(SessionInput::AltScreenEntered);
@@ -390,20 +386,22 @@ impl Pump {
 
     /// A submitted line: correlated, then written.
     ///
-    /// The id is queued for the block that will claim it — unless this session has no
-    /// shell integration, in which case no block is coming and the submission is itself
-    /// the boundary (decision 10). Either way the correlation is settled before the first
-    /// byte goes out, so no output can arrive with nowhere to go.
+    /// The id is queued for the block that will claim it, in every session. **Pressing
+    /// Enter no longer opens a block** — decision 10's second branch is gone (spec B4.4).
+    /// A submission the far end never reads is not a command that ran, and opening a block
+    /// for it produced the empty heading 22.10 found, with a later backlog filling
+    /// whichever block happened to be open last.
+    ///
+    /// What opens the block instead is the far end echoing the line, which is the same
+    /// evidence B6.1 already used to say *which* submission a block is running — the echo
+    /// does for a session with no markers what `C` does for one with them. The correlation
+    /// is still settled before the first byte goes out, so no output can arrive with
+    /// nowhere to go.
     async fn submit(&mut self, command_id: CommandId, line: &str) {
-        if self.integration == Integration::Unintegrated {
-            self.close(None).await;
-            self.open(command_id, None);
-        } else {
-            self.submitted.push_back(Submitted {
-                id: command_id,
-                line: line.to_owned(),
-            });
-        }
+        self.submitted.push_back(Submitted {
+            id: command_id,
+            line: line.to_owned(),
+        });
         self.write(format!("{line}{ENTER}").as_bytes());
         self.settle_running();
     }
@@ -459,6 +457,172 @@ impl Pump {
         let command_id = self.claim(echoed.as_deref());
         self.open(command_id, echoed);
         self.settle_running();
+    }
+
+    /// One line item, all the way to the frontend or deliberately not.
+    ///
+    /// Three questions, and their order is the whole of it (spec B4.4).
+    ///
+    /// **Is this append the far end echoing a line we submitted?** Then it is not output,
+    /// it is the boundary: the block it belongs to opens here and takes the echo as its
+    /// heading. Matching is B6.1's — exact after trimming, never fuzzy — and it is asked
+    /// only where the tracker has not already delimited the echo itself. In an integrated
+    /// session's `B..C` region [`Echo`] owns that job and [`Pump::wants`] already rejects
+    /// the text; inside a nested shell there is no such region at all, because the
+    /// proxying command never ends and everything the container writes lands in one open
+    /// `C..D`.
+    ///
+    /// **Has this text anywhere to go?** A line arriving with no block open is dropped
+    /// outright by the actor, which returns early when nothing is active — this product's
+    /// cardinal defect. So a block is opened for whatever is waiting, or minted if nothing
+    /// is, before a single character is forwarded. That is what makes deferring the open
+    /// until the echo admissible: it can never cost text.
+    ///
+    /// **Does this region belong to the open block?** [`Pump::wants`], unchanged.
+    async fn line(&mut self, region: Region, id: LineId, text: String, revision: LineRevision) {
+        // Read before anything else looks at the line, and read from every region: what
+        // the prompt put on a row is what tells a rewrite of that row apart from the
+        // command line on it.
+        self.echo.observe(region, &text, revision);
+
+        // `due` runs for every line whatever region it fell in: the bookkeeping it keeps
+        // is what tells the echo's row from the output's later on.
+        if let Some(due) = self.due(id, text.clone(), revision)
+            && self.wants(region)
+        {
+            // Nothing is forwarded into a session with no open block: `SessionActor`
+            // returns early when nothing is active, so that text would be dropped
+            // outright — this product's cardinal defect. Deferring the open until the
+            // echo is only admissible because of this.
+            //
+            // A fresh id rather than [`Pump::claim`], deliberately: claiming would take
+            // the submission whose echo this very row may be about to complete, and the
+            // boundary below would then find nothing to open. Text arriving before any
+            // echo belongs to no command the user submitted — it is the shell's own
+            // prompt, or its banner — and B6 already treats a block nobody submitted as
+            // a real block with real output.
+            if self.open.is_none() {
+                let command_id = CommandId(self.next_id.fetch_add(1, Ordering::SeqCst));
+                self.open(command_id, None);
+                self.settle_running();
+            }
+            self.output(id, due);
+        }
+
+        self.boundary(region, text, revision).await;
+    }
+
+    /// Whether the row this append landed on has now become the far end's echo of a line
+    /// we submitted — and if it has, the block that line runs in opens here.
+    ///
+    /// **Decided on the row's accumulated text, never on one append**, and that is the
+    /// whole reason this is separate from forwarding. A pseudoconsole hands over whatever
+    /// it has, so `dir /s` can arrive as one append or as six; matching an append would
+    /// make the boundary land wherever a read happened to cut, and
+    /// `every_session_says_the_same_thing_when_every_byte_is_its_own_read` exists to
+    /// forbid exactly that.
+    ///
+    /// **The echo is not suppressed, and that is deliberate.** It was already forwarded
+    /// above, to the block that was open when the far end wrote it — which is the row the
+    /// prompt is on, so the buffer reads the way a terminal transcript does: the prompt
+    /// with the command typed after it, and then the output beneath its own heading.
+    /// Removing it instead would mean holding every row back until it was complete,
+    /// which delays speech and strands text when a far end goes quiet mid-row. What the
+    /// original defect was about — the same line appearing twice *inside* one block, once
+    /// as the heading and once as its first content line — does not happen either way.
+    ///
+    /// Asked only where the tracker has not already delimited the echo itself. In an
+    /// integrated session's `B..C` region [`Echo`] owns that job and [`Pump::wants`]
+    /// already rejects the text; inside a nested shell there is no such region at all,
+    /// because the proxying command never ends and everything the container writes lands
+    /// in one open `C..D`.
+    async fn boundary(&mut self, region: Region, text: String, revision: LineRevision) {
+        if region == Region::CommandLine || revision != LineRevision::Appended {
+            self.row.clear();
+            return;
+        }
+        // Nothing is waiting for an echo, so nothing can be one.
+        let Some(window) = self.window() else {
+            self.row.clear();
+            return;
+        };
+
+        self.row.push_str(&text);
+        if self.row.len() > window {
+            let over = self.row.len() - window;
+            let cut = (over..=self.row.len())
+                .find(|at| self.row.is_char_boundary(*at))
+                .unwrap_or(self.row.len());
+            self.row.drain(..cut);
+        }
+
+        let Some(index) = self.echoed(&self.row) else {
+            return;
+        };
+        let submitted = self.adopt(index);
+        self.close(None).await;
+        self.open(submitted.id, Some(submitted.line));
+        self.settle_running();
+        self.row.clear();
+    }
+
+    /// How much of the recent stream could still be an echo: the longest line waiting for
+    /// one, plus the character in front of it that has to prove the match starts a word.
+    ///
+    /// **The window is what makes crossing rows safe.** A command line wider than the
+    /// screen wraps, and whether the wrap stays on one line item is the far end's
+    /// business rather than ours — measured 2026-08-22, `cmd.exe` swallows its
+    /// continuation into the same `LineId` and a container's `sh` starts a new one — so
+    /// the text is accumulated across consecutive appends instead of per row. Bounding it
+    /// by the longest pending submission is what stops that from becoming a search over
+    /// the whole session: nothing older than the longest line anyone is waiting for can
+    /// match, and a wrap inserts no characters, so a line split across rows joins back
+    /// into exactly what was submitted.
+    fn window(&self) -> Option<usize> {
+        self.submitted
+            .iter()
+            .map(|submitted| submitted.line.trim().len())
+            .max()
+            .filter(|longest| *longest > 0)
+            .map(|longest| longest + 1)
+    }
+
+    /// Which pending submission this row is the far end's echo of, if any.
+    ///
+    /// The row ends with the submitted line, because the echo is written after whatever
+    /// the prompt drew and nothing follows it. Trailing whitespace is ignored the way
+    /// B6.1's matcher ignores it, and the character before the match must not be
+    /// alphanumeric — without that, submitting `ls` would match an output row ending in
+    /// `dlls`. A blank submission matches nothing, or every empty row would be somebody's
+    /// bare Enter.
+    ///
+    /// It is a suffix rather than B6.1's whole-string equality because the prompt shares
+    /// the row: `C:\Users\marlo>dir /s` is one line, and the part of it that is evidence
+    /// is the end. The failure direction is a block that should not have opened — extra
+    /// structure — and never text that is hidden.
+    fn echoed(&self, row: &str) -> Option<usize> {
+        let row = row.trim_end();
+        self.submitted.iter().position(|submitted| {
+            let line = submitted.line.trim();
+            !line.is_empty()
+                && row.ends_with(line)
+                && row[..row.len() - line.len()]
+                    .chars()
+                    .next_back()
+                    .is_none_or(|before| !before.is_alphanumeric())
+        })
+    }
+
+    /// Takes that submission, retiring the ones before it.
+    ///
+    /// The same rule as [`Pump::claim`] and for the same reason: phase 1's shell is
+    /// serial, so a far end echoing a later line has already disposed of the earlier ones
+    /// as something other than command lines (spec B6.1, decision 3).
+    fn adopt(&mut self, index: usize) -> Submitted {
+        self.submitted.drain(..index);
+        self.submitted
+            .pop_front()
+            .expect("the index came from this queue")
     }
 
     /// Which submission this block is running.
@@ -537,21 +701,15 @@ impl Pump {
     /// it owns the session state, and a session whose markers already arrived is
     /// unaffected.
     ///
-    /// If a line was submitted during the grace period and no block ever claimed it, it
-    /// becomes the degraded session's open command now, so everything arriving from here
-    /// on has somewhere to go. Only the most recent one: the shell is serial, so the
-    /// submissions before it are over.
+    /// **It no longer adopts a submission** (spec B4.4). It used to open a block for the
+    /// most recent line submitted during the grace period, so that everything arriving
+    /// afterwards had somewhere to go. [`Pump::line`] now guarantees that for every path
+    /// rather than for this one — nothing is forwarded until a block exists — and adopting
+    /// here would open exactly the empty heading 22.10 was about, for a line the far end
+    /// may never have read.
     async fn grace_expired(&mut self) {
         self.integration = self.integration.grace_period_expired();
         self.send(SessionInput::GracePeriodExpired);
-        if self.integration == Integration::Unintegrated
-            && self.open.is_none()
-            && let Some(latest) = self.submitted.pop_back()
-        {
-            self.submitted.clear();
-            // No echo: a session with no markers has no B..C region for one to be in.
-            self.open(latest.id, None);
-        }
         self.settle_running();
     }
 
@@ -949,6 +1107,23 @@ mod tests {
                 .into_iter()
                 .filter_map(|event| match event {
                     SessionEvent::CommandStarted { command_line, .. } => Some(command_line),
+                    _ => None,
+                })
+                .collect()
+        }
+
+        /// Everything one block received, concatenated. The boundary now falls on the
+        /// far end's echo rather than on the submission, so which block a row landed in
+        /// is the question most of these tests are actually asking.
+        fn output_of(&self, command_id: CommandId) -> String {
+            self.events()
+                .into_iter()
+                .filter_map(|event| match event {
+                    SessionEvent::Output {
+                        command_id: at,
+                        text,
+                        ..
+                    } if at == command_id => Some(text),
                     _ => None,
                 })
                 .collect()
@@ -1408,8 +1583,7 @@ mod tests {
         assert!(
             !session
                 .events()
-                .iter()
-                .any(|event| matches!(event, SessionEvent::CommandFinished { .. })),
+                .contains(&SessionEvent::CommandFinished { command_id }),
             "and never also as finished: {:?}",
             session.events()
         );
@@ -1611,38 +1785,87 @@ mod tests {
     /// block there is no slot for the text, so the submission opens one and the next
     /// submission closes it.
     #[tokio::test]
-    async fn an_unintegrated_session_makes_the_submission_the_boundary() {
+    async fn an_unintegrated_session_makes_the_echo_the_boundary() {
         let session = Session::with_config(quick_grace()).await;
         session.advance_to(300).await;
 
+        // The shape a real shell produces: a prompt is drawn, and the echo of what the
+        // user submits is written onto that same row.
+        session.emit(vec![line(1, "C:\\>")]).await;
         let first = session.submit("one").await;
         session
             .emit(vec![line(1, "one"), line(2, "some output")])
             .await;
         session.advance_to(1_000).await;
 
-        assert_eq!(session.started(), vec![first]);
         assert_eq!(
-            session.rendered(),
-            "one\nsome output",
-            "every line reaches the buffer, the echo it can no longer exclude included"
+            session.output_of(first),
+            "some output",
+            "the far end's echo of the submitted line is the boundary: the block opens \
+             *after* it, so what is under the heading is the command's output and not the \
+             command line read back at the user (spec B4.4)"
         );
-        assert!(
-            session.announcements().is_empty(),
-            "and nothing is read aloud: {:?}",
+        assert_eq!(
+            session.headings().last(),
+            Some(&Some("one".to_owned())),
+            "and the heading is the echo the far end produced, not the frontend's guess"
+        );
+        assert_eq!(
+            session.announcements(),
+            vec![
+                Announcement::ReadAloud {
+                    text: "C:\\>one".to_owned()
+                },
+                Announcement::ReadAloud {
+                    text: "some output".to_owned()
+                }
+            ],
+            "a session with no integration now reads aloud, which is B4.4's whole point — \
+             the prompt with the command echoed onto it, and then the output: {:?}",
             session.announcements()
         );
 
         let second = session.submit("two").await;
+        session.emit(vec![line(3, "C:\\>"), line(3, "two")]).await;
         session.advance_to(2_000).await;
 
-        assert_eq!(session.started(), vec![first, second]);
+        assert_eq!(
+            session.started().last(),
+            Some(&second),
+            "the next echo opens the next block: {:?}",
+            session.events()
+        );
         assert!(
             session
                 .events()
                 .contains(&SessionEvent::CommandFinished { command_id: first }),
-            "the previous command closed when the next line was submitted: {:?}",
+            "and closes the one before it: {:?}",
             session.events()
+        );
+    }
+
+    /// The other half of the same rule, and 22.10's defect: pressing Enter is not evidence
+    /// of anything. A far end that never reads the line — a `docker run -t` holding a tty
+    /// it never attaches stdin to — leaves nothing to echo, and a heading with nothing
+    /// under it tells the user a command ran when none did.
+    #[tokio::test]
+    async fn a_submission_nothing_echoes_opens_no_block() {
+        let session = Session::with_config(quick_grace()).await;
+        session.advance_to(300).await;
+
+        session.submit("ls").await;
+        session.submit("ls").await;
+        session.advance_to(2_000).await;
+
+        assert!(
+            session.started().is_empty(),
+            "no block opens for a line the far end never read: {:?}",
+            session.events()
+        );
+        assert!(
+            session.rendered().is_empty(),
+            "and there is nothing under it: {:?}",
+            session.rendered()
         );
     }
 
@@ -1660,15 +1883,24 @@ mod tests {
         let session = Session::with_config(quick_grace()).await;
         session.advance_to(300).await;
 
+        // The prompt, then the echo written onto it, which is what opens a block now that
+        // pressing Enter does not (spec B4.4).
+        session.emit(vec![line(9, "C:\\>")]).await;
         session.submit("dir /s").await;
         session
-            .emit(vec![line(1, "fms.dll.mui"), line(2, "mlang.dll.mui")])
+            .emit(vec![
+                line(9, "dir /s"),
+                line(1, "fms.dll.mui"),
+                line(2, "mlang.dll.mui"),
+            ])
             .await;
         session.advance_to(1_000).await;
 
-        session.submit("ping").await;
+        session.emit(vec![line(10, "C:\\>")]).await;
+        let ping = session.submit("ping").await;
         session
             .emit(vec![
+                line(10, "ping"),
                 line(3, "reply one"),
                 settled(1, "fms.dll.mui"),
                 line(4, "reply two"),
@@ -1678,11 +1910,8 @@ mod tests {
         session.advance_to(2_000).await;
 
         assert_eq!(
-            session.outputs(),
-            vec![
-                "fms.dll.mui\nmlang.dll.mui".to_owned(),
-                "reply one\nreply two".to_owned(),
-            ],
+            session.output_of(ping),
+            "reply one\nreply two",
             "the second block holds its own output and nothing the first one left on \
              screen: {:?}",
             session.outputs()
@@ -1698,18 +1927,22 @@ mod tests {
         let session = Session::with_config(quick_grace()).await;
         session.advance_to(300).await;
 
+        session.emit(vec![line(9, "C:\\>")]).await;
         session.submit("first").await;
         session
             .emit(vec![
+                line(9, "first"),
                 line(1, "downloading"),
                 rewritten(1, "downloading done"),
             ])
             .await;
         session.advance_to(1_000).await;
 
-        session.submit("second").await;
+        session.emit(vec![line(10, "C:\\>")]).await;
+        let second = session.submit("second").await;
         session
             .emit(vec![
+                line(10, "second"),
                 line(2, "its own output"),
                 settled(1, "downloading done"),
             ])
@@ -1717,8 +1950,8 @@ mod tests {
         session.advance_to(2_000).await;
 
         assert_eq!(
-            session.outputs(),
-            vec!["downloading".to_owned(), "its own output".to_owned()],
+            session.output_of(second),
+            "its own output",
             "what the first block was owed stopped being owed when it closed: {:?}",
             session.outputs()
         );
@@ -1778,16 +2011,28 @@ mod tests {
     /// A line submitted while the shell might still have been starting: when the grace
     /// period resolves against it, that command opens rather than being stranded.
     #[tokio::test]
-    async fn a_line_submitted_during_the_grace_period_opens_when_it_expires() {
+    async fn a_line_submitted_during_the_grace_period_opens_when_it_is_echoed() {
         let session = Session::with_config(quick_grace()).await;
 
         let command_id = session.submit("early").await;
         session.advance_to(300).await;
-        session.emit(vec![line(1, "output after the flag")]).await;
+        // **B4.4 moved what resolves this.** The grace period expiring used to adopt the
+        // most recent submission so that later output had somewhere to go; the far end
+        // echoing the line does it now, and nothing is forwarded before a block exists
+        // either way. The submission is no longer stranded — it is simply waiting for the
+        // evidence every other submission waits for.
+        session
+            .emit(vec![line(1, "early"), line(2, "output after the flag")])
+            .await;
         session.advance_to(1_000).await;
 
-        assert_eq!(session.started(), vec![command_id]);
-        assert_eq!(session.rendered(), "output after the flag");
+        assert_eq!(
+            session.started().last(),
+            Some(&command_id),
+            "the submission opens its block when its echo arrives: {:?}",
+            session.events()
+        );
+        assert_eq!(session.output_of(command_id), "output after the flag");
     }
 
     /// **B4.1, and the reason B6 decision 10's amendment came back out.** An interrupt in
@@ -1877,15 +2122,22 @@ mod tests {
     /// closes the interrupted command as stopped, not as finished with an invented exit
     /// code 0 — which is the mis-announcement `CommandInterrupted` exists to prevent.
     #[tokio::test]
-    async fn the_next_submission_closes_an_interrupted_command_as_stopped() {
+    async fn the_next_commands_echo_closes_an_interrupted_command_as_stopped() {
         let session = Session::with_config(quick_grace()).await;
         session.advance_to(300).await;
 
+        session.emit(vec![line(1, "C:\\>")]).await;
         let command_id = session.submit("forever").await;
-        session.emit(vec![line(1, "still working")]).await;
+        session
+            .emit(vec![line(1, "forever"), line(2, "still working")])
+            .await;
         session.press(ctrl('c')).await;
 
+        // The submission is no longer the boundary; the far end echoing the next line is
+        // (spec B4.4). What is under test is unchanged — that the command which was
+        // interrupted closes as stopped and never also as finished.
         session.submit("next").await;
+        session.emit(vec![line(3, "C:\\>"), line(3, "next")]).await;
         session.advance_to(2_000).await;
 
         assert!(
@@ -1898,8 +2150,7 @@ mod tests {
         assert!(
             !session
                 .events()
-                .iter()
-                .any(|event| matches!(event, SessionEvent::CommandFinished { .. })),
+                .contains(&SessionEvent::CommandFinished { command_id }),
             "and never also as finished: {:?}",
             session.events()
         );

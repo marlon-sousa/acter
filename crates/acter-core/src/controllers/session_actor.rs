@@ -22,7 +22,7 @@ use tokio::sync::mpsc;
 use crate::entities::{ReadMode, UnspokenText};
 use crate::policies::{PacingAction, measure, on_command_end, on_output, on_wake};
 use crate::{
-    Announcement, Clock, CommandId, EventSink, ExitCode, Integration, Mode, PacingConfig,
+    Announcement, Clock, CommandId, EventSink, ExitCode, Mode, PacingConfig,
     PacingState, SessionEvent, SessionState, Timer,
 };
 
@@ -360,19 +360,20 @@ impl SessionActor {
                     // Rendered, not spoken: the babble guard went quiet, so the buffer
                     // keeps up and the listener is left alone.
                     ReadMode::Quiet => {}
-                    // Read aloud, unless this session has no shell integration. There
-                    // the span is not a command's output but everything that arrived
-                    // between two submissions, prompt and echo included, and DESIGN's
-                    // reliability case 2 Decided that such a session degrades to case 1:
-                    // patience announcement, manual buffer review, no auto-read. The
-                    // text is still taken, so the policy's counting is identical either
-                    // way and the status announcements below — too big, still running,
-                    // output continues — keep working. In a degraded session the
-                    // listener gets status and never content (spec B6, decision 10).
+                    // Read aloud, in every session (spec B4.4). DESIGN's reliability case
+                    // 2 used to say a session with no integration degrades to no
+                    // auto-read, and that argument was written when the alternative was
+                    // *guessing* — a prompt matched by its shape, output attributed by
+                    // inference. Repeating text that genuinely arrived is not a guess; it
+                    // is the same category as autoread everywhere else, which is the
+                    // distinction B4.1 turned on when `command stopped` came out. A
+                    // degraded session that renders everything and speaks none of it is
+                    // silent to the only user this product has.
+                    //
+                    // The rest of case 2 stands: no exit code, no verdict, and the
+                    // patience announcement still fires.
                     ReadMode::Auto => {
-                        if let Some(text) = text
-                            && self.session.integration != Integration::Unintegrated
-                        {
+                        if let Some(text) = text {
                             self.announce(Announcement::ReadAloud { text });
                         }
                     }
@@ -874,10 +875,18 @@ mod tests {
         );
         clock.advance_to(config.quiescence);
         actor.wake_pacing();
-        assert!(
-            sink.announcements().is_empty(),
-            "an unintegrated session reads nothing aloud: {:?}",
-            sink.announcements()
+        // **Inverted by B4.4, deliberately kept rather than deleted.** This asserted that
+        // an unintegrated session reads nothing aloud, which was DESIGN's reliability case
+        // 2 before B4.4 amended it: text that genuinely arrived is evidence, not the guess
+        // the no-auto-read rule was protecting against, and a session that renders
+        // everything while speaking none of it is silent to the only user this product
+        // has.
+        assert_eq!(
+            sink.announcements(),
+            vec![Announcement::ReadAloud {
+                text: "degraded\n".to_owned()
+            }],
+            "a session with no integration reads its output aloud"
         );
 
         actor.handle(SessionInput::MarkersObserved);
@@ -891,11 +900,15 @@ mod tests {
 
         assert_eq!(
             sink.announcements(),
-            vec![Announcement::ReadAloud {
-                text: "recovered
-"
-                .to_owned()
-            }]
+            vec![
+                Announcement::ReadAloud {
+                    text: "degraded\n".to_owned()
+                },
+                Announcement::ReadAloud {
+                    text: "recovered\n".to_owned()
+                }
+            ],
+            "and goes on reading aloud once markers recover it"
         );
         assert_eq!(
             sink.events()

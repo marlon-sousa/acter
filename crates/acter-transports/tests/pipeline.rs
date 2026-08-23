@@ -758,11 +758,12 @@ async fn a_session_with_no_markers_degrades_honestly_instead_of_going_silent() {
     assert!(
         pipeline.events().contains(&SessionEvent::CommandStarted {
             command_id: CommandId(1),
-            // No markers means no B..C region, so there is no echo to read and the
-            // frontend keeps the heading its own ack gave the block.
-            command_line: None,
+            // **The far end's echo is the boundary now** (spec B4.4), and it is also the
+            // heading: there is no `B..C` region without markers, but the echo is still
+            // on the wire, and the row it was written onto is what opens this block.
+            command_line: Some("forever".to_owned()),
         }),
-        "the submission is the boundary, so the command the user typed exists: {:?}",
+        "the echo is the boundary, so the command the user typed exists: {:?}",
         pipeline.events()
     );
     assert!(
@@ -781,12 +782,16 @@ async fn a_session_with_no_markers_degrades_honestly_instead_of_going_silent() {
         "patience still fires — that is what degrading to case 1 means: {:?}",
         pipeline.announcements()
     );
+    // **And it is read aloud, which B4.4 inverted.** Degrading to case 1 still means no
+    // exit code and no verdict, and the patience announcement above is still what tells a
+    // listener the command is going; what it no longer means is silence. Repeating text
+    // that genuinely arrived is evidence, not the guess the old rule was avoiding.
     assert!(
-        !pipeline
-            .announcements()
-            .iter()
-            .any(|announcement| matches!(announcement, Announcement::ReadAloud { .. })),
-        "and nothing is read aloud: {:?}",
+        pipeline.announcements().iter().any(|announcement| matches!(
+            announcement,
+            Announcement::ReadAloud { text } if text.contains("phase one")
+        )),
+        "and its output is read aloud: {:?}",
         pipeline.announcements()
     );
 }
@@ -992,14 +997,17 @@ async fn every_case_in_the_suite_actually_produces_a_session() {
 
         if case.far_end == "unmarked builtin" {
             assert!(substance.unintegrated, "{}: {substance:?}", case.name);
-            assert_eq!(substance.blocks.len(), 1, "{}: {substance:?}", case.name);
+            // Two, since B4.4: the shell's own prompt arrives before anything has been
+            // submitted, so it belongs to no command and gets a block of its own, and the
+            // command's block opens when the far end echoes it.
+            assert_eq!(substance.blocks.len(), 2, "{}: {substance:?}", case.name);
             assert!(
-                !substance.blocks[0].output.is_empty(),
+                !substance.blocks[1].output.is_empty(),
                 "{}: a degraded session still puts its text in the buffer: {substance:?}",
                 case.name
             );
             assert!(
-                !substance.blocks[0].closed,
+                !substance.blocks[1].closed,
                 "{}: and a command that never ends structurally never closes",
                 case.name
             );
@@ -1033,7 +1041,7 @@ async fn every_case_in_the_suite_actually_produces_a_session() {
 /// submission closes it — which is exactly decision 10's model, and why the assertion
 /// here is about what was said rather than about the exit code.
 #[tokio::test]
-async fn a_completed_command_in_an_unintegrated_session_is_never_read_aloud() {
+async fn a_completed_command_in_an_unintegrated_session_is_read_aloud() {
     let mut pipeline = Pipeline::over(
         Box::new(Unmarked::new(TranscriptShell::builtin())),
         Chunking::Whole,
@@ -1052,12 +1060,20 @@ async fn a_completed_command_in_an_unintegrated_session_is_never_read_aloud() {
         pipeline.rendered().contains("small"),
         "echo exclusion is lost with the markers, so the echoed line is in the buffer too"
     );
+    // **Inverted by B4.4.** This asserted that neither the echo nor the output was read
+    // aloud, which was DESIGN's reliability case 2 before B4.4 amended it. A session that
+    // renders everything and speaks none of it is silent to the only user this product
+    // has, and repeating text that genuinely arrived is evidence rather than the guess the
+    // no-auto-read rule was written to avoid.
     assert!(
-        !pipeline
+        pipeline
             .announcements()
             .iter()
-            .any(|announcement| matches!(announcement, Announcement::ReadAloud { .. })),
-        "and neither the echo nor the output is read aloud: {:?}",
+            .any(|announcement| matches!(
+                announcement,
+                Announcement::ReadAloud { text } if text.contains("hello from acter")
+            )),
+        "the output of a session with no integration is read aloud: {:?}",
         pipeline.announcements()
     );
 }
@@ -1091,8 +1107,11 @@ async fn a_finished_commands_rows_do_not_scroll_into_the_next_block() {
     pipeline.run_until(6_000).await;
 
     let substance = pipeline.substance();
-    let [flood, after] = &substance.blocks[..] else {
-        panic!("two submissions, two blocks: {substance:?}");
+    // Three blocks, since B4.4: the shell's prompt arrives before anything is submitted
+    // and belongs to no command, then each submission's block opens when the far end
+    // echoes it.
+    let [_prompt, flood, after] = &substance.blocks[..] else {
+        panic!("a prompt block and two submissions: {substance:?}");
     };
 
     let flooded: Vec<&str> = flood.output.lines().map(str::trim_end).collect();

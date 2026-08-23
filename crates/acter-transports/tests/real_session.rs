@@ -20,8 +20,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use acter_core::{
-    Clock, CommandId, EventSink, PacingConfig, SessionApi, SessionEvent, SessionId, SessionService,
-    Timer,
+    Clock, CommandId, EventSink, Key, KeyPress, PacingConfig, SessionApi, SessionEvent, SessionId,
+    SessionService, Timer,
 };
 use acter_term::AlacrittyEngine;
 use acter_transports::LocalPty;
@@ -149,6 +149,36 @@ impl RealSession {
                 _ => None,
             })
             .collect()
+    }
+
+    /// The heading one block opened with: `None` if it never opened, `Some(None)` if it
+    /// opened without the far end saying what it was running.
+    fn heading_of(&self, command_id: CommandId) -> Option<Option<String>> {
+        self.events
+            .0
+            .lock()
+            .expect("recorder poisoned")
+            .iter()
+            .find_map(|event| match event {
+                SessionEvent::CommandStarted {
+                    command_id: at,
+                    command_line,
+                } if *at == command_id => Some(command_line.clone()),
+                _ => None,
+            })
+    }
+
+    /// What the frontend sends for Ctrl+C: the key, not the meaning (spec B6, decision 4).
+    fn ctrl_c(&self) {
+        self.session.send_key(
+            SESSION,
+            KeyPress {
+                key: Key::Char('c'),
+                ctrl: true,
+                shift: false,
+                alt: false,
+            },
+        );
     }
 
     /// Everything the session said, whichever block it belonged to. Only ever used to
@@ -331,3 +361,71 @@ fn docker(args: &[&str]) -> bool {
         .status()
         .is_ok_and(|status| status.success())
 }
+
+/// B4.4, against a real `cmd.exe`: the far end's echo opens the block and becomes its
+/// heading, rather than arriving under the heading as the first thing the command printed.
+///
+/// This is the duplication a listener actually hits — measured through NVDA on
+/// 2026-08-22, every block showed the submitted line twice — and it cannot be pinned
+/// anywhere below this file, because it depends on ConPTY really echoing what was written
+/// to it onto the row the prompt was drawn on.
+#[tokio::test]
+#[ignore = "spawns a real shell"]
+async fn a_real_shells_echo_opens_the_block_and_becomes_its_heading() {
+    let session = RealSession::cmd();
+    session.flagged().await;
+
+    let line = format!("echo {AFTER}");
+    let command = session.submit(&line);
+    let output = session.until(command, AFTER, PATIENCE).await;
+
+    assert_eq!(
+        session.heading_of(command),
+        Some(Some(line.clone())),
+        "the heading is the echo the shell produced: {:?}",
+        session.heading_of(command)
+    );
+    assert!(
+        !output.contains(&line),
+        "and the command line is not also the block's first content line: {output:?}"
+    );
+}
+
+/// 22.10, folded into B4.4: a backlog released all at once gets one block per submission,
+/// each holding its own output.
+///
+/// Before this, `ping` held the console without reading it, the two queued lines produced
+/// two headings with nothing under them, and the interrupt released both at once into
+/// whichever block happened to be open last — measured 2026-08-22 as two empty blocks and
+/// a third holding two commands' echoes and output. Windows does not discard typed-ahead
+/// input on Ctrl+C and a real `cmd.exe` behaves the same way, so what is fixed here is the
+/// shape rather than the ordering: a block opens when the far end echoes a line, so the
+/// blocks appear when the lines actually run.
+#[tokio::test]
+#[ignore = "spawns a real shell"]
+async fn a_backlog_released_by_an_interrupt_fills_its_own_blocks() {
+    let session = RealSession::cmd();
+    session.flagged().await;
+
+    let held = session.submit("ping -n 20 127.0.0.1");
+    session.until(held, "Pinging", PATIENCE).await;
+
+    let queued: Vec<CommandId> = (1..=2)
+        .map(|n| session.submit(&format!("echo acter-backlog-{n}")))
+        .collect();
+    tokio::time::sleep(Duration::from_millis(750)).await;
+
+    session.ctrl_c();
+    session.until(queued[1], "acter-backlog-2", PATIENCE).await;
+
+    for (index, command) in queued.iter().enumerate() {
+        let wanted = format!("acter-backlog-{}", index + 1);
+        assert!(
+            session.output_of(*command).contains(&wanted),
+            "each released submission holds its own output, not its sibling's: \
+             {wanted} was not in {:?}",
+            session.output_of(*command)
+        );
+    }
+}
+
