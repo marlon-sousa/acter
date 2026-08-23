@@ -809,9 +809,14 @@ the answer to "what should we do now?".
     is the possibility that would make the flake a genuine bug, and it is the one the rate
     difference is evidence for.
 
-22.4. B4.4, autoread in a session with no boundaries. Spec: none yet → specify first.
-    **Unblocked 2026-08-22**: the DESIGN decision this entry was waiting on is taken (see
-    "Answered" below), and 22.10 has folded into it. Next step here is writing the spec.
+22.4. **Done** — B4.4, autoread in a session with no boundaries. Spec:
+    [b4.4-autoread-with-no-boundaries.md](specs/b4.4-autoread-with-no-boundaries.md).
+    **Absorbs 22.10**, whose block-shape half is delivered here. A real shell now reads its
+    output aloud, the far end's echo opens the block and becomes its heading instead of
+    arriving under it as a duplicate, and a submission nothing ever read opens no block.
+    Two DESIGN amendments rode with it: reliability case 2 lost "no auto-read", and the
+    evidence rule for opening a block narrowed to the echo alone — see the spec for why the
+    prompt anchor was withdrawn before it shipped.
     **The user's idea, 2026-08-22**, and the gap B4.1's manual pass made concrete: with a
     real shell, Acter today reads *nothing* aloud, so a user who stops a program hears
     silence and has to go and review the buffer to learn what happened.
@@ -883,10 +888,19 @@ the answer to "what should we do now?".
 
     **Answered 2026-08-22 in a design conversation: yes, and the amendment is in DESIGN
     under "Edit field ownership".** The test is now positive evidence that the far end
-    treated the line as a command line, in two parts that must both hold — the far end
-    **echoed** it, exact after trimming; and the **prompt anchor** reappeared, the anchor
-    being the text on the cursor row at the moment of submission. Absent evidence the line
-    is stdin, exactly as before, so `y` and passwords are untouched.
+    treated the line as a command line: it **echoed** it. A line nobody echoed is stdin, so
+    `y` and passwords are untouched.
+
+    **The second part was withdrawn during implementation, before it shipped.** The rule as
+    first agreed also required the **prompt anchor** — the text on the cursor row at the
+    moment of submission — to reappear. Tracing it against a plain session showed it
+    regresses the commonest thing anyone does: after `cd projects` the prompt is a
+    different string, never reappears, and the next `dir` would be filed as stdin with no
+    block and no heading, on every `cd`, to protect a case that arises occasionally. There
+    is no third option that keeps both — once a command goes quiet leaving a new row on
+    screen, "the prompt is back" and "the program is asking a question" are
+    indistinguishable without markers. The anchor is deferred to the entry where an
+    integrated session's nested shells would otherwise get no boundaries at all.
 
     Three things the conversation settled that this entry had wrong or had left open, all
     now recorded in DESIGN:
@@ -1306,10 +1320,13 @@ the answer to "what should we do now?".
     about repetition and comfort across many commands in a row, which no unit test can
     answer and one command cannot either.
 
-22.10. **Closed 2026-08-22, not a defect** — an interrupt can release a backlog of
-    submitted lines into one block. No spec and no PR: measured, then ruled by the user
-    against a real `cmd.exe` window, which does the same thing. What remains of it is
-    22.4's. **Found by the user 2026-08-22**, driving a real `cmd.exe`
+22.10. **Closed 2026-08-22** — an interrupt can release a backlog of submitted lines into
+    one block. The interrupt half is not a defect: measured, then ruled by the user against
+    a real `cmd.exe` window, which does the same thing. The block-shape half was delivered
+    by 22.4, where a block opens on the far end's echo, so a released backlog produces one
+    filled block per submission instead of two empty headings and one holding everything —
+    pinned by `a_backlog_released_by_an_interrupt_fills_its_own_blocks` against a real
+    shell. **Found by the user 2026-08-22**, driving a real `cmd.exe`
     session while the agent observed through NVDA in live capture.
 
     Reproduced with `docker run -t alpine` — deliberately `-t` and not `-i`, which gives
