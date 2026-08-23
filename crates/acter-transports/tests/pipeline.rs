@@ -1068,13 +1068,10 @@ async fn a_completed_command_in_an_unintegrated_session_is_read_aloud() {
     // has, and repeating text that genuinely arrived is evidence rather than the guess the
     // no-auto-read rule was written to avoid.
     assert!(
-        pipeline
-            .announcements()
-            .iter()
-            .any(|announcement| matches!(
-                announcement,
-                Announcement::ReadAloud { text } if text.contains("hello from acter")
-            )),
+        pipeline.announcements().iter().any(|announcement| matches!(
+            announcement,
+            Announcement::ReadAloud { text } if text.contains("hello from acter")
+        )),
         "the output of a session with no integration is read aloud: {:?}",
         pipeline.announcements()
     );

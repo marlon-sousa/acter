@@ -428,4 +428,3 @@ async fn a_backlog_released_by_an_interrupt_fills_its_own_blocks() {
         );
     }
 }
-

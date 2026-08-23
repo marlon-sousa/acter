@@ -538,7 +538,11 @@ impl Pump {
             Some((_, accumulated)) => accumulated.push_str(&text),
             None => self.held = Some((id, text)),
         }
-        if self.held.as_ref().is_some_and(|(_, held)| held.len() > window) {
+        if self
+            .held
+            .as_ref()
+            .is_some_and(|(_, held)| held.len() > window)
+        {
             self.spill().await;
         }
     }

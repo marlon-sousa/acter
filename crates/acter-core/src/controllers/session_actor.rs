@@ -22,8 +22,8 @@ use tokio::sync::mpsc;
 use crate::entities::{ReadMode, UnspokenText};
 use crate::policies::{PacingAction, measure, on_command_end, on_output, on_wake};
 use crate::{
-    Announcement, Clock, CommandId, EventSink, ExitCode, Mode, PacingConfig,
-    PacingState, SessionEvent, SessionState, Timer,
+    Announcement, Clock, CommandId, EventSink, ExitCode, Mode, PacingConfig, PacingState,
+    SessionEvent, SessionState, Timer,
 };
 
 /// A domain fact the actor is told about. Deliberately not bytes: extraction, OSC 133
