@@ -148,15 +148,20 @@ describe('submit', () => {
     expect(editField.clearedCount).toBe(1);
   });
 
-  it('ignores empty and whitespace-only input', async () => {
+  // Inverted in B4.9, not deleted: this used to assert that an empty or whitespace-only
+  // field was dropped where it stood, which is why a bare Enter did nothing at all — no
+  // bytes, so the shell never redrew its prompt and the user heard silence. It goes to
+  // the far end now, and opens no block, because an empty submission matches no echo: a
+  // bare Enter is a re-orient gesture rather than a command.
+  it('submits empty and whitespace-only input, and opens no block for it', async () => {
     const { backend, buffer, editField, controller } = makeApp();
     editField.text = '   ';
 
     await controller.submit();
 
-    expect(backend.submitted).toEqual([]);
+    expect(backend.submitted).toEqual(['']);
     expect(buffer.opened).toEqual([]);
-    expect(editField.clearedCount).toBe(0);
+    expect(editField.clearedCount).toBe(1);
   });
 });
 

@@ -347,12 +347,50 @@ Consequences:
 - **The block opens where the echo arrives, not where Enter was pressed**, and nothing
   is opened retroactively. Text that arrives before any echo belongs to no command the
   user submitted — it is the shell's own prompt, or its banner — and gets a block with no
-  heading, which is what a session's first prompt produces. The echo itself stays in the
-  block that was open when the far end wrote it, because that is the row the prompt is
-  on: the buffer then reads the way a terminal transcript does, the prompt with the
-  command typed after it and the output beneath its own heading. Removing the echo
-  instead would mean holding every row back until it was complete, which delays speech
-  and strands text when a far end goes quiet mid-row.
+  heading, which is what a session's first prompt produces.
+
+  **"No heading" means no heading element at all — clarified 2026-08-23 (B4.9), after a
+  listener met the other reading.** The frontend had been rendering such a block as an
+  *empty* level 2 heading, which is a different thing and a worse one: heading navigation
+  lands on it and it announces nothing, so the one navigation the buffer exists to offer
+  runs into a dead end. The text still reaches the buffer and is still read aloud; what
+  it does not get is a heading with nothing in it. Headings are commands, and text no
+  command accounts for is text.
+
+  **The echo itself is held and dropped — amended 2026-08-23 (B4.9), reversing the half
+  of this bullet that let it through.** It used to stay in the block that was open when
+  the far end wrote it, on the grounds that removing it would mean holding every row back
+  until it was complete, delaying speech and stranding text when a far end goes quiet
+  mid-row. That objection is sound about a rule that holds every row, and it is not this
+  rule. A listener heard what it cost: every command after the first read the user's own
+  typing back at them before answering it, and inside a container every line typed did.
+
+  **What replaces it is positional and exact, not a comparison.** At the instant Enter is
+  pressed the far end has drawn its prompt and its cursor is on that row, and the only
+  thing that reaches the far end is what Acter wrote — so everything appended to *that row
+  after that instant* is the echo. Only that row is held, bounded by the longest line
+  still waiting, and anything past either bound is published at once. Comparing a row's
+  text against the heading was the other candidate and is rejected: running `dir` twice
+  makes `dir` both a heading and a plausible output row, and equality would hide output,
+  which is the cardinal defect. Position cannot.
+
+  It needs no markers, which is the point — it reaches inside a container, an `ssh`, a
+  `wsl` and a REPL, where OSC 133 cannot. **The prompt survives it** and is still the last
+  thing announced after every command, because the prompt is forwarded before Enter is
+  pressed and only what lands after it is held.
+
+  Two shapes stay uncovered and fail toward an echo spoken once, never toward hidden
+  text: a far end that ends the row before the echo starts, and the second of two lines
+  typed ahead, whose echo lands on a row the far end chooses only after finishing the
+  first.
+- **An empty submission is sent and opens no block — Decided 2026-08-23 (B4.9).** A bare
+  Enter is a re-orient gesture rather than a command: it goes to the far end like any
+  other line, and the prompt the shell draws in reply is the answer to it. It matches no
+  echo, so by the rule above it opens no block, and it is carried in no correlation queue
+  — an id that can never be claimed would be taken by a later block, which is the drift
+  correlation exists to prevent. It is also ordinary input to a running program: a REPL, a
+  "press Enter to continue". The frontend used to discard it, so nothing was written, the
+  shell never redrew its prompt, and a user asking where they were heard silence.
 - **What this fixed, and it is why the rule changed at all.** A submission the far end
   never read — a `docker run -t` holding a tty it never attaches stdin to — used to open
   a block immediately, so the user got a heading with nothing under it, and a backlog
@@ -377,6 +415,12 @@ Consequences:
   have opened is extra structure, and a line that is never spoken is the cardinal defect.
   The prompt region is content in such a shell, which is the one exception to "block
   content is C..D" and is stated with its reason under command boundaries above.
+
+  **Amended 2026-08-23 (B4.9).** The unmarked half is positional too, and by the same
+  test one layer out: everything appended to the row the submission is pending on is the
+  echo. The two halves are now one rule chosen by whether a region exists to express it,
+  which is what makes the seam between a marked shell and the container it launched
+  disappear.
 
 ## Output pacing: quiescence, patience, follow mode — **Decided**
 

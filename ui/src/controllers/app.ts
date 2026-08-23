@@ -97,12 +97,20 @@ export class AppController {
 
   async submit(): Promise<void> {
     const text = this.editField.value().trim();
+    // An empty field is submitted like any other line (spec B4.9). It used to return
+    // here, so nothing was written, the shell never redrew its prompt and the user heard
+    // nothing at all — and a blank line is ordinary input to a running program besides,
+    // a REPL or a "press Enter to continue". What it does not do is open a block: an
+    // empty submission matches no echo, so a bare Enter is a re-orient gesture rather
+    // than a command, and the prompt it brings back is the answer to it.
+    const ack = await this.backend.submitCommand(text);
     if (text === '') {
+      this.editField.clear();
       return;
     }
     // The block appears immediately, tagged with the id from the ack (ARCHITECTURE
     // round-trip); later events append under it.
-    const ack = await this.backend.submitCommand(text);
+    //
     // Set the command line here too: an event (CommandStarted/Output) can arrive over
     // the Channel before this ack resolves and open the block with an empty heading, so
     // openBlock updates it rather than being gated out.

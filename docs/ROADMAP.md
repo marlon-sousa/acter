@@ -1525,10 +1525,36 @@ the answer to "what should we do now?".
     as what remains of this entry.
 
 
-22.12. Hearing what you just typed, and a bare Enter that goes nowhere. Spec: none yet →
-    specify first. **Found by the user 2026-08-22**, listening to B4.4 in a real `cmd.exe`
+22.12. **Done** — B4.9, hearing what you just typed, and a bare Enter that goes nowhere.
+    Spec: [b4.9-hearing-what-you-just-typed.md](specs/b4.9-hearing-what-you-just-typed.md).
+    **Found by the user 2026-08-22**, listening to B4.4 in a real `cmd.exe`
     session, and the more important of the two by their own account: reading the same line
     above a heading is clutter, *hearing it read back* is the thing that grates.
+
+    **What shipped, against what this entry proposed.** The fix is the positional one
+    written below, unchanged: `Pump` remembers the row the far end last wrote to, `submit`
+    captures it as the row the submission is pending on, and everything appended there
+    while it is pending is held by B4.4's own hold mechanism and dropped when it completes.
+    Two limits are named in the spec rather than discovered later — a far end that ends the
+    row before the echo starts, and the second of two lines typed ahead, whose echo lands
+    on a row the far end only chooses after finishing the first. Both fail toward an echo
+    spoken once and never toward hidden text.
+
+    Three things the spec settled that this entry did not ask: an empty submission is
+    **not queued for correlation** at all, because an id no echo can ever match would be
+    claimed by a later block — B6.1's drift, restored by a keystroke; the cancel byte of
+    B4.5 now goes ahead of a bare Enter too, on the same gate, so a re-orient gesture at a
+    prompt holding an unclaimed device-query answer does not run that answer as a command;
+    and in a *marked* session a bare Enter's returning prompt arrives with no block open
+    and gets one of its own with no heading, which is the shape B4.5 already ships for a
+    session's first prompt. That last is a consequence rather than a choice, and if it
+    grates it belongs to 22.9.
+
+    **It did not decide 22.13 on its way past**, which that entry allowed for. The nested
+    real-shell test fails identically before and after, and for the reason recorded there:
+    the flood's echo is truncated on the wire, so nothing matches and no block opens. This
+    rule changes where the echo is *published*, never what *matches*, so the measurement
+    22.13 asks for is still owed.
 
     **What is spoken, and why.** The frontend never announces a submitted line —
     `AppController::submit` opens a block and clears the field, and calls nothing on the
@@ -1645,6 +1671,55 @@ the answer to "what should we do now?".
     match at all — so it may well decide this entry on its way past, and measuring the echo
     before that lands would be measuring a mechanism about to change.
 
+    **22.12 has landed and did not decide it**, which narrows this entry usefully. B4.9's
+    rule changes where the echo is *published* — held on the pending row and dropped —
+    and never what *matches*, so a block still opens only where an echo matches and this
+    test still fails in exactly the shape recorded above. Re-run on B4.9's branch
+    2026-08-23: every row arrives in order, nothing is lost, and `output_of(flood)` is
+    empty. The mechanism this entry was waiting on is now settled, so the measurement it
+    asks for — whether the container's `sh` truly never echoed the rest of the line, or
+    whether the accumulator lost it — can be taken as it stands.
+
+
+22.14. A marked cmd session grows one empty block after its first command. Spec: none yet
+    → specify first, and the first thing to specify is where the block comes from, because
+    the measurement below rules out the obvious answer. **Found 2026-08-23** in B4.9's NVDA
+    pass, and filed rather than fixed there: it is not B4.9's, and the entry says how that
+    was established.
+
+    **What a listener meets.** Running `echo acter-alpha`, `echo acter-bravo`,
+    `echo acter-charlie` in a marked `cmd.exe` session and then reading the buffer back
+    with `h`, the headings are: `echo acter-alpha`, **an empty level 2 heading with nothing
+    under it**, `echo acter-bravo`, `echo acter-charlie`. One empty block, after the first
+    command only, and it is a dead end for heading navigation — the same shape 22.10 and
+    B4.4 were about, reached by a different road.
+
+    **Measured on both sides of B4.9, and the two runs are identical line for line.**
+    NVDA 2026.1.1 through the screen-readers bridge, silent capture, `user` persona,
+    `ACTER_SHELL=cmd.exe`, driven as an ordinary user: tab to the edit field, type, Enter,
+    then browse mode and `h`. The build from `main` and the build from B4.9's branch
+    produce the same fifteen document lines, so the block is pre-existing and this is a
+    filing rather than a regression.
+
+    **And the backend alone does not produce it**, which is what makes this worth a spec.
+    The same two commands through `real_session.rs` — a real `cmd.exe`, a real pump, no
+    frontend at all — emit exactly two `CommandStarted` events with their headings and
+    nothing else. So the extra block appears only when the frontend is in the picture, and
+    the candidates are about that boundary: a block the frontend opened from a submit ack
+    whose id no backend event ever mentions, or a `Pump::unclaimed` block minted for text
+    that reaches the sink before the frontend attaches, so that the block arrives and its
+    content does not. **Neither is established**, and guessing between them is exactly what
+    this entry exists to stop.
+
+    **The audible half of it is already gone, and that changes what is left.** B4.9's
+    manual pass ended with the user hearing a blank heading after a bare Enter, so that PR
+    made a block with no command line render no heading element at all — DESIGN's "a block
+    with no heading" read as written. This entry's empty block therefore no longer
+    announces anything or catches heading navigation: it is an empty `div` and a spent
+    `CommandId`. What remains is structural, and it is still worth understanding, because
+    a block opening for nothing means an id was claimed by something nobody can name — but
+    it is no longer something a listener meets, which is why it is filed here rather than
+    fixed in a hurry.
 
 23. B5, PowerShell adapter. Spec: none yet → specify first. Scope sketch: OSC 133
     injection snippet; record the first golden transcripts as fixtures, in B2's format

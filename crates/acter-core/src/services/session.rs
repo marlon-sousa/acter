@@ -155,6 +155,8 @@ impl SessionService {
                 held: None,
                 row: String::new(),
                 last_line: None,
+                cursor: None,
+                pending_row: None,
             }
             .run(),
         );
@@ -315,10 +317,12 @@ struct Pump {
     /// saturation — and [`Pump::due`] removes the entry then. What this holds is the lines
     /// currently live on screen.
     lines: HashMap<LineId, bool>,
-    /// Text that arrived while no block was open, and the line it came from.
+    /// Text that arrived somewhere it might not belong, and the line it came from.
     ///
     /// See [`Pump::hold`]: it is very often a submission's echo, and publishing it would
-    /// mean a block with no heading holding the user's own command line.
+    /// mean the user's own command line read back at them — under a heading of its own at
+    /// the start of a session, and as the previous block's output at every command after
+    /// that.
     held: Option<(LineId, String)>,
     /// The tail of what the far end has appended lately, bounded by [`Pump::window`].
     ///
@@ -331,6 +335,22 @@ struct Pump {
     /// The last line whose text was forwarded, so consecutive lines are separated the way
     /// the pacing policy counts them.
     last_line: Option<LineId>,
+    /// The line the far end last wrote to: where its cursor is, as far as anything here
+    /// can know. Every item but a settlement moves it, because a settlement is the
+    /// extractor freezing a row rather than the far end writing to one.
+    cursor: Option<LineId>,
+    /// The row a submission is pending on: [`Pump::cursor`] as it stood when the line was
+    /// written to the far end (spec B4.9, decision 1).
+    ///
+    /// At that instant the far end has drawn its prompt and its cursor is on that row, and
+    /// the only thing that reaches it is what this pump wrote — so everything appended to
+    /// that row afterwards is the echo of it. That is exact rather than a match, which is
+    /// why it can be dropped without any risk of hiding output, and it needs no markers,
+    /// which is why it reaches inside a container, an `ssh` or a REPL.
+    ///
+    /// Only meaningful while something is pending; [`Pump::pending_echo`] asks both
+    /// questions together.
+    pending_row: Option<LineId>,
 }
 
 impl Pump {
@@ -419,12 +439,25 @@ impl Pump {
     /// does for a session with no markers what `C` does for one with them. The correlation
     /// is still settled before the first byte goes out, so no output can arrive with
     /// nowhere to go.
+    ///
+    /// **An empty submission is written and nothing else** (spec B4.9, decision 4). It is
+    /// a bare Enter, which is a re-orient gesture rather than a command: the shell redraws
+    /// its prompt, the user hears where they are, and that is the whole of it. Queueing it
+    /// would be worse than pointless — an empty line matches no echo, so the id would sit
+    /// at the front of the queue until some later block claimed it, which is B6.1's drift
+    /// restored by a keystroke. Not queueing it also keeps `running` honest, so Ctrl+C
+    /// after a bare Enter still answers that there is nothing to stop.
     async fn submit(&mut self, command_id: CommandId, line: &str) {
-        self.submitted.push_back(Submitted {
-            id: command_id,
-            line: line.to_owned(),
-        });
+        // Before the queue is touched, so "nothing else was already pending" is still
+        // answerable — and so the escape is written ahead of the line it protects.
         self.cancel_pending_input();
+        if !line.trim().is_empty() {
+            self.submitted.push_back(Submitted {
+                id: command_id,
+                line: line.to_owned(),
+            });
+            self.pending_row = self.cursor;
+        }
         self.write(format!("{line}{ENTER}").as_bytes());
         self.settle_running();
     }
@@ -470,9 +503,16 @@ impl Pump {
     /// ConPTY translates input bytes into key events, and an escape immediately followed
     /// by a letter is `Alt`+that letter rather than a bare escape: sent as one write the
     /// line was still rejected, and sent as its own write it runs. Measured.
+    ///
+    /// **A bare Enter is protected the same way** (spec B4.9, decision 5), which is what
+    /// the third gate now says out loud: nothing else was already pending. It read
+    /// `submitted.len() == 1` while every submission was queued, and an empty one no
+    /// longer is. Without it the re-orient gesture returns garbage — the queued answer is
+    /// submitted as a command line, and instead of the prompt the user hears that
+    /// something they never typed is not recognized as an internal or external command.
     fn cancel_pending_input(&mut self) {
         let reading = matches!(self.tracker.region(), Region::Prompt | Region::CommandLine);
-        if !self.markers.marks_output_start() && reading && self.submitted.len() == 1 {
+        if !self.markers.marks_output_start() && reading && self.submitted.is_empty() {
             self.write(&[CANCEL]);
         }
     }
@@ -565,6 +605,13 @@ impl Pump {
         // command line on it.
         self.echo.observe(region, &text, revision);
 
+        // Where the far end's cursor is, kept from every region for the same reason: the
+        // row a submission will be echoed onto is a physical fact about the screen, and
+        // whichever region the prompt happened to be labelled with does not change it.
+        if revision != LineRevision::Settled {
+            self.cursor = Some(id);
+        }
+
         // `due` runs for every line whatever region it fell in: the bookkeeping it keeps
         // is what tells the echo's row from the output's later on.
         if let Some(due) = self.due(id, text.clone(), revision)
@@ -572,10 +619,12 @@ impl Pump {
         {
             // Nothing is forwarded into a session with no open block: `SessionActor`
             // returns early when nothing is active, so that text would be dropped
-            // outright — this product's cardinal defect.
+            // outright — this product's cardinal defect. And nothing is forwarded onto
+            // the row a submission is pending on, because what lands there is the user's
+            // own line coming back (spec B4.9, decision 2).
             match self.open {
-                Some(_) => self.output(id, due),
-                None => self.hold(id, due).await,
+                Some(_) if !self.pending_echo(id) => self.output(id, due),
+                _ => self.hold(id, due).await,
             }
         }
 
@@ -585,24 +634,30 @@ impl Pump {
         }
     }
 
-    /// Text that arrived while no block was open.
+    /// Text that arrived where it might not belong: with no block open, or on the row a
+    /// submission is pending on.
     ///
-    /// **Held rather than given a block of its own, while a submission is still waiting
-    /// for its echo**, because at the start of a session that text usually *is* the echo.
-    /// Opening a block for it put the user's own command line under a heading with no
-    /// text — found in the NVDA pass for this spec, where the listener's buffer ended
-    /// with an empty level 2 heading and the command line repeated beneath it, which is a
-    /// dead end for heading navigation and the duplication this entry exists to remove.
+    /// **Held rather than published, while a submission is still waiting for its echo**,
+    /// because that text very often *is* the echo. With no block open, publishing it put
+    /// the user's own command line under a heading with no text — found in the NVDA pass
+    /// for B4.4, where the listener's buffer ended with an empty level 2 heading and the
+    /// command line repeated beneath it. With a block open it is worse, and it is what
+    /// B4.9 is about: the line is read back at the user as the previous command's output,
+    /// on every command of an unintegrated session and every line typed into a container.
     ///
     /// The hold is bounded twice over, because held text is text the listener has not
     /// heard yet: by [`Pump::window`], so it can never exceed the longest line anyone is
     /// waiting for, and by there being a submission pending at all. Anything past either
     /// bound can no longer be part of an echo and is spilled immediately.
+    ///
+    /// That bound is also the answer to B4.4's objection to suppressing the echo at all —
+    /// that it would mean holding every row back until it was complete, delaying speech
+    /// and stranding text when a far end goes quiet mid-row. Only the pending row is ever
+    /// held, and only for as long as a line of that length could still be arriving.
     async fn hold(&mut self, id: LineId, text: String) {
         let Some(window) = self.window() else {
             self.spill().await;
-            self.unclaimed();
-            self.output(id, text);
+            self.publish(id, text);
             return;
         };
         if !self.held.as_ref().is_some_and(|(held, _)| *held == id) {
@@ -621,11 +676,27 @@ impl Pump {
         }
     }
 
+    /// Whether this row is the one a submission is pending on, and so whether what is
+    /// being appended to it is the far end echoing that submission back.
+    ///
+    /// Both halves are the question: a row that was the pending row for a submission that
+    /// has since opened its block is an ordinary row again, which is what
+    /// [`Pump::window`] answers here.
+    fn pending_echo(&self, id: LineId) -> bool {
+        self.pending_row == Some(id) && self.window().is_some()
+    }
+
     /// Gives held text the block it turned out to deserve, no echo having claimed it.
     async fn spill(&mut self) {
         let Some((id, text)) = self.held.take() else {
             return;
         };
+        self.publish(id, text);
+    }
+
+    /// Forwards text that has finished waiting, into the block that is open or into one
+    /// minted for text no submission accounts for.
+    fn publish(&mut self, id: LineId, text: String) {
         if self.open.is_none() {
             self.unclaimed();
         }
@@ -653,14 +724,14 @@ impl Pump {
     /// `every_session_says_the_same_thing_when_every_byte_is_its_own_read` exists to
     /// forbid exactly that.
     ///
-    /// **The echo is not suppressed, and that is deliberate.** It was already forwarded
-    /// above, to the block that was open when the far end wrote it — which is the row the
-    /// prompt is on, so the buffer reads the way a terminal transcript does: the prompt
-    /// with the command typed after it, and then the output beneath its own heading.
-    /// Removing it instead would mean holding every row back until it was complete,
-    /// which delays speech and strands text when a far end goes quiet mid-row. What the
-    /// original defect was about — the same line appearing twice *inside* one block, once
-    /// as the heading and once as its first content line — does not happen either way.
+    /// **The echo is suppressed, and it is [`Pump::hold`] above that makes that possible**
+    /// (spec B4.9). B4.4 forwarded it to the block that was open when the far end wrote
+    /// it, on the grounds that removing it would mean holding every row back until it was
+    /// complete — delaying speech and stranding text when a far end goes quiet mid-row.
+    /// That is true of a rule that holds every row, and this is not one: what is held is
+    /// the row the submission is pending on, which is where the echo is written and
+    /// nowhere else. A listener heard the difference immediately — every command after the
+    /// first read the user's own typing back at them before answering it.
     ///
     /// Asked only where the tracker has not already delimited the echo itself. In an
     /// integrated session's `B..C` region [`Echo`] owns that job and [`Pump::wants`]
@@ -693,9 +764,9 @@ impl Pump {
         let submitted = self.adopt(index);
 
         // Held text that ends with this echo *is* this echo, so it is dropped rather than
-        // published: the command line belongs in the heading below, not under a heading of
-        // its own with nothing to name it. Whatever came before the echo on that row — a
-        // prompt, a banner — is still text the far end wrote, and still gets its block.
+        // published: the command line belongs in the heading below, not read back at the
+        // user as the previous block's output. Whatever came before the echo on that row —
+        // a prompt, a banner — is still text the far end wrote, and still reaches a block.
         if let Some((id, held)) = self.held.take() {
             let before = held
                 .trim_end()
@@ -703,14 +774,8 @@ impl Pump {
                 .map(str::to_owned);
             match before {
                 Some(before) if before.is_empty() => {}
-                Some(before) => {
-                    self.unclaimed();
-                    self.output(id, before);
-                }
-                None => {
-                    self.unclaimed();
-                    self.output(id, held);
-                }
+                Some(before) => self.publish(id, before),
+                None => self.publish(id, held),
             }
         }
 
@@ -1991,14 +2056,17 @@ mod tests {
             session.announcements(),
             vec![
                 Announcement::ReadAloud {
-                    text: "C:\\>one".to_owned()
+                    text: "C:\\>".to_owned()
                 },
                 Announcement::ReadAloud {
                     text: "some output".to_owned()
                 }
             ],
-            "a session with no integration now reads aloud, which is B4.4's whole point — \
-             the prompt with the command echoed onto it, and then the output: {:?}",
+            "a session with no integration reads aloud, which is B4.4's whole point — and \
+             what it reads is the prompt and then the output, with the echo held on the \
+             row it was written onto and dropped when it turned out to be the echo (spec \
+             B4.9). Before that, this said `C:\\>one`: the prompt with the user's own \
+             command line glued to it, said back at them before the answer: {:?}",
             session.announcements()
         );
 
@@ -2044,6 +2112,226 @@ mod tests {
             "and there is nothing under it: {:?}",
             session.rendered()
         );
+    }
+
+    /// What B4.9 is about: the far end's echo of a submitted line is held on the row it
+    /// is written onto and dropped, rather than forwarded as the previous block's output
+    /// and read out at the user before their answer arrives.
+    ///
+    /// The rule is positional, not a match against the heading. Everything appended to the
+    /// row the far end's cursor was on when Enter was pressed is the echo, because the
+    /// only thing that reaches the far end is what this pump wrote — so it can be dropped
+    /// with no risk of hiding output, which comparing text against the heading could never
+    /// promise: running `dir` twice makes `dir` both a heading and a plausible output row.
+    mod the_echo_is_not_read_back {
+        use super::*;
+
+        /// B4.4 fixed the *first* command of a session, where the echo is held for want of
+        /// a block and dropped. Every command after it still had a block open, so the echo
+        /// went straight into it — which is what a listener meets, one command in.
+        #[tokio::test]
+        async fn no_command_in_an_unintegrated_session_reads_the_typed_line_back() {
+            let session = Session::with_config(quick_grace()).await;
+            session.advance_to(300).await;
+
+            session.emit(vec![line(1, PROMPT)]).await;
+            let first = session.submit("acter-one").await;
+            session
+                .emit(vec![line(1, "acter-one"), line(2, "first answer")])
+                .await;
+
+            // The next prompt, which is forwarded into the block that is still open — it
+            // is the only ending an unintegrated session has to offer — and then the same
+            // shape again, this time with a block open the whole way through.
+            session.emit(vec![line(3, PROMPT)]).await;
+            let second = session.submit("acter-two").await;
+            session
+                .emit(vec![line(3, "acter-two"), line(4, "second answer")])
+                .await;
+            session.advance_to(2_000).await;
+
+            let said = session.rendered();
+            assert!(
+                !said.contains("acter-one") && !said.contains("acter-two"),
+                "no command line reaches the buffer as text, in any block: {said:?}"
+            );
+            assert_eq!(
+                session.output_of(first),
+                format!("first answer\n{PROMPT}"),
+                "the first block holds its own answer and the prompt that came back after \
+                 it, which is the only ending an unintegrated session has to offer"
+            );
+            assert_eq!(session.output_of(second), "second answer");
+        }
+
+        /// The seam B4.5 opened, and the reason this rule needs no markers. Inside a
+        /// container the proxying command's `C..D` never closes, so everything the far end
+        /// writes lands in that one open block — the echo included, before the boundary
+        /// has recognised it.
+        #[tokio::test]
+        async fn a_line_typed_into_a_nested_shell_is_not_read_back() {
+            let session = Session::start().await;
+
+            session
+                .emit(vec![marker(Osc133Marker::PromptStart), line(1, "> ")])
+                .await;
+            let enter = session.submit("acter-enter-the-container").await;
+            session
+                .emit(vec![
+                    marker(Osc133Marker::CommandStart),
+                    line(1, "acter-enter-the-container"),
+                    marker(Osc133Marker::OutputStart),
+                    // The container's own prompt, which no marker delimits.
+                    line(2, "/ # "),
+                ])
+                .await;
+
+            let inside = session.submit("acter-inside").await;
+            session
+                .emit(vec![line(2, "acter-inside"), line(3, "the answer")])
+                .await;
+            session.advance_to(1_000).await;
+
+            assert!(
+                !session.rendered().contains("acter-inside"),
+                "the line typed into the container is not read back: {:?}",
+                session.rendered()
+            );
+            assert!(
+                session.output_of(enter).contains("/ # "),
+                "the container's prompt still is: {:?}",
+                session.output_of(enter)
+            );
+            assert_eq!(
+                session.output_of(inside),
+                "the answer",
+                "and the block the echo opened holds the answer to it"
+            );
+        }
+
+        /// The bound that makes this safe, and B4.4's objection answered in a test: only
+        /// the pending row is ever held, so output produced while a submission is pending
+        /// is spoken the moment it arrives rather than waiting behind anything.
+        #[tokio::test]
+        async fn output_on_any_other_row_is_forwarded_at_once() {
+            let session = Session::with_config(quick_grace()).await;
+            session.advance_to(300).await;
+
+            session.emit(vec![line(1, PROMPT)]).await;
+            session.submit("still-pending").await;
+            session
+                .emit(vec![line(2, "a program is still printing")])
+                .await;
+            session.advance_to(2_000).await;
+
+            assert!(
+                session.rendered().contains("a program is still printing"),
+                "a row that is not the pending one is never held: {:?}",
+                session.rendered()
+            );
+        }
+
+        /// The other half of the same bound. Text appended to the pending row that turns
+        /// out not to be an echo is still the far end's, and is still spoken — held only
+        /// while a line of that length could still be arriving.
+        #[tokio::test]
+        async fn text_on_the_pending_row_that_is_not_the_echo_is_still_spoken() {
+            let session = Session::with_config(quick_grace()).await;
+            session.advance_to(300).await;
+
+            session.emit(vec![line(1, PROMPT)]).await;
+            session.submit("ls").await;
+            session
+                .emit(vec![line(1, "a password prompt, say, and no echo at all")])
+                .await;
+            session.advance_to(2_000).await;
+
+            assert!(
+                session
+                    .rendered()
+                    .contains("a password prompt, say, and no echo at all"),
+                "past the window it can no longer be an echo, so it is published: {:?}",
+                session.rendered()
+            );
+        }
+    }
+
+    /// A bare Enter: a re-orient gesture rather than a command (spec B4.9).
+    ///
+    /// The frontend used to drop it, so nothing was written, the shell never redrew its
+    /// prompt and the user heard nothing at all. It is also ordinary input to a running
+    /// program — a REPL, a "press Enter to continue" — which is the other half of why the
+    /// guard was wrong.
+    mod a_bare_enter {
+        use super::*;
+
+        /// Written, and queued for nothing. An empty line matches no echo, so an id
+        /// queued for it could only be claimed by some later block — B6.1's drift,
+        /// restored by a keystroke.
+        #[tokio::test]
+        async fn is_written_and_opens_no_block() {
+            let session = Session::with_config(quick_grace()).await;
+            session.advance_to(300).await;
+            session.emit(vec![line(1, PROMPT)]).await;
+
+            session.submit("").await;
+            // What a shell does with it: draws its prompt again, on a new row.
+            session.emit(vec![line(2, PROMPT)]).await;
+            session.advance_to(2_000).await;
+
+            assert_eq!(session.written(), "\r", "the Enter reaches the far end");
+            assert_eq!(
+                session.started().len(),
+                1,
+                "and opens nothing of its own — the one block is the session's own text: \
+                 {:?}",
+                session.events()
+            );
+            assert!(
+                session.rendered().contains(PROMPT),
+                "what the user hears is the prompt coming back: {:?}",
+                session.rendered()
+            );
+        }
+
+        /// Nothing is queued for it either, which is what keeps `running` honest: a
+        /// submission that can never be claimed would otherwise leave the session
+        /// answering that there is something to stop for the rest of its life.
+        #[tokio::test]
+        async fn leaves_nothing_running() {
+            let session = Session::with_config(quick_grace()).await;
+            session.advance_to(300).await;
+
+            session.submit("").await;
+
+            assert_eq!(session.press(ctrl('c')).await, KeyAck::NothingToActOn);
+            assert_eq!(session.interrupts(), 0, "and nothing was interrupted");
+        }
+
+        /// The drift, asserted directly: the next real command's output belongs to the
+        /// next real command.
+        #[tokio::test]
+        async fn never_takes_the_block_of_the_command_after_it() {
+            let session = Session::with_config(quick_grace()).await;
+            session.advance_to(300).await;
+            session.emit(vec![line(1, PROMPT)]).await;
+
+            session.submit("").await;
+            session.emit(vec![line(2, PROMPT)]).await;
+            let command = session.submit("acter-real").await;
+            session
+                .emit(vec![line(2, "acter-real"), line(3, "its output")])
+                .await;
+            session.advance_to(2_000).await;
+
+            assert_eq!(
+                session.started().last(),
+                Some(&command),
+                "the block that opened is the command's own: {:?}",
+                session.events()
+            );
+            assert_eq!(session.output_of(command), "its output");
+        }
     }
 
     /// **B4.2, written from the capture that found it.** A session that had run
@@ -2487,6 +2775,42 @@ mod tests {
                 session.written(),
                 "\u{1b}dir\r",
                 "the cancel goes out on its own, then the line"
+            );
+        }
+
+        /// **A bare Enter is protected the same way** (spec B4.9, decision 5). Without it
+        /// the re-orient gesture returns garbage: the queued answer nobody read is
+        /// submitted as a command line, and instead of the prompt the user hears that
+        /// something they never typed is not recognized.
+        #[tokio::test]
+        async fn a_bare_enter_at_the_prompt_gets_one() {
+            let session = cmd().await;
+            session.emit(prompt(1, PROMPT)).await;
+            session.submit("").await;
+
+            assert_eq!(
+                session.written(),
+                "\u{1b}\r",
+                "the cancel, and then the Enter it protects"
+            );
+        }
+
+        /// And it is the same gate, not a new one: an Enter pressed while something is
+        /// running is stdin for that program — a REPL, a "press Enter to continue" — so it
+        /// goes out as one byte and nothing else.
+        #[tokio::test]
+        async fn a_bare_enter_into_a_running_program_gets_none() {
+            let session = cmd().await;
+            session.emit(prompt(1, PROMPT)).await;
+            session.submit("python").await;
+            session.emit(vec![line(1, "python"), line(2, ">>>")]).await;
+            session.submit("").await;
+
+            assert_eq!(
+                session.written(),
+                "\u{1b}python\r\r",
+                "the Enter goes out on its own — only the first submission, made at the \
+                 prompt, carried a cancel"
             );
         }
 
