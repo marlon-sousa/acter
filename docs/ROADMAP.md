@@ -1412,8 +1412,10 @@ the answer to "what should we do now?".
     The corrupted command line is fixed for a marked cmd session; the caret text in a
     buffer past the injection point is not, and is what is left of this entry — see the
     end of it. **Found by the user 2026-08-22**, in the same session as 22.10 and visible
-    in the same capture. **The cause recorded below is wrong, and B4.5's measurement says
-    how** — read this entry to its end before acting on any of it.
+    in the same capture. **Both the cause and the framing recorded below are wrong, and
+    B4.5's measurements say how** — read this entry to its end before acting on any of
+    it. The bytes are ConPTY's rather than Acter's, and the behaviour is the host
+    console's, which means 22.10's fidelity principle reaches here after all.
 
     The buffer contains, as literal readable text, `C:\Users\marlo>^[[24;5Rls` followed by
     `'s not recognized as an internal or external command,`. `ESC[24;5R` is a Cursor
@@ -1483,11 +1485,30 @@ the answer to "what should we do now?".
     input nobody read. Acter's own reply loop is not the source, and its startup answer,
     which `cmd.exe` asks for and reads, is the only one it ever writes here.
 
-    That leaves an open question for the user's own console rather than a ruling: does a
-    real `cmd.exe` window mangle the next typed line the same way? If it does, this is
-    host-console behaviour being passed through, as 22.10 was — with the difference that a
-    listener cannot see the corruption and backspace over it, which is why B4.5 prevented
-    it anyway rather than waiting for the answer.
+    **Measured 2026-08-23 in a real Command Prompt, and it settles the fidelity question
+    against this entry's own framing.** Driven through NVDA 2026.1.1 as an ordinary user,
+    in a classic `conhost.exe` window — not Windows Terminal, so not ConPTY at the outer
+    layer either. The same two commands: the slow consumer, then `echo after-the-query`.
+
+    NVDA spoke `C:\Users\marlo>^[[5;1R`, and the next line came back
+    `'s not recognized as an internal or external command,` and `operable program or batch
+    file.` **Both of this entry's faults, byte for byte, in the console Acter is imitating,
+    with no Acter in the picture at all.**
+
+    So the boundary this entry drew is gone in both directions. The bytes are not Acter's —
+    ConPTY answers the query itself — and the behaviour is not Acter's either: a real
+    console echoes the unclaimed answer as caret text and concatenates the next typed line
+    onto it. **22.10's principle reaches this entry after all**, and by that principle
+    Acter was already behaving correctly before B4.5 touched it.
+
+    That makes B4.5's cancel byte a deliberate *improvement* on the host console rather
+    than a defect repair, and it is filed here as such rather than being smuggled in under
+    a defect that turned out not to exist. The argument for keeping it, for the user to
+    accept or reject: the console makes the garbage *audible* — NVDA read it out — but it
+    still costs the listener the command they typed, and recovering needs them to work out
+    that the line in front of theirs is not theirs and backspace over exactly the right
+    number of characters. The fix costs one byte, sent only to a shell whose prompt Acter
+    injected and only while the region says it is reading a line.
 
     **What B4.5 fixed, and what is left.** Fixed: a line submitted at a marked cmd prompt
     is preceded by a bare escape, which that shell's line editor turns into "discard the
