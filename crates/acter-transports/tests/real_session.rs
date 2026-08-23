@@ -524,3 +524,46 @@ async fn a_submission_behind_an_unread_device_query_answer_still_runs() {
         session.rendered()
     );
 }
+
+/// **Every** command in a marked cmd session, not only the first: the block holds the
+/// command's output and the returning prompt, and never the line the user typed.
+///
+/// Written during the NVDA pass for this spec, which heard exactly that failure — the
+/// first command clean and every one after it reading the user's own typing back, glued to
+/// the answer as `echo bravobravo`. It turned out to be a session that was never
+/// integrated at all, so what was heard is ROADMAP 22.12 in an unintegrated session rather
+/// than anything about markers. The test stays because nothing else asserted that the
+/// exclusion holds past the *first* command, which is precisely where 22.12 says an
+/// unmarked session stops holding it.
+#[tokio::test]
+#[ignore = "spawns a real shell"]
+async fn no_command_in_a_marked_session_reads_the_typed_line_back() {
+    let session = RealSession::over(
+        &["/Q", "/K"],
+        acter_shells::cmd::ENVIRONMENT,
+        acter_shells::cmd::MARKERS,
+    );
+
+    let first = session.submit("echo acter-alpha");
+    session.until(first, "acter-alpha", PATIENCE).await;
+
+    let second = session.submit("echo acter-bravo");
+    let output = session.until(second, "acter-bravo", PATIENCE).await;
+
+    // Asked of the whole session, not of one block: the echo was reaching the buffer as
+    // output of the *previous* command, which an assertion about this block cannot see.
+    let said = session.rendered();
+    assert!(
+        !said.contains("echo acter-bravo"),
+        "the command line is never read back at the user, in any block: {said:?}"
+    );
+    assert!(
+        output.contains('>'),
+        "and the returning prompt is still the last thing it says: {output:?}"
+    );
+    assert_eq!(
+        session.heading_of(second),
+        Some(Some("echo acter-bravo".to_owned())),
+        "the command line belongs in the heading and nowhere else"
+    );
+}
