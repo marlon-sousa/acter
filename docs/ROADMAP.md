@@ -1596,6 +1596,56 @@ the answer to "what should we do now?".
     the right answer and means a bare Enter is a re-orient gesture rather than a command.
 
 
+22.13. The nested-shell real-shell test is red on main, and nobody filed it. Spec: none yet
+    → specify first, and the first thing to specify is whether the *test* or the *behaviour*
+    is wrong. **Found 2026-08-23** while running the real-shell suite for B4.5, and filed
+    because a permanently red check trains everyone to ignore the suite that catches the
+    things unit tests cannot.
+
+    `a_shell_inside_a_shell_does_not_mangle_the_buffer` in `real_session.rs` fails on clean
+    main. **It is not B4.5's**: it was verified failing on `e04ac98`, before that PR landed,
+    and it fails identically with and without the marker work. When it started is not
+    established — it needs Docker, so it only runs where Docker is installed, which is
+    exactly how a test rots unnoticed.
+
+    **What actually happens, from the full failure output.** Inside `docker run -it alpine
+    sh`, the test submits a forty-row flood and waits for `acter-row-40` to reach the
+    flood's own block. Every one of the forty rows arrives, in order, and so does the next
+    command's output and the container's prompt — **nothing is lost and nothing is
+    duplicated.** What does not happen is the flood getting a block of its own: its output
+    stays in the block of the `docker run` command that opened the container, and
+    `output_of(flood)` is therefore empty.
+
+    The echo is why. The stream carries the flood's echo as
+    `/ # i=1; while [ $i -le 40 ]; do ec` — truncated well before the end of the submitted
+    line — so `Pump::boundary` never sees a row ending with the line it submitted, never
+    matches, and never opens the block. Whether the container's `sh` genuinely never echoed
+    the rest, or whether it did and the accumulator lost it to a rewrite or a
+    non-consecutive line item, is **the measurement this entry needs** and is not yet done.
+    B4.4's notes say a container's `sh` starts a new line item for a wrapped command line
+    where `cmd.exe` swallows it, so both explanations are live.
+
+    **And that is why the test may be the thing that is wrong.** DESIGN's edit-field
+    ownership section already rules on this exact shape: "No echo means no block, and that
+    is the direction this rule is permitted to fail in... guessing toward stdin gives a
+    coarser buffer with nothing lost, nothing duplicated and order preserved. The buffer
+    must not mangle; structure may be imperfect." What the failure shows is precisely a
+    coarser buffer with nothing lost — the sanctioned degradation. The test asserts
+    structure that DESIGN does not promise where an echo never matched.
+
+    So there are three honest outcomes and the entry must pick one rather than drift:
+    **the matcher is losing an echo it should have caught**, which is a real defect and the
+    only one worth fixing; **the container never echoes it**, in which case the test should
+    assert what DESIGN promises — order preserved, nothing lost — instead of block
+    attribution; or **the case is genuinely out of reach until an anchor rule exists**, in
+    which case the test is quarantined with that reason written on it rather than left red.
+
+    Sequencing: **after 22.12**, and not by accident. 22.12 holds the row a submission is
+    pending on from the instant Enter was pressed, which is positional and needs no echo
+    match at all — so it may well decide this entry on its way past, and measuring the echo
+    before that lands would be measuring a mechanism about to change.
+
+
 23. B5, PowerShell adapter. Spec: none yet → specify first. Scope sketch: OSC 133
     injection snippet; record the first golden transcripts as fixtures, in B2's format
     — so a captured real session is replayable as a fake session.
