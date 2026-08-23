@@ -1471,6 +1471,49 @@ the answer to "what should we do now?".
     behaviour of the host console is being replicated. This stays a defect.
 
 
+22.12. Hearing what you just typed, and a bare Enter that goes nowhere. Spec: none yet →
+    specify first. **Found by the user 2026-08-22**, listening to B4.4 in a real `cmd.exe`
+    session, and the more important of the two by their own account: reading the same line
+    above a heading is clutter, *hearing it read back* is the thing that grates.
+
+    **What is spoken, and why.** The frontend never announces a submitted line —
+    `AppController::submit` opens a block and clears the field, and calls nothing on the
+    announcer. So the utterance that repeats what the user typed is the far end's **echo**,
+    forwarded as the previous block's output and then read aloud, which it now is because
+    B4.4 turned autoread on. B4.4 removed it for the *first* command of a session, where
+    the echo is held and dropped; every command after it still speaks the user's typing
+    back at them.
+
+    **The fix is positional, and it is exact rather than a match.** At the instant Enter is
+    pressed the far end has drawn its prompt and the cursor is on that row, so everything
+    appended *to that row after that instant* is the echo — there is nothing else it could
+    be, because the only thing that reaches the far end is what Acter wrote. That beats the
+    user's first suggestion of comparing a line against the heading, which was the right
+    instinct but has a failure this does not: running `dir` twice makes `dir` both a
+    heading and a plausible output line, and equality would then hide output, which is this
+    product's cardinal defect. Position cannot.
+
+    **Why B4.4 did not already do it.** A decision taken partway through a row is sensitive
+    to where a read happened to cut, which
+    `every_session_says_the_same_thing_when_every_byte_is_its_own_read` forbids. B4.4's
+    empty-heading fix built the mechanism anyway — text can be *held* rather than
+    published, bounded by the longest line still waiting for an echo — so this is extending
+    that hold from "no block is open" to "a submission is pending on this row". Position is
+    chunk-independent, so the invariant holds.
+
+    **The prompt must survive it, and does.** Stated by the user as a requirement: the
+    prompt should still be the last thing announced after every command. It is forwarded
+    *before* Enter is pressed, so suppressing the echo never touches it.
+
+    **The second half, and it is a separate defect in the frontend.** The user asked to hear
+    the prompt back "even if I just press enter", and today they cannot: `submit` returns
+    early on an empty field, so nothing is written, the shell never redraws its prompt and
+    nothing is announced. The guard is also wrong for a running program, where a blank line
+    is ordinary input — a REPL, a "press Enter to continue". Removing it needs one decision
+    made in the open: an empty submission matches no echo, so it opens no block, which is
+    the right answer and means a bare Enter is a re-orient gesture rather than a command.
+
+
 23. B5, PowerShell adapter. Spec: none yet → specify first. Scope sketch: OSC 133
     injection snippet; record the first golden transcripts as fixtures, in B2's format
     — so a captured real session is replayable as a fake session.
