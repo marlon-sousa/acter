@@ -1681,6 +1681,40 @@ the answer to "what should we do now?".
     whether the accumulator lost it — can be taken as it stands.
 
 
+22.14. A marked cmd session grows one empty block after its first command. Spec: none yet
+    → specify first, and the first thing to specify is where the block comes from, because
+    the measurement below rules out the obvious answer. **Found 2026-08-23** in B4.9's NVDA
+    pass, and filed rather than fixed there: it is not B4.9's, and the entry says how that
+    was established.
+
+    **What a listener meets.** Running `echo acter-alpha`, `echo acter-bravo`,
+    `echo acter-charlie` in a marked `cmd.exe` session and then reading the buffer back
+    with `h`, the headings are: `echo acter-alpha`, **an empty level 2 heading with nothing
+    under it**, `echo acter-bravo`, `echo acter-charlie`. One empty block, after the first
+    command only, and it is a dead end for heading navigation — the same shape 22.10 and
+    B4.4 were about, reached by a different road.
+
+    **Measured on both sides of B4.9, and the two runs are identical line for line.**
+    NVDA 2026.1.1 through the screen-readers bridge, silent capture, `user` persona,
+    `ACTER_SHELL=cmd.exe`, driven as an ordinary user: tab to the edit field, type, Enter,
+    then browse mode and `h`. The build from `main` and the build from B4.9's branch
+    produce the same fifteen document lines, so the block is pre-existing and this is a
+    filing rather than a regression.
+
+    **And the backend alone does not produce it**, which is what makes this worth a spec.
+    The same two commands through `real_session.rs` — a real `cmd.exe`, a real pump, no
+    frontend at all — emit exactly two `CommandStarted` events with their headings and
+    nothing else. So the extra block appears only when the frontend is in the picture, and
+    the candidates are about that boundary: a block the frontend opened from a submit ack
+    whose id no backend event ever mentions, or a `Pump::unclaimed` block minted for text
+    that reaches the sink before the frontend attaches, so that the block arrives and its
+    content does not. **Neither is established**, and guessing between them is exactly what
+    this entry exists to stop.
+
+    Worth measuring together with 22.9, which owns how a headingless block should read:
+    B4.9 adds one deliberately, for the prompt a bare Enter brings back, and if that shape
+    is wrong both entries want the same answer.
+
 23. B5, PowerShell adapter. Spec: none yet → specify first. Scope sketch: OSC 133
     injection snippet; record the first golden transcripts as fixtures, in B2's format
     — so a captured real session is replayable as a fake session.
