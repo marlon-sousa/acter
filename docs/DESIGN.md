@@ -349,6 +349,14 @@ Consequences:
   user submitted — it is the shell's own prompt, or its banner — and gets a block with no
   heading, which is what a session's first prompt produces.
 
+  **"No heading" means no heading element at all — clarified 2026-08-23 (B4.9), after a
+  listener met the other reading.** The frontend had been rendering such a block as an
+  *empty* level 2 heading, which is a different thing and a worse one: heading navigation
+  lands on it and it announces nothing, so the one navigation the buffer exists to offer
+  runs into a dead end. The text still reaches the buffer and is still read aloud; what
+  it does not get is a heading with nothing in it. Headings are commands, and text no
+  command accounts for is text.
+
   **The echo itself is held and dropped — amended 2026-08-23 (B4.9), reversing the half
   of this bullet that let it through.** It used to stay in the block that was open when
   the far end wrote it, on the grounds that removing it would mean holding every row back

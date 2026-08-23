@@ -55,6 +55,40 @@ describe('BufferDom blocks', () => {
     expect(headings[0]?.nextElementSibling?.textContent).toBe('early chunk');
   });
 
+  // B4.9's manual pass, on the prompt a bare Enter brings back: it arrives with nothing
+  // open, so it is a block for text no command accounts for. An empty h2 there is a
+  // level 2 heading that announces nothing and reads as a dead end — DESIGN says such
+  // text gets a block with *no heading*, and this is that rendered honestly.
+  it('gives a block with no command line no heading at all, and still shows its text', () => {
+    const region = makeRegion();
+    const buffer = new BufferDom(region);
+    buffer.openBlock(1, 'echo hello');
+    buffer.appendOutput(1, 'hello');
+    // The shell's own text: a returning prompt nobody submitted.
+    buffer.openBlock(2, '');
+    buffer.appendOutput(2, 'C:\\Users\\marlo>');
+
+    const headings = region.querySelectorAll('h2');
+    expect(Array.from(headings).map((h) => h.textContent)).toEqual([
+      'echo hello',
+    ]);
+    expect(region.textContent).toContain('C:\\Users\\marlo>');
+  });
+
+  it('creates the heading in front of the output when a block is named later', () => {
+    const region = makeRegion();
+    const buffer = new BufferDom(region);
+    buffer.openBlock(1, '');
+    buffer.appendOutput(1, 'early chunk');
+    buffer.openBlock(1, 'git status');
+
+    const heading = region.querySelector('h2');
+    expect(heading?.textContent).toBe('git status');
+    // Reads in the order it would have had all along: heading, then its output.
+    expect(heading?.nextElementSibling?.textContent).toBe('early chunk');
+    expect(heading?.getAttribute('tabindex')).toBe('-1');
+  });
+
   it('ignores output for a command with no open block rather than throwing', () => {
     const region = makeRegion();
     const buffer = new BufferDom(region);

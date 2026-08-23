@@ -1,11 +1,18 @@
 // Role: adapter (DOM) — the results buffer region: one h2 per command keyed by
-// CommandId, with output chunks appended under it as they arrive.
+// CommandId, with output chunks appended under it as they arrive. A block for text no
+// command accounts for has no h2 at all; see Block below.
 
 import type { CommandId } from '../protocol';
 import type { BufferView } from '../ports/buffer_view';
 
 interface Block {
-  heading: HTMLElement;
+  // Absent until something says what this block is running. Text that belongs to no
+  // command the user submitted — the shell's own prompt, its banner, the prompt a bare
+  // Enter brings back — is a block with **no heading**, which is what DESIGN says it
+  // gets. Rendering that as an *empty* heading is a different thing and a worse one: a
+  // level 2 heading announcing nothing, which heading navigation lands on and cannot
+  // read (found in B4.9's manual pass).
+  heading: HTMLElement | null;
   output: HTMLElement;
 }
 
@@ -22,23 +29,37 @@ export class BufferDom implements BufferView {
     // event never clobbers it.
     const existing = this.blocks.get(commandId);
     if (existing !== undefined) {
-      if (commandLine !== '') {
-        existing.heading.textContent = commandLine;
+      if (commandLine === '') {
+        return;
       }
+      // A block that opened with nothing to call it, now named: the heading is created
+      // here and put in front of the output it belongs to, so the block reads in the
+      // same order it would have had all along.
+      if (existing.heading === null) {
+        existing.heading = this.newHeading(commandLine);
+        existing.output.before(existing.heading);
+        return;
+      }
+      existing.heading.textContent = commandLine;
       return;
     }
 
+    const heading = commandLine === '' ? null : this.newHeading(commandLine);
+
+    const output = document.createElement('div');
+    output.className = 'response';
+
+    this.region.append(...(heading === null ? [output] : [heading, output]));
+    this.blocks.set(commandId, { heading, output });
+  }
+
+  private newHeading(commandLine: string): HTMLElement {
     const heading = document.createElement('h2');
     heading.textContent = commandLine;
     // Programmatically focusable (a heading is never in the tab order) so focus()
     // can land here without adding it to sequential navigation.
     heading.tabIndex = -1;
-
-    const output = document.createElement('div');
-    output.className = 'response';
-
-    this.region.append(heading, output);
-    this.blocks.set(commandId, { heading, output });
+    return heading;
   }
 
   appendOutput(commandId: CommandId, text: string): void {

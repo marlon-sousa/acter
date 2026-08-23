@@ -1711,9 +1711,15 @@ the answer to "what should we do now?".
     content does not. **Neither is established**, and guessing between them is exactly what
     this entry exists to stop.
 
-    Worth measuring together with 22.9, which owns how a headingless block should read:
-    B4.9 adds one deliberately, for the prompt a bare Enter brings back, and if that shape
-    is wrong both entries want the same answer.
+    **The audible half of it is already gone, and that changes what is left.** B4.9's
+    manual pass ended with the user hearing a blank heading after a bare Enter, so that PR
+    made a block with no command line render no heading element at all — DESIGN's "a block
+    with no heading" read as written. This entry's empty block therefore no longer
+    announces anything or catches heading navigation: it is an empty `div` and a spent
+    `CommandId`. What remains is structural, and it is still worth understanding, because
+    a block opening for nothing means an id was claimed by something nobody can name — but
+    it is no longer something a listener meets, which is why it is filed here rather than
+    fixed in a hurry.
 
 23. B5, PowerShell adapter. Spec: none yet → specify first. Scope sketch: OSC 133
     injection snippet; record the first golden transcripts as fixtures, in B2's format
