@@ -1547,6 +1547,34 @@ the answer to "what should we do now?".
     heading and a plausible output line, and equality would then hide output, which is this
     product's cardinal defect. Position cannot.
 
+    **Found again by the user 2026-08-23, in the B4.5 manual pass, and B4.5 changed what it
+    costs.** Running `docker run -it` from a marked `cmd.exe` session: the container's own
+    prompt is read correctly, and every line typed into the container is still read back at
+    the user before its output.
+
+    Nothing about the nested case changed — it behaved identically before B4.5, when the
+    outer shell was unintegrated and read the echo back too. **What changed is the
+    contrast.** The outer shell is now clean, because its echo falls in a marked `B..C`
+    region that `wants` excludes; the container is past the injection point, so everything
+    it writes lands in the one open `C..D` of the `docker` command that never ends, the
+    echo is forwarded to that block *before* `Pump::boundary` recognises it, and only then
+    does the new block open. One session now behaves two ways, and the user meets the
+    difference the moment they run a container.
+
+    That also retires the argument B4.4 recorded for leaving the echo in the stream —
+    "removing it instead would mean holding every row back until it was complete, which
+    delays speech and strands text when a far end goes quiet mid-row". This entry's fix
+    does not hold every row: it holds *the row a submission is pending on*, from the
+    instant Enter was pressed, which is bounded and which B4.4's own empty-heading
+    mechanism already built. The objection was to a rule this entry does not propose.
+
+    **It needs no markers, which is the point.** The fix is positional — everything appended
+    to the cursor's row after the instant Enter was pressed is the echo, because the only
+    thing that reaches the far end is what Acter wrote — so it reaches exactly where OSC 133
+    cannot: inside a container, an `ssh`, a `wsl`, a REPL. That makes this entry the one
+    that closes the gap B4.5 opened, rather than another entry that stops at the injection
+    point.
+
     **Why B4.4 did not already do it.** A decision taken partway through a row is sensitive
     to where a read happened to cut, which
     `every_session_says_the_same_thing_when_every_byte_is_its_own_read` forbids. B4.4's
