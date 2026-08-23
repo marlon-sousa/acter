@@ -1525,10 +1525,36 @@ the answer to "what should we do now?".
     as what remains of this entry.
 
 
-22.12. Hearing what you just typed, and a bare Enter that goes nowhere. Spec: none yet →
-    specify first. **Found by the user 2026-08-22**, listening to B4.4 in a real `cmd.exe`
+22.12. **Done** — B4.9, hearing what you just typed, and a bare Enter that goes nowhere.
+    Spec: [b4.9-hearing-what-you-just-typed.md](specs/b4.9-hearing-what-you-just-typed.md).
+    **Found by the user 2026-08-22**, listening to B4.4 in a real `cmd.exe`
     session, and the more important of the two by their own account: reading the same line
     above a heading is clutter, *hearing it read back* is the thing that grates.
+
+    **What shipped, against what this entry proposed.** The fix is the positional one
+    written below, unchanged: `Pump` remembers the row the far end last wrote to, `submit`
+    captures it as the row the submission is pending on, and everything appended there
+    while it is pending is held by B4.4's own hold mechanism and dropped when it completes.
+    Two limits are named in the spec rather than discovered later — a far end that ends the
+    row before the echo starts, and the second of two lines typed ahead, whose echo lands
+    on a row the far end only chooses after finishing the first. Both fail toward an echo
+    spoken once and never toward hidden text.
+
+    Three things the spec settled that this entry did not ask: an empty submission is
+    **not queued for correlation** at all, because an id no echo can ever match would be
+    claimed by a later block — B6.1's drift, restored by a keystroke; the cancel byte of
+    B4.5 now goes ahead of a bare Enter too, on the same gate, so a re-orient gesture at a
+    prompt holding an unclaimed device-query answer does not run that answer as a command;
+    and in a *marked* session a bare Enter's returning prompt arrives with no block open
+    and gets one of its own with no heading, which is the shape B4.5 already ships for a
+    session's first prompt. That last is a consequence rather than a choice, and if it
+    grates it belongs to 22.9.
+
+    **It did not decide 22.13 on its way past**, which that entry allowed for. The nested
+    real-shell test fails identically before and after, and for the reason recorded there:
+    the flood's echo is truncated on the wire, so nothing matches and no block opens. This
+    rule changes where the echo is *published*, never what *matches*, so the measurement
+    22.13 asks for is still owed.
 
     **What is spoken, and why.** The frontend never announces a submitted line —
     `AppController::submit` opens a block and clears the field, and calls nothing on the
@@ -1644,6 +1670,15 @@ the answer to "what should we do now?".
     pending on from the instant Enter was pressed, which is positional and needs no echo
     match at all — so it may well decide this entry on its way past, and measuring the echo
     before that lands would be measuring a mechanism about to change.
+
+    **22.12 has landed and did not decide it**, which narrows this entry usefully. B4.9's
+    rule changes where the echo is *published* — held on the pending row and dropped —
+    and never what *matches*, so a block still opens only where an echo matches and this
+    test still fails in exactly the shape recorded above. Re-run on B4.9's branch
+    2026-08-23: every row arrives in order, nothing is lost, and `output_of(flood)` is
+    empty. The mechanism this entry was waiting on is now settled, so the measurement it
+    asks for — whether the container's `sh` truly never echoed the rest of the line, or
+    whether the accumulator lost it — can be taken as it stands.
 
 
 23. B5, PowerShell adapter. Spec: none yet → specify first. Scope sketch: OSC 133

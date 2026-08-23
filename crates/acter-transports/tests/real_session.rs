@@ -226,6 +226,27 @@ impl RealSession {
         }
     }
 
+    /// Waits until everything the session has said satisfies `wanted`, then lets it go
+    /// quiet. For the cases with no block to wait on: a bare Enter is answered by the
+    /// shell drawing its prompt again, which belongs to whichever block happens to be
+    /// open.
+    async fn until_said(&self, patience: Duration, wanted: impl Fn(&str) -> bool) -> String {
+        let deadline = Instant::now() + patience;
+        loop {
+            if wanted(&self.rendered()) {
+                tokio::time::sleep(SETTLE).await;
+                return self.rendered();
+            }
+            if Instant::now() >= deadline {
+                panic!(
+                    "the session never said it. What it did say was:\n{}",
+                    self.rendered()
+                );
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+
     /// Waits out the integration grace period, so a submission lands in a session that has
     /// already been flagged rather than one still deciding. Production submits whenever the
     /// user does; the tests below are about what happens *after* flagging, and this keeps
@@ -565,5 +586,116 @@ async fn no_command_in_a_marked_session_reads_the_typed_line_back() {
         session.heading_of(second),
         Some(Some("echo acter-bravo".to_owned())),
         "the command line belongs in the heading and nowhere else"
+    );
+}
+
+/// **B4.9 against the session the marker work cannot reach**, and the one a listener met
+/// first: an unintegrated `cmd.exe`, where every region is `Unstructured` and the only
+/// thing separating the echo from output is where the far end wrote it.
+///
+/// B4.4 fixed the first command of such a session, because its echo is held for want of a
+/// block and dropped. Every command after it had a block open, so the echo went straight
+/// into it — measured through NVDA on 2026-08-22 as the user's own typing read back before
+/// every answer.
+#[tokio::test]
+#[ignore = "spawns a real shell"]
+async fn no_command_in_an_unintegrated_session_reads_the_typed_line_back() {
+    let session = RealSession::cmd();
+    session.flagged().await;
+
+    let first = session.submit("echo acter-alpha");
+    session.until(first, "acter-alpha", PATIENCE).await;
+
+    let second = session.submit("echo acter-bravo");
+    let output = session.until(second, "acter-bravo", PATIENCE).await;
+
+    // Asked of the whole session rather than of one block: the echo reached the buffer as
+    // output of the *previous* command, which an assertion about this block cannot see.
+    let said = session.rendered();
+    assert!(
+        !said.contains("echo acter-bravo") && !said.contains("echo acter-alpha"),
+        "no command line is read back at the user, in any block: {said:?}"
+    );
+    assert!(
+        output.contains('>'),
+        "and the returning prompt is still the last thing it says: {output:?}"
+    );
+    assert_eq!(
+        session.heading_of(second),
+        Some(Some("echo acter-bravo".to_owned())),
+        "the command line belongs in the heading and nowhere else"
+    );
+}
+
+/// **The case B4.5 could not reach, which is why this rule is positional and not a
+/// marker.** Inside `docker run -it` the proxying command's `C..D` never closes, so
+/// everything the container writes lands in that one open block — the echo of every line
+/// typed into it included, before the boundary has recognised it.
+///
+/// Found by the user on 2026-08-23, in B4.5's manual pass: the outer shell had just been
+/// made clean by the markers, and the container read every line back.
+#[tokio::test]
+#[ignore = "spawns a real shell and a container"]
+async fn a_line_typed_into_a_container_is_not_read_back() {
+    if !docker_is_available() || !image_is_present() {
+        println!("skipped: Docker is not available on this machine");
+        return;
+    }
+
+    let session = RealSession::over(
+        &["/Q", "/K"],
+        acter_shells::cmd::ENVIRONMENT,
+        acter_shells::cmd::MARKERS,
+    );
+
+    // Waiting for the container's own prompt rather than for an echo of our own is what
+    // keeps the outer `cmd.exe` from answering by mistake: until `sh` has drawn `/ #`, a
+    // line submitted here could still be read by the shell we came from.
+    let enter = session.submit(&format!("docker run -it --rm {IMAGE} sh"));
+    session.until(enter, "/ #", DOCKER_PATIENCE).await;
+
+    let inside = session.submit(&format!("echo {AFTER}"));
+    session.until(inside, AFTER, DOCKER_PATIENCE).await;
+
+    let said = session.rendered();
+    assert!(
+        !said.contains(&format!("echo {AFTER}")),
+        "the line typed into the container is not read back at the user: {said:?}"
+    );
+    assert!(
+        said.contains("/ #"),
+        "and the container's own prompt still is: {said:?}"
+    );
+
+    session.submit("exit");
+}
+
+/// The second half of 22.12: a bare Enter reaches the far end, and the shell answers it
+/// with the prompt.
+///
+/// It used to be dropped in the frontend, so no bytes were written, the shell had no
+/// reason to redraw anything and the user heard nothing at all — which in a session whose
+/// only ending is the returning prompt leaves them with no way to ask where they are.
+#[tokio::test]
+#[ignore = "spawns a real shell"]
+async fn a_bare_enter_brings_the_prompt_back() {
+    let session = RealSession::cmd();
+    session.flagged().await;
+
+    let first = session.submit("echo acter-alpha");
+    let before = session
+        .until(first, "acter-alpha", PATIENCE)
+        .await
+        .matches('>')
+        .count();
+
+    session.submit("");
+
+    let said = session
+        .until_said(PATIENCE, |said| said.matches('>').count() > before)
+        .await;
+    assert!(
+        said.matches('>').count() > before,
+        "the shell drew its prompt again, and the user hears where they are: {said:?}"
     );
 }
