@@ -1010,9 +1010,14 @@ the answer to "what should we do now?".
 
     Sequencing: **after 22.2**, or the duplicate-line defect means duplicates get spoken.
 
-22.5. B4.5, cmd.exe can carry OSC 133 A and B. Spec: none yet → specify first, and its
-    open question is now answered — see "Pinned answers" below, agreed in conversation
-    2026-08-22. Ready to spec.
+22.5. B4.5, cmd.exe can carry OSC 133 A and B. **Done** — spec
+    `docs/specs/b4.5-cmd-markers-and-unclaimed-replies.md`, landed with 22.11 in one PR.
+    A real `cmd.exe` started with the injected `PROMPT` now produces one block per
+    command: the heading is the line the shell echoed, the content is the output followed
+    by the returning prompt, and the block closes. Two of the pinned answers were amended
+    in the open, and the spec says why — the block closes on `B` rather than on `A`, and
+    `wants` gained an arm so the prompt is still spoken. Without that second change every
+    cmd command would have ended in silence, which is what 22.12 asked for out loud.
     **Sequencing note, 2026-08-22: this has become the keystone of the 22.x cluster.**
     22.4 wants a real boundary to replace its heuristic, 22.7's pager decision is easier
     once prompts are known, 22.8 needs a completion signal, and 22.9 needs a prompt region
@@ -1402,8 +1407,15 @@ the answer to "what should we do now?".
     there is nothing separate left here.
 
 22.11. A device-query reply can reach the user's command line, and its bytes can reach the
-    buffer. Spec: none yet → specify first. **Found by the user 2026-08-22**, in the same
-    session as 22.10 and visible in the same capture.
+    buffer. **Mostly done** — spec
+    `docs/specs/b4.5-cmd-markers-and-unclaimed-replies.md`, landed with 22.5 in one PR.
+    The corrupted command line is fixed for a marked cmd session; the caret text in a
+    buffer past the injection point is not, and is what is left of this entry — see the
+    end of it. **Found by the user 2026-08-22**, in the same session as 22.10 and visible
+    in the same capture. **Both the cause and the framing recorded below are wrong, and
+    B4.5's measurements say how** — read this entry to its end before acting on any of
+    it. The bytes are ConPTY's rather than Acter's, and the behaviour is the host
+    console's, which means 22.10's fidelity principle reaches here after all.
 
     The buffer contains, as literal readable text, `C:\Users\marlo>^[[24;5Rls` followed by
     `'s not recognized as an internal or external command,`. `ESC[24;5R` is a Cursor
@@ -1464,11 +1476,53 @@ the answer to "what should we do now?".
     reachable whenever a reply goes unclaimed, whether or not a later submission collides
     with it.
 
-    **The cmd-fidelity principle that closed 22.10 does not reach this entry**, and the
-    boundary is worth stating since the two were found in one capture. There, Acter was
-    passing through what the host console does with a backlog. Here the bytes are Acter's
-    own: `cmd.exe` never sends a cursor position report into its own input, and no
-    behaviour of the host console is being replicated. This stays a defect.
+    **The cmd-fidelity principle that closed 22.10 was said not to reach this entry, and
+    the measurement in B4.5 unsettles that.** The boundary was drawn on "the bytes are
+    Acter's own: `cmd.exe` never sends a cursor position report into its own input".
+    **ConPTY does.** Logging every read of a real session showed the program's `ESC[6n`
+    never reaching Acter at all — ConPTY intercepts it, answers it into the console input
+    queue itself, and the only thing on the wire is that answer already echoed back as
+    input nobody read. Acter's own reply loop is not the source, and its startup answer,
+    which `cmd.exe` asks for and reads, is the only one it ever writes here.
+
+    **Measured 2026-08-23 in a real Command Prompt, and it settles the fidelity question
+    against this entry's own framing.** Driven through NVDA 2026.1.1 as an ordinary user,
+    in a classic `conhost.exe` window — not Windows Terminal, so not ConPTY at the outer
+    layer either. The same two commands: the slow consumer, then `echo after-the-query`.
+
+    NVDA spoke `C:\Users\marlo>^[[5;1R`, and the next line came back
+    `'s not recognized as an internal or external command,` and `operable program or batch
+    file.` **Both of this entry's faults, byte for byte, in the console Acter is imitating,
+    with no Acter in the picture at all.**
+
+    So the boundary this entry drew is gone in both directions. The bytes are not Acter's —
+    ConPTY answers the query itself — and the behaviour is not Acter's either: a real
+    console echoes the unclaimed answer as caret text and concatenates the next typed line
+    onto it. **22.10's principle reaches this entry after all**, and by that principle
+    Acter was already behaving correctly before B4.5 touched it.
+
+    That makes B4.5's cancel byte a deliberate *improvement* on the host console rather
+    than a defect repair, and it is filed here as such rather than being smuggled in under
+    a defect that turned out not to exist. The argument for keeping it, for the user to
+    accept or reject: the console makes the garbage *audible* — NVDA read it out — but it
+    still costs the listener the command they typed, and recovering needs them to work out
+    that the line in front of theirs is not theirs and backspace over exactly the right
+    number of characters. The fix costs one byte, sent only to a shell whose prompt Acter
+    injected and only while the region says it is reading a line.
+
+    **What B4.5 fixed, and what is left.** Fixed: a line submitted at a marked cmd prompt
+    is preceded by a bare escape, which that shell's line editor turns into "discard the
+    pending line", so the queued answer is thrown away and the user's command runs — and
+    the caret text is erased from the row, so it never reaches the buffer or the heading.
+    The gate is the tracker's region, which is why this could only land beside 22.5.
+
+    Left, and it is the second fault outside a marked session: a nested shell, an `ssh` or
+    a container can still put caret-notation text in the buffer, where it is read out
+    character by character. The mechanism B4.5 first built for it — holding back a fragment
+    that might be one of Acter's own answers — was removed once the measurement showed the
+    bytes are not Acter's to recognise. Recognising them there means matching a *shape*
+    rather than bytes we wrote, which is a decision worth taking on its own evidence. Filed
+    as what remains of this entry.
 
 
 22.12. Hearing what you just typed, and a bare Enter that goes nowhere. Spec: none yet →
@@ -1492,6 +1546,34 @@ the answer to "what should we do now?".
     instinct but has a failure this does not: running `dir` twice makes `dir` both a
     heading and a plausible output line, and equality would then hide output, which is this
     product's cardinal defect. Position cannot.
+
+    **Found again by the user 2026-08-23, in the B4.5 manual pass, and B4.5 changed what it
+    costs.** Running `docker run -it` from a marked `cmd.exe` session: the container's own
+    prompt is read correctly, and every line typed into the container is still read back at
+    the user before its output.
+
+    Nothing about the nested case changed — it behaved identically before B4.5, when the
+    outer shell was unintegrated and read the echo back too. **What changed is the
+    contrast.** The outer shell is now clean, because its echo falls in a marked `B..C`
+    region that `wants` excludes; the container is past the injection point, so everything
+    it writes lands in the one open `C..D` of the `docker` command that never ends, the
+    echo is forwarded to that block *before* `Pump::boundary` recognises it, and only then
+    does the new block open. One session now behaves two ways, and the user meets the
+    difference the moment they run a container.
+
+    That also retires the argument B4.4 recorded for leaving the echo in the stream —
+    "removing it instead would mean holding every row back until it was complete, which
+    delays speech and strands text when a far end goes quiet mid-row". This entry's fix
+    does not hold every row: it holds *the row a submission is pending on*, from the
+    instant Enter was pressed, which is bounded and which B4.4's own empty-heading
+    mechanism already built. The objection was to a rule this entry does not propose.
+
+    **It needs no markers, which is the point.** The fix is positional — everything appended
+    to the cursor's row after the instant Enter was pressed is the echo, because the only
+    thing that reaches the far end is what Acter wrote — so it reaches exactly where OSC 133
+    cannot: inside a container, an `ssh`, a `wsl`, a REPL. That makes this entry the one
+    that closes the gap B4.5 opened, rather than another entry that stops at the injection
+    point.
 
     **Why B4.4 did not already do it.** A decision taken partway through a row is sensitive
     to where a read happened to cut, which

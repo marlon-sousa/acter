@@ -13,6 +13,7 @@ name = "acter-app"
 version = "0.1.0"
 dependencies = [
  "acter-core",
+ "acter-shells",
  "acter-term",
  "acter-transports",
  "serde",
@@ -41,6 +42,9 @@ dependencies = [
 [[package]]
 name = "acter-shells"
 version = "0.1.0"
+dependencies = [
+ "acter-core",
+]
 
 [[package]]
 name = "acter-term"
@@ -56,6 +60,7 @@ name = "acter-transports"
 version = "0.1.0"
 dependencies = [
  "acter-core",
+ "acter-shells",
  "acter-term",
  "portable-pty",
  "serde",

@@ -24,6 +24,25 @@ use super::shell::{Delivery, FakeShell, Script, Submission};
 /// pressed: the carriage return moves to column one, the line feed moves down.
 const CRLF: &[u8] = b"\r\n";
 
+/// What a console line editor treats as "discard whatever is pending on this line".
+///
+/// Line discipline, and therefore this shell's rather than the pipe's — the same side of
+/// the seam as the echo and the prompt. It is modelled because B4.5 writes this byte at a
+/// real `cmd.exe` and needs a fake that answers the way the real one was measured to: the
+/// pending line is thrown away, and **nothing is echoed for it**. Echoing it instead is
+/// what a raw byte pipe does, and it made a submitted `dir` come back as `ir` — the
+/// emulator taking the escape and the letter after it for one sequence.
+///
+/// **Only a bare one**, and that distinction is measured rather than chosen. A console
+/// turns input bytes into key events: an escape on its own is the escape *key* and clears
+/// the line, while an escape followed by `[` is the start of a sequence and is echoed as
+/// the literal characters it is made of — which is exactly why an unread cursor-position
+/// answer sits in the buffer as `^[[3;1R` rather than quietly cancelling anything.
+const CANCEL: u8 = 0x1b;
+
+/// What follows an escape that makes it a sequence rather than the escape key.
+const SEQUENCE: u8 = b'[';
+
 /// A far end that says whatever its transcript says.
 pub struct TranscriptShell {
     transcript: SessionTranscript,
@@ -69,13 +88,24 @@ impl FakeShell for TranscriptShell {
     /// Bytes accumulate until a line is complete, and each complete line is one
     /// submission.
     ///
-    /// One exception, and it is B3.5 decision 7's whole point: bytes that exactly match
-    /// a rule marked `interrupts` are submitted without waiting for a line ending,
-    /// because a control byte never carries one. Everything else — a device-query
-    /// answer, a partial line — simply accumulates.
+    /// Two exceptions. Bytes that exactly match a rule marked `interrupts` are submitted
+    /// without waiting for a line ending, because a control byte never carries one — B3.5
+    /// decision 7's whole point. And an escape discards everything pending on the line
+    /// ahead of it, which is what a console line editor does with one and what B4.5 relies
+    /// on. Everything else — a device-query answer, a partial line — simply accumulates.
     fn accept(&mut self, pending: &mut Vec<u8>) -> Vec<Submission> {
         let mut submissions = Vec::new();
         loop {
+            // Ahead of the line-ending scan, so a cancel arriving in the same read as the
+            // line it precedes clears what was there rather than the line itself.
+            if let Some(index) = pending
+                .iter()
+                .position(|byte| *byte == CANCEL)
+                .filter(|at| pending.get(at + 1) != Some(&SEQUENCE))
+            {
+                pending.drain(..index + 1);
+                continue;
+            }
             if let Some(index) = pending
                 .iter()
                 .position(|byte| *byte == b'\r' || *byte == b'\n')
@@ -288,6 +318,23 @@ mod tests {
         assert_eq!(
             pending, b"\x1b[1;1R",
             "it stays pending, and it stays intact"
+        );
+    }
+
+    /// The byte B4.5 writes ahead of a submitted line, and what a console line editor does
+    /// with it: the pending line is thrown away and nothing is echoed for it.
+    #[test]
+    fn a_bare_escape_discards_the_pending_line() {
+        let mut shell = shell();
+        let mut pending = b"half a line\x1bgo\r".to_vec();
+
+        let submissions = shell.accept(&mut pending);
+
+        assert_eq!(submissions.len(), 1);
+        assert_eq!(
+            submissions[0].bytes(),
+            b"go",
+            "what was pending ahead of the escape is gone, and the escape with it"
         );
     }
 

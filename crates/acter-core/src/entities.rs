@@ -9,6 +9,7 @@ mod protocol_events;
 mod read_mode;
 mod session_intent;
 mod session_state;
+mod shell_markers;
 mod terminal_item;
 mod unspoken_text;
 
@@ -20,5 +21,6 @@ pub use protocol_events::{Announcement, SessionEvent};
 pub(crate) use read_mode::ReadMode;
 pub use session_intent::SessionIntent;
 pub use session_state::{Integration, Screen, SessionState};
+pub use shell_markers::ShellMarkers;
 pub use terminal_item::{LineId, LineRevision, TerminalItem};
 pub(crate) use unspoken_text::UnspokenText;

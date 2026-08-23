@@ -5,5 +5,10 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[dependencies]
+# The `ShellMarkers` value a shell declares about its own prompt. The domain crate, not an
+# adapter: what a shell can mark is a fact the domain acts on (spec B4.5, decision 1).
+acter-core = { path = "../acter-core" }
+
 [lints]
 workspace = true

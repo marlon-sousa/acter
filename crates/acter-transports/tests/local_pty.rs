@@ -66,7 +66,13 @@ impl Shell {
     }
 
     fn over(args: &[&str]) -> Self {
-        let mut pty = LocalPty::spawn(SHELL, args, 80, 24).expect("a shell starts");
+        Self::with(args, &[])
+    }
+
+    /// The same, with an environment for the shell — `cmd.exe`'s OSC 133 prompt injection
+    /// is one variable, and this is where it is proved to reach a real one (spec B4.5).
+    fn with(args: &[&str], environment: &[(&str, &str)]) -> Self {
+        let mut pty = LocalPty::spawn(SHELL, args, environment, 80, 24).expect("a shell starts");
         let (bytes, reads) = channel(1024);
         pty.start(bytes);
         Self {

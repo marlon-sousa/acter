@@ -27,6 +27,9 @@ windows-sys = { version = "0.61", features = ["Win32_System_Console"] }
 # The full-pipeline test replays a transcript through the real terminal engine. A
 # dev-dependency only: nothing in this crate's library touches an emulator.
 acter-term = { path = "../acter-term" }
+# cmd's OSC 133 prompt injection, so the real-shell suite starts the same shell the
+# product starts rather than a second copy of the same string (spec B4.5).
+acter-shells = { path = "../acter-shells" }
 # "time" and "rt-multi-thread" are the real-shell tests' alone (tests/local_pty.rs): they
 # drive a process nobody scripted, so they need a real timeout to fail on rather than a
 # fake clock to advance, and a reading thread that can make progress while the test awaits.

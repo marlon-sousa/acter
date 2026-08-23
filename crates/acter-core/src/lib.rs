@@ -14,7 +14,7 @@ pub use controllers::{Requests, SessionActor, SessionInput, Wake};
 pub use entities::{
     Announcement, CommandId, ConnectionState, ExitCode, Integration, Key, KeyAck, KeyPress, LineId,
     LineRevision, Mode, Osc133Marker, PacingConfig, PacingState, Screen, SessionEvent, SessionId,
-    SessionIntent, SessionState, SubmitAck, TerminalItem,
+    SessionIntent, SessionState, ShellMarkers, SubmitAck, TerminalItem,
 };
 // The pacing verdict is domain-internal since A6: `ReadMode` no longer crosses the wire,
 // so the items whose signatures mention it — `PacingAction`, `PacingOutcome`, `verdict`

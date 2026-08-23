@@ -21,7 +21,7 @@ use std::time::{Duration, Instant};
 
 use acter_core::{
     Clock, CommandId, EventSink, Key, KeyPress, PacingConfig, SessionApi, SessionEvent, SessionId,
-    SessionService, Timer,
+    SessionService, ShellMarkers, Timer,
 };
 use acter_term::AlacrittyEngine;
 use acter_transports::LocalPty;
@@ -108,7 +108,16 @@ struct RealSession {
 
 impl RealSession {
     fn start(args: &[&str]) -> Self {
-        let pty = LocalPty::spawn(SHELL, args, COLUMNS, SCREEN_LINES).expect("a shell starts");
+        Self::over(args, &[], ShellMarkers::Full)
+    }
+
+    /// A session over a shell started with this environment, declaring this much about its
+    /// own markers. The two travel together because they are one decision: injecting cmd's
+    /// prompt markers without telling the domain the shell emits no `C` produces a session
+    /// that receives markers and speaks nothing (spec B4.5).
+    fn over(args: &[&str], environment: &[(&str, &str)], markers: ShellMarkers) -> Self {
+        let pty = LocalPty::spawn(SHELL, args, environment, COLUMNS, SCREEN_LINES)
+            .expect("a shell starts");
         let events = Arc::new(Recorder::default());
         let session = SessionService::start(
             Box::new(pty),
@@ -118,6 +127,7 @@ impl RealSession {
                 integration_grace: GRACE,
                 ..PacingConfig::default()
             },
+            markers,
         );
         session.attach_session(SESSION, Arc::clone(&events) as Arc<dyn EventSink>);
         Self { session, events }
@@ -237,6 +247,14 @@ impl RealSession {
         panic!("a marker-less shell was never flagged as unintegrated");
     }
 }
+
+/// A far end that asks the terminal where the cursor is and then does not read the
+/// answer. Six seconds of sleeping is all it takes; the container that held a tty in
+/// the original capture was incidental (ROADMAP 22.11).
+const SLOW_CONSUMER: &str = concat!(
+    r#"powershell -NoProfile -Command "[Console]::Write([char]27 + '[6n'); "#,
+    r#"Start-Sleep -Seconds 6""#
+);
 
 /// What each test floods the screen with, and what it runs afterwards. The rows are
 /// prefixed so that finding one in the wrong block is unambiguous rather than a guess
@@ -427,4 +445,125 @@ async fn a_backlog_released_by_an_interrupt_fills_its_own_blocks() {
             session.output_of(*command)
         );
     }
+}
+
+/// A real `cmd.exe` with its `PROMPT` carrying OSC 133 `A` and `B` — the whole of 22.5
+/// against the shell it is about (spec B4.5, decisions 1 to 4).
+///
+/// **The measurement this replaces is the reason both halves are one PR.** Setting the
+/// variable against the domain as it stood did not degrade such a session, it deleted it:
+/// no `CommandStarted`, no output, nothing spoken, because `BlockStarted` came only from a
+/// `C` and `wants` accepted only `Output`.
+#[tokio::test]
+#[ignore = "spawns a real shell"]
+async fn a_real_cmd_carries_its_own_prompt_markers() {
+    let session = RealSession::over(
+        &["/Q", "/K"],
+        acter_shells::cmd::ENVIRONMENT,
+        acter_shells::cmd::MARKERS,
+    );
+
+    let command = session.submit("echo acter-marked-line");
+    let output = session.until(command, "acter-marked-line", PATIENCE).await;
+
+    assert_eq!(
+        session.heading_of(command),
+        Some(Some("echo acter-marked-line".to_owned())),
+        "the block is named by what the far end echoed, and the echo is what opened it"
+    );
+    assert!(
+        !session
+            .events
+            .0
+            .lock()
+            .expect("recorder poisoned")
+            .contains(&SessionEvent::IntegrationUnavailable),
+        "a shell whose prompt carries A and B is integrated, not flagged"
+    );
+    assert!(
+        output.contains('>'),
+        "the returning prompt is the last thing the block says — the only ending a shell \
+         with no exit code has: {output:?}"
+    );
+}
+
+/// 22.11: a device-query answer the program that asked never read, and the submitted line
+/// that used to be concatenated onto it.
+///
+/// The far end is a slow consumer — it writes a cursor-position query and then sleeps
+/// without reading — which is all it takes. The tty-holding container the defect was found
+/// in was incidental to the capture, not a precondition.
+///
+/// Before decision 7 the next submission came back as
+/// `'s not recognized as an internal or external command,`, naming a command the user
+/// never typed.
+#[tokio::test]
+#[ignore = "spawns a real shell"]
+async fn a_submission_behind_an_unread_device_query_answer_still_runs() {
+    let session = RealSession::over(
+        &["/Q", "/K"],
+        acter_shells::cmd::ENVIRONMENT,
+        acter_shells::cmd::MARKERS,
+    );
+
+    let slow = session.submit(SLOW_CONSUMER);
+    // Long enough for the query to be answered and for the far end to give up without
+    // reading: the sleep is six seconds.
+    session.until(slow, ">", DOCKER_PATIENCE).await;
+
+    let command = session.submit("echo acter-second-line");
+    let output = session.until(command, "acter-second-line", PATIENCE).await;
+
+    assert!(
+        !session.rendered().contains("not recognized"),
+        "the line the user submitted is the line the shell ran: {output:?}"
+    );
+    assert!(
+        !session.rendered().contains("^["),
+        "and this pump's own answer is never in the buffer as text: {:?}",
+        session.rendered()
+    );
+}
+
+/// **Every** command in a marked cmd session, not only the first: the block holds the
+/// command's output and the returning prompt, and never the line the user typed.
+///
+/// Written during the NVDA pass for this spec, which heard exactly that failure — the
+/// first command clean and every one after it reading the user's own typing back, glued to
+/// the answer as `echo bravobravo`. It turned out to be a session that was never
+/// integrated at all, so what was heard is ROADMAP 22.12 in an unintegrated session rather
+/// than anything about markers. The test stays because nothing else asserted that the
+/// exclusion holds past the *first* command, which is precisely where 22.12 says an
+/// unmarked session stops holding it.
+#[tokio::test]
+#[ignore = "spawns a real shell"]
+async fn no_command_in_a_marked_session_reads_the_typed_line_back() {
+    let session = RealSession::over(
+        &["/Q", "/K"],
+        acter_shells::cmd::ENVIRONMENT,
+        acter_shells::cmd::MARKERS,
+    );
+
+    let first = session.submit("echo acter-alpha");
+    session.until(first, "acter-alpha", PATIENCE).await;
+
+    let second = session.submit("echo acter-bravo");
+    let output = session.until(second, "acter-bravo", PATIENCE).await;
+
+    // Asked of the whole session, not of one block: the echo was reaching the buffer as
+    // output of the *previous* command, which an assertion about this block cannot see.
+    let said = session.rendered();
+    assert!(
+        !said.contains("echo acter-bravo"),
+        "the command line is never read back at the user, in any block: {said:?}"
+    );
+    assert!(
+        output.contains('>'),
+        "and the returning prompt is still the last thing it says: {output:?}"
+    );
+    assert_eq!(
+        session.heading_of(second),
+        Some(Some("echo acter-bravo".to_owned())),
+        "the command line belongs in the heading and nowhere else"
+    );
 }

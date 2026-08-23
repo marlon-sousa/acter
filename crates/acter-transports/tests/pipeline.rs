@@ -28,7 +28,8 @@ use std::time::Duration;
 
 use acter_core::{
     Announcement, Clock, CommandId, EventSink, ExitCode, Key, KeyAck, KeyPress, PacingConfig,
-    SessionApi, SessionEvent, SessionId, SessionService, Timer, Transport, TransportError,
+    SessionApi, SessionEvent, SessionId, SessionService, ShellMarkers, Timer, Transport,
+    TransportError,
 };
 use acter_term::AlacrittyEngine;
 use acter_transports::{
@@ -201,6 +202,12 @@ impl Pipeline {
     /// replayed unchanged over a shell that emits no markers, and over a pipe that hands
     /// the engine one byte at a time.
     fn over(shell: Box<dyn FakeShell>, chunking: Chunking) -> Self {
+        Self::marked(shell, chunking, ShellMarkers::Full)
+    }
+
+    /// The same, for a far end whose prompt marks only `A` and `B` — `cmd.exe` (spec
+    /// B4.5). The declaration is the shell's, so it is named beside the shell.
+    fn marked(shell: Box<dyn FakeShell>, chunking: Chunking, markers: ShellMarkers) -> Self {
         let clock = Arc::new(FakeClock::default());
         let events = Arc::new(Recorder::default());
         let far_end = Arc::new(FarEnd::default());
@@ -216,6 +223,7 @@ impl Pipeline {
                 integration_grace: GRACE,
                 ..PacingConfig::default()
             },
+            markers,
         );
         session.attach_session(SESSION, Arc::clone(&events) as Arc<dyn EventSink>);
 
@@ -821,6 +829,82 @@ async fn a_device_query_is_answered_back_to_the_transport() {
     );
 }
 
+/// A `cmd.exe`-shaped session end to end over the real engine and the real tracker: the
+/// prompt carries `A` and `B`, nothing carries `C` or `D`, and the block structure has to
+/// come from the echo (spec B4.5, decisions 2 to 4).
+///
+/// This is the whole of 22.5 in one assertion. Before it, setting the environment variable
+/// did not degrade such a session, it deleted it — no `CommandStarted`, no output, nothing
+/// spoken — because `BlockStarted` only ever came from a `C` and `wants` accepted only
+/// `Output`.
+#[tokio::test]
+async fn a_shell_that_marks_only_its_prompt_still_gets_blocks_and_speaks() {
+    let mut pipeline = Pipeline::marked(
+        far_end("cmd_prompt.json"),
+        Chunking::Whole,
+        ShellMarkers::PromptAndCommandLine,
+    );
+    pipeline.run_until(0).await;
+
+    pipeline.submit("dir");
+    pipeline.run_until(1_000).await;
+    pipeline.submit("quiet");
+    pipeline.run_until(2_000).await;
+
+    let substance = pipeline.substance();
+    assert!(
+        !substance.unintegrated,
+        "a shell that marks A and B is integrated: it is one shell's shortcoming, not a \
+         third integration state (ROADMAP 22.5, pinned)"
+    );
+
+    let commands: Vec<_> = substance
+        .blocks
+        .iter()
+        .filter(|block| block.command_line.is_some())
+        .collect();
+    assert_eq!(
+        commands.len(),
+        2,
+        "one block per submitted command, and it is the synthesized C that opens each: {:?}",
+        substance.blocks
+    );
+
+    let dir = commands[0];
+    assert_eq!(dir.command_line.as_deref(), Some("dir"));
+    assert!(
+        dir.output.contains("one.txt") && dir.output.contains("two.txt"),
+        "the command's output is under its own heading: {:?}",
+        dir.output
+    );
+    assert!(
+        !dir.output.contains("dir\r") && !dir.output.starts_with("dir"),
+        "and the echo of the command line is not, which is DESIGN's echo exclusion doing \
+         what the markers were injected to let it do: {:?}",
+        dir.output
+    );
+    assert!(
+        dir.output.contains("acter>"),
+        "the returning prompt is the last thing the block says — the only ending a shell \
+         with no exit code has to offer (spec B4.5, decision 4): {:?}",
+        dir.output
+    );
+    assert!(dir.closed, "and the block closes");
+
+    let quiet = commands[1];
+    assert_eq!(
+        quiet.command_line.as_deref(),
+        Some("quiet"),
+        "a command that printed nothing still opens a block and names it: {:?}",
+        substance.blocks
+    );
+    assert!(
+        quiet.output.contains("acter>"),
+        "with the returning prompt as its content: {:?}",
+        quiet.output
+    );
+}
+
 /// One replayable session: a far end, how long to let it settle before anything is typed,
 /// and the lines submitted to it with the scripted moment each is given to answer by.
 struct Case {
@@ -836,7 +920,7 @@ struct Case {
 
 impl Case {
     async fn replay(&self, chunking: Chunking) -> Substance {
-        let mut pipeline = Pipeline::over(far_end(self.far_end), chunking);
+        let mut pipeline = Pipeline::marked(far_end(self.far_end), chunking, markers(self.far_end));
         pipeline.run_until(self.warmup).await;
         for (line, until) in self.submissions {
             pipeline.submit(line);
@@ -848,6 +932,16 @@ impl Case {
 
 /// A far end by name: the built-in shell, the built-in shell with its integration taken
 /// away, or a transcript fixture from disk.
+/// What the far end of that name is able to mark, which is a fact about the shell rather
+/// than about the session — the container derives it the same way, from which shell was
+/// named (spec B4.5, decision 1).
+fn markers(name: &str) -> ShellMarkers {
+    match name {
+        "cmd_prompt.json" => ShellMarkers::PromptAndCommandLine,
+        _ => ShellMarkers::Full,
+    }
+}
+
 fn far_end(name: &str) -> Box<dyn FakeShell> {
     match name {
         "builtin" => Box::new(TranscriptShell::builtin()),
@@ -936,6 +1030,16 @@ const CASES: &[Case] = &[
         far_end: "captured_prompt.json",
         warmup: 0,
         submissions: &[("hello", 1_000)],
+    },
+    // `cmd.exe`'s shape: `A`, the prompt, `B` and nothing else, with the echo of the
+    // submitted line written onto the prompt's own row. Two commands, one with output and
+    // one without, because a command that prints nothing is where a synthesized `C` has to
+    // come from the next prompt's `A` rather than from a new row (spec B4.5, decision 2).
+    Case {
+        name: "cmd_prompt.json",
+        far_end: "cmd_prompt.json",
+        warmup: 0,
+        submissions: &[("dir", 1_000), ("quiet", 2_000)],
     },
     Case {
         name: "device_query.json",

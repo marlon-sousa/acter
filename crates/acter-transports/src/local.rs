@@ -6,8 +6,9 @@
 //! running against a scripted far end and does not change because these bytes came from
 //! ConPTY instead. What is new is that nobody wrote them down in advance.
 //!
-//! **It names no shell.** The program to spawn is the caller's, because which shell to
-//! run and what to inject into it is `ShellAdapter`'s knowledge and therefore B5's —
+//! **It names no shell.** The program to spawn is the caller's, and so is the environment
+//! it is spawned with, because which shell to run and what to inject into it is
+//! `ShellAdapter`'s knowledge and therefore B5's —
 //! DESIGN's transport-versus-shell criterion, the same one that put [`Transport::interrupt`]
 //! on this port and left EOF off it. A transport reaching for `powershell.exe` would be
 //! deciding a shell question at the transport seam, and the SSH adapter beside it would
@@ -81,9 +82,17 @@ impl LocalPty {
     /// The error is a whole spoken sentence, not a fragment: it reaches the user as the
     /// answer to "why is there no session", and by CLAUDE.md that is a domain requirement
     /// rather than polish.
+    /// The environment is the caller's for the same reason the program is: what to inject
+    /// into a shell is `ShellAdapter`'s knowledge, and `cmd.exe`'s whole OSC 133 injection
+    /// is one variable (spec B4.5, decision 1). A transport reaching for `PROMPT` itself
+    /// would be deciding a shell question at the transport seam.
+    ///
+    /// Variables are added to the ones this process already has rather than replacing
+    /// them: a shell started with an empty environment is not the shell the user asked for.
     pub fn spawn(
         program: &str,
         args: &[&str],
+        environment: &[(&str, &str)],
         columns: u16,
         screen_lines: u16,
     ) -> Result<Self, String> {
@@ -97,6 +106,9 @@ impl LocalPty {
 
         let mut command = CommandBuilder::new(program);
         command.args(args);
+        for (name, value) in environment {
+            command.env(name, value);
+        }
         let child = pty
             .slave
             .spawn_command(command)
