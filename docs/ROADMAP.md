@@ -1828,12 +1828,18 @@ the answer to "what should we do now?".
     `ESC[?9001l ESC[?1004l` — the pseudoconsole turning win32-input-mode and focus
     reporting back off as the console host tears down — and only then the close.
 
-    **It runs in CI**, unlike 22.13's Docker case, so unlike that one it is presumably a
-    recent change in what the host console emits rather than a test nobody ran; when it
-    started is not established. Whether the test should tolerate a trailing read from a
-    shell that has gone away, or whether a byte arriving after `exit` is something the
-    transport should be swallowing, is the question — and the answer decides whether
-    anything above this line ever sees such a read.
+    **It runs in CI, and CI is green**, which is what makes it worth an entry rather than
+    a fix on the spot: the `real-shell (Windows)` job passed on every recent run of main,
+    including B4.9's. So this is not a test nobody runs and not a regression in the code —
+    it is the developer's Windows 11 console host emitting something the runner's does not,
+    and the suite is therefore red on the machine where manual accessibility work happens
+    and green everywhere the check is looked at. That is the worse of the two shapes 22.13
+    warned about, because nothing will ever draw attention to it.
+
+    Whether the test should tolerate a trailing read from a shell that has gone away, or
+    whether a byte arriving after `exit` is something the transport should be swallowing,
+    is the question — and the answer decides whether anything above this line ever sees
+    such a read.
 
 ## Convergence (requires B4, B5 and B6 all Done)
 
