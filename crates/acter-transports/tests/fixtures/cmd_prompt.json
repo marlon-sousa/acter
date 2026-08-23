@@ -1,0 +1,46 @@
+{
+  "on_start": [
+    {
+      "payload": {
+        "marker": {
+          "kind": "A"
+        }
+      }
+    },
+    {
+      "payload": {
+        "text": "acter> "
+      }
+    },
+    {
+      "payload": {
+        "marker": {
+          "kind": "B"
+        }
+      }
+    }
+  ],
+  "rules": [
+    {
+      "match": "dir",
+      "steps": [
+        {
+          "delay": {
+            "min_ms": 100,
+            "max_ms": 100
+          },
+          "payload": {
+            "text": "one.txt\r\ntwo.txt\r\n"
+          }
+        }
+      ]
+    },
+    {
+      "match": "quiet",
+      "steps": []
+    }
+  ],
+  "default": {
+    "steps": []
+  }
+}

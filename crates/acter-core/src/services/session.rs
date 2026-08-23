@@ -46,8 +46,8 @@ use tokio::sync::mpsc::{Receiver, Sender, UnboundedSender, channel, unbounded_ch
 use crate::{
     BoundaryEvent, BoundaryTracker, Clock, CommandId, EventSink, ExitCode, Integration, KeyAck,
     KeyPress, LineId, LineRevision, PacingConfig, Region, Screen, SessionActor, SessionApi,
-    SessionEvent, SessionId, SessionInput, SessionIntent, SubmitAck, TerminalEngine, Timer,
-    Transport, intent_for,
+    SessionEvent, SessionId, SessionInput, SessionIntent, ShellMarkers, SubmitAck, TerminalEngine,
+    Timer, Transport, intent_for,
 };
 
 /// Read buffering between the transport and the pump. Bounded, so a far end that floods
@@ -67,6 +67,17 @@ const REQUESTS: usize = 64;
 /// and then silently do nothing. The scripted far end hid it by accepting either byte,
 /// which is why it took a real shell to find (spec B4).
 const ENTER: char = '\r';
+
+/// What `cmd.exe`'s line editor treats as "discard whatever is pending on this line".
+///
+/// Written ahead of a submitted line when the far end is a shell sitting at its prompt
+/// with something queued in front of it that the user did not type — see
+/// [`Pump::cancel_pending_input`] for what that something turned out to be and why the
+/// byte goes out on its own.
+///
+/// It belongs to `ShellAdapter` and moves there in B5: which byte discards a pending line
+/// is a fact about a shell's line editor, the same category as its prompt injection.
+const CANCEL: u8 = 0x1b;
 
 /// One session: the [`SessionApi`] the routers hold, and the handle on the two tasks
 /// behind it.
@@ -105,6 +116,7 @@ impl SessionService {
         engine: Box<dyn TerminalEngine + Send>,
         clock: Arc<dyn Clock>,
         config: PacingConfig,
+        markers: ShellMarkers,
     ) -> Self {
         let sink = Arc::new(AttachedSink::default());
         let (bytes, reads) = channel(READS);
@@ -125,7 +137,7 @@ impl SessionService {
             Pump {
                 transport,
                 engine,
-                tracker: BoundaryTracker::new(),
+                tracker: BoundaryTracker::new(markers),
                 grace: config.integration_grace,
                 clock,
                 reads,
@@ -134,6 +146,7 @@ impl SessionService {
                 next_id: Arc::clone(&next_id),
                 running: Arc::clone(&running),
                 integration: Integration::Pending,
+                markers,
                 submitted: VecDeque::new(),
                 echo: Echo::default(),
                 open: None,
@@ -270,6 +283,9 @@ struct Pump {
     /// (decision 10). Both copies are driven by the same two facts and the pump is the
     /// source of both, so they cannot come to disagree.
     integration: Integration,
+    /// What the far end's prompt is able to say (spec B4.5). Only [`Pump::wants`] reads it
+    /// here; the rest of the difference is the tracker's.
+    markers: ShellMarkers,
     /// Submissions minted and not yet claimed by a block, oldest first. Each carries the
     /// line it was minted for, because the shell's echo of a line is what identifies the
     /// submission it is running (spec B6.1, decision 3).
@@ -408,8 +424,57 @@ impl Pump {
             id: command_id,
             line: line.to_owned(),
         });
+        self.cancel_pending_input();
         self.write(format!("{line}{ENTER}").as_bytes());
         self.settle_running();
+    }
+
+    /// Discards whatever is pending on the far end's line, ahead of the line about to be
+    /// submitted.
+    ///
+    /// **What this is really about, and the roadmap entry had the cause wrong.** 22.11
+    /// recorded that Acter answers a program's cursor-position query itself and that its
+    /// own answer lands unread in front of the next submitted line. Measured against a
+    /// real `cmd.exe`, the query from a program below **never reaches Acter at all**:
+    /// ConPTY intercepts it, answers it into the console input queue itself, and the only
+    /// thing on the wire is that answer already echoed back as caret-notation text. So the
+    /// bytes are not this pump's, and no ledger of what it wrote can see them coming.
+    ///
+    /// What is left is prevention, and one byte does it: `cmd.exe`'s line editor treats
+    /// escape as "discard the pending line", so the queued answer is thrown away and the
+    /// submitted line is read as itself. Measured both ways — without it the shell answers
+    /// `'s not recognized as an internal or external command,`, naming a command the user
+    /// never typed; with it the line runs and the caret text is erased from the row.
+    ///
+    /// **Two gates, and both are load-bearing.**
+    ///
+    /// *The shell is one Acter injected cmd's prompt into.* Escape clearing the line is
+    /// `cmd.exe`'s line editor, not a universal; a POSIX shell's reader takes it as a meta
+    /// prefix. That is `ShellAdapter`'s knowledge and B5's port; until then the marker
+    /// declaration is the only thing that says which shell this is, and it says it
+    /// exactly.
+    ///
+    /// *The shell is reading a line, and this is the line.* An escape reaching a program
+    /// that reads raw input is a keypress — in `vim` it leaves insert mode — so it may only
+    /// go to a shell sitting at its prompt. That is exactly `Prompt` or `CommandLine`: the
+    /// prompt has been drawn and nothing has yet said output began.
+    ///
+    /// **This is what makes 22.5 the precondition for 22.11 rather than a neighbour of
+    /// it.** Without markers there are no regions at all and the question has no answer;
+    /// with them it is read straight off the tracker. Inside a REPL, a nested shell or a
+    /// container the region is `Output` — the proxying command never ended — so the gate
+    /// stays shut and those far ends are untouched. A second line typed behind one the far
+    /// end has not accounted for is not at a prompt either, whatever the region says.
+    ///
+    /// **It is written on its own, never joined to the line**, and that is not tidiness.
+    /// ConPTY translates input bytes into key events, and an escape immediately followed
+    /// by a letter is `Alt`+that letter rather than a bare escape: sent as one write the
+    /// line was still rejected, and sent as its own write it runs. Measured.
+    fn cancel_pending_input(&mut self) {
+        let reading = matches!(self.tracker.region(), Region::Prompt | Region::CommandLine);
+        if !self.markers.marks_output_start() && reading && self.submitted.len() == 1 {
+            self.write(&[CANCEL]);
+        }
     }
 
     /// Asks the far end to stop what it is running, and remembers that it was asked.
@@ -447,19 +512,28 @@ impl Pump {
     /// it would lose text. **A submission never opened a block**: see [`Pump::claim`],
     /// which is where B6.1 changed B6's answer.
     ///
-    /// And one more, which only a recovering session reaches: a command is **already
-    /// open** here. The tracker never nests blocks, so that can only be a command this
-    /// pump opened itself at submission time while the session was unintegrated, and a
-    /// late marker has just recovered it (DESIGN decision 8). The block is that same
-    /// command finally announcing itself, so it keeps the id the ack already gave the
-    /// frontend: the buffer block the user is looking at goes on to receive the real
-    /// output and the real exit code, rather than being orphaned beside a second one.
+    /// And one more, which two different sessions reach in opposite directions: a command
+    /// is **already open** here.
+    ///
+    /// **With nothing queued it keeps the id**, which is DESIGN decision 8's recovery. The
+    /// open block is one this pump inferred for a submission whose echo it recognised, and
+    /// a late marker has just recovered the session; the block is that same command
+    /// finally announcing itself, so the buffer block the user is looking at goes on to
+    /// receive the real output rather than being orphaned beside a second one.
+    ///
+    /// **With a submission still queued it closes and opens a fresh one**, which is where
+    /// B4.5 arrives. In a marked `cmd.exe` session the first prompt of the session gets a
+    /// block of its own — text that belongs to no command anyone submitted, exactly as
+    /// DESIGN says — and the synthesized `C` that follows is a real boundary for a real
+    /// submission. Keeping the prompt's block there would file the command's output under
+    /// the session banner and leave the submission running forever.
     async fn block_started(&mut self) {
         let echoed = self.echo.take();
-        if self.open.is_some() {
+        if self.open.is_some() && self.submitted.is_empty() {
             self.last_line = None;
             return;
         }
+        self.close(None).await;
         let command_id = self.claim(echoed.as_deref());
         self.open(command_id, echoed);
         self.settle_running();
@@ -804,7 +878,19 @@ impl Pump {
     fn wants(&self, region: Region) -> bool {
         match self.integration {
             Integration::Unintegrated => region == Region::Unstructured,
-            Integration::Pending | Integration::Integrated => region == Region::Output,
+            Integration::Pending | Integration::Integrated => match self.markers {
+                ShellMarkers::Full => region == Region::Output,
+                // **The prompt is content in a shell that emits no `D`** (spec B4.5,
+                // decision 4). There is no exit code to announce, so nothing at all is
+                // said when a command ends, and the prompt coming back is the only ending
+                // such a session has to offer a listener — which is why 22.12 records it
+                // as a requirement rather than a nicety. An unintegrated session already
+                // speaks it, as output of the block that is still open; marking the
+                // session without this arm would take it away.
+                ShellMarkers::PromptAndCommandLine => {
+                    matches!(region, Region::Output | Region::Prompt)
+                }
+            },
         }
     }
 
@@ -1107,6 +1193,11 @@ mod tests {
         }
 
         async fn with_config(config: PacingConfig) -> Self {
+            Self::of(config, ShellMarkers::Full).await
+        }
+
+        /// A session over a far end whose prompt marks only what this says (spec B4.5).
+        async fn of(config: PacingConfig, markers: ShellMarkers) -> Self {
             let far_end = Arc::new(FarEnd::default());
             let clock = Arc::new(FakeClock::default());
             let events = Arc::new(Recorder::default());
@@ -1115,6 +1206,7 @@ mod tests {
                 Box::new(FakeEngine(Arc::clone(&far_end))),
                 Arc::clone(&clock) as Arc<dyn Clock>,
                 config,
+                markers,
             );
             api.attach_session(SessionId(1), Arc::clone(&events) as Arc<dyn EventSink>);
             let session = Self {
@@ -1250,6 +1342,11 @@ mod tests {
             *self.far_end.interrupts.lock().expect("far end poisoned")
         }
     }
+
+    /// What a shell has drawn when it is waiting for a line. Any string would do — what
+    /// makes it a prompt in these tests is the region it falls in and the fact that the
+    /// echo is appended to the same row.
+    const PROMPT: &str = r"C:\>";
 
     fn marker(marker: Osc133Marker) -> TerminalItem {
         TerminalItem::Marker(marker)
@@ -2262,5 +2359,189 @@ mod tests {
             !reloaded.0.lock().expect("recorder poisoned").is_empty(),
             "and the new one has the session"
         );
+    }
+
+    /// Spec B4.5's two halves as the pump sees them: a shell that marks only `A` and `B`,
+    /// and a device-query answer the far end never read.
+    mod a_shell_that_marks_no_output_start {
+        use super::*;
+
+        async fn cmd() -> Session {
+            Session::of(quick_grace(), ShellMarkers::PromptAndCommandLine).await
+        }
+
+        /// The prompt drawn, the command line marked, the echo appended to the prompt's
+        /// own row — exactly what a real `cmd.exe` puts on the wire.
+        fn prompt(row: u64, at: &str) -> Vec<TerminalItem> {
+            vec![
+                marker(Osc133Marker::PromptStart),
+                line(row, at),
+                marker(Osc133Marker::CommandStart),
+            ]
+        }
+
+        /// A block opens where the echo ends, and it is the submission's block: the
+        /// heading names what the user typed, and the output is under it.
+        #[tokio::test]
+        async fn the_echo_opens_the_submissions_block_and_names_it() {
+            let session = cmd().await;
+            session.emit(prompt(1, PROMPT)).await;
+            let command = session.submit("dir").await;
+            session.emit(vec![line(1, "dir"), line(2, "one.txt")]).await;
+            session.advance_to(1_000).await;
+
+            // Two blocks: the session's first prompt belongs to no command anyone
+            // submitted and gets one of its own, exactly as DESIGN says, and the
+            // submission gets the one the synthesized `C` opened.
+            assert_eq!(session.started().last(), Some(&command));
+            assert_eq!(session.headings(), vec![None, Some("dir".to_owned())]);
+            assert_eq!(session.output_of(command), "one.txt");
+        }
+
+        /// Decision 4, and the reason it amends a pinned answer: a cmd session has no exit
+        /// code, so the returning prompt is the only ending a listener gets. It has to be
+        /// inside the block it ended, and it has to be spoken.
+        #[tokio::test]
+        async fn the_prompt_comes_back_inside_the_block_it_ended() {
+            let session = cmd().await;
+            session.emit(prompt(1, PROMPT)).await;
+            let command = session.submit("dir").await;
+            session.emit(vec![line(1, "dir"), line(2, "one.txt")]).await;
+            session.emit(prompt(3, PROMPT)).await;
+            session.advance_to(1_000).await;
+
+            assert!(
+                session.output_of(command).contains(PROMPT),
+                "the prompt is the last thing the block says, and it was {:?}",
+                session.output_of(command)
+            );
+            assert!(
+                session.events().iter().any(|event| matches!(
+                    event,
+                    SessionEvent::CommandFinished { command_id } if *command_id == command
+                )),
+                "the block closes"
+            );
+        }
+
+        /// The echo is still excluded from the block's content — DESIGN's echo exclusion,
+        /// doing exactly what the markers were injected to let it do.
+        #[tokio::test]
+        async fn the_echo_is_never_the_blocks_content() {
+            let session = cmd().await;
+            session.emit(prompt(1, PROMPT)).await;
+            let command = session.submit("dir").await;
+            session.emit(vec![line(1, "dir"), line(2, "one.txt")]).await;
+            session.advance_to(1_000).await;
+
+            assert!(!session.output_of(command).contains("dir"));
+        }
+
+        /// The safety constraint: in a shell known not to emit `C`, a line that cannot be
+        /// classified must be forwarded rather than dropped. Text on a row that is not the
+        /// echo's ends the command line and is spoken.
+        #[tokio::test]
+        async fn text_that_is_not_the_echo_is_never_dropped() {
+            let session = cmd().await;
+            session.emit(prompt(1, PROMPT)).await;
+            session.submit("dir").await;
+            session
+                .emit(vec![line(7, "something the far end wrote")])
+                .await;
+            session.advance_to(1_000).await;
+
+            assert!(session.rendered().contains("something the far end wrote"));
+        }
+    }
+
+    /// The cancel byte that keeps a submitted line from being concatenated onto input
+    /// nobody read (spec B4.5, decisions 6 and 7).
+    ///
+    /// What is queued in front of the line is not modelled here, because Acter cannot see
+    /// it: ConPTY answers a program's cursor-position query itself, so the answer is in the
+    /// far end's input queue and never on the wire. What these tests pin is the gate —
+    /// which sessions get the byte and which never do — and the real shell proves it works.
+    mod the_cancel_ahead_of_a_submission {
+        use super::*;
+
+        async fn cmd() -> Session {
+            Session::of(quick_grace(), ShellMarkers::PromptAndCommandLine).await
+        }
+
+        fn prompt(row: u64, at: &str) -> Vec<TerminalItem> {
+            vec![
+                marker(Osc133Marker::PromptStart),
+                line(row, at),
+                marker(Osc133Marker::CommandStart),
+            ]
+        }
+
+        /// A shell sitting at its prompt: the line goes out behind one escape.
+        #[tokio::test]
+        async fn a_shell_at_its_prompt_gets_one() {
+            let session = cmd().await;
+            session.emit(prompt(1, PROMPT)).await;
+            session.submit("dir").await;
+
+            assert_eq!(
+                session.written(),
+                "\u{1b}dir\r",
+                "the cancel goes out on its own, then the line"
+            );
+        }
+
+        /// **The gate 22.5 is the precondition for.** A command is running, so the line is
+        /// stdin for it — a REPL's answer, a `y` at a `[y/N]` — and an escape reaching a
+        /// program that reads raw input is a keypress rather than a line cancel.
+        #[tokio::test]
+        async fn a_running_command_gets_none() {
+            let session = cmd().await;
+            session.emit(prompt(1, PROMPT)).await;
+            session.submit("python").await;
+            session.emit(vec![line(1, "python"), line(2, ">>>")]).await;
+            session.submit("2 + 2").await;
+
+            assert!(
+                session.written().ends_with("2 + 2\r"),
+                "and nothing in front of it: {:?}",
+                session.written()
+            );
+            assert_eq!(
+                session.written().matches('\u{1b}').count(),
+                1,
+                "only the first submission, made at the prompt, carried one: {:?}",
+                session.written()
+            );
+        }
+
+        /// A second line typed while the first is still unaccounted for is not a line at a
+        /// prompt either: the far end has not said what it did with the one before it.
+        #[tokio::test]
+        async fn a_line_submitted_behind_another_gets_none() {
+            let session = cmd().await;
+            session.emit(prompt(1, PROMPT)).await;
+            session.submit("first").await;
+            session.submit("second").await;
+
+            assert_eq!(
+                session.written().matches('\u{1b}').count(),
+                1,
+                "one cancel, for the line that was actually at the prompt: {:?}",
+                session.written()
+            );
+        }
+
+        /// And no shell Acter did not inject cmd's prompt into ever gets one. Escape
+        /// clearing the line is `cmd.exe`'s line editor; a POSIX shell's reader takes it as
+        /// a meta prefix.
+        #[tokio::test]
+        async fn a_shell_that_is_not_cmd_never_gets_one() {
+            let session = Session::with_config(quick_grace()).await;
+            session.advance_to(300).await;
+            session.emit(vec![line(1, PROMPT)]).await;
+            session.submit("dir").await;
+
+            assert_eq!(session.written(), "dir\r");
+        }
     }
 }

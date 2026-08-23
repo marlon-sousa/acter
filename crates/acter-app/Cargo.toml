@@ -18,6 +18,9 @@ acter-core = { path = "../acter-core" }
 # know which implementation fills a port (B6).
 acter-term = { path = "../acter-term" }
 acter-transports = { path = "../acter-transports" }
+# Per-shell knowledge behind no port yet: cmd's OSC 133 prompt injection and what it can
+# mark. Named here for the same reason the other adapter crates are (spec B4.5).
+acter-shells = { path = "../acter-shells" }
 # Protocol payloads that cross the IPC boundary as JSON.
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

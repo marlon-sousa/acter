@@ -103,6 +103,29 @@ Marker semantics: **A** prompt start, **B** command line accepted, **C** output
 begins, **D + exit code** command finished. The prompt only reappears when the
 previous command has ended, so D is a deterministic end signal — not a heuristic.
 
+**Amended 2026-08-22 (B4.5): a shell may be able to mark only A and B, and cmd is one.**
+`PROMPT` is evaluated when the prompt is drawn and `cmd.exe` has no post-execution hook, so
+"output begins" and "the command ended with this code" have nowhere to come from. Such a
+shell **declares** what it can mark, and two rules change for it; nothing changes for a
+shell that marks the full cycle.
+
+- **C is synthesized at the end of the echoed line, and that is evidence rather than a
+  guess.** In a line-oriented shell the echo is the one line the shell read, and Acter
+  knows the exact text it submitted. The boundary tracker ends the command-line region when
+  anything arrives that is not a further append to the row the prompt was drawn on, and
+  opens the block there. Text on a *new* row therefore ends the region and is labelled
+  output rather than being excluded as an echo, which is what keeps the exclusion below
+  from ever hiding a line.
+- **The block closes on B, not on A, and the returning prompt is block content.** There is
+  no exit code, so nothing is announced when such a command ends; the prompt coming back is
+  the only ending a listener gets. Closing on A would leave it belonging to no block, and
+  excluding it as prompt region would end every command in silence. It is the one case
+  where the prompt region is content, and it exists because the alternative is a session
+  that says nothing when it finishes.
+
+D never arrives in such a shell, so a verdict stays unavailable and every command reports
+having ended without one — which is what an unintegrated session already produced.
+
 ### Reliability model — **Decided**
 
 Three ways D can fail to arrive, each with defined behavior:
@@ -345,6 +368,15 @@ Consequences:
   every far end past the injection point, and any unintegrated session — that exclusion
   cannot fire, and the echo matcher above suppresses the duplicate instead. Two halves of
   one fact, chosen by whether the region is marked.
+
+  **Amended 2026-08-22 (B4.5).** In a shell that marks only A and B the C is Acter's own,
+  synthesized at the end of the echoed line, so the exclusion fires on a region Acter
+  closed rather than one the shell delimited. The rule that keeps that safe is positional:
+  only text appended to the row the prompt was drawn on stays in the excluded region.
+  Anything on a new row ends the region and becomes output — a block that should not
+  have opened is extra structure, and a line that is never spoken is the cardinal defect.
+  The prompt region is content in such a shell, which is the one exception to "block
+  content is C..D" and is stated with its reason under command boundaries above.
 
 ## Output pacing: quiescence, patience, follow mode — **Decided**
 
