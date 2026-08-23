@@ -139,6 +139,7 @@ impl SessionService {
                 open: None,
                 interrupted: false,
                 lines: HashMap::new(),
+                held: None,
                 row: String::new(),
                 last_line: None,
             }
@@ -298,6 +299,11 @@ struct Pump {
     /// saturation — and [`Pump::due`] removes the entry then. What this holds is the lines
     /// currently live on screen.
     lines: HashMap<LineId, bool>,
+    /// Text that arrived while no block was open, and the line it came from.
+    ///
+    /// See [`Pump::hold`]: it is very often a submission's echo, and publishing it would
+    /// mean a block with no heading holding the user's own command line.
+    held: Option<(LineId, String)>,
     /// The tail of what the far end has appended lately, bounded by [`Pump::window`].
     ///
     /// Only [`Pump::boundary`] reads it: the far end's echo of a submitted line is
@@ -492,24 +498,71 @@ impl Pump {
         {
             // Nothing is forwarded into a session with no open block: `SessionActor`
             // returns early when nothing is active, so that text would be dropped
-            // outright — this product's cardinal defect. Deferring the open until the
-            // echo is only admissible because of this.
-            //
-            // A fresh id rather than [`Pump::claim`], deliberately: claiming would take
-            // the submission whose echo this very row may be about to complete, and the
-            // boundary below would then find nothing to open. Text arriving before any
-            // echo belongs to no command the user submitted — it is the shell's own
-            // prompt, or its banner — and B6 already treats a block nobody submitted as
-            // a real block with real output.
-            if self.open.is_none() {
-                let command_id = CommandId(self.next_id.fetch_add(1, Ordering::SeqCst));
-                self.open(command_id, None);
-                self.settle_running();
+            // outright — this product's cardinal defect.
+            match self.open {
+                Some(_) => self.output(id, due),
+                None => self.hold(id, due).await,
             }
-            self.output(id, due);
         }
 
         self.boundary(region, text, revision).await;
+        if self.window().is_none() {
+            self.spill().await;
+        }
+    }
+
+    /// Text that arrived while no block was open.
+    ///
+    /// **Held rather than given a block of its own, while a submission is still waiting
+    /// for its echo**, because at the start of a session that text usually *is* the echo.
+    /// Opening a block for it put the user's own command line under a heading with no
+    /// text — found in the NVDA pass for this spec, where the listener's buffer ended
+    /// with an empty level 2 heading and the command line repeated beneath it, which is a
+    /// dead end for heading navigation and the duplication this entry exists to remove.
+    ///
+    /// The hold is bounded twice over, because held text is text the listener has not
+    /// heard yet: by [`Pump::window`], so it can never exceed the longest line anyone is
+    /// waiting for, and by there being a submission pending at all. Anything past either
+    /// bound can no longer be part of an echo and is spilled immediately.
+    async fn hold(&mut self, id: LineId, text: String) {
+        let Some(window) = self.window() else {
+            self.spill().await;
+            self.unclaimed();
+            self.output(id, text);
+            return;
+        };
+        if !self.held.as_ref().is_some_and(|(held, _)| *held == id) {
+            self.spill().await;
+        }
+        match self.held.as_mut() {
+            Some((_, accumulated)) => accumulated.push_str(&text),
+            None => self.held = Some((id, text)),
+        }
+        if self.held.as_ref().is_some_and(|(_, held)| held.len() > window) {
+            self.spill().await;
+        }
+    }
+
+    /// Gives held text the block it turned out to deserve, no echo having claimed it.
+    async fn spill(&mut self) {
+        let Some((id, text)) = self.held.take() else {
+            return;
+        };
+        if self.open.is_none() {
+            self.unclaimed();
+        }
+        self.output(id, text);
+    }
+
+    /// Opens a block for text no submission accounts for — the shell's own prompt, or its
+    /// banner. A fresh id rather than [`Pump::claim`], deliberately: claiming would take
+    /// the submission whose echo this very row may be about to complete, and the boundary
+    /// would then find nothing to open. B6 already treats a block nobody submitted as a
+    /// real block with real output.
+    fn unclaimed(&mut self) {
+        let command_id = CommandId(self.next_id.fetch_add(1, Ordering::SeqCst));
+        self.open(command_id, None);
+        self.settle_running();
     }
 
     /// Whether the row this append landed on has now become the far end's echo of a line
@@ -560,6 +613,29 @@ impl Pump {
             return;
         };
         let submitted = self.adopt(index);
+
+        // Held text that ends with this echo *is* this echo, so it is dropped rather than
+        // published: the command line belongs in the heading below, not under a heading of
+        // its own with nothing to name it. Whatever came before the echo on that row — a
+        // prompt, a banner — is still text the far end wrote, and still gets its block.
+        if let Some((id, held)) = self.held.take() {
+            let before = held
+                .trim_end()
+                .strip_suffix(submitted.line.trim())
+                .map(str::to_owned);
+            match before {
+                Some(before) if before.is_empty() => {}
+                Some(before) => {
+                    self.unclaimed();
+                    self.output(id, before);
+                }
+                None => {
+                    self.unclaimed();
+                    self.output(id, held);
+                }
+            }
+        }
+
         self.close(None).await;
         self.open(submitted.id, Some(submitted.line));
         self.settle_running();

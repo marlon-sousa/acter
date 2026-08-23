@@ -772,8 +772,9 @@ async fn a_session_with_no_markers_degrades_honestly_instead_of_going_silent() {
         pipeline.rendered()
     );
     assert!(
-        pipeline.rendered().contains("forever"),
-        "echo exclusion is lost with the markers, so the echoed line is in the buffer too"
+        !pipeline.rendered().contains("forever"),
+        "**and the echoed command line is not in the buffer** (spec B4.4). It used to be,          because echo exclusion is DESIGN's `B..C` rule and there is no such region          without markers. The echo is what opens the block now, and it becomes the          heading rather than the first line under it: {:?}",
+        pipeline.rendered()
     );
     assert!(
         pipeline
@@ -1057,8 +1058,9 @@ async fn a_completed_command_in_an_unintegrated_session_is_read_aloud() {
         pipeline.rendered()
     );
     assert!(
-        pipeline.rendered().contains("small"),
-        "echo exclusion is lost with the markers, so the echoed line is in the buffer too"
+        !pipeline.rendered().contains("small"),
+        "**and the echoed command line is not in the buffer** (spec B4.4): it is the          heading, not the block's first content line: {:?}",
+        pipeline.rendered()
     );
     // **Inverted by B4.4.** This asserted that neither the echo nor the output was read
     // aloud, which was DESIGN's reliability case 2 before B4.4 amended it. A session that
