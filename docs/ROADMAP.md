@@ -1857,7 +1857,7 @@ thing to pick up once the adapters land, not merely the next number.
     against a real pseudoconsole before it is code. The scope this entry carried is
     distributed below and nothing is dropped.
 
-23.1. B5.1, the `ShellAdapter` port, with cmd behind it. Spec:
+23.1. **Done** — B5.1, the `ShellAdapter` port, with cmd behind it. Spec:
     [b5.1-shell-adapter-port.md](specs/b5.1-shell-adapter-port.md) — agreed in conversation
     2026-08-23. A refactor with no behaviour change: ARCHITECTURE has named this port since
     the beginning, and `acter-shells::cmd` is already its first implementer in constant
@@ -1870,6 +1870,21 @@ thing to pick up once the adapters land, not merely the next number.
     candidate explanation for 22.14's empty block, whose measurement compared a `/Q` test
     against a no-`/Q` app and concluded the frontend was implicated. Whether it is the cause
     or not, one place must own it, and that place is the adapter.
+
+    **What shipped.** `ShellAdapter` and `ShellLaunch` in `acter-core`, `Cmd` and `Plain`
+    in `acter-shells`, and `adapter_for` — one match from a program name to a shell — in a
+    module of its own rather than in the facade, which is the spec's one amendment and is
+    recorded in it. The composition root now names no shell at all.
+
+    **The argument drift is closed, and it was the only one.** Both real-shell suites take
+    their arguments from the adapter, so `/Q` and `/K` are spelled out nowhere but in cmd's
+    own module. The injection is a different matter and stays where each suite wants it:
+    `local_pty.rs` is about the pipe and keeps its unmarked stream, and `RealSession::cmd`
+    keeps the unintegrated session B4.2 only exists inside, while `RealSession::marked` is
+    the whole launch as the application performs it.
+
+    **22.14 is now re-measurable without the confound**, and has not been re-measured yet:
+    that is a separate NVDA pass and is filed as such rather than assumed.
 
 23.2. B5.2, the PowerShell adapter. Spec:
     [b5.2-powershell-adapter.md](specs/b5.2-powershell-adapter.md) — agreed in conversation

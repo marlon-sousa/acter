@@ -21,5 +21,8 @@ pub use entities::{
 // and the three transition functions — are `pub(crate)` in `policies` and reached
 // through that module rather than re-exported here. Nothing outside this crate used them.
 pub use policies::{BoundaryEvent, BoundaryTracker, Region, TextSize, intent_for, measure};
-pub use ports::{Clock, EventSink, SessionApi, TerminalEngine, Timer, Transport, TransportError};
+pub use ports::{
+    Clock, EventSink, SessionApi, ShellAdapter, ShellLaunch, TerminalEngine, Timer, Transport,
+    TransportError,
+};
 pub use services::SessionService;

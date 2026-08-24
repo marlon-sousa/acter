@@ -58,19 +58,30 @@ struct Shell {
 }
 
 impl Shell {
+    /// Started with the arguments the *application* starts this shell with, which since
+    /// B5.1 means asking the same adapter the composition root asks instead of spelling
+    /// them out here. That is the point of the entry: `/Q` (cmd's own command echo off)
+    /// and `/K` (keep running after each command) used to live in this file and nowhere
+    /// else, so every measurement here was taken against a stream the product never
+    /// produced (spec B5.1, decision 5).
+    ///
+    /// **The injection is deliberately not taken with them.** What this suite is about is
+    /// the pipe, and its subject is an unmarked stream; the environment half of the launch
+    /// is proved to reach a real shell in `real_session.rs`, where a marker means
+    /// something.
     fn start() -> Self {
-        // /Q turns the echo of the shell's own commands off, so what comes back is the
-        // pseudoconsole's echo of what was typed rather than cmd's script-style
-        // re-printing of it. /K keeps it running after each command.
-        Self::over(&["/Q", "/K"])
+        let launch = acter_shells::adapter_for(SHELL).launch();
+        let args: Vec<&str> = launch.args.iter().map(String::as_str).collect();
+        Self::with(&args, &[])
     }
 
+    /// A shell started with arguments this suite chose rather than the adapter's — `/C`,
+    /// which runs one command and exits, is not how Acter starts a session and is only
+    /// ever what a test about a far end *going away* needs.
     fn over(args: &[&str]) -> Self {
         Self::with(args, &[])
     }
 
-    /// The same, with an environment for the shell — `cmd.exe`'s OSC 133 prompt injection
-    /// is one variable, and this is where it is proved to reach a real one (spec B4.5).
     fn with(args: &[&str], environment: &[(&str, &str)]) -> Self {
         let mut pty = LocalPty::spawn(SHELL, args, environment, 80, 24).expect("a shell starts");
         let (bytes, reads) = channel(1024);
