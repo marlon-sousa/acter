@@ -1622,9 +1622,9 @@ the answer to "what should we do now?".
     the right answer and means a bare Enter is a re-orient gesture rather than a command.
 
 
-22.13. The nested-shell real-shell test is red on main, and nobody filed it. Spec: none yet
-    → specify first, and the first thing to specify is whether the *test* or the *behaviour*
-    is wrong. **Found 2026-08-23** while running the real-shell suite for B4.5, and filed
+22.13. **Done** — B4.10, an echo whose last characters arrived as a settlement. Spec:
+    [b4.10-an-echo-that-scrolled-as-it-finished.md](specs/b4.10-an-echo-that-scrolled-as-it-finished.md).
+    **Found 2026-08-23** while running the real-shell suite for B4.5, and filed
     because a permanently red check trains everyone to ignore the suite that catches the
     things unit tests cannot.
 
@@ -1679,6 +1679,42 @@ the answer to "what should we do now?".
     empty. The mechanism this entry was waiting on is now settled, so the measurement it
     asks for — whether the container's `sh` truly never echoed the rest of the line, or
     whether the accumulator lost it — can be taken as it stands.
+
+    **The measurement, taken 2026-08-23 before anything was proposed, picks the first
+    outcome: the matcher was losing an echo it should have caught.** A probe drove the
+    same nested session through a real `LocalPty` and a real `AlacrittyEngine` with no
+    pump in the picture and printed every read and every `TerminalItem`. The container's
+    `sh` echoed the **whole** line: the row arrived complete, as
+    `/ # i=1; while [ $i -le 40 ]; do echo acter-row-$i; i=$((i+1)); done`. What it did not
+    arrive as is an append. The pseudoconsole cut the read one character short of the end
+    of the echo, and the next read carried that character together with twenty-five rows of
+    output — so inside a single `advance` the echo's row was completed and then scrolled
+    out of the screen area, and the extractor emits a row that leaves the screen area as a
+    **settlement carrying its whole text**. `Pump::boundary` returned early on any revision
+    that was not an append, so the completed echo was thrown away and the accumulator was
+    left holding the line one character short, a suffix match that could never succeed.
+    Not a wrap, and not the non-consecutive line item B4.4's note made plausible.
+
+    That also made it a chunk-dependence, which this codebase already forbids: cut the same
+    bytes one at a time and every character appends, the accumulator matches and the block
+    opens. `every_session_says_the_same_thing_when_every_byte_is_its_own_read` exists to
+    forbid exactly that, and `Pump::boundary`'s own doc comment claimed it.
+
+    **So the test was right and the behaviour was wrong**, and neither of the other two
+    outcomes applies: DESIGN's sanctioned degradation is for a far end that did not echo,
+    and this one did. The test is unchanged.
+
+    **What shipped.** A rewrite and a settlement carry the row's whole text, so they now
+    *replace* the boundary accumulator instead of clearing it — and only on the row a
+    submission is pending on, which is the gate that makes it safe. Settlements arrive for
+    old rows, out of order, long after they were written; run `dir` twice and the first
+    command's echo row settles while the second `dir` is pending, so an ungated rule would
+    open a block on a row the far end wrote minutes earlier and then read the real echo
+    back at the user. **22.12 decided this entry after all**, just not the way its
+    sequencing hoped: B4.9's `pending_row` is not the fix, it is what makes the fix safe.
+    The held partial echo is resolved against the whole row by arithmetic rather than by
+    B4.9's suffix strip, which cannot see an echo that is one character short — without
+    that, fixing the match would have put the user's own line back into the buffer.
 
 
 22.14. A marked cmd session grows one empty block after its first command. Spec: none yet
@@ -1778,6 +1814,32 @@ the answer to "what should we do now?".
     nothing, and an event meaning "this never ran" would be new protocol surface plus a
     pinned string, decided in the open with a listener present rather than as a side
     effect.
+
+22.15. A second real-shell test is red on main, in the byte-level suite. Spec: none yet
+    → specify first, and the first thing to specify is whether `cmd.exe` exiting really
+    owes us a closed channel and nothing else. **Found 2026-08-23** while running the whole
+    real-shell suite for B4.10, and filed rather than fixed there: it is not B4.10's, and
+    it is one layer below anything that PR touches.
+
+    `a_shell_that_exits_ends_the_session_by_closing_the_channel` in `local_pty.rs` fails on
+    clean main — verified by stashing B4.10 and running it against `2e8bc2d`. It submits
+    `exit` and asserts that the next thing the read channel produces is its close. What it
+    gets on this machine is one more read first: sixteen bytes,
+    `ESC[?9001l ESC[?1004l` — the pseudoconsole turning win32-input-mode and focus
+    reporting back off as the console host tears down — and only then the close.
+
+    **It runs in CI, and CI is green**, which is what makes it worth an entry rather than
+    a fix on the spot: the `real-shell (Windows)` job passed on every recent run of main,
+    including B4.9's. So this is not a test nobody runs and not a regression in the code —
+    it is the developer's Windows 11 console host emitting something the runner's does not,
+    and the suite is therefore red on the machine where manual accessibility work happens
+    and green everywhere the check is looked at. That is the worse of the two shapes 22.13
+    warned about, because nothing will ever draw attention to it.
+
+    Whether the test should tolerate a trailing read from a shell that has gone away, or
+    whether a byte arriving after `exit` is something the transport should be swallowing,
+    is the question — and the answer decides whether anything above this line ever sees
+    such a read.
 
 ## Convergence (requires B4, B5 and B6 all Done)
 

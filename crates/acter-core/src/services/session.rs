@@ -628,7 +628,7 @@ impl Pump {
             }
         }
 
-        self.boundary(region, text, revision).await;
+        self.boundary(region, id, text, revision).await;
         if self.window().is_none() {
             self.spill().await;
         }
@@ -738,8 +738,8 @@ impl Pump {
     /// already rejects the text; inside a nested shell there is no such region at all,
     /// because the proxying command never ends and everything the container writes lands
     /// in one open `C..D`.
-    async fn boundary(&mut self, region: Region, text: String, revision: LineRevision) {
-        if region == Region::CommandLine || revision != LineRevision::Appended {
+    async fn boundary(&mut self, region: Region, id: LineId, text: String, revision: LineRevision) {
+        if region == Region::CommandLine {
             self.row.clear();
             return;
         }
@@ -749,7 +749,18 @@ impl Pump {
             return;
         };
 
-        self.row.push_str(&text);
+        // An append carries the delta the extractor computed, so appends accumulate. A
+        // rewrite and a settlement carry the row's *whole* text, so they replace what has
+        // accumulated rather than being thrown away — and only on the row a submission is
+        // pending on, which is the one row an echo is being written to (spec B4.10).
+        match revision {
+            LineRevision::Appended => self.row.push_str(&text),
+            _ if self.pending_row == Some(id) => self.row = text.clone(),
+            _ => {
+                self.row.clear();
+                return;
+            }
+        }
         if self.row.len() > window {
             let over = self.row.len() - window;
             let cut = (over..=self.row.len())
@@ -763,16 +774,13 @@ impl Pump {
         };
         let submitted = self.adopt(index);
 
-        // Held text that ends with this echo *is* this echo, so it is dropped rather than
+        // Held text that is this echo *is* this echo, so it is dropped rather than
         // published: the command line belongs in the heading below, not read back at the
         // user as the previous block's output. Whatever came before the echo on that row —
         // a prompt, a banner — is still text the far end wrote, and still reaches a block.
+        let whole = (revision != LineRevision::Appended).then_some(text.as_str());
         if let Some((id, held)) = self.held.take() {
-            let before = held
-                .trim_end()
-                .strip_suffix(submitted.line.trim())
-                .map(str::to_owned);
-            match before {
+            match before_echo(&held, whole, submitted.line.trim()) {
                 Some(before) if before.is_empty() => {}
                 Some(before) => self.publish(id, before),
                 None => self.publish(id, held),
@@ -1019,6 +1027,36 @@ impl Pump {
     fn send(&self, input: SessionInput) {
         let _ = self.inputs.send(input);
     }
+}
+
+/// What of the text held on the echo's row was *not* the echo that just matched.
+///
+/// `None` means none of it could be told apart, and the caller publishes the held text
+/// whole: losing text is this product's cardinal defect, and a line the listener hears
+/// twice is not.
+///
+/// **With the whole row in hand this is arithmetic** (spec B4.10). Held text is a tail of
+/// the row the echo was written onto, and the echo is the end of that row, so where the
+/// held text sits inside the row says how much of it lies in front of the echo. That much
+/// is the prompt or the banner the far end drew before reading the line, and it is
+/// published; the rest is the user's own line coming back.
+///
+/// **Without it, the strip B4.9 shipped**, which is all an echo matched on appends alone
+/// allows: the held text either ends with the submitted line or is not that echo at all.
+/// It is exactly the case the whole row is needed for — an echo whose last characters
+/// arrived as a settlement rather than as an append — that the strip cannot see, because
+/// the held text is then a line one character short of the one that matched.
+fn before_echo(held: &str, row: Option<&str>, line: &str) -> Option<String> {
+    let held = held.trim_end();
+    let Some(row) = row.map(str::trim_end) else {
+        return held.strip_suffix(line).map(str::to_owned);
+    };
+    let echo_at = row.len().checked_sub(line.len())?;
+    // The held text is a tail of this row unless something rewrote the row underneath it,
+    // in which case there is no arithmetic to do and the caller keeps every character.
+    let held_at = row.rfind(held)?;
+    let keep = echo_at.saturating_sub(held_at).min(held.len());
+    Some(held[..keep].to_owned())
 }
 
 /// A submitted line waiting for the block that will run it.
@@ -2251,6 +2289,179 @@ mod tests {
                     .rendered()
                     .contains("a password prompt, say, and no echo at all"),
                 "past the window it can no longer be an echo, so it is published: {:?}",
+                session.rendered()
+            );
+        }
+    }
+
+    /// B4.10, and roadmap 22.13's measurement: an echo whose last characters never
+    /// arrived as an append.
+    ///
+    /// A pseudoconsole cuts a read wherever it likes, and the read that carries the last
+    /// character of an echo routinely carries the output after it too. Enough output and
+    /// the echo's row leaves the screen area inside that one `advance`, so the extractor
+    /// emits it as a **settlement carrying the whole row** rather than as the append that
+    /// would have completed it. Measured in a real `alpine` container 2026-08-23: the row
+    /// arrived complete, as `Settled`, and the matcher threw it away.
+    ///
+    /// The same session therefore said two different things depending on where the pipe
+    /// cut — under byte-at-a-time reads every character appends and the block opens —
+    /// which is what `every_session_says_the_same_thing_when_every_byte_is_its_own_read`
+    /// forbids.
+    mod an_echo_completed_by_a_whole_row_revision {
+        use super::*;
+
+        /// The measured case, in the shape the engine emitted it: the echo one character
+        /// short as an append, then the whole row as a settlement, then the output that
+        /// scrolled it away.
+        #[tokio::test]
+        async fn a_settlement_opens_the_block_and_names_it() {
+            let session = Session::with_config(quick_grace()).await;
+            session.advance_to(300).await;
+
+            session.emit(vec![line(1, "/ #")]).await;
+            let flood = session.submit("echo one; echo two").await;
+            session
+                .emit(vec![
+                    line(1, " echo one; echo tw"),
+                    settled(1, "/ # echo one; echo two"),
+                    settled(2, "one"),
+                    line(3, "two"),
+                ])
+                .await;
+            session.advance_to(2_000).await;
+
+            assert_eq!(
+                session.headings().last(),
+                Some(&Some("echo one; echo two".to_owned())),
+                "the row the far end wrote is the echo whether it arrived as an append or \
+                 as the settlement of a row that scrolled away: {:?}",
+                session.events()
+            );
+            assert_eq!(
+                session.output_of(flood),
+                "one\ntwo",
+                "and the block it opens holds the output that scrolled it away: {:?}",
+                session.events()
+            );
+        }
+
+        /// The other revision that carries a whole row. A far end that repaints the row it
+        /// is echoing onto — a line editor redrawing after a bracketed paste — says the
+        /// same thing by rewriting rather than by settling.
+        #[tokio::test]
+        async fn a_rewrite_opens_the_block_and_names_it() {
+            let session = Session::with_config(quick_grace()).await;
+            session.advance_to(300).await;
+
+            session.emit(vec![line(1, "/ #")]).await;
+            let command = session.submit("ls -la").await;
+            session
+                .emit(vec![
+                    line(1, " ls -l"),
+                    rewritten(1, "/ # ls -la"),
+                    line(2, "total 0"),
+                ])
+                .await;
+            session.advance_to(2_000).await;
+
+            assert_eq!(
+                session.headings().last(),
+                Some(&Some("ls -la".to_owned())),
+                "{:?}",
+                session.events()
+            );
+            assert_eq!(session.output_of(command), "total 0");
+        }
+
+        /// The gate, and why it is not decoration. Settlements arrive for **old** rows,
+        /// out of order and long after they were written — a row settles when the screen
+        /// scrolls past it. Run the same command twice and the first one's echo row is
+        /// still on screen, ending in the line the second submission is waiting for; a
+        /// rule that took any row's whole text would open the second block on a row the
+        /// far end wrote minutes ago, before it had echoed anything at all.
+        ///
+        /// Position is what makes a whole row admissible, and only one row has it: the one
+        /// the far end's cursor was on when Enter was pressed (spec B4.9).
+        #[tokio::test]
+        async fn a_settlement_on_any_other_row_opens_nothing() {
+            let session = Session::with_config(quick_grace()).await;
+            session.advance_to(300).await;
+
+            // The first `dir`, echoed and answered in the ordinary way.
+            session.emit(vec![line(1, PROMPT)]).await;
+            session.submit("dir").await;
+            session
+                .emit(vec![line(1, "dir"), line(2, "one.txt"), line(3, PROMPT)])
+                .await;
+            session.advance_to(1_000).await;
+            let opened = session.started().len();
+
+            // The second, pending on row 3 — and row 1, which is the first command's echo,
+            // scrolls out of the screen area while it waits.
+            session.submit("dir").await;
+            session.emit(vec![settled(1, r"C:\>dir")]).await;
+            session.advance_to(2_000).await;
+
+            assert_eq!(
+                session.started().len(),
+                opened,
+                "a row the far end wrote before this line was ever submitted is not its \
+                 echo, whatever it ends with: {:?}",
+                session.events()
+            );
+        }
+
+        /// The half of B4.9 this could have undone. The held text is the echo one
+        /// character short, so the strip that looks for the whole submitted line on the
+        /// end of it finds nothing — and publishing it anyway is the user's own line read
+        /// back at them, which is the defect B4.9 exists to have removed.
+        #[tokio::test]
+        async fn the_partial_echo_is_not_read_back() {
+            let session = Session::with_config(quick_grace()).await;
+            session.advance_to(300).await;
+
+            session.emit(vec![line(1, "/ #")]).await;
+            session.submit("echo one; echo two").await;
+            session
+                .emit(vec![
+                    line(1, " echo one; echo tw"),
+                    settled(1, "/ # echo one; echo two"),
+                    settled(2, "one"),
+                ])
+                .await;
+            session.advance_to(2_000).await;
+
+            assert!(
+                !session.rendered().contains("echo tw"),
+                "not one character of the command line is read back as output: {:?}",
+                session.rendered()
+            );
+        }
+
+        /// And the other direction, which is the one that must never fail: text the far
+        /// end wrote in front of the echo is still text, and still reaches a block.
+        #[tokio::test]
+        async fn what_the_far_end_wrote_in_front_of_the_echo_is_kept() {
+            let session = Session::with_config(quick_grace()).await;
+            session.advance_to(300).await;
+
+            // Nothing has been published for this row yet: the banner is drawn onto it
+            // after the line was submitted, so it is held with the echo that follows it.
+            session.submit("echo one").await;
+            session
+                .emit(vec![
+                    line(1, "a banner nobody submitted"),
+                    settled(1, "a banner nobody submitted/ # echo one"),
+                    settled(2, "one"),
+                ])
+                .await;
+            session.advance_to(2_000).await;
+
+            assert!(
+                session.rendered().contains("a banner nobody submitted"),
+                "the banner in front of the echo is the far end's and is never dropped: \
+                 {:?}",
                 session.rendered()
             );
         }
