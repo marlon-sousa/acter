@@ -771,55 +771,47 @@ the answer to "what should we do now?".
     change and 22.5 is about to change how many sessions are marker-less at all. Revisit
     after 22.5; recorded in the spec as rejected-for-now rather than rejected.
 
-22.3. B4.3, a shell that exited sometimes sends one more read. Spec: none yet → specify
-    first. **Found while implementing B4.1, and pre-existing** — B4.1 neither caused it
-    nor fixed it.
+22.3. **Done** — B4.3, a shell that exited sometimes sends one more read. Spec:
+    [b4.3-a-teardown-read-that-races-the-close.md](specs/b4.3-a-teardown-read-that-races-the-close.md).
+    **Found while implementing B4.1, and pre-existing** — B4.1 neither caused it nor fixed
+    it. It was the test's expectation, the first of the three candidates this entry named.
 
-    `a_shell_that_exits_ends_the_session_by_closing_the_channel` is flaky. `cmd /C echo
-    done` runs its command and exits, and the test asserts that the next thing off the
-    read channel is the channel closing; sometimes one more read arrives first —
-    `ESC [ ? 9 0 0 1 l` followed by `ESC [ ? 1 0 0 4 l`, which is ConPTY turning
-    win32-input-mode and focus-event reporting back off as it tears the pseudoconsole
-    down. Measured on 2026-08-22: 7 of 8 runs failed on the pre-B4.1 tree, 1 of 5 on the
-    post-B4.1 tree. The rate difference is unexplained and is itself worth a measurement
-    — it is too large to write off as noise, and B4.1 has no mechanism that should touch
-    this path at all.
-
-    It has never been skipped in CI, so the `real-shell (Windows)` job has presumably been
+    `a_shell_that_exits_ends_the_session_by_closing_the_channel` ran `cmd /C echo done` and
+    asserted that the next thing off the read channel was the channel closing; sometimes one
+    more read arrived first — `ESC [ ? 9 0 0 1 l` followed by `ESC [ ? 1 0 0 4 l`, ConPTY
+    turning win32-input-mode and focus-event reporting back off as it tears the pseudoconsole
+    down. It has never been skipped in CI, so the `real-shell (Windows)` job was presumably
     intermittently red for this all along.
 
-    **Re-measured 2026-08-23, running the whole real-shell suite for B4.10, and it has
-    stopped being flaky here: it now fails every time.** Three runs on `2e8bc2d`, one of
-    them serial with `--test-threads=1` as CI runs it, all red with the same sixteen bytes
-    — so on this machine the teardown read is no longer *sometimes*. **And CI is green**,
-    on every recent run of main including B4.9's, which the paragraph above did not expect:
-    whatever decides whether those bytes arrive, the developer's Windows 11 console host
-    and the runner's now answer it differently and consistently. That is worse than an
-    intermittent failure, because the suite is red on the machine where the manual
-    accessibility work happens and green on the only one anybody looks at — and it is
-    evidence for the first candidate below rather than the third, since a race would not
-    land the same way five times running.
+    **The determinism this entry recorded on 2026-08-23 was not real, and the correction
+    matters more than the original claim.** That paragraph said the flake had stopped being
+    one — three runs, one of them serial as CI runs it, all red — and reasoned that a race
+    would not land identically five times. Re-measured the next day on `2f9467d`: the test
+    alone, serial, was red **1 of 5**; the whole real-shell suite serial, **2 of 3**; a probe
+    spawning `cmd /C echo done` thirty times in one process, **14 of 30**. It is a coin flip
+    at roughly even odds, and yesterday's three reds were a run of the same coin. The
+    conclusion survived; the reasoning behind it did not.
 
-    **Whose defect it is has to be decided before anything is written**, and the three
-    candidates have different consequences.
+    **What decided it were the other two measurements**, both of which the entry had filed as
+    unknown. Fed to a real `AlacrittyEngine`, the sixteen bytes produce **no `TerminalItem` at
+    all** — nothing rendered, nothing reaching a block, nothing spoken — so the second
+    candidate, that an escape sequence is read aloud at the end of every session, is not
+    happening. And the third candidate was probed in the form that would have made it a real
+    bug: if the watcher dropping the master can catch the reader mid-drain, **output** would
+    be losable too. `cmd /C for /L %i in (1,1,2000) do @echo line-%i` — two thousand lines and
+    an immediate exit — across twenty runs delivered every line every time, **20970 bytes
+    byte-identical in all twenty**. The teardown never truncates what the shell produced.
 
-    *The test's expectation.* If a teardown read is a legitimate and ordinary part of the
-    stream, then "the next thing is the close" is simply the wrong assertion, and it should
-    drain to the close instead — which is exactly what
-    `writing_to_a_shell_that_exited_says_the_session_ended` beside it already does. The
-    cheapest answer, and possibly the right one.
+    So what races is only ConPTY's mode-reset epilogue, addressed to a terminal being
+    destroyed, meaning nothing in either outcome. The test now drains to the close the way
+    `writing_to_a_shell_that_exited_says_the_session_ended` beside it already did, and asserts
+    the drained bytes produce no items — pinning the user-facing half rather than discarding
+    it, so a future ConPTY that says something audible on the way down is caught here.
 
-    *The domain's handling of those bytes.* They reach the engine as ordinary output
-    arriving after the last command ended. Whether anything is rendered or spoken for them
-    is unmeasured, and that is the half that matters to a user rather than to a test — an
-    escape sequence read aloud at the end of every session would be a real defect that this
-    flake is only the symptom of.
-
-    *The ordering inside `watch`.* The watcher thread drops the master to make the
-    reader's blocking read return; if the reader can still be mid-drain when that happens,
-    the race is the transport's and the fix is in `local.rs` rather than in the test. This
-    is the possibility that would make the flake a genuine bug, and it is the one the rate
-    difference is evidence for.
+    **Left unexplained on purpose:** why CI is green. A race at even odds landing green on
+    every recent runner run is odd, and nothing here claims to know why — only that the
+    runner's teardown timing lands the other way from the developer machine's. Draining is
+    correct on both, which is the reason it was not worth a PR to chase.
 
 22.4. **Done** — B4.4, autoread in a session with no boundaries. Spec:
     [b4.4-autoread-with-no-boundaries.md](specs/b4.4-autoread-with-no-boundaries.md).
