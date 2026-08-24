@@ -3,7 +3,9 @@
 // Channel<SessionEvent> created for attachSession carries the session's event stream.
 
 import { Channel, invoke } from '@tauri-apps/api/core';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 
+import type { AboutFacts, AppShell } from '../ports/app_shell';
 import type { BackendApi } from '../ports/backend_api';
 import type { KeyAck, KeyPress, SessionEvent, SubmitAck } from '../protocol';
 
@@ -23,5 +25,22 @@ export class TauriBackend implements BackendApi {
 
   sendKey(key: KeyPress): Promise<KeyAck> {
     return invoke<KeyAck>('send_key', { sessionId: SESSION_ID, key });
+  }
+}
+
+export class TauriShell implements AppShell {
+  about(): Promise<AboutFacts> {
+    return invoke<AboutFacts>('about');
+  }
+
+  platform(): Promise<string> {
+    return invoke<string>('platform');
+  }
+
+  // Closing the window rather than exiting the process: Tauri drops the app's managed
+  // state as the last window goes, which is what takes the session — and the shell it
+  // spawned — with it.
+  async exit(): Promise<void> {
+    await getCurrentWindow().close();
   }
 }

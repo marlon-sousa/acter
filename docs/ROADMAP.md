@@ -245,6 +245,35 @@ the answer to "what should we do now?".
     (`WM_SYSCOMMAND` / `SC_KEYMENU`), and if that fails too, DESIGN's native-menu decision is
     reopened with evidence rather than preference.
 
+    **The measurement ran 2026-08-24, and it blocks the entry.** Alt *does* reach the menu
+    bar from inside the webview — question 1 passes and the `SC_KEYMENU` fallback is not
+    needed — and NVDA reads the bar, its submenus, Enter and Escape correctly. But opening
+    the menu **freezes NVDA for tens of seconds**: measured 68, 45, 36, 20.5 and about 18
+    seconds between the Alt press and the first announcement, with the reader's own main
+    thread unresponsive throughout. Not the machine (a classic Win32 menu bar answers
+    instantly on the same reader), not the debug automation surface (a release build stalls
+    too), and not the way the key was pressed (a keystroke injected from outside NVDA stalls
+    the same). **And NVDA's own log names the call**, captured by the user pressing Alt by
+    hand in a window carrying the menu bar and an empty `about:blank` page: three watchdog
+    freezes of ten seconds each, every one of them a synchronous accessibility call into the
+    WebView2 renderer made because focus was *leaving* the webview document, the first ending
+    in `RPC_E_CALL_CANCELED`. So it is not Acter's page, and the announcement was never slow
+    — it was queued behind the freezes.
+
+    **Every confound was then closed by measurement.** Not the add-ons: the user re-ran it
+    with the event tracer disabled and the thirty seconds did not collapse. Not Acter: a
+    **vanilla Tauri application built outside this repository from Tauri's own window-menu
+    tutorial, unedited**, freezes the same — 35 seconds, measured through the bridge. And
+    not "focus leaving the webview": in that same window Alt+Tab to another application
+    announces in about a second. It is the native menu taking focus, and nothing else.
+
+    **So the entry turns.** The defect is not Acter's to fix — the blocking calls are
+    NVDA's, into a renderer Acter does not own, in a window built from twenty lines of
+    Tauri's documentation. What is Acter's is the choice, and it now has evidence behind
+    it: **DESIGN's native-menu decision is reopened**, with an in-document menu bar as the
+    alternative that keeps focus inside the webview where none of this applies. The spec's
+    opening section carries the numbers, the controls, NVDA's stacks and the prior art.
+
     **Nothing in this project can test the menu end to end**: `MockRuntime` does not run the
     native webview and WebDriver drives only the webview. So the menu is split — a pure
     value describing it, which plain `cargo test` asserts on, and a thin construction layer

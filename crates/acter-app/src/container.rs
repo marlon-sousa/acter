@@ -69,7 +69,9 @@ pub fn run() {
         .invoke_handler(generate_handler![
             crate::routers::attach_session,
             crate::routers::submit_command,
-            crate::routers::send_key
+            crate::routers::send_key,
+            crate::routers::about,
+            crate::routers::platform
         ]);
 
     // Embedded WebDriver server for E2E tests (spec T2): debug builds only, so
