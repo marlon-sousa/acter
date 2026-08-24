@@ -181,31 +181,79 @@ accelerator — `Acter subMenu Alt+ a` and `About subMenu Alt+ a`. With no mnemo
 labels, the platform gives both the same first letter, so Alt+A is ambiguous. Decision 1's
 labels need explicit, distinct mnemonics.
 
+## The design, rewritten around what was measured
+
+**Agreed in conversation 2026-08-24**, after the section above turned out to invalidate the
+design this spec was written for. DESIGN's native-menu decision is revised in the same
+change; what follows is what shipped.
+
+### 1. The menu bar is a WAI-ARIA `menubar` in the page
+
+The static structure lives in `main_window.html` so it is inspectable without executing
+anything, and the keyboard behaviour lives in one adapter. Roving tabindex, so Tab reaches
+the bar and then leaves it rather than walking every item of every menu.
+
+**Wrapped in `role="application"`**, which is the answer to the objection the old decision
+raised and accepted: NVDA reads a document in browse mode, where the arrows move its own
+cursor rather than reaching a widget, and it switches to focus mode by itself only if the
+user has left that setting on. A menu bar whose arrows depend on somebody's configuration
+is not a menu bar. The wrapper covers the bar and nothing else.
+
+### 2. Two ways in: F10, and Alt on its own
+
+F10 is the platform's own "give me the menu bar" and is unambiguous. Alt is what a Windows
+user's hands already do, and it cannot be answered on keydown — at that moment Alt+F4,
+Alt+Tab and Alt alone are identical. So it is answered on **keyup**, armed by an Alt
+keydown with no other modifier and disarmed by any other key, a click, or the window losing
+focus. Both leave the bar as well as enter it.
+
+### 3. The command line is deliberately not an application
+
+Tried, measured, reverted the same day. Wrapping it does force focus mode, so typed letters
+are text rather than quick-navigation — but it also removes the browsable document from the
+one place a listener uses browse mode on purpose: turning focus mode off at the edit field
+and arrowing up to hear the tail of the last command. Reading the output wins. The results
+buffer is a document for the same reason and more obviously.
+
+### 4. Windows only
+
+The whole menu bar is gated on a `platform` command answering `std::env::consts::OS`, and
+the region is removed outright elsewhere. A native menu bar is right on macOS, where menus
+live in the system bar rather than in the window; this exists because Windows is where a
+native one freezes the reader.
+
+### 5. The web inspector is off
+
+`devtools: false` on the window. Found by the user pressing F10 and landing in dev tools:
+wry enables the inspector in debug builds and its keys win before the page sees them.
+
+### 6. Tab is trapped in the dialog explicitly
+
+Measured through NVDA: in a modal `<dialog>` with a single focusable control, Tab leaves it
+for the dialog's own document and NVDA drops back into browse mode, and it then took a
+second Escape to get out. The dialog cycles focus itself rather than trusting the element.
+
 ## What can and cannot be tested
 
-`MockRuntime` does not execute native webview libraries, and nothing in Tauri documents
-driving a menu or `on_menu_event` under it. WebDriver drives the webview only. So **no
-suite in this project can open this menu**, and pretending otherwise with a test that
-asserts a builder did not panic would be worse than admitting it.
+**This section is superseded by the redesign, and the change is entirely in its favour.**
+It said that `MockRuntime` does not execute native webview libraries, that WebDriver drives
+the webview only, and that therefore **no suite in this project could open this menu** — so
+the menu had to be split into a pure value plus a thin construction layer verified only by
+a manual NVDA pass.
 
-The design answers it by splitting the menu in two:
-
-- **A pure function returning the menu as data** — a small tree of ids, labels and nesting,
-  with no Tauri types in it. Plain `cargo test` asserts the structure, the labels, the ids
-  the event handler matches on, and that every id an item can emit is one the handler
-  handles. That last one is the assertion that actually catches a bug.
-- **A thin construction layer** turning that data into Tauri's `MenuBuilder` calls, kept
-  boring enough that reading it is sufficient review, and verified by the NVDA pass.
-
-Everything the menu *opens* is HTML, and HTML is testable by both suites — which is another
-reason the dialogs are not native.
+With the menu bar in the document, all of that goes away: the bar and the dialog are
+ordinary DOM, so vitest drives the keyboard contract directly and WebDriver can drive the
+whole path end to end. Twenty-one vitest tests cover the bar's navigation and the dialog's
+two Acter-specific behaviours; what remains for the NVDA pass is what only a reader can
+answer — that the announcements are right and that nothing freezes.
 
 ## Decisions
 
 ### 1. Two menus, and About holds one item
 
-- **Acter** — Exit. (The Connect submenu is added by A8, the day it works. A menu item that opens
-  nothing is worse than a menu that does not offer it yet.)
+- **Acter** — Exit. (Connect is added by A8, the day it works — as a dialog since
+  2026-08-24, not a submenu. A menu item that opens nothing is worse than a menu that does
+  not offer it yet.)
 - **About** — About Acter.
 
 About is a menu containing one item rather than a top-level item that fires, because a menu
@@ -243,22 +291,37 @@ Dialog behaviour, all of which is testable and all of which is a domain requirem
 
 ### 4. The menu talks to the frontend by event, and the frontend owns what happens
 
-`on_menu_event` in the composition root emits one event per menu action to the webview; the
-frontend listens and acts. The alternative — Rust opening dialogs — would put user-interface
-behaviour on the wrong side of the seam and outside every test suite we have.
+**Superseded by the redesign, and for the better.** This described `on_menu_event` in the
+composition root emitting one event per menu action to the webview, because the alternative
+— Rust opening dialogs — would put user-interface behaviour on the wrong side of the seam.
+With the menu bar in the document there is no seam to cross at all: the frontend owns the
+menu and what it opens, and Rust owns only the two facts behind it (`about` and
+`platform`) plus closing the window.
 
 ## Files touched
 
-- `crates/acter-app/src/menu.rs` — the pure menu definition and its ids (new; role:
-  entity/value for the definition, adapter for the construction).
-- `crates/acter-app/src/container.rs` — building the menu, attaching it to the window,
-  routing `on_menu_event` to webview events.
+**Rewritten with the design.** `crates/acter-app/src/menu.rs` never existed: with no native
+menu there is no menu definition in Rust to keep pure, and nothing for `on_menu_event` to
+route.
+
 - `crates/acter-app/src/routers/about.rs` — the command answering name, version, copyright
-  and licence.
-- `ui/src/views/main_window.html` — the About dialog's static skeleton.
-- `ui/src/adapters/about_dialog.ts` — opening, focus, Escape, close (role: adapter).
-- `ui/src/controllers/app.ts` — the menu-event listener wiring.
-- `ui/test/adapters/about_dialog.test.ts`, `e2e/` — the dialog's tests.
+  and licence, read from the build (new).
+- `crates/acter-app/src/routers/platform.rs` — the command answering which operating system
+  this is, so the menu bar is Windows-only (new).
+- `crates/acter-app/src/container.rs` — registering those two commands, and nothing else.
+- `crates/acter-app/tauri.conf.json` — `devtools: false`, so F10 belongs to the page.
+- `ui/src/views/main_window.html` — the menu bar's static structure and the About dialog's.
+- `ui/src/adapters/menu_bar.ts` — the menubar keyboard contract, F10 and the Alt trap (new;
+  role: adapter).
+- `ui/src/adapters/about_dialog.ts` — filling, opening, trapping Tab, returning focus (new;
+  role: adapter).
+- `ui/src/ports/app_shell.ts` — what the menu needs from the application shell rather than
+  from the session (new; role: port).
+- `ui/src/routers/tauri.ts` — `TauriShell`, the one module that may import `@tauri-apps/api`.
+- `ui/src/main.ts` — the wiring, including the platform gate.
+- `ui/src/styles.css` — the bar, kept plain.
+- `ui/test/adapters/menu_bar.test.ts`, `ui/test/adapters/about_dialog.test.ts` — their
+  tests (new).
 
 ## Definition of done
 
@@ -267,29 +330,48 @@ behaviour on the wrong side of the seam and outside every test suite we have.
       2026-08-24, and none of the three outcomes obtains**: Alt reaches the menu and the
       menu reads correctly, but opening it freezes the reader for tens of seconds. See the
       section above; the rest of this spec is blocked on that.
-- [ ] The menu definition is a pure value with tests over structure, labels and ids, and a
-      test that every id an item can emit is handled.
-- [ ] The About dialog opens from the menu, is announced as a dialog, reads its four facts,
-      traps focus, closes on Escape, and leaves focus in the edit field.
-- [ ] Version and copyright come from the build; changing the workspace version changes what
+- [x] The menu bar's keyboard contract is tested directly — fourteen vitest tests over
+      entering, walking, choosing and leaving, including that every leaf runs an action,
+      which is the assertion that catches an item nobody wired.
+- [x] The About dialog opens from the menu, is announced as a dialog, reads its four facts,
+      traps Tab, closes on Escape, and leaves focus in the edit field. Measured through
+      NVDA 2026-08-24 and pinned by seven vitest tests.
+- [x] Version and copyright come from the build; changing the workspace version changes what
       the dialog says with no second edit.
-- [ ] Exit closes the window and the shell goes with it.
-- [ ] `cargo fmt`, `cargo clippy --workspace --all-targets`, workspace tests, vitest and the
-      E2E suite all clean.
+- [ ] Exit closes the window and the shell goes with it. **Not yet verified** — it is the
+      one item on this list that needs a look at the machine after the window is gone.
+- [x] `cargo fmt`, `cargo clippy --workspace --all-targets`, workspace tests and vitest are
+      clean (95 frontend tests).
+- [ ] The E2E suite drives the menu bar and the dialog end to end, which this design makes
+      possible for the first time. **Not yet written.**
+- [ ] The stray `desconhecido` (unknown) utterance heard once between activating About Acter
+      and the dialog announcing itself is understood or gone.
 
 ## Accessibility checklist for the PR body
 
 Agent-observable through the screen-readers bridge, `user` persona, and recorded inline with
 the NVDA version and capture mode:
 
-- [ ] With focus in the edit field, the menu bar can be opened from the keyboard, and NVDA
-      announces it as a menu bar.
-- [ ] Arrow keys move between Acter and About and into their items, each announced with its
-      name and its position.
-- [ ] Enter on About Acter opens the dialog, and NVDA announces a dialog with its name.
-- [ ] The dialog's four facts are readable with ordinary reading commands.
-- [ ] Escape closes the dialog and NVDA announces the edit field as the new focus.
-- [ ] Tab from inside the dialog does not escape it.
+All of the following were **agent-observed** through the bridge on 2026-08-24, NVDA
+2026.1.1, `user` persona, live and silent capture, against a debug build of the shipped
+design, unless the item says otherwise.
+
+- [x] With focus in the edit field, the menu bar can be opened from the keyboard, and NVDA
+      announces it. **F10 and Alt-alone both**: `Acter menu bar` then
+      `Acter subMenu 1 de 2`, immediate.
+- [x] Arrow keys move between Acter and About and into their items, each announced with its
+      name and its position — `About subMenu 2 de 2`, `Exit 1 de 1`, `About Acter 1 de 1`.
+- [x] Enter on About Acter opens the dialog, and NVDA announces a dialog with its name:
+      `About Acter diálogo` (this reader is running in Portuguese).
+- [x] The dialog's four facts are read: `Acter, Version 0.1.0, © 2026 Marlon Brandão de
+      Sousa, MIT licence`, followed by `Close botão`.
+- [x] Escape closes the dialog and NVDA announces the edit field as the new focus:
+      `Command input edição em branco`.
+- [x] Tab from inside the dialog does not escape it. **Failed first**: focus left the Close
+      button for the dialog's document (`Acter, DOCUMENT`), NVDA dropped into browse mode
+      and a second Escape was needed. Fixed, re-measured, and pinned by a test.
+- [ ] The stray `desconhecido` heard once on activation is chased. **Open finding**, not a
+      blocker: it does not stop anything, but it is noise on the feature's main path.
 - [ ] Exit quits, and no `cmd.exe` is left running afterwards. **Human-verified**: this one
       is about a process on the machine after the window is gone, which the bridge cannot
       observe.

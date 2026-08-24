@@ -283,17 +283,25 @@ the answer to "what should we do now?".
     triggers; the lanes run in parallel, so this is the one cross-lane dependency in this
     group and it is named here rather than discovered later.
 
-    Adds Connect to the Acter menu as a **submenu**, one item per thing the backend says can
-    be connected to: cmd, each installed PowerShell edition, one entry per installed WSL
-    distribution, any profile stored on disk, and in debug builds the scripted sessions.
-    Choosing one replaces the running session and the listener is told which far end they
-    are on now.
+    **Reshaped 2026-08-24, and the spec is superseded**: A7 measured a native menu bar to
+    death and replaced it with one in the document, and in the same conversation the user
+    reopened what Connect itself should be. It is a **dialog**, not a submenu: a list of
+    connection kinds with a panel below it holding whatever that kind needs — nothing for
+    cmd and PowerShell, the installed distributions for WSL, host and port and user for
+    SSH. A submenu cannot hold a form, and two surfaces for one action is worse than one.
+    DESIGN carries the decision and the reason the old navigational argument is answered
+    rather than ignored: the panel announces itself when the kind changes.
 
-    **The dialog this entry used to be was dropped 2026-08-23**, in the same conversation
-    that introduced profiles: a submenu needs no focus trap, no modal semantics and no
-    second surface, and arrowing a list is what menu navigation is already best at. What is
-    lost is that a submenu cannot be driven by WebDriver — which is why the entry it depends
-    on puts the whole of connecting behind actions that are testable without any UI at all.
+    Choosing a kind and connecting replaces the running session, and the listener is told
+    which far end they are on now. **A connection that fails is spoken and leaves the
+    running session alone** — which is a requirement this entry puts on 25 (B7), where
+    starting a shell stops being a startup panic.
+
+    The old dialog-versus-submenu note recorded here on 2026-08-23 is superseded, and the
+    reason it was wrong is worth keeping: it weighed navigation against E2E testability and
+    concluded connecting "needs no more than a choice". SSH needs a form. And the
+    testability half of the trade reversed too — a dialog inside the webview is drivable by
+    WebDriver end to end, which the native submenu never was.
 14. A4, completion path. Spec: none yet → specify first. Scope sketch: fake
     completion provider, Tab handling in the edit field, completion announcement.
 15. A5.3 and onward — iteration entries appear here as NVDA findings arrive.
@@ -2011,7 +2019,13 @@ thing to pick up once the adapters land, not merely the next number.
     **A failed use must not be a panic.** There is a user standing in front of it, possibly
     a working session behind it, and a speakable sentence is the only acceptable answer.
 
-26. B8, the profile store and `--profile`. Spec:
+26. B8, the profile store and `--profile`. **Resequenced 2026-08-24: this comes after
+    23.3 (WSL) rather than before it**, and it changes shape with the Connect dialog
+    (entry 13). Profiles stop being files a user hand-edits and become **saved
+    connections**: a connection is probed, and only one that actually came up is offered
+    for saving. A save flow with nothing behind it but cmd and PowerShell would save
+    nothing a user could not retype in a second, which is why WSL is what makes it worth
+    building. Spec:
     [b8-profile-store.md](specs/b8-profile-store.md) — agreed in conversation 2026-08-23.
     Profiles stop being a section of DESIGN and become files: JSON under `%APPDATA%\acter`
     on Windows, with `ACTER_PROFILES_DIR` pointing somewhere else for development, tests and
