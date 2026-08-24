@@ -193,7 +193,7 @@ describe('walking it', () => {
 });
 
 describe('choosing something', () => {
-  it('enter on a leaf runs its action, closes the menu and returns focus', () => {
+  it('enter on a leaf runs its action and closes the menu', () => {
     press('F10');
     press('ArrowDown');
     press('Enter');
@@ -201,7 +201,37 @@ describe('choosing something', () => {
     expect(actions.exited).toBe(1);
     expect(actions.abouts).toBe(0);
     expect(expanded('menu-acter')).toBe('false');
+  });
+
+  /** Focus must not be left on a hidden menu item, so it falls back to the edit field —
+   * but only after the action has had its chance to take focus somewhere of its own.
+   * Moving it eagerly put focus in the edit field for one frame on the way into the About
+   * dialog, and NVDA announced that frame as an unnamed object. */
+  it('focus falls back to the edit field when the action did not take it', async () => {
+    press('F10');
+    press('ArrowDown');
+    press('Enter');
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
     expect(focused()).toBe('command-input');
+    expect(returned).toBe(1);
+  });
+
+  it('an action that takes focus itself keeps it', async () => {
+    const elsewhere = document.createElement('button');
+    elsewhere.id = 'elsewhere';
+    document.body.append(elsewhere);
+    press('F10');
+    press('ArrowRight');
+    press('ArrowDown');
+    // The About dialog does exactly this: it opens and takes focus.
+    elsewhere.focus();
+    press('Enter');
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(returned).toBe(0);
   });
 
   it('the other leaf runs the other action', () => {

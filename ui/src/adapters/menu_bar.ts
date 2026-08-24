@@ -188,12 +188,23 @@ export function installMenuBar(
 
   function activate(item: HTMLElement): void {
     closeAll();
-    returnTo.focus();
     if (item.id === 'menu-exit') {
       actions.exit();
     } else if (item.id === 'menu-about-acter') {
       actions.about();
     }
+    // **Focus goes to the edit field only if the action did not take it somewhere.**
+    // Moving it first and letting the action move it again put focus in the edit field
+    // for one frame on its way into the dialog, and a reader heard that frame: NVDA
+    // announced an unnamed object between the item being chosen and the dialog naming
+    // itself (measured 2026-08-24). What is left after a menu closes must never be a
+    // hidden menu item, though, which is why the fallback stays.
+    setTimeout(() => {
+      const landed = document.activeElement;
+      if (landed === null || landed === document.body || bar.contains(landed)) {
+        returnTo.focus();
+      }
+    }, 0);
   }
 
   // Clicking is not the target user's road in, but a menu that cannot be clicked is a

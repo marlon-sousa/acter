@@ -342,10 +342,17 @@ route.
       one item on this list that needs a look at the machine after the window is gone.
 - [x] `cargo fmt`, `cargo clippy --workspace --all-targets`, workspace tests and vitest are
       clean (95 frontend tests).
-- [ ] The E2E suite drives the menu bar and the dialog end to end, which this design makes
-      possible for the first time. **Not yet written.**
-- [ ] The stray `desconhecido` (unknown) utterance heard once between activating About Acter
-      and the dialog announcing itself is understood or gone.
+- [x] The E2E suite drives the menu bar and the dialog end to end, which this design makes
+      possible for the first time: eight WebDriver tests over F10, Alt-alone and its
+      disarming, walking the bar, opening About, the four facts arriving from the Rust
+      side, Tab staying inside, and focus returning. The existing axe audit passes with
+      the bar in the document.
+- [x] The stray `desconhecido` (unknown) utterance heard once between activating About
+      Acter and the dialog announcing itself is understood and fixed: activating a leaf
+      moved focus to the edit field *before* running the action, so focus landed there for
+      one frame on its way into the dialog and the reader announced that frame. Focus now
+      falls back to the edit field only if the action did not take it somewhere, and both
+      halves are pinned by tests. **Not yet re-measured through NVDA.**
 
 ## Accessibility checklist for the PR body
 
@@ -370,8 +377,10 @@ design, unless the item says otherwise.
 - [x] Tab from inside the dialog does not escape it. **Failed first**: focus left the Close
       button for the dialog's document (`Acter, DOCUMENT`), NVDA dropped into browse mode
       and a second Escape was needed. Fixed, re-measured, and pinned by a test.
-- [ ] The stray `desconhecido` heard once on activation is chased. **Open finding**, not a
-      blocker: it does not stop anything, but it is noise on the feature's main path.
+- [ ] The stray `desconhecido` heard once on activation is gone. **Fixed but not
+      re-measured**: the cause was a one-frame focus stop in the edit field on the way into
+      the dialog, removed and covered by tests, and this box stays open until a reader has
+      confirmed it.
 - [ ] Exit quits, and no `cmd.exe` is left running afterwards. **Human-verified**: this one
       is about a process on the machine after the window is gone, which the bridge cannot
       observe.
