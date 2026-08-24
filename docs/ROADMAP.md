@@ -278,7 +278,7 @@ the answer to "what should we do now?".
     native webview and WebDriver drives only the webview. So the menu is split — a pure
     value describing it, which plain `cargo test` asserts on, and a thin construction layer
     verified by the NVDA pass.
-13. A8, the Connect submenu. Spec: [a8-connect-submenu.md](specs/a8-connect-submenu.md) —
+13. A8, the Connect dialog. Spec: [a8-connect-dialog.md](specs/a8-connect-dialog.md) —
     agreed in conversation 2026-08-23. **Depends on 25 (B7)**, which supplies the actions it
     triggers; the lanes run in parallel, so this is the one cross-lane dependency in this
     group and it is named here rather than discovered later.
