@@ -198,6 +198,67 @@ individually), so cd, environment, and aliases persist between commands.
   bytes — escape sequences and prompt redraws would inflate the count.
 - Configurable per profile / per session like any other setting.
 
+## Application menu and connecting — **Decided**
+
+Agreed in conversation 2026-08-23. This is the first user-facing surface over the profile
+machinery above, and it is what turns Acter from "a session chosen by an environment
+variable at launch" into an application a user drives.
+
+### The menu bar is native — **Decided**
+
+A real window menu, built with Tauri's `MenuBuilder` and attached to the main window.
+Underneath, Tauri's `muda` builds a Win32 `HMENU`, which Windows exposes to a screen
+reader with no work from us: NVDA announces a menu bar, Alt reaches it, arrows navigate it,
+and there is no browse-mode/focus-mode switch anywhere in the interaction.
+
+**An in-page ARIA `menubar` was rejected**, and not narrowly: it would put a mode switch in
+front of the one control every user of this product must be able to reach, in exchange for
+E2E testability. The cost is real and accepted — WebDriver drives the webview only, so a
+native menu is covered by Rust tests over its definition plus a manual NVDA pass, which is
+the same trade the product already makes for anything below the webview.
+
+Two menus, and no more until something earns one:
+
+- **Acter** — Connect…, Exit.
+- **About** — About Acter. A top-level menu holding one item rather than a top-level item
+  that acts, because a menu bar entry that fires instead of opening is a surprise to
+  anyone navigating by arrow keys.
+
+### Dialogs are HTML modals in the window — **Decided**
+
+The menu is native; what it opens is not. A `<dialog>` in the main window reuses the focus
+discipline, the announcer and the test suites the product already has, its text is
+browse-mode readable and copyable, and both vitest and WebDriver can drive it. Native
+message boxes would add a dependency and a surface neither suite can reach.
+
+### Connecting replaces the session — **Decided**
+
+Phase 1 runs **one session at a time**. Connecting tears down the outgoing shell, clears
+the buffer to a clean boundary, and the change is announced — the listener is told which far
+end they are now on, because the alternative is a window that looks the same and answers
+differently. Tabs remain the later answer, with each tab one session, as above.
+
+**There is deliberately no "something is still running" confirmation.** It would have to
+ask the session whether a command is outstanding, and that answer is currently stuck at
+"yes" for the whole life of a real shell session (roadmap 22.8). A confirmation that fires
+every single time teaches the user to dismiss it, which is worse than not having one.
+It becomes buildable when 22.8 lands, and is reconsidered then rather than guessed at now.
+
+### The connectable list comes from the backend, and it is flat — **Decided**
+
+The frontend hardcodes nothing: installed WSL distributions are discovered at runtime, and
+the scripted profiles exist only in debug builds. So the backend answers what can be
+connected to, and the dialog renders exactly that.
+
+**Flat, one entry per connectable thing** — "WSL: Ubuntu" is an entry, not a WSL entry with
+a nested distro choice. A conditional second control that appears only for one option is
+harder to navigate non-visually than a longer list of equals, and a list is what arrow keys
+and first-letter navigation are already good at.
+
+The scripted fake sessions appear in this list in debug builds, which is what the profiles
+section above promised: the fake is a permanent, selectable session kind rather than a
+launch-time environment variable.
+
 ## Keystroke map
 
 All keybindings are configurable. **Decided:** bindings are a global setting, not
