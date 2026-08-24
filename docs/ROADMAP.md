@@ -249,16 +249,22 @@ the answer to "what should we do now?".
     native webview and WebDriver drives only the webview. So the menu is split — a pure
     value describing it, which plain `cargo test` asserts on, and a thin construction layer
     verified by the NVDA pass.
-13. A8, the Connect dialog. Spec: [a8-connect-dialog.md](specs/a8-connect-dialog.md) —
-    agreed in conversation 2026-08-23. **Depends on 25 (B7)**, which supplies the two
-    protocol commands it needs; the lanes run in parallel, so this is the one cross-lane
-    dependency in this group and it is named here rather than discovered later.
+13. A8, the Connect submenu. Spec: [a8-connect-submenu.md](specs/a8-connect-submenu.md) —
+    agreed in conversation 2026-08-23. **Depends on 25 (B7)**, which supplies the actions it
+    triggers; the lanes run in parallel, so this is the one cross-lane dependency in this
+    group and it is named here rather than discovered later.
 
-    Adds Connect… to the Acter menu, opening an HTML modal listing what the backend says
-    can be connected to: cmd, PowerShell (each installed edition), one entry per installed
-    WSL distribution, and in debug builds the scripted profiles. Flat, one entry per
-    connectable thing, per DESIGN. Connecting replaces the running session and the listener
-    is told which far end they are now on.
+    Adds Connect to the Acter menu as a **submenu**, one item per thing the backend says can
+    be connected to: cmd, each installed PowerShell edition, one entry per installed WSL
+    distribution, any profile stored on disk, and in debug builds the scripted sessions.
+    Choosing one replaces the running session and the listener is told which far end they
+    are on now.
+
+    **The dialog this entry used to be was dropped 2026-08-23**, in the same conversation
+    that introduced profiles: a submenu needs no focus trap, no modal semantics and no
+    second surface, and arrowing a list is what menu navigation is already best at. What is
+    lost is that a submenu cannot be driven by WebDriver — which is why the entry it depends
+    on puts the whole of connecting behind actions that are testable without any UI at all.
 14. A4, completion path. Spec: none yet → specify first. Scope sketch: fake
     completion provider, Tab handling in the edit field, completion announcement.
 15. A5.3 and onward — iteration entries appear here as NVDA findings arrive.
@@ -1941,16 +1947,42 @@ thing to pick up once the adapters land, not merely the next number.
     `AppState` holds it as a fixed `Arc<dyn SessionApi>`, so there is no way to start a
     second far end without restarting the application.
 
-    This entry makes the session replaceable: a command answering what can be connected to
-    (built from the adapters of 23.1 to 23.3, the installed WSL distributions, and — in
-    debug builds only — the scripted profiles), a command that connects to one of them, the
+    This entry makes the session replaceable, and it does it as **actions rather than as a
+    user interface** — the shape the user proposed 2026-08-23 to answer "nothing can test the
+    menu": `connectable` and `use`, named operations that the menu triggers, that the launch
+    path triggers, and that a test triggers directly with no window, no webview and no
+    screen reader in the way. The menu becomes the thinnest possible caller, and everything
+    behind it is provable.
+
+    So: the action listing what can be connected to (built from the adapters of 23.1 to
+    23.3 and — in debug builds only — the scripted sessions), the action that uses one, the
     teardown of the outgoing session, and the event that tells a listener which far end they
     are on now.
 
-    **A failed connect must not be a panic.** Startup may still die loudly on a shell that
-    cannot start, because a window opening onto silence is worse; a *connect* has a user
-    standing in front of it, an existing working session behind it, and a speakable sentence
-    is the only acceptable answer.
+    **And the window now starts unconnected**, per DESIGN: nothing is spawned until a
+    profile is used, so the first thing this entry has to get right is that an empty window
+    says it is empty, and that a line submitted before connecting is answered rather than
+    swallowed.
+
+    **A failed use must not be a panic.** There is a user standing in front of it, possibly
+    a working session behind it, and a speakable sentence is the only acceptable answer.
+
+26. B8, the profile store and `--profile`. Spec:
+    [b8-profile-store.md](specs/b8-profile-store.md) — agreed in conversation 2026-08-23.
+    Profiles stop being a section of DESIGN and become files: JSON under `%APPDATA%\acter`
+    on Windows, with `ACTER_PROFILES_DIR` pointing somewhere else for development, tests and
+    the NVDA fixture — which is what makes a manual accessibility pass repeatable instead of
+    dependent on what this machine happens to have installed. Other operating systems get
+    their own locations when they get their own builds.
+
+    Stored profiles join the discovered shells in what 25 lists, so a fresh install is
+    useful with no configuration and a configured one is the user's own.
+
+    **And the one command-line switch**: `acter --profile <name>` starts that profile's
+    session. Arguments are parsed, never printed — a windowed binary has no console, so a
+    name that resolves to nothing opens the window unconnected and *says* what was wrong
+    with it. There is no `create` on the command line: profiles are files, and creating one
+    from a shell whose output nobody can see is not a workflow this audience needs.
 
 ## Convergence (requires B4, B5 and B6 all Done)
 

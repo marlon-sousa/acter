@@ -219,7 +219,7 @@ the same trade the product already makes for anything below the webview.
 
 Two menus, and no more until something earns one:
 
-- **Acter** — Connect…, Exit.
+- **Acter** — Connect (a submenu, one item per thing that can be connected to), Exit.
 - **About** — About Acter. A top-level menu holding one item rather than a top-level item
   that acts, because a menu bar entry that fires instead of opening is a surprise to
   anyone navigating by arrow keys.
@@ -244,20 +244,51 @@ ask the session whether a command is outstanding, and that answer is currently s
 every single time teaches the user to dismiss it, which is worse than not having one.
 It becomes buildable when 22.8 lands, and is reconsidered then rather than guessed at now.
 
-### The connectable list comes from the backend, and it is flat — **Decided**
+### Connect is a submenu, and its list comes from the backend — **Decided**
 
-The frontend hardcodes nothing: installed WSL distributions are discovered at runtime, and
-the scripted profiles exist only in debug builds. So the backend answers what can be
-connected to, and the dialog renders exactly that.
+**One item per thing that can be connected to, directly in the menu.** No dialog: a submenu
+needs no focus trap, no modal semantics and no second surface, and arrowing through a list
+of items — with first-letter navigation — is the thing menu navigation is already best at
+for a screen reader user. A dialog would earn its place only when connecting needs more
+than a choice, which it does not.
 
 **Flat, one entry per connectable thing** — "WSL: Ubuntu" is an entry, not a WSL entry with
 a nested distro choice. A conditional second control that appears only for one option is
-harder to navigate non-visually than a longer list of equals, and a list is what arrow keys
-and first-letter navigation are already good at.
+harder to navigate non-visually than a longer list of equals.
 
-The scripted fake sessions appear in this list in debug builds, which is what the profiles
-section above promised: the fake is a permanent, selectable session kind rather than a
-launch-time environment variable.
+The frontend and the menu hardcode nothing. The backend answers what can be connected to,
+and it answers with two things joined:
+
+- **Shells discovered on this machine** — cmd, each installed PowerShell edition, one entry
+  per installed WSL distribution. This is what makes a fresh install useful with no
+  configuration at all.
+- **Profiles stored on disk**, which is where a user's own settings live (starting
+  directory, auto-read threshold, which shell) as the profiles section above describes.
+
+The scripted fake sessions join the list in debug builds, which is what that section
+promised: the fake is a permanent, selectable session kind rather than a launch-time
+environment variable.
+
+### Acter starts unconnected, and `--profile` is the only switch — **Decided**
+
+Launched with no arguments, Acter opens a window with **no session**: nothing is spawned
+until the user connects. Launched as `acter --profile <name>`, it starts that profile's
+session immediately.
+
+**An unconnected window must say so.** It announces that it is not connected and where to
+go — the Acter menu — and a line submitted before connecting is answered with the same
+sentence rather than swallowed. A window that opens onto silence is the failure shape this
+product can least afford, and one that accepts typing into nothing is a worse version of it.
+
+**Command-line arguments are parsed, never printed.** Acter is a windowed binary with no
+console attached, so `--profile something-that-does-not-exist` cannot report itself on
+stdout — and should not want to. The window opens, unconnected, and *says* what was wrong
+with the name. Failures belong where the user is, spoken, which is the same rule the rest
+of this document applies to shells that will not start.
+
+There is deliberately **no `create profile` on the command line**: profiles are files, and
+creating one from a shell nobody can see the output of is not a workflow this audience
+needs. Editing them is hand-editing today and an in-app flow when one earns its place.
 
 ## Keystroke map
 

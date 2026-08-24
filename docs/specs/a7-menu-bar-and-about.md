@@ -57,7 +57,7 @@ reason the dialogs are not native.
 
 ### 1. Two menus, and About holds one item
 
-- **Acter** — Exit. (Connect… is added by A8, the day it works. A menu item that opens
+- **Acter** — Exit. (The Connect submenu is added by A8, the day it works. A menu item that opens
   nothing is worse than a menu that does not offer it yet.)
 - **About** — About Acter.
 
