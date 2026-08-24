@@ -1113,7 +1113,9 @@ the answer to "what should we do now?".
     buys exactness for the outer shell and the prompt region 22.9 wants — not the difference
     between structure and none.
 
-22.6. B4.6, does an interrupt survive a proxied shell? Spec: none yet → specify first.
+22.6. **Done** — B4.6, an interrupt through a proxied shell. It does survive one, and the
+    entry closes as a measurement with no product code. Spec:
+    [b4.6-an-interrupt-through-a-proxied-shell.md](specs/b4.6-an-interrupt-through-a-proxied-shell.md).
     **Raised by the user 2026-08-22**, immediately after B4.1 landed, and it bounds what
     B4.1 may be read as claiming.
 
@@ -1139,8 +1141,37 @@ the answer to "what should we do now?".
     way. That is precisely the shape of the confound that cost B4.1 four disproven
     mechanisms, so it gets measured on a machine with Docker rather than argued about.
 
-    Not measurable on the development machine as of 2026-08-22 — Docker is not installed —
-    which is itself why this is an entry and not a paragraph in the B4.1 spec.
+    **Measured 2026-08-23, and it is the first outcome on every signature.** The entry
+    recorded that this was not measurable here because Docker was not installed; it is
+    installed and running (29.7.2, Linux daemon), so that paragraph is gone rather than
+    amended. A real `cmd.exe` on a real `LocalPty` enters `docker run -it alpine sh` and
+    starts a loop printing one tick a second, which makes the container's own stdout a
+    clock. Within 16 to 22 milliseconds of the `0x03` our stream carries `^C` and the
+    container's prompt — the *container's* tty echoing the control character — and
+    `docker logs` stops at exactly the tick our stream stopped at, so the loop is dead
+    inside the container rather than merely inaudible. The container is still running, only
+    its `sh` is left in `docker top`, and `uname -s` afterwards still answers `Linux`. Three
+    runs of three, identical. The other outcome, the client dying and the container being
+    orphaned, is excluded on all of it. **The same measurement through `wsl.exe`** gives the
+    same shape, so this is about `0x03` being data all the way down rather than about
+    Docker, and `ssh` and `kubectl exec` need no measurement of their own.
+
+    **Two consequences worth carrying forward.** There is nothing for B5's `ShellAdapter` to
+    declare: "is this a proxy" looks like a shell question, and Acter cannot tell and does
+    not need to, because the correct behaviour is identical either way. And an interrupt at
+    a proxied *idle* prompt is as harmless as it is in `cmd.exe` — `^C`, a redrawn prompt, a
+    container still running — which is one thing 22.8 does not have to treat separately.
+
+    **And the leaked containers are not ours**, which is the other thing this entry
+    measured. `LocalPty::drop` kills `docker.exe` and the container survives, `--rm`
+    notwithstanding — twenty-four of them had accumulated here, seventeen still running. But
+    closing a real `cmd.exe` window that is running `docker run -it --rm` leaves the
+    container up and un-removed in exactly the same way: Windows delivers its close event,
+    the client does not stop the container, and the end state is identical. Acter matches
+    the platform, and doing better would mean terminating something outside our process tree
+    that was never our child — the stance B4.1 settled. Recorded in the spec rather than
+    filed as an entry, so that the next person to find two dozen leaked containers does not
+    file it as one.
 
 22.7. B4.7, the results buffer is the pager. Spec: none yet → specify first.
     **Measured 2026-08-22**, from the user's `git diff` case, and the cheapest large win

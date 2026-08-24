@@ -487,3 +487,200 @@ async fn a_session_goes_on_working_after_a_real_program_was_stopped() {
     let seen = shell.until("alive-after-a-real-stop").await;
     assert!(seen.contains("alive-after-a-real-stop"));
 }
+
+/// **The requirement B4.6 measured**: an interrupt survives a shell Acter did not spawn
+/// and cannot reach — `docker run -it`, and by the same mechanism `wsl`, `ssh`,
+/// `kubectl exec`.
+///
+/// B4.1's mechanism cannot be what carries it. That one is the transitive inheritance of
+/// a Windows console attribute, Acter to shell to program, and a container's shell is not
+/// in this process tree at all: it is the daemon's child, in another kernel, behind a
+/// client. What carries the interrupt here is the *byte*, travelling as data through
+/// `docker.exe` to a tty the container's own line discipline is watching — a second,
+/// independent mechanism that gives Acter the same behaviour for a completely different
+/// reason.
+///
+/// **It asserts against the container rather than against our own stream, and that is the
+/// whole design of the test.** The entry named two outcomes that look identical from
+/// here, because output stops either way: the byte passing through as data and the
+/// program inside being signalled, or ConPTY turning it into a console control event that
+/// kills the *client* and orphans the container. So the question is put to the container:
+/// its own stdout must stop advancing, and the session must still be talking to it
+/// afterwards.
+///
+/// **What it guards against is a plausible future change**, which is why it earns its
+/// runtime: replacing the byte written by `Transport::interrupt` with a Windows console
+/// control API would leave every test beside this one passing and silently take the
+/// interrupt away from every proxied session.
+///
+/// Skipped rather than failed on a machine without Docker, for `real_session.rs`'s reason:
+/// a machine without Docker has not discovered a defect.
+#[tokio::test]
+#[ignore = "spawns a real shell and a container"]
+async fn an_interrupt_survives_a_proxied_shell() {
+    if !docker_is_available() || !image_is_present() {
+        println!("skipped: Docker is not available on this machine");
+        return;
+    }
+
+    // Deliberately not `--rm`: `docker logs` and `docker inspect` after the interrupt are
+    // the measurement, and `--rm` would delete the evidence in the outcome that matters.
+    // The container is removed by `Container`'s drop instead, including when an assertion
+    // below panics — a leftover from a failed run would otherwise read as this run's.
+    let container = Container::named("acter-interrupt-through-a-proxy");
+    let mut shell = Shell::start();
+    shell.until(">").await;
+
+    // Waiting for the container's own prompt rather than for an echo of our own is what
+    // keeps the outer `cmd.exe` from answering by mistake: until `sh` has drawn `/ #`, a
+    // line submitted here could still be read by the shell we came from.
+    shell.submit(&format!(
+        "docker run -it --name {} {IMAGE} sh",
+        container.name
+    ));
+    shell.until("/ #").await;
+
+    // One tick per second, so the container's own stdout is a clock: a loop that survived
+    // the interrupt says so by having counted further than we ever saw.
+    shell.submit("i=1; while true; do echo tick-$i; i=$((i+1)); sleep 1; done");
+    let ticking = shell.until("tick-3").await;
+
+    shell.pty.interrupt().expect("the interrupt is delivered");
+
+    // Long enough that a surviving loop would have ticked several more times.
+    let mut after = String::new();
+    let started = Instant::now();
+    while started.elapsed() < Duration::from_secs(5) {
+        let Ok(Some(read)) = tokio::time::timeout(Duration::from_secs(2), shell.reads.recv()).await
+        else {
+            break;
+        };
+        shell.answer(&read);
+        after.push_str(&String::from_utf8_lossy(&read));
+    }
+
+    // One tick of slack, because the interrupt can land in the moment between the loop
+    // printing and the byte arriving, and that tick is on its way either way.
+    let before = last_tick(&ticking).expect("the loop ticked before the stop");
+    let ours = last_tick(&after).unwrap_or(before).max(before);
+    assert!(
+        ours <= before + 1,
+        "the loop went on ticking after the interrupt: our stream reached tick-{ours}, \
+         against tick-{before} when the interrupt was sent"
+    );
+
+    // The half our own stream cannot answer: it stopped, but a client killed by a console
+    // control event would look exactly the same from here while the loop ran on unheard.
+    let inside = last_tick(&container.logs()).expect("the container recorded its own ticks");
+    assert!(
+        inside <= ours,
+        "the loop went on ticking inside the container after the interrupt: it reached \
+         tick-{inside} and the last one we ever saw was tick-{ours}"
+    );
+    assert_eq!(
+        container.state(),
+        "running",
+        "the interrupt stopped the program in the container, not the container"
+    );
+
+    // And the session is still talking to the container rather than to the shell we came
+    // from: `uname` answers in `sh` and is an error in `cmd.exe`, so this fails loudly in
+    // the outcome where the client died and left us at the outer prompt.
+    shell.submit("uname -s");
+    let who = shell.until("Linux").await;
+    assert!(
+        who.contains("Linux"),
+        "the container's shell is still the far end: {who:?}"
+    );
+}
+
+/// The container image the proxied case runs in: tiny, and its `sh` is as plain as a shell
+/// gets. `real_session.rs` runs the same one for the same reason.
+const IMAGE: &str = "alpine";
+
+/// A container that is removed when the test ends, however it ends.
+///
+/// **Not a nicety.** Measured 2026-08-23: a container outlives the session that started
+/// it, `--rm` notwithstanding, because `LocalPty::drop` kills `docker.exe` and the
+/// container is the daemon's child rather than the client's — which is the same fact this
+/// test's interrupt depends on, seen from the other side. Closing a real `cmd.exe` window
+/// leaves it running too, so it is not Acter's to fix (spec B4.6); it *is* this test's to
+/// clean up after.
+struct Container {
+    name: String,
+}
+
+impl Container {
+    fn named(name: &str) -> Self {
+        // A leftover from a killed run would read as this run's container.
+        let _ = docker(&["rm", "-f", name]);
+        Self {
+            name: name.to_owned(),
+        }
+    }
+
+    /// Everything the container has written to its own stdout, which is the observer that
+    /// is not our stream.
+    fn logs(&self) -> String {
+        docker_output(&["logs", &self.name])
+    }
+
+    fn state(&self) -> String {
+        docker_output(&["inspect", "-f", "{{.State.Status}}", &self.name])
+    }
+}
+
+impl Drop for Container {
+    fn drop(&mut self) {
+        let _ = docker(&["rm", "-f", &self.name]);
+    }
+}
+
+/// The highest `tick-N` in some text.
+fn last_tick(text: &str) -> Option<u32> {
+    text.split("tick-")
+        .skip(1)
+        .filter_map(|rest| {
+            rest.chars()
+                .take_while(char::is_ascii_digit)
+                .collect::<String>()
+                .parse::<u32>()
+                .ok()
+        })
+        .max()
+}
+
+/// Whether this machine can run the proxied case at all. Deliberately a check on the
+/// daemon rather than on the client: `docker` being on `PATH` with nothing behind it is
+/// the common shape of "installed", and it would hang the test rather than skip it.
+fn docker_is_available() -> bool {
+    docker(&["info", "--format", "{{.ServerVersion}}"])
+}
+
+/// Pulls the image before the session starts, so a cold machine waits here rather than
+/// inside the pseudoconsole, where a pull's carriage-return progress bars would become
+/// part of what the test is reading.
+fn image_is_present() -> bool {
+    docker(&["pull", "--quiet", IMAGE])
+}
+
+fn docker(args: &[&str]) -> bool {
+    std::process::Command::new("docker")
+        .args(args)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+fn docker_output(args: &[&str]) -> String {
+    std::process::Command::new("docker")
+        .args(args)
+        .output()
+        .map(|out| {
+            let mut said = String::from_utf8_lossy(&out.stdout).into_owned();
+            said.push_str(&String::from_utf8_lossy(&out.stderr));
+            said.trim().to_owned()
+        })
+        .unwrap_or_default()
+}
