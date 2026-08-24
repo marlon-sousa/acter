@@ -23,7 +23,7 @@
 
 use std::time::{Duration, Instant};
 
-use acter_core::{TerminalEngine, Transport, TransportError};
+use acter_core::{TerminalEngine, TerminalItem, Transport, TransportError};
 use acter_term::AlacrittyEngine;
 use acter_transports::LocalPty;
 use tokio::sync::mpsc::{Receiver, channel};
@@ -115,12 +115,18 @@ impl Shell {
 
     /// Answers whatever the read asked for, the way the pump does: an emulator does not
     /// answer a device query itself, and a shell that asked one waits forever.
-    fn answer(&mut self, read: &[u8]) {
-        self.engine.advance(read);
+    ///
+    /// Returns what the read meant, which most callers here ignore — this suite asserts on
+    /// text rather than on items. [`a_shell_that_exits_ends_the_session_by_closing_the_channel`]
+    /// is the exception, and it needs the items the engine was computing and dropping
+    /// anyway (spec B4.3, decision 2).
+    fn answer(&mut self, read: &[u8]) -> Vec<TerminalItem> {
+        let items = self.engine.advance(read);
         let replies = self.engine.take_replies();
         if !replies.is_empty() {
             let _ = self.pty.write(&replies);
         }
+        items
     }
 }
 
@@ -203,7 +209,21 @@ async fn a_resize_reaches_the_far_end() {
     );
 }
 
-/// The session ends by the channel closing, not by an error (spec B4, decision 3).
+/// The session ends by the channel closing, not by an error (spec B4, decision 3) — and
+/// what a pseudoconsole says on its way down means nothing to a user (spec B4.3).
+///
+/// **It drains rather than asserting on the next read, and that is the point.** ConPTY
+/// restores the modes it set as it tears the pseudoconsole down, writing `ESC[?9001l
+/// ESC[?1004l` — win32-input-mode and focus-event reporting back off. Whether those bytes
+/// beat the close is a race this machine loses at roughly even odds and CI wins every time,
+/// so "the next thing is the close" was asserting a coin flip. How many reads an ending
+/// takes is not this suite's business; that it *ends* is.
+///
+/// **What is asserted instead is the half that matters to a user.** Everything arriving
+/// after the last output goes through the engine, and none of it may mean anything —
+/// measured 2026-08-23 across fourteen runs that saw the epilogue, which produced no
+/// `TerminalItem` at all. An escape sequence read aloud at the end of every session would
+/// be a real defect, and this is what would catch it.
 #[tokio::test]
 #[ignore = "spawns a real shell"]
 async fn a_shell_that_exits_ends_the_session_by_closing_the_channel() {
@@ -212,13 +232,22 @@ async fn a_shell_that_exits_ends_the_session_by_closing_the_channel() {
     let mut shell = Shell::over(&["/C", "echo done"]);
     shell.until("done").await;
 
-    let ended = tokio::time::timeout(PATIENCE, shell.reads.recv())
-        .await
-        .expect("the session ends within the patience window");
+    let mut epilogue: Vec<u8> = Vec::new();
+    let mut items: Vec<TerminalItem> = Vec::new();
+    loop {
+        let read = tokio::time::timeout(PATIENCE, shell.reads.recv())
+            .await
+            .expect("the session ends within the patience window");
+        // `None` is the ending, and the only one the port has.
+        let Some(read) = read else { break };
+        items.extend(shell.answer(&read));
+        epilogue.extend_from_slice(&read);
+    }
 
     assert!(
-        ended.is_none(),
-        "the far end going away is the channel closing, never an error: {ended:?}"
+        items.is_empty(),
+        "the shell's teardown said something a user would hear: {items:?}, from {:?}",
+        String::from_utf8_lossy(&epilogue)
     );
 }
 
