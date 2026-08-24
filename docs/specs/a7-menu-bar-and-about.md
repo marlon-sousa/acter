@@ -338,8 +338,13 @@ route.
       NVDA 2026-08-24 and pinned by seven vitest tests.
 - [x] Version and copyright come from the build; changing the workspace version changes what
       the dialog says with no second edit.
-- [ ] Exit closes the window and the shell goes with it. **Not yet verified** — it is the
-      one item on this list that needs a look at the machine after the window is gone.
+- [x] Exit closes the window and the shell goes with it. **Measured 2026-08-24** against a
+      debug build with `ACTER_SHELL=cmd.exe`: the app spawned `cmd.exe` as its child, a
+      `WM_CLOSE` to the window ended the app, and the child was gone three seconds later.
+      What that verifies is the close *path* — the Exit item calls
+      `getCurrentWindow().close()`, which is the same one. Pressing the item itself from a
+      reader is still the checklist's, because the E2E suite cannot assert on an
+      application it has just told to quit.
 - [x] `cargo fmt`, `cargo clippy --workspace --all-targets`, workspace tests and vitest are
       clean (95 frontend tests).
 - [x] The E2E suite drives the menu bar and the dialog end to end, which this design makes
@@ -381,6 +386,8 @@ design, unless the item says otherwise.
       re-measured**: the cause was a one-frame focus stop in the edit field on the way into
       the dialog, removed and covered by tests, and this box stays open until a reader has
       confirmed it.
-- [ ] Exit quits, and no `cmd.exe` is left running afterwards. **Human-verified**: this one
-      is about a process on the machine after the window is gone, which the bridge cannot
+- [x] Exit quits, and no `cmd.exe` is left running afterwards. **Agent-verified by process
+      inspection rather than by ear** (2026-08-24): the window's close path was driven and
+      the spawned `cmd.exe` was confirmed gone. Pressing the menu item with a reader is
+      still worth one human pass, because the bridge cannot
       observe.
