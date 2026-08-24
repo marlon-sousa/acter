@@ -788,6 +788,18 @@ the answer to "what should we do now?".
     It has never been skipped in CI, so the `real-shell (Windows)` job has presumably been
     intermittently red for this all along.
 
+    **Re-measured 2026-08-23, running the whole real-shell suite for B4.10, and it has
+    stopped being flaky here: it now fails every time.** Three runs on `2e8bc2d`, one of
+    them serial with `--test-threads=1` as CI runs it, all red with the same sixteen bytes
+    — so on this machine the teardown read is no longer *sometimes*. **And CI is green**,
+    on every recent run of main including B4.9's, which the paragraph above did not expect:
+    whatever decides whether those bytes arrive, the developer's Windows 11 console host
+    and the runner's now answer it differently and consistently. That is worse than an
+    intermittent failure, because the suite is red on the machine where the manual
+    accessibility work happens and green on the only one anybody looks at — and it is
+    evidence for the first candidate below rather than the third, since a race would not
+    land the same way five times running.
+
     **Whose defect it is has to be decided before anything is written**, and the three
     candidates have different consequences.
 
@@ -1814,32 +1826,6 @@ the answer to "what should we do now?".
     nothing, and an event meaning "this never ran" would be new protocol surface plus a
     pinned string, decided in the open with a listener present rather than as a side
     effect.
-
-22.15. A second real-shell test is red on main, in the byte-level suite. Spec: none yet
-    → specify first, and the first thing to specify is whether `cmd.exe` exiting really
-    owes us a closed channel and nothing else. **Found 2026-08-23** while running the whole
-    real-shell suite for B4.10, and filed rather than fixed there: it is not B4.10's, and
-    it is one layer below anything that PR touches.
-
-    `a_shell_that_exits_ends_the_session_by_closing_the_channel` in `local_pty.rs` fails on
-    clean main — verified by stashing B4.10 and running it against `2e8bc2d`. It submits
-    `exit` and asserts that the next thing the read channel produces is its close. What it
-    gets on this machine is one more read first: sixteen bytes,
-    `ESC[?9001l ESC[?1004l` — the pseudoconsole turning win32-input-mode and focus
-    reporting back off as the console host tears down — and only then the close.
-
-    **It runs in CI, and CI is green**, which is what makes it worth an entry rather than
-    a fix on the spot: the `real-shell (Windows)` job passed on every recent run of main,
-    including B4.9's. So this is not a test nobody runs and not a regression in the code —
-    it is the developer's Windows 11 console host emitting something the runner's does not,
-    and the suite is therefore red on the machine where manual accessibility work happens
-    and green everywhere the check is looked at. That is the worse of the two shapes 22.13
-    warned about, because nothing will ever draw attention to it.
-
-    Whether the test should tolerate a trailing read from a shell that has gone away, or
-    whether a byte arriving after `exit` is something the transport should be swallowing,
-    is the question — and the answer decides whether anything above this line ever sees
-    such a read.
 
 ## Convergence (requires B4, B5 and B6 all Done)
 
