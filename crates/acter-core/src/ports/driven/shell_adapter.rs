@@ -41,6 +41,39 @@ pub struct ShellLaunch {
     pub environment: Vec<(String, String)>,
 }
 
+/// What the *session* needs to know about the shell it is talking to: how far its markers
+/// reach, and what ends its input.
+///
+/// **Two facts in one value, rather than two more parameters.** `SessionService::start`
+/// took `ShellMarkers` alone until B5.2 gave the domain a second thing to ask a shell, and
+/// a service that grows an argument per shell fact is a service whose call sites have to be
+/// edited by every entry in B5. Bundling them is the same reasoning [`ShellLaunch`] is
+/// built on, applied to the other side of the seam: the launch is what the transport needs,
+/// this is what the session needs, and each travels as one thing.
+///
+/// **The service is handed values rather than the adapter itself**, deliberately. It reads
+/// both facts once at construction and holds them for the life of the session, so a
+/// borrowed `&dyn ShellAdapter` would be a reference the service does not keep and cannot
+/// use again — and every test that starts a session would need an adapter to hand it, even
+/// the ones whose whole subject is a shell with the injection deliberately taken away.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShellFacts {
+    /// How far this shell's own markers reach.
+    pub markers: ShellMarkers,
+    /// The bytes that end its input, or `None` for a shell nobody has measured.
+    pub eof: Option<Vec<u8>>,
+}
+
+impl ShellFacts {
+    /// What this adapter says about itself, which is how the composition root builds one.
+    pub fn of(shell: &dyn ShellAdapter) -> Self {
+        Self {
+            markers: shell.markers(),
+            eof: shell.eof(),
+        }
+    }
+}
+
 /// One shell Acter can talk to.
 ///
 /// `Send + Sync` because the composition root hands one to a transport built on another

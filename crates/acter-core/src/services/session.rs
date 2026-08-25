@@ -46,7 +46,7 @@ use tokio::sync::mpsc::{Receiver, Sender, UnboundedSender, channel, unbounded_ch
 use crate::{
     BoundaryEvent, BoundaryTracker, Clock, CommandId, EventSink, ExitCode, Integration, KeyAck,
     KeyPress, LineId, LineRevision, PacingConfig, Region, Screen, SessionActor, SessionApi,
-    SessionEvent, SessionId, SessionInput, SessionIntent, ShellAdapter, ShellMarkers, SubmitAck,
+    SessionEvent, SessionId, SessionInput, SessionIntent, ShellFacts, ShellMarkers, SubmitAck,
     TerminalEngine, Timer, Transport, intent_for,
 };
 
@@ -130,9 +130,9 @@ impl SessionService {
         engine: Box<dyn TerminalEngine + Send>,
         clock: Arc<dyn Clock>,
         config: PacingConfig,
-        shell: &dyn ShellAdapter,
+        shell: ShellFacts,
     ) -> Self {
-        let markers = shell.markers();
+        let markers = shell.markers;
         let sink = Arc::new(AttachedSink::default());
         let (bytes, reads) = channel(READS);
         transport.start(bytes);
@@ -180,7 +180,7 @@ impl SessionService {
             requests,
             next_id,
             running,
-            eof: shell.eof(),
+            eof: shell.eof,
             sink,
         }
     }
@@ -1341,48 +1341,22 @@ mod tests {
         }
     }
 
-    /// A shell the service can ask its two questions of, which is all a fake needs to be:
-    /// this port is knowledge rather than I/O, so there is nothing here to record or to
-    /// script (spec B5.1, decision 2).
-    struct FakeShell {
-        markers: ShellMarkers,
-        eof: Option<Vec<u8>>,
+    /// What a shell tells the service about itself, built by hand — which is all a fake
+    /// needs to be, because this is a value rather than a port: knowledge, with nothing to
+    /// record and nothing to script (spec B5.1 decision 2, and the value B5.2 bundled it
+    /// into).
+    fn marking(markers: ShellMarkers) -> ShellFacts {
+        ShellFacts { markers, eof: None }
     }
 
-    impl FakeShell {
-        /// A shell that marks this much and has no measured end-of-input answer, which is
-        /// every shell in this file except the ones testing EOF.
-        fn marking(markers: ShellMarkers) -> Self {
-            Self { markers, eof: None }
-        }
-
-        /// A shell that answers end-of-input with these bytes. Deliberately not the answer
-        /// PowerShell was measured to want: what the service must do is write *whatever the
-        /// adapter said*, and a fake spelling out the one real answer would let a service
-        /// that hardcoded it pass.
-        fn ending_with(bytes: &[u8]) -> Self {
-            Self {
-                markers: ShellMarkers::Full,
-                eof: Some(bytes.to_vec()),
-            }
-        }
-    }
-
-    impl ShellAdapter for FakeShell {
-        fn launch(&self) -> crate::ShellLaunch {
-            crate::ShellLaunch {
-                program: "fake".to_owned(),
-                args: Vec::new(),
-                environment: Vec::new(),
-            }
-        }
-
-        fn markers(&self) -> ShellMarkers {
-            self.markers
-        }
-
-        fn eof(&self) -> Option<Vec<u8>> {
-            self.eof.clone()
+    /// A shell that answers end-of-input with these bytes. Deliberately not the answer
+    /// PowerShell was measured to want: what the service must do is write *whatever the
+    /// shell said*, and a fake spelling out the one real answer would let a service that
+    /// hardcoded it pass.
+    fn ending_with(bytes: &[u8]) -> ShellFacts {
+        ShellFacts {
+            markers: ShellMarkers::Full,
+            eof: Some(bytes.to_vec()),
         }
     }
 
@@ -1405,13 +1379,13 @@ mod tests {
 
         /// A session over a far end whose prompt marks only what this says (spec B4.5).
         async fn of(config: PacingConfig, markers: ShellMarkers) -> Self {
-            Self::over(config, FakeShell::marking(markers)).await
+            Self::over(config, marking(markers)).await
         }
 
         /// A session over a far end that is a particular shell, which since B5.2 is what
         /// the service is told about rather than one fact taken out of it. Most tests here
         /// care only about the markers and reach this through [`Self::of`].
-        async fn over(config: PacingConfig, shell: FakeShell) -> Self {
+        async fn over(config: PacingConfig, shell: ShellFacts) -> Self {
             let far_end = Arc::new(FarEnd::default());
             let clock = Arc::new(FakeClock::default());
             let events = Arc::new(Recorder::default());
@@ -1420,7 +1394,7 @@ mod tests {
                 Box::new(FakeEngine(Arc::clone(&far_end))),
                 Arc::clone(&clock) as Arc<dyn Clock>,
                 config,
-                &shell,
+                shell,
             );
             api.attach_session(SessionId(1), Arc::clone(&events) as Arc<dyn EventSink>);
             let session = Self {
@@ -3207,8 +3181,7 @@ mod tests {
         /// next, which is the whole reason this is a port method.
         #[tokio::test]
         async fn the_session_writes_whatever_the_shell_said_ends_it() {
-            let session =
-                Session::over(quick_grace(), FakeShell::ending_with(b"stop-this-shell")).await;
+            let session = Session::over(quick_grace(), ending_with(b"stop-this-shell")).await;
 
             assert_eq!(session.press(ctrl('d')).await, KeyAck::Applied);
             assert_eq!(session.written(), "stop-this-shell");
@@ -3231,8 +3204,7 @@ mod tests {
         /// is precisely the moment when nothing is running.
         #[tokio::test]
         async fn nothing_needs_to_be_running_for_it_to_apply() {
-            let session =
-                Session::over(quick_grace(), FakeShell::ending_with(b"stop-this-shell")).await;
+            let session = Session::over(quick_grace(), ending_with(b"stop-this-shell")).await;
 
             assert_eq!(
                 session.press(ctrl('c')).await,
@@ -3251,8 +3223,7 @@ mod tests {
         /// nobody typed.
         #[tokio::test]
         async fn it_is_not_a_submission_and_gets_no_block() {
-            let session =
-                Session::over(quick_grace(), FakeShell::ending_with(b"stop-this-shell")).await;
+            let session = Session::over(quick_grace(), ending_with(b"stop-this-shell")).await;
             session.press(ctrl('d')).await;
 
             assert!(
@@ -3267,8 +3238,7 @@ mod tests {
         /// leave.
         #[tokio::test]
         async fn it_is_not_an_interrupt() {
-            let session =
-                Session::over(quick_grace(), FakeShell::ending_with(b"stop-this-shell")).await;
+            let session = Session::over(quick_grace(), ending_with(b"stop-this-shell")).await;
             session.press(ctrl('d')).await;
 
             assert_eq!(session.interrupts(), 0);

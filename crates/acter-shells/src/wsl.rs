@@ -97,6 +97,24 @@ impl ShellAdapter for Wsl {
     fn markers(&self) -> ShellMarkers {
         ShellMarkers::Full
     }
+
+    /// **Nobody has measured what ends a bash session through this transport, so this says
+    /// so rather than guessing.**
+    ///
+    /// `0x04` is the obvious answer and it is probably right: bash reads from a
+    /// pseudoconsole whose line discipline turns that byte into end-of-file. But "probably
+    /// right" is exactly what B5.2 measured and disproved for the shell next door —
+    /// *neither* control byte that is supposed to end a PowerShell session does, both are
+    /// echoed as caret text, and a line submitted behind one runs as a command the user
+    /// never typed. A byte assumed here would fail in the same shape: silently, in front of
+    /// a user who pressed Ctrl+D and cannot see what happened.
+    ///
+    /// `None` means "Acter does not know how to end this shell", which the session reports
+    /// out loud. It becomes a byte the day somebody drives a real distribution and watches
+    /// the session close.
+    fn eof(&self) -> Option<Vec<u8>> {
+        None
+    }
 }
 
 /// Whether this program is the WSL client, however it was named.

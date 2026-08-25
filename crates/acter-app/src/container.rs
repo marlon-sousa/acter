@@ -12,7 +12,9 @@
 use std::env;
 use std::sync::Arc;
 
-use acter_core::{Clock, PacingConfig, SessionApi, SessionService, ShellAdapter, Transport};
+use acter_core::{
+    Clock, PacingConfig, SessionApi, SessionService, ShellAdapter, ShellFacts, Transport,
+};
 use acter_shells::Plain;
 use acter_term::AlacrittyEngine;
 use acter_transports::{
@@ -114,7 +116,7 @@ pub(crate) fn session() -> SessionService {
         Box::new(AlacrittyEngine::new(COLUMNS, SCREEN_LINES)),
         clock,
         PacingConfig::default(),
-        shell.as_ref(),
+        ShellFacts::of(shell.as_ref()),
     )
 }
 
@@ -128,9 +130,10 @@ pub(crate) fn session() -> SessionService {
 /// It returns the shell alongside the far end itself, because the two are one decision:
 /// injecting cmd's prompt markers without telling the domain that this shell emits no `C`
 /// produces a session that receives markers, opens no block and speaks nothing at all —
-/// measured before either half was written (ROADMAP 22.5). Since B5.2 the session asks the
-/// adapter for both of the answers it needs rather than being handed one of them, so this
-/// hands the object over and takes nothing out of it.
+/// measured before either half was written (ROADMAP 22.5). Since B5.2 the session needs two
+/// answers from a shell rather than one — how far its markers reach, and what ends its
+/// input — so this hands the adapter over whole and lets the caller take what it needs out
+/// of it as [`ShellFacts`].
 ///
 /// A scripted far end is a shell Acter knows nothing about, which is what [`Plain`] is:
 /// the transcript speaks the markers itself, and nothing is injected into a fake.

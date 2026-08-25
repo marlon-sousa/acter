@@ -24,9 +24,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use acter_core::{
-    Announcement, Clock, CommandId, EventSink, ExitCode, InstalledShells, Key, KeyPress,
-    PacingConfig, SessionApi, SessionEvent, SessionId, SessionService, ShellLaunch, ShellMarkers,
-    Timer,
+    Announcement, Clock, CommandId, EventSink, ExitCode, InstalledShells, Key, KeyAck, KeyPress,
+    PacingConfig, SessionApi, SessionEvent, SessionId, SessionService, ShellAdapter, ShellFacts,
+    ShellLaunch, ShellMarkers, Timer,
 };
 use acter_shells::ThisMachine;
 use acter_term::AlacrittyEngine;
@@ -38,6 +38,13 @@ use tokio::sync::oneshot;
 /// incidental here but the precondition, since B4.2 only exists in a session nothing ever
 /// tells about a command boundary.
 const SHELL: &str = "cmd.exe";
+
+/// The shell the marker tests below are about: Windows PowerShell 5.1, which is on every
+/// Windows machine including the CI image. PowerShell 7 is the other edition and is
+/// deliberately not what this suite drives — it is installed separately, so a suite that
+/// needed it would be red on a machine that simply does not have it, and B5.2 measured the
+/// two producing byte-for-byte the same marker stream.
+const POWERSHELL: &str = "powershell.exe";
 
 /// Eighty by twenty-four, matching `pipeline.rs`, so a flood of forty rows genuinely
 /// scrolls rather than merely being long.
@@ -123,6 +130,16 @@ impl RealSession {
         Self::over_within(launch, markers, GRACE)
     }
 
+    /// A session over the shell this adapter describes, started and declared exactly as
+    /// the application starts and declares it — launch, markers and end-of-input all taken
+    /// from the one object, so nothing here can drift from what ships.
+    ///
+    /// The grace period is the caller's because it is the one thing that is *not* the
+    /// shell's: see [`Self::powershell`], which is the only caller that has to state it.
+    fn adapted(shell: &dyn ShellAdapter, grace: Duration) -> Self {
+        Self::launched(&shell.launch(), ShellFacts::of(shell), grace)
+    }
+
     /// The same, with the integration grace period stated rather than accelerated.
     ///
     /// Most of this file is about what a *flagged* session does, so it shortens the grace
@@ -134,6 +151,12 @@ impl RealSession {
     /// arrives — but it makes "was this session ever flagged" a question about the clock
     /// rather than about the shell.
     fn over_within(launch: &ShellLaunch, markers: ShellMarkers, grace: Duration) -> Self {
+        Self::launched(launch, ShellFacts { markers, eof: None }, grace)
+    }
+
+    /// The one place a real session is actually built, however the caller described the
+    /// shell it is over.
+    fn launched(launch: &ShellLaunch, shell: ShellFacts, grace: Duration) -> Self {
         let args: Vec<&str> = launch.args.iter().map(String::as_str).collect();
         let environment: Vec<(&str, &str)> = launch
             .environment
@@ -151,7 +174,7 @@ impl RealSession {
                 integration_grace: grace,
                 ..PacingConfig::default()
             },
-            markers,
+            shell,
         );
         session.attach_session(SESSION, Arc::clone(&events) as Arc<dyn EventSink>);
         Self { session, events }
@@ -233,6 +256,52 @@ impl RealSession {
 
     /// Everything the session said, whichever block it belonged to. Only ever used to
     /// make a timeout legible.
+    /// **The one thing it does not take from the rest of this file is the grace period,
+    /// and that is a measurement rather than a convenience.** Every other session here runs
+    /// under two hundred milliseconds because `cmd.exe` draws its prompt in tens of them;
+    /// PowerShell does not, and measured 2026-08-24 a PowerShell session under that grace
+    /// is flagged `IntegrationUnavailable` before its first marker has arrived. That is
+    /// correct behaviour and it recovers silently (DESIGN decision 8), but it is a fact
+    /// about how long a shell takes to start rather than about its markers, so this runs
+    /// under the grace the product ships — which is twenty-five times longer and never
+    /// close.
+    fn powershell() -> Self {
+        Self::adapted(
+            acter_shells::adapter_for(POWERSHELL).as_ref(),
+            PacingConfig::default().integration_grace,
+        )
+    }
+
+    /// What the frontend would send for Ctrl+D: end of input, whatever that costs in
+    /// bytes for this shell (spec B5.2, decision 5).
+    fn ctrl_d(&self) -> KeyAck {
+        self.session.send_key(
+            SESSION,
+            KeyPress {
+                key: Key::Char('d'),
+                ctrl: true,
+                shift: false,
+                alt: false,
+            },
+        )
+    }
+
+    /// Whether the block closed because the shell said it had — the marker cmd cannot
+    /// send, and therefore the fact this suite could not assert before PowerShell.
+    fn finished(&self, command_id: CommandId) -> bool {
+        self.events
+            .0
+            .lock()
+            .expect("recorder poisoned")
+            .iter()
+            .any(|event| {
+                matches!(
+                    event,
+                    SessionEvent::CommandFinished { command_id: at } if *at == command_id
+                )
+            })
+    }
+
     fn rendered(&self) -> String {
         self.events
             .0
@@ -979,4 +1048,162 @@ fn outside_the_session(command: &str) -> String {
         .next()
         .expect("md5sum prints a hash")
         .to_owned()
+}
+
+/// **The whole of B5.2 against the shell it is about**: a real Windows PowerShell whose
+/// injected snippet marks all four boundaries, so a block opens on `C`, closes on `D`, and
+/// closes because the shell said the command ended rather than because a prompt reappeared.
+///
+/// This is the first test in this repository that can assert any of it. cmd can mark its
+/// prompt and its command line and nothing else, so until now every block in every real
+/// session ended by inference and no session had ever seen an exit code (spec B4.5).
+#[tokio::test]
+#[ignore = "spawns a real shell"]
+async fn a_real_powershell_marks_every_boundary_and_finishes_its_blocks() {
+    let session = RealSession::powershell();
+
+    let command = session.submit("echo acter-marked-line");
+    let output = session.until(command, "acter-marked-line", PATIENCE).await;
+
+    assert_eq!(
+        session.heading_of(command),
+        Some(Some("echo acter-marked-line".to_owned())),
+        "the block is named by what the far end echoed between B and C"
+    );
+    assert!(
+        output.contains("acter-marked-line"),
+        "and holds the command's output: {output:?}"
+    );
+    assert!(
+        !output.contains("echo acter-marked-line"),
+        "and never the line the user typed, which belongs in the heading: {output:?}"
+    );
+    assert!(
+        session.finished(command),
+        "the block closed because the shell said so: {:?}",
+        session.events.0.lock().expect("recorder poisoned")
+    );
+    assert!(
+        !session
+            .events
+            .0
+            .lock()
+            .expect("recorder poisoned")
+            .contains(&SessionEvent::IntegrationUnavailable),
+        "a shell that marks all four boundaries is integrated, not flagged"
+    );
+}
+
+/// **The line the user typed is never read back at them, in any block** — B4.9's
+/// requirement against the first shell whose `B..C` region is the shell's own rather than
+/// one the tracker synthesized from an echo.
+///
+/// Two commands, because this failure showed up on the second when it showed up at all: a
+/// session whose first block is clean and whose every block after it glues the user's own
+/// typing onto the answer.
+#[tokio::test]
+#[ignore = "spawns a real shell"]
+async fn no_command_in_a_powershell_session_reads_the_typed_line_back() {
+    let session = RealSession::powershell();
+
+    let first = session.submit("echo acter-alpha");
+    session.until(first, "acter-alpha", PATIENCE).await;
+
+    let second = session.submit("echo acter-bravo");
+    session.until(second, "acter-bravo", PATIENCE).await;
+
+    let said = session.rendered();
+    assert!(
+        !said.contains("echo acter-bravo") && !said.contains("echo acter-alpha"),
+        "no command line is read back at the user, in any block: {said:?}"
+    );
+    assert_eq!(
+        session.heading_of(second),
+        Some(Some("echo acter-bravo".to_owned())),
+        "the command line belongs in the heading and nowhere else"
+    );
+}
+
+/// **A line that invokes no command at all still gets its output into the block**, which is
+/// the edge the output marker had to survive.
+///
+/// `C` comes from PowerShell's command-lookup hook and `1..3` looks nothing up, so had the
+/// hook not fired those three lines would have landed in the `B..C` region — which
+/// `Pump::wants` excludes, leaving the user with silence. Measured on both editions:
+/// PowerShell resolves its formatting pipeline as a command, so the marker arrives before
+/// the first line of output either way. A silent line is the worst failure this product
+/// has, which is why an expression with no command in it earns a test of its own.
+#[tokio::test]
+#[ignore = "spawns a real shell"]
+async fn a_line_that_invokes_no_command_still_says_what_it_produced() {
+    let session = RealSession::powershell();
+
+    let command = session.submit("1..3");
+    let output = session.until(command, "3", PATIENCE).await;
+
+    for expected in ["1", "2", "3"] {
+        assert!(
+            output.contains(expected),
+            "every line of output reached the block: {expected} missing from {output:?}"
+        );
+    }
+    assert!(session.finished(command), "and the block closed");
+}
+
+/// **Ctrl+D ends a real PowerShell session**, and the read channel closing is what ending
+/// means — the only ending the transport port models (spec B4, decision 3).
+///
+/// What it costs in bytes is the adapter's answer and was measured rather than assumed:
+/// neither `0x1a` nor `0x04` ends a PowerShell session on a pseudoconsole, so taking the
+/// spec's expectation on trust would have shipped a keystroke that quietly did nothing
+/// (spec B5.2, decision 5, amended).
+///
+/// The session is asserted to be *gone* rather than merely quiet: a submission after it
+/// must not run. The frontend does not forward Ctrl+D yet, so this drives `send_key`
+/// directly — the same call the router makes, and the same path a keyboard will take.
+#[tokio::test]
+#[ignore = "spawns a real shell"]
+async fn ctrl_d_ends_a_real_powershell_session() {
+    let session = RealSession::powershell();
+
+    let first = session.submit("echo acter-before-the-end");
+    session.until(first, "acter-before-the-end", PATIENCE).await;
+
+    assert_eq!(
+        session.ctrl_d(),
+        KeyAck::Applied,
+        "PowerShell has an end-of-input answer and it went out"
+    );
+
+    // The shell echoes and runs whatever that answer was, so the ending is audible before
+    // it is complete; what says it completed is that nothing runs afterwards.
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    session.submit("echo acter-after-the-end");
+    tokio::time::sleep(Duration::from_secs(3)).await;
+
+    assert!(
+        !session.rendered().contains("acter-after-the-end"),
+        "the session had ended, so nothing ran in it: {:?}",
+        session.rendered()
+    );
+}
+
+/// The same keystroke in a session over a shell nobody has measured writes nothing and says
+/// so, rather than guessing at a byte.
+///
+/// `cmd.exe` stands in for that here only because it is the other shell this suite can
+/// start; what is under test is the honest answer, not cmd (spec B5.2, decision 5).
+#[tokio::test]
+#[ignore = "spawns a real shell"]
+async fn ctrl_d_in_a_shell_with_no_measured_answer_does_nothing() {
+    let session = RealSession::marked();
+
+    assert_eq!(session.ctrl_d(), KeyAck::NothingToActOn);
+
+    let after = session.submit("echo acter-still-here");
+    let output = session.until(after, "acter-still-here", PATIENCE).await;
+    assert!(
+        output.contains("acter-still-here"),
+        "and the session is untouched: {output:?}"
+    );
 }
