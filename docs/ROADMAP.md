@@ -2041,8 +2041,8 @@ thing to pick up once the adapters land, not merely the next number.
     the shell has no answer, nothing is listening). That is a keystroke-map decision and a
     pinned string, which is exactly the sort of thing this project decides in the open.
 
-23.6. The prompt stopped being spoken, and the better the integration the worse it is.
-    Spec: none yet → specify first. **Found by the user 2026-08-25**, listening to the first
+23.6. **Done** — the prompt is spoken again in an integrated session. Spec:
+    [b5.6-the-prompt-is-spoken.md](specs/b5.6-the-prompt-is-spoken.md). **Found by the user 2026-08-25**, listening to the first
     real PowerShell session, and it is a regression this group caused rather than an old gap.
 
     **What a listener meets.** In a session over a shell that marks all four boundaries —
@@ -2079,6 +2079,34 @@ thing to pick up once the adapters land, not merely the next number.
 
     Filed against 23 as a group rather than against 23.2 alone: 23.3 has the same defect for
     the same reason, and any fix belongs above both adapters rather than inside either.
+
+23.7. A session that is starting says nothing while it starts. Spec: none yet → specify
+    first. **Found by the user 2026-08-25**, in B5.6's manual pass, and filed rather than
+    fixed there because it is not that entry's: B5.6 restored the prompt, and this is about
+    the seconds *before* there is a prompt to restore.
+
+    **What a listener meets.** The window opens and announces a panel, and then nothing at
+    all for several seconds, until the shell finally draws its first prompt. The user's
+    account: "I heard panel for some seconds, until the connection came." Nothing says a
+    session is starting, which shell it is, or that waiting is the right thing to do.
+
+    **It gets worse with the better shells, again.** `cmd.exe` starts in tens of
+    milliseconds, so the gap was never noticeable; PowerShell takes seconds — it is the same
+    slow start B5.2 had to raise the integration grace period for — and a WSL distribution
+    that is cold takes longer still. So this arrived with 23.2 and 23.3 and was invisible
+    before them.
+
+    **DESIGN already has the rule this is a case of**: an unconnected window must say so,
+    "it announces that it is not connected and where to go". That was written for a window
+    with no session at all. A window whose session is *on its way* is a third state, between
+    unconnected and ready, and it has no words yet.
+
+    What the spec has to settle: whether the announcement names the far end ("starting
+    PowerShell") or stays generic, whether it repeats or says one thing and waits, what is
+    said if the shell never comes up, and how this composes with the `IntegrationUnavailable`
+    grace period, which is a different clock measuring a different thing. **Not just a
+    spinner in words**: a listener needs to know that waiting is correct, and to be told when
+    waiting stopped being correct.
 
 24. **Done** — B6.1, correlation that cannot drift. Spec:
     [b6.1-correlation-that-cannot-drift.md](specs/b6.1-correlation-that-cannot-drift.md).

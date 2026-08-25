@@ -25,6 +25,15 @@ export interface BufferView {
    * region container. The specific landing element is view-adapter knowledge — the
    * controller only asks for focus.
    */
+  /**
+   * Put a prompt the shell drew into the buffer, between blocks, as its own element.
+   *
+   * **Not a heading**, deliberately: heading navigation is how a listener walks
+   * *commands*, and putting prompts into that sequence would double its length and break
+   * the rhythm A5 and B4.4 were built for. It is readable where it happened, which is what
+   * a listener reviewing the session needs (spec B5.6, decision 5).
+   */
+  appendPrompt(text: string): void;
   focus(): void;
   containsFocus(): boolean;
 }

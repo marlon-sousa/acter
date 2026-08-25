@@ -36,20 +36,27 @@ describe('announcer: live-region lifecycle', () => {
         announcer;
     });
 
+    // Since B5.6 a marked session also announces the prompt the shell drew, so the live
+    // region legitimately holds more than one utterance during a burst: it is a queue
+    // drained one child per turn, not a single slot. What this test is about is that the
+    // phrase was announced, so it asks whether the region contains it rather than whether
+    // the region is only it.
     await submitCommand('small');
 
     // Catch the announced state the moment the text lands, before the clear delay.
     const announced = (await browser.waitUntil(
       async () => {
         const snap = await browser.execute(snapshotAnnouncer);
-        return snap.text === 'hello from acter' ? snap : false;
+        return snap.text.includes('hello from acter') ? snap : false;
       },
       { timeout: 5000, timeoutMsg: 'the auto-read announcement never appeared' },
     )) as AnnouncerState;
 
     expect(announced.sameNode).toBe(true);
-    // Exactly once: a single child holding the output text, not appended twice.
-    expect(announced.childCount).toBe(1);
+    // Not appended twice: the output text appears once however many other announcements
+    // the burst carried. Counting children stopped saying that when B5.6 gave a marked
+    // session a prompt to announce as well, so the assertion is about the text.
+    expect(announced.text.split('hello from acter').length - 1).toBe(1);
 
     // Then it empties itself without recreating the node — so a screen reader
     // arrowing past the region later finds nothing stale to read.

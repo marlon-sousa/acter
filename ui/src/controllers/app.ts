@@ -188,6 +188,18 @@ export class AppController {
         this.openBlocks.delete(event.command_id);
         this.echoed.delete(event.command_id);
         break;
+      case 'PromptDrawn':
+        // Rendered first and spoken second, which is the render-before-announce invariant
+        // A5.2 pinned: the text is in the buffer before anything says it, so a listener who
+        // reaches for it after hearing it finds it there.
+        //
+        // Spoken every time rather than only when it changes (spec B5.6, decision 3): the
+        // prompt is how a user knows where they are, and a terminal repeats it after every
+        // command. If the repetition proves tiring in use it becomes a setting, not a
+        // silent default.
+        this.buffer.appendPrompt(event.text);
+        this.announcer.announce(event.text);
+        break;
       case 'CommandInterrupted':
         // Terminal, like CommandFinished, and silent like it too: the block bookkeeping
         // happens and nothing is announced (B4.1). What the user hears is the shell's own

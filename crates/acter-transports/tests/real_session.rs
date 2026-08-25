@@ -1050,6 +1050,45 @@ fn outside_the_session(command: &str) -> String {
         .to_owned()
 }
 
+/// **B5.6 against a real shell**: the prompt PowerShell drew is reported, so a listener can
+/// hear the working directory and the branch they are in.
+///
+/// The regression this pins was invisible to every earlier test in this file, because none
+/// of them asked what a session says *between* blocks — and that is exactly where a prompt
+/// lives once a shell marks all four boundaries.
+#[tokio::test]
+#[ignore = "spawns a real shell"]
+async fn a_real_powershell_reports_the_prompt_it_drew() {
+    let session = RealSession::powershell();
+
+    let command = session.submit("echo acter-before-the-prompt");
+    session
+        .until(command, "acter-before-the-prompt", PATIENCE)
+        .await;
+    tokio::time::sleep(SETTLE).await;
+
+    let prompts: Vec<String> = session
+        .events
+        .0
+        .lock()
+        .expect("recorder poisoned")
+        .iter()
+        .filter_map(|event| match event {
+            SessionEvent::PromptDrawn { text } => Some(text.clone()),
+            _ => None,
+        })
+        .collect();
+
+    assert!(
+        !prompts.is_empty(),
+        "a marked session says what its prompt says, and it said: {prompts:?}"
+    );
+    assert!(
+        prompts.iter().any(|drawn| drawn.contains("PS ")),
+        "and what it says is PowerShell's own prompt: {prompts:?}"
+    );
+}
+
 /// **The whole of B5.2 against the shell it is about**: a real Windows PowerShell whose
 /// injected snippet marks all four boundaries, so a block opens on `C`, closes on `D`, and
 /// closes because the shell said the command ended rather than because a prompt reappeared.

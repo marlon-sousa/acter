@@ -45,6 +45,23 @@ pub enum SessionEvent {
     /// on the wire at all — nothing read it, and the frontend must not speak it (A6
     /// decision 2). A later feature wanting the code adds a shape for it deliberately.
     CommandFinished { command_id: CommandId },
+    /// The shell drew a prompt, and this is what it says.
+    ///
+    /// **Restores what shell integration took away** (spec B5.6). The prompt is where a
+    /// terminal user reads their working directory, their git branch, their virtualenv —
+    /// and in a session marking all four boundaries it lives in the `A..B` region, which
+    /// block content excludes, so a listener heard it nowhere at all. `D` replaced the
+    /// prompt as an *ending signal* and replaced nothing about what it *says*.
+    ///
+    /// **Its own event rather than block content.** A prompt admitted as output would
+    /// arrive inside a block, before that block's verdict, reading as though the shell had
+    /// printed it. It is not output: it is the state the next command will run in.
+    ///
+    /// Only a `ShellMarkers::Full` session emits it. A shell that marks only its prompt and
+    /// command line already speaks the prompt as content, because with no `D` the returning
+    /// prompt is the only ending it has (spec B4.5, decision 4) — emitting this as well
+    /// would say everything twice.
+    PromptDrawn { text: String },
     /// The command was stopped before it ended on its own. Terminal: no
     /// `CommandFinished` follows. Distinct from `CommandFinished` on purpose — the exit
     /// code of a process the user stopped carries no information worth announcing, and
