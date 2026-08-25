@@ -49,6 +49,13 @@ export class AboutDialog {
   }
 
   async open(): Promise<void> {
+    // Opening an open dialog throws `InvalidStateError`, and the throw is silent: the
+    // promise rejects into a `void` call and the user is left with whatever was on screen.
+    // A menu that is asked twice — a double Enter, a click on an item already chosen — is
+    // an ordinary thing, so this answers it rather than breaking.
+    if (this.dialog.open) {
+      return;
+    }
     const facts = await this.shell.about();
     this.fill('#about-name', facts.name);
     this.fill('#about-version', `Version ${facts.version}`);

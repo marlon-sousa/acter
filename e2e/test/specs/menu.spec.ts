@@ -86,29 +86,53 @@ describe('the menu bar', () => {
   });
 });
 
+/** Is the dialog open right now? Asked of the element rather than of the DOM's shape,
+ * because `open` is what `showModal` sets and what `close` clears. */
+function dialogIsOpen(): Promise<boolean> {
+  return browser.execute(
+    () =>
+      (document.getElementById('about-dialog') as HTMLDialogElement | null)?.open === true,
+  );
+}
+
+/** Walk the menu to About Acter and activate it, then wait for the dialog to be open.
+ * Factored out because three tests need the same five steps, and because the waiting is
+ * the part that has to be right: CI is slower than this machine, and the facts come back
+ * over IPC before the dialog is shown. */
+async function openAbout(): Promise<void> {
+  await press('F10');
+  await press('ArrowRight');
+  await press('ArrowDown');
+  await press('Enter');
+  await browser.waitUntil(dialogIsOpen, {
+    timeout: 15_000,
+    timeoutMsg: 'the About dialog never opened',
+  });
+}
+
 describe('the About dialog', () => {
   beforeEach(async () => {
+    // Every test here starts from a closed dialog and a focused edit field, and *waits*
+    // for that rather than assuming it: the previous test leaves the dialog open, closing
+    // is what returns focus, and a test that began before either had happened would fail
+    // for a reason that has nothing to do with what it is testing.
     await browser.execute(() => {
       const dialog = document.getElementById('about-dialog') as HTMLDialogElement | null;
       dialog?.close();
-      document.getElementById('command-input')?.focus();
     });
+    await browser.waitUntil(async () => !(await dialogIsOpen()), {
+      timeout: 15_000,
+      timeoutMsg: 'the About dialog would not close between tests',
+    });
+    await browser.execute(() => document.getElementById('command-input')?.focus());
   });
 
   /** The whole path: menu bar, into a menu, activate, and a dialog carrying facts that
    * came from the Rust side rather than from the page. */
   it('opens from the menu and reads four facts from the build', async () => {
-    await press('F10');
-    await press('ArrowRight');
-    await press('ArrowDown');
-    await press('Enter');
+    await openAbout();
 
     const dialog = await $('#about-dialog');
-    await browser.waitUntil(
-      async () => browser.execute(() => (document.getElementById('about-dialog') as HTMLDialogElement | null)?.open === true),
-      { timeout: 5_000, timeoutMsg: 'the About dialog never opened' },
-    );
-
     // The name is filled by the adapter from the `about` command; the HTML ships empty.
     await expect(await dialog.getText()).toContain('Acter');
     await expect(await dialog.getText()).toContain('Version');
@@ -119,14 +143,7 @@ describe('the About dialog', () => {
   /** Measured through NVDA before it was fixed: Tab left the only control for the
    * dialog's own document, and the reader dropped back into browse mode. */
   it('keeps Tab inside itself', async () => {
-    await press('F10');
-    await press('ArrowRight');
-    await press('ArrowDown');
-    await press('Enter');
-    await browser.waitUntil(
-      async () => browser.execute(() => (document.getElementById('about-dialog') as HTMLDialogElement | null)?.open === true),
-      { timeout: 5_000 },
-    );
+    await openAbout();
 
     await browser.execute(() => document.getElementById('about-close')?.focus());
     await press('Tab');
@@ -135,14 +152,7 @@ describe('the About dialog', () => {
   });
 
   it('closes on Escape and leaves focus in the edit field', async () => {
-    await press('F10');
-    await press('ArrowRight');
-    await press('ArrowDown');
-    await press('Enter');
-    await browser.waitUntil(
-      async () => browser.execute(() => (document.getElementById('about-dialog') as HTMLDialogElement | null)?.open === true),
-      { timeout: 5_000 },
-    );
+    await openAbout();
 
     // Escape on a modal dialog is the platform's own, and an untrusted synthetic key does
     // not reach it — so this closes the dialog the way its own close button does, which is
@@ -150,7 +160,7 @@ describe('the About dialog', () => {
     await browser.execute(() => document.getElementById('about-close')?.click());
 
     await browser.waitUntil(async () => (await focusedId()) === 'command-input', {
-      timeout: 5_000,
+      timeout: 15_000,
       timeoutMsg: 'focus never returned to the edit field',
     });
   });
