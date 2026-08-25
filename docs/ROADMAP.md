@@ -2013,6 +2013,32 @@ thing to pick up once the adapters land, not merely the next number.
     with WSL and no distribution could not be reproduced here — their sentences are unit
     tested, not observed. The NVDA pass is the PR body's.
 
+23.4. **Done** — B5.4, the connection catalogue: what can be connected to, and what to say
+    when it cannot. Spec: [b5.4-connection-catalogue.md](specs/b5.4-connection-catalogue.md)
+    — agreed in conversation 2026-08-25, raised by the user while 23.2 was being finished.
+
+    Three adapters exist and the Connect dialog will list them, but on any given machine
+    some cannot be started: PowerShell 7 is installed separately, WSL may have no
+    distribution, and cmd does not exist off Windows at all. **Hiding what a machine cannot
+    do is the wrong answer** — a list that silently omits WSL teaches a listener that Acter
+    does not support it, and a list that offers it and fails teaches them Acter is broken.
+    Neither is true.
+
+    So every kind stays, unavailable ones sort to the end, and `(not available)` goes in the
+    accessible **name** rather than a visual state; the row stays selectable, because a row
+    that cannot be focused cannot be read and the point is that the user can find out why.
+    Choosing one shows read-only instructions naming what is missing, what to type, and
+    where.
+
+    **Two absences are kept apart**: a kind that does not belong to this operating system is
+    absent from the catalogue entirely — `WSL (not available)` on macOS, with instructions to
+    install Windows, would be absurd — while a kind that belongs here and is missing is
+    present and explains itself.
+
+    Knowledge rather than discovery: availability is an argument, not a lookup, so every rule
+    is testable without a machine that happens to lack something. Asking the machine is 25
+    (B7)'s, and this is what B7 and 13 (A8) render.
+
 23.5. Ctrl+D is not reachable from the window. Spec: none yet → specify first, and the
     specifying is small because the diagnosis is already complete. **Found 2026-08-25** in
     B5.2's NVDA pass, and filed rather than fixed there: forwarding it is frontend work and
@@ -2107,6 +2133,7 @@ thing to pick up once the adapters land, not merely the next number.
     grace period, which is a different clock measuring a different thing. **Not just a
     spinner in words**: a listener needs to know that waiting is correct, and to be told when
     waiting stopped being correct.
+
 
 24. **Done** — B6.1, correlation that cannot drift. Spec:
     [b6.1-correlation-that-cannot-drift.md](specs/b6.1-correlation-that-cannot-drift.md).
