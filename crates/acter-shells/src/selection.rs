@@ -6,13 +6,17 @@
 //! `lib.rs` because a facade declares modules and re-exports, and this has behaviour and
 //! tests of its own.
 //!
-//! **Finding out which shells a machine has is not this** — that is I/O, it is a port, and
-//! it arrives with the adapter that needs it (spec B5.3).
+//! **Finding out which shells a machine has is not this** — that is I/O, it lives behind
+//! `InstalledShells`, and it arrived in B5.3 with the adapter that needs it. A program name
+//! is all this function has, which is why `wsl.exe` selects a session in whatever
+//! distribution WSL calls the default: naming one is the connect list's business, and the
+//! connect list builds that adapter directly rather than through here.
 
 use acter_core::ShellAdapter;
 
 use crate::cmd::{self, Cmd};
 use crate::plain::Plain;
+use crate::wsl::{self, Wsl};
 
 /// The adapter for the shell this program names, and [`Plain`](crate::Plain) for one this
 /// crate does not recognise.
@@ -22,6 +26,8 @@ use crate::plain::Plain;
 pub fn adapter_for(program: &str) -> Box<dyn ShellAdapter> {
     if cmd::is_cmd(program) {
         Box::new(Cmd::new(program))
+    } else if wsl::is_wsl(program) {
+        Box::new(Wsl::new(program))
     } else {
         Box::new(Plain::new(program))
     }
@@ -54,9 +60,43 @@ mod tests {
         }
     }
 
+    /// `wsl.exe` reaches the WSL adapter and gets the injection, in whatever distribution
+    /// WSL calls the default. Asserted through the port for the reason cmd's is: what a
+    /// caller can observe is the launch and the markers.
+    #[test]
+    fn the_wsl_client_is_selected_however_it_was_named() {
+        for named in ["wsl", "wsl.exe", "WSL.EXE", r"C:\Windows\system32\wsl.exe"] {
+            let adapter = adapter_for(named);
+
+            assert_eq!(
+                adapter.markers(),
+                ShellMarkers::Full,
+                "{named} marks the whole cycle"
+            );
+            assert_eq!(adapter.launch().program, named, "started as it was named");
+            assert_eq!(
+                adapter
+                    .launch()
+                    .environment
+                    .iter()
+                    .map(|(name, _)| name.clone())
+                    .collect::<Vec<String>>(),
+                ["WSLENV", "PROMPT_COMMAND"],
+                "{named} gets the injection and the entry that carries it across"
+            );
+            assert!(
+                adapter.launch().args.is_empty(),
+                "{named} names no distribution, so WSL picks its own default"
+            );
+        }
+    }
+
+    /// The null adapter is what is left over. `Full` markers alone stopped identifying it
+    /// in B5.3, since a real shell now claims them too, so this compares the whole launch —
+    /// which it already did, and which is why the change cost nothing here.
     #[test]
     fn a_shell_this_crate_does_not_know_gets_the_null_adapter() {
-        for named in ["powershell.exe", "pwsh", "bash", r"C:\bin\wsl.exe"] {
+        for named in ["powershell.exe", "pwsh", "bash", r"C:\bin\wslconfig.exe"] {
             let adapter = adapter_for(named);
 
             assert_eq!(adapter.markers(), ShellMarkers::Full, "{named} is unknown");

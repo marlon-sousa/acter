@@ -14,15 +14,21 @@
 //! `cargo test -p acter-transports --test real_session -- --ignored --nocapture`
 //!
 //! The nested case additionally needs Docker, and says so and returns rather than failing
-//! when it is absent — a machine without Docker has not discovered a defect.
+//! when it is absent — a machine without Docker has not discovered a defect. The WSL group
+//! at the end of this file skips the same way and for the same reason, asking the
+//! `InstalledShells` port whether there is a distribution rather than whether `wsl.exe`
+//! exists: every Windows 11 install ships that binary, and a client with nothing behind it
+//! would hang waiting for a prompt that never comes instead of skipping.
 
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use acter_core::{
-    Clock, CommandId, EventSink, Key, KeyPress, PacingConfig, SessionApi, SessionEvent, SessionId,
-    SessionService, ShellLaunch, ShellMarkers, Timer,
+    Announcement, Clock, CommandId, EventSink, ExitCode, InstalledShells, Key, KeyPress,
+    PacingConfig, SessionApi, SessionEvent, SessionId, SessionService, ShellLaunch, ShellMarkers,
+    Timer,
 };
+use acter_shells::ThisMachine;
 use acter_term::AlacrittyEngine;
 use acter_transports::LocalPty;
 use tokio::sync::oneshot;
@@ -114,6 +120,20 @@ impl RealSession {
     /// (spec B4.5) — which is why since B5.1 both come from one adapter rather than from
     /// two arguments this file assembles.
     fn over(launch: &ShellLaunch, markers: ShellMarkers) -> Self {
+        Self::over_within(launch, markers, GRACE)
+    }
+
+    /// The same, with the integration grace period stated rather than accelerated.
+    ///
+    /// Most of this file is about what a *flagged* session does, so it shortens the grace
+    /// to two hundred milliseconds and gets there fast. A session that is supposed to
+    /// become integrated cannot use that: starting a WSL distribution takes seconds, the
+    /// first marker arrives after them, and a two-hundred-millisecond grace flags the
+    /// session before bash has drawn a prompt. That is the shipped behaviour and not a
+    /// defect — DESIGN decision 8 upgrades such a session silently the moment a marker
+    /// arrives — but it makes "was this session ever flagged" a question about the clock
+    /// rather than about the shell.
+    fn over_within(launch: &ShellLaunch, markers: ShellMarkers, grace: Duration) -> Self {
         let args: Vec<&str> = launch.args.iter().map(String::as_str).collect();
         let environment: Vec<(&str, &str)> = launch
             .environment
@@ -128,7 +148,7 @@ impl RealSession {
             Box::new(AlacrittyEngine::new(COLUMNS, SCREEN_LINES)),
             Arc::new(RealClock::new()) as Arc<dyn Clock>,
             PacingConfig {
-                integration_grace: GRACE,
+                integration_grace: grace,
                 ..PacingConfig::default()
             },
             markers,
@@ -702,4 +722,261 @@ async fn a_bare_enter_brings_the_prompt_back() {
         said.matches('>').count() > before,
         "the shell drew its prompt again, and the user hears where they are: {said:?}"
     );
+}
+
+/// The WSL client, named the way a user would name it. Which distribution that reaches is
+/// WSL's own default, which is deliberate: naming one here would test a machine's
+/// configuration rather than the adapter.
+const WSL: &str = "wsl.exe";
+
+/// Long enough for a cold distribution to be started by the WSL service, which is a real
+/// wait the first time and nothing afterwards.
+const WSL_PATIENCE: Duration = Duration::from_secs(60);
+
+impl RealSession {
+    /// Bash inside a WSL distribution, launched and declared exactly as the application
+    /// launches and declares it: the `-d`-less launch, the two-variable injection, and the
+    /// full marker cycle. Everything in this file's WSL group asks the adapter rather than
+    /// spelling anything out, so the suite and the product cannot measure different
+    /// streams (spec B5.1, decision 5).
+    fn wsl() -> Self {
+        let adapter = acter_shells::adapter_for(WSL);
+        Self::over_within(
+            &adapter.launch(),
+            adapter.markers(),
+            PacingConfig::default().integration_grace,
+        )
+    }
+
+    /// The verdict about one block, if the session reached one. `Some(code)` is a failure
+    /// announced with the code it failed with; `None` is a block that ended without one,
+    /// which for a successful command is the only thing on the wire (A6, decision 2).
+    fn failure_of(&self, command_id: CommandId) -> Option<ExitCode> {
+        self.events
+            .0
+            .lock()
+            .expect("recorder poisoned")
+            .iter()
+            .find_map(|event| match event {
+                SessionEvent::Announce {
+                    command_id: at,
+                    announcement: Announcement::Failed { exit_code },
+                } if *at == command_id => Some(*exit_code),
+                _ => None,
+            })
+    }
+
+    /// Whether one block ended, by either of the two endings a marked session has.
+    fn ended(&self, command_id: CommandId) -> bool {
+        self.events
+            .0
+            .lock()
+            .expect("recorder poisoned")
+            .iter()
+            .any(|event| match event {
+                SessionEvent::CommandFinished { command_id: at }
+                | SessionEvent::CommandInterrupted { command_id: at } => *at == command_id,
+                _ => false,
+            })
+    }
+
+    /// Waits until `wanted` has reached `command_id`'s block, with WSL's patience.
+    async fn wsl_until(&self, command_id: CommandId, wanted: &str) -> String {
+        self.until(command_id, wanted, WSL_PATIENCE).await
+    }
+}
+
+/// Whether this machine has a WSL distribution to start at all, asked through the port
+/// that exists to answer it.
+///
+/// A machine without WSL has not discovered a defect, so these skip and say so, the way
+/// the Docker cases do. Deliberately the full question rather than "is `wsl.exe` on
+/// `PATH`": every Windows 11 install ships that binary, and a machine with the client and
+/// no distribution would hang on a prompt that never comes rather than skip.
+fn wsl_is_available() -> bool {
+    ThisMachine::new().wsl_distributions().is_ok()
+}
+
+/// **The whole of B5.3 in one session**: a real bash, in a real distribution, reached
+/// through a real `wsl.exe`, marking every boundary of a command it ran.
+///
+/// This is the first shipped shell that emits `C` and `D`, so it is the first session
+/// where a block genuinely opens where output begins and genuinely closes when the command
+/// ends, rather than being reconstructed from an echo and a returning prompt. What makes
+/// it possible is that bash inherits the environment before it sources `.bashrc`, so a
+/// `PROMPT_COMMAND` crossed with `WSLENV` runs *after* the user's own configuration and
+/// wraps the prompt that file chose instead of losing to it.
+#[tokio::test]
+#[ignore = "spawns a real shell and needs a WSL distribution installed"]
+async fn a_real_bash_under_wsl_marks_the_boundaries_of_the_command_it_ran() {
+    if !wsl_is_available() {
+        println!("skipped: this machine has no WSL distribution");
+        return;
+    }
+
+    let session = RealSession::wsl();
+
+    let line = "echo acter-under-wsl";
+    let command = session.submit(line);
+    let output = session.wsl_until(command, "acter-under-wsl").await;
+
+    assert_eq!(
+        session.heading_of(command),
+        Some(Some(line.to_owned())),
+        "the block is named by the line bash echoed between B and C"
+    );
+    assert!(
+        output.contains("acter-under-wsl"),
+        "and holds what the command printed: {output:?}"
+    );
+    assert!(
+        !output.contains(line),
+        "the command line belongs in the heading and nowhere else: {output:?}"
+    );
+    assert!(
+        session.ended(command),
+        "a shell that emits D closes its own block, rather than leaving it open until \
+         the next prompt"
+    );
+    assert!(
+        !session
+            .events
+            .0
+            .lock()
+            .expect("recorder poisoned")
+            .contains(&SessionEvent::IntegrationUnavailable),
+        "a session whose PROMPT_COMMAND survived the user's .bashrc is integrated, and \
+         within the grace period the application really ships"
+    );
+}
+
+/// **The first verdict any shipped session has had.** cmd cannot say how a command went,
+/// so `Announce { Failed }` had never been produced by anything but a transcript; bash
+/// puts the exit status in its `D` marker and this is where that becomes real.
+///
+/// A listener hears the difference directly: until now the returning prompt was the only
+/// ending a session offered, and "it failed, with code three" was a sentence the product
+/// could form and never had cause to.
+#[tokio::test]
+#[ignore = "spawns a real shell and needs a WSL distribution installed"]
+async fn a_command_that_fails_under_wsl_is_announced_with_the_code_it_failed_with() {
+    if !wsl_is_available() {
+        println!("skipped: this machine has no WSL distribution");
+        return;
+    }
+
+    let session = RealSession::wsl();
+
+    // A first command establishes the session and proves the markers are flowing, so a
+    // failure to see the verdict below cannot be "bash never started".
+    let opener = session.submit("echo acter-before-the-failure");
+    session.wsl_until(opener, "acter-before-the-failure").await;
+    assert_eq!(
+        session.failure_of(opener),
+        None,
+        "a command that succeeded is not announced as a failure"
+    );
+
+    let failing = session.submit("(exit 3)");
+    session
+        .until_said(WSL_PATIENCE, |_| session.failure_of(failing).is_some())
+        .await;
+
+    assert_eq!(
+        session.failure_of(failing),
+        Some(ExitCode(3)),
+        "the code bash reported in its D marker is the code the user is told"
+    );
+}
+
+/// **The interrupt, pinned as a test rather than as a probe.** 22.6 measured that `0x03`
+/// crosses `wsl.exe` into the distribution and that bash's own line discipline turns it
+/// into `SIGINT`; this is the first shipped shell where it is the *product* relying on
+/// that rather than an investigation.
+///
+/// `sleep` in a loop rather than a single long `sleep`, because what has to survive is a
+/// shell that is running something, not a shell waiting on one syscall.
+#[tokio::test]
+#[ignore = "spawns a real shell and needs a WSL distribution installed"]
+async fn an_interrupt_stops_a_program_inside_a_wsl_distribution() {
+    if !wsl_is_available() {
+        println!("skipped: this machine has no WSL distribution");
+        return;
+    }
+
+    let session = RealSession::wsl();
+
+    let opener = session.submit("echo acter-before-the-interrupt");
+    session
+        .wsl_until(opener, "acter-before-the-interrupt")
+        .await;
+
+    let held = session.submit("while true; do sleep 1; done");
+    // Nothing is printed by a silent loop, so there is no text to wait for: this is long
+    // enough that bash has certainly read the line and started running it.
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    session.ctrl_c();
+
+    let after = session.submit("echo acter-still-alive");
+    let output = session.wsl_until(after, "acter-still-alive").await;
+
+    assert!(
+        session.ended(held),
+        "the loop's block was closed rather than left open forever"
+    );
+    assert!(
+        output.contains("acter-still-alive"),
+        "and the session goes on working afterwards: {output:?}"
+    );
+}
+
+/// **Nothing is written into the distribution**, which is the pinned constraint of the
+/// whole entry (spec B5.3, decision 2): a WSL adapter that appended to `.bashrc` or
+/// dropped an init file into the user's home would be easier and would change a machine
+/// the user has to live in after Acter is closed.
+///
+/// Asked from inside the integrated session itself, and compared with the same question
+/// put to a `wsl.exe` Acter never touched. Deliberately about the startup files rather
+/// than about the home directory to the byte: bash appends to `.bash_history` whenever a
+/// person uses it, which is bash's business and not Acter's.
+#[tokio::test]
+#[ignore = "spawns a real shell and needs a WSL distribution installed"]
+async fn a_wsl_session_leaves_the_distributions_own_files_alone() {
+    if !wsl_is_available() {
+        println!("skipped: this machine has no WSL distribution");
+        return;
+    }
+
+    const HASH: &str = "md5sum ~/.bashrc ~/.profile | md5sum";
+    let untouched = outside_the_session(HASH);
+    let session = RealSession::wsl();
+
+    let command = session.submit(HASH);
+    let output = session.wsl_until(command, &untouched).await;
+
+    assert!(
+        output.contains(&untouched),
+        "the startup files are the ones that were there before Acter started: expected \
+         {untouched:?} in {output:?}"
+    );
+    assert_eq!(
+        outside_the_session(HASH),
+        untouched,
+        "and they are still those after the session has run"
+    );
+}
+
+/// The same question put to a `wsl.exe` Acter is not driving, so the comparison is against
+/// the distribution as it stands rather than against another Acter session.
+fn outside_the_session(command: &str) -> String {
+    let answered = std::process::Command::new(WSL)
+        .args(["--", "bash", "-c", command])
+        .output()
+        .expect("wsl answers");
+    String::from_utf8_lossy(&answered.stdout)
+        .split_whitespace()
+        .next()
+        .expect("md5sum prints a hash")
+        .to_owned()
 }

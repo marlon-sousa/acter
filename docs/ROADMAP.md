@@ -1936,7 +1936,7 @@ thing to pick up once the adapters land, not merely the next number.
     alone because EOF is shell knowledge — PowerShell wants Ctrl+Z, bash wants `0x04` —
     and it needs this port to have somewhere to live.
 
-23.3. B5.3, the WSL adapter and distro discovery. Spec:
+23.3. **Done** — B5.3, the WSL adapter and distro discovery. Spec:
     [b5.3-wsl-adapter.md](specs/b5.3-wsl-adapter.md) — agreed in conversation 2026-08-23.
     A bash far end reached through `wsl.exe`, and the first adapter whose *variants* are
     discovered at runtime: the installed distributions, behind a port of their own because
@@ -1949,6 +1949,33 @@ thing to pick up once the adapters land, not merely the next number.
     without `WSLENV`, and an interrupt does cross, because it travels as data. Injection
     has to survive the user's own `.bashrc`, which is what makes this the hardest of the
     three.
+
+    **What shipped.** `InstalledShells` and `NoDistributions` in `acter-core`, `Wsl` and
+    `ThisMachine` in `acter-shells`, and `adapter_for("wsl.exe")` starting a session in
+    whatever distribution WSL calls the default. The list decodes to `Ubuntu`,
+    `docker-desktop` and `Debian` on this machine, in that order, and `docker-desktop` is
+    offered rather than filtered on purpose.
+
+    **The injection survived, and it reached further than the spec allowed for.** A bash
+    program in `PROMPT_COMMAND`, crossed with `WSLENV`, wrapping the prompt the user's own
+    `.bashrc` chose rather than replacing it — because bash exports the environment before
+    it sources that file. Measured 2026-08-24 off a real pseudoconsole: the **full OSC 133
+    cycle**, `D` carrying real exit codes (`0`, `1`, and `130` for an interrupted loop), on
+    Ubuntu 24.04.2 and Debian alike. So this is the first shipped shell whose adapter
+    claims `ShellMarkers::Full` as a measurement, and the first session in which a listener
+    is told how a command went rather than only that the prompt came back.
+
+    **Nothing is written into the distribution.** Startup files and the home directory
+    listing hash identically before, during and after an integrated session. Two bash facts
+    the program is built on were measured rather than read: a `DEBUG` trap cannot remove
+    itself from inside a function, and a trap armed inside a function fires for the
+    statements after it in that same function. Both are written into the spec.
+
+    **What is not verified**, and is named rather than assumed: no byte-order mark was
+    emitted, so that half of the spec's decode requirement is withdrawn rather than proved;
+    and of the three "no WSL here" situations, a machine without `wsl.exe` and a machine
+    with WSL and no distribution could not be reproduced here — their sentences are unit
+    tested, not observed. The NVDA pass is the PR body's.
 
 24. **Done** — B6.1, correlation that cannot drift. Spec:
     [b6.1-correlation-that-cannot-drift.md](specs/b6.1-correlation-that-cannot-drift.md).

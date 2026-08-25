@@ -34,11 +34,14 @@ const TRANSCRIPT_ENV: &str = "ACTER_TRANSCRIPT";
 /// buys now is that B4 can be *heard*: a manual accessibility run needs a way to say
 /// which session it is testing, which is the same reason `ACTER_TRANSCRIPT` exists.
 ///
-/// **`cmd.exe` is now integrated, and nothing else is** (spec B4.5). Naming cmd here gets
-/// the OSC 133 prompt injection and real command boundaries; naming any other shell still
-/// gets a session with no integration at all, degrading exactly as DESIGN's reliability
-/// case 2 says it should, until B5.2 brings the PowerShell snippet. Which of those a name
-/// resolves to is `acter_shells::adapter_for`'s since B5.1, not this file's.
+/// **Two shells are integrated: `cmd.exe` and `wsl.exe`.** Naming cmd gets the OSC 133
+/// prompt injection and boundaries around the prompt and the command line (spec B4.5);
+/// naming wsl gets a bash session in whatever distribution WSL calls the default, marking
+/// the full cycle with real exit codes (spec B5.3), which makes it the one name here that
+/// produces a session with a *verdict* in it. Naming any other shell still gets a session
+/// with no integration at all, degrading exactly as DESIGN's reliability case 2 says it
+/// should, until B5.2 brings the PowerShell snippet. Which of those a name resolves to is
+/// `acter_shells::adapter_for`'s since B5.1, not this file's.
 const SHELL_ENV: &str = "ACTER_SHELL";
 
 /// The emulated screen the engine keeps. Eighty by twenty-four, the same as the

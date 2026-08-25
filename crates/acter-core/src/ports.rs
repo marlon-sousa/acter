@@ -7,6 +7,7 @@ mod driven;
 mod driving;
 
 pub use driven::{
-    Clock, EventSink, ShellAdapter, ShellLaunch, TerminalEngine, Timer, Transport, TransportError,
+    Clock, EventSink, InstalledShells, NoDistributions, ShellAdapter, ShellLaunch, TerminalEngine,
+    Timer, Transport, TransportError,
 };
 pub use driving::SessionApi;
