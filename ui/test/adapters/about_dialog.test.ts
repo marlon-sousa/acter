@@ -40,6 +40,10 @@ class StubShell implements AppShell {
     });
   }
 
+  connection(): Promise<string | null> {
+    return Promise.resolve('powershell');
+  }
+
   platform(): Promise<string> {
     return Promise.resolve('windows');
   }

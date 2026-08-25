@@ -4,6 +4,7 @@
 
 import type {
   Announcement,
+  ConnectionState,
   CommandId,
   KeyPress,
   SessionEvent,
@@ -12,6 +13,7 @@ import type { AnnouncerView } from '../ports/announcer_view';
 import type { BackendApi } from '../ports/backend_api';
 import type { BeepView } from '../ports/beep_view';
 import type { BufferView } from '../ports/buffer_view';
+import type { WindowView } from '../ports/window_view';
 import type { EditFieldView } from '../ports/edit_field_view';
 
 // Pinned announcement strings (spec decision 3). Every announced string is a domain
@@ -54,6 +56,18 @@ export function failureMessage(exitCode: number): string {
 // A3.1 decision 6 named this one: the typed `stop` had no honest way to say it, because
 // the only surface that could justify the words is a key with an ack to report them.
 export const nothingToStopMessage = 'nothing running to stop';
+
+// What the status region says, one string per state (spec A9, decision 2). Pinned here with
+// the rest of this frontend's user-facing words, because every one of them is read aloud and
+// is therefore a domain requirement rather than presentation.
+//
+// "connecting" is the one that had to exist: a window opening onto a shell that takes
+// seconds to start used to say nothing at all, and a listener cannot tell a slow start from
+// a broken one (roadmap 23.7).
+export const connectingStatus = 'connecting';
+export const connectedStatus = 'connected';
+export const disconnectedStatus = 'not connected';
+
 // Unreachable while Ctrl+C is both the only key reported and the only key bound. It is
 // still spoken, because the first thing a second reported key must not do is vanish.
 export const unboundKeyMessage = 'that key does nothing here';
@@ -88,6 +102,7 @@ export class AppController {
     private readonly buffer: BufferView,
     private readonly announcer: AnnouncerView,
     private readonly beep: BeepView,
+    private readonly window: WindowView,
   ) {}
 
   /** Attach to the session at startup; every SessionEvent flows to handleEvent. */
@@ -228,8 +243,10 @@ export class AppController {
         // says something about text that is already there. Nothing is appended here.
         this.handleAnnouncement(event.command_id, event.announcement);
         break;
-      case 'TitleChanged':
       case 'ConnectionChanged':
+        this.connectionChanged(event.state);
+        break;
+      case 'TitleChanged':
         // No UX decided yet (no producers in Phase 1); handled to keep the switch
         // exhaustive.
         break;
@@ -241,6 +258,37 @@ export class AppController {
   // One announcement, turned into one of the pinned strings this module owns. The
   // backend sends what happened, never the words: `TooBig` carries a line count rather
   // than the text, because past the threshold the text is not held backend-side at all.
+  /**
+   * What the window says about its connection: the status region always, and the titles
+   * when a connection came or went.
+   *
+   * The far end's *name* is not on this event and deliberately so — `ConnectionState` is
+   * about the transport, and which shell is behind it is the session's business. Until B7
+   * makes that a question anyone can ask, the window names what the app was started with,
+   * which the backend reports once at startup.
+   */
+  private connectionChanged(state: ConnectionState): void {
+    switch (state) {
+      case 'Connecting':
+        this.window.status(connectingStatus);
+        break;
+      case 'Connected':
+        this.window.status(connectedStatus);
+        break;
+      case 'Reconnecting':
+        // No producer yet: a transport that can reconnect is SSH's (spec A9, decision 5).
+        this.window.status(connectingStatus);
+        break;
+      case 'Disconnected':
+        this.window.status(disconnectedStatus);
+        // Nothing is behind the window any more, so it stops claiming to be anything.
+        this.window.connectedTo(null);
+        break;
+      default:
+        assertNever(state);
+    }
+  }
+
   private handleAnnouncement(
     commandId: CommandId,
     announcement: Announcement,

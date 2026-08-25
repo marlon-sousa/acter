@@ -302,6 +302,27 @@ the answer to "what should we do now?".
     concluded connecting "needs no more than a choice". SSH needs a form. And the
     testability half of the trade reversed too — a dialog inside the webview is drivable by
     WebDriver end to end, which the native submenu never was.
+13.1. A9, the window says what it is connected to. Spec:
+    [a9-the-window-says-where-you-are.md](specs/a9-the-window-says-where-you-are.md) —
+    agreed in conversation 2026-08-25, raised by the user straight after 23.6: having made
+    the prompt audible again, the window itself still says nothing about what it is.
+
+    Two titles from one value — the operating system's, which is what the desktop reads out
+    in the task switcher, and an `h1`, which is what a reader meets inside the document and
+    what `Ctrl+Home` lands on. `Acter` with no session, `Acter - PowerShell` with one, using
+    the connect list's own label so the name a user chose and the name the window takes are
+    the same words.
+
+    And a status region saying **not connected, connecting, connected**, announced without
+    stealing focus and readable afterwards. `ConnectionState` has been in the protocol since
+    A2 with no producer; this gives it one, and adds the fourth state that was missing —
+    `Connecting`, for a session that has been started and is not usable yet.
+
+    **This closes 23.7**: a window that opens onto a slow PowerShell says it is connecting
+    rather than leaving a listener with a panel and silence. Connected is reported when the
+    far end first speaks rather than when a process was spawned, because a shell that has
+    not drawn a prompt is not one anybody can use.
+
 14. A4, completion path. Spec: none yet → specify first. Scope sketch: fake
     completion provider, Tab handling in the edit field, completion announcement.
 15. A5.3 and onward — iteration entries appear here as NVDA findings arrive.

@@ -5,10 +5,12 @@
 //! alongside the function, and a named re-export would leave them behind.
 
 mod about;
+mod connection;
 mod platform;
 mod session;
 
 pub(crate) use about::*;
+pub(crate) use connection::*;
 pub(crate) use platform::*;
 pub(crate) use session::*;
 

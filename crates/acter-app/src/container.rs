@@ -78,7 +78,8 @@ pub fn run() {
             crate::routers::submit_command,
             crate::routers::send_key,
             crate::routers::about,
-            crate::routers::platform
+            crate::routers::platform,
+            crate::routers::connection
         ]);
 
     // Embedded WebDriver server for E2E tests (spec T2): debug builds only, so

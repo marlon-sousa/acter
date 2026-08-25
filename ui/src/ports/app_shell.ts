@@ -15,6 +15,9 @@ export interface AboutFacts {
 
 export interface AppShell {
   about(): Promise<AboutFacts>;
+  /// What this window is connected to, or `null` for the scripted session — which nobody
+  /// chose and which has no name worth putting in a title bar (spec A9).
+  connection(): Promise<string | null>;
   /// Which operating system this build runs on, so the frontend can decide where the
   /// menu bar belongs: in the document on Windows, in the system bar on macOS.
   platform(): Promise<string>;

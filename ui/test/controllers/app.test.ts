@@ -14,6 +14,7 @@ import type { AnnouncerView } from '../../src/ports/announcer_view';
 import type { BackendApi } from '../../src/ports/backend_api';
 import type { BeepView } from '../../src/ports/beep_view';
 import type { BufferView } from '../../src/ports/buffer_view';
+import type { WindowView } from '../../src/ports/window_view';
 import type { EditFieldView } from '../../src/ports/edit_field_view';
 import {
   AppController,
@@ -131,14 +132,34 @@ class FakeBeep implements BeepView {
   }
 }
 
+/** What the window was told to call itself and to say, in order (spec A9). */
+class FakeWindow implements WindowView {
+  titles: Array<string | null> = [];
+  statuses: string[] = [];
+  connectedTo(name: string | null): void {
+    this.titles.push(name);
+  }
+  status(text: string): void {
+    this.statuses.push(text);
+  }
+}
+
 function makeApp() {
   const backend = new FakeBackend();
   const editField = new FakeEditField();
   const buffer = new FakeBuffer();
   const announcer = new FakeAnnouncer();
   const beep = new FakeBeep();
-  const controller = new AppController(backend, editField, buffer, announcer, beep);
-  return { backend, editField, buffer, announcer, beep, controller };
+  const window = new FakeWindow();
+  const controller = new AppController(
+    backend,
+    editField,
+    buffer,
+    announcer,
+    beep,
+    window,
+  );
+  return { backend, editField, buffer, announcer, beep, window, controller };
 }
 
 describe('submit', () => {
@@ -167,6 +188,51 @@ describe('submit', () => {
     expect(backend.submitted).toEqual(['']);
     expect(buffer.opened).toEqual([]);
     expect(editField.clearedCount).toBe(1);
+  });
+});
+
+describe('what the window says about its connection (spec A9)', () => {
+  /** The state a user meets first, and the one that had no words: a window opening onto a
+   * shell that takes seconds to start used to say nothing at all (roadmap 23.7). */
+  it('says it is connecting', async () => {
+    const { backend, window, controller } = makeApp();
+    await controller.attach();
+
+    backend.emit({ type: 'ConnectionChanged', state: 'Connecting' });
+
+    expect(window.statuses).toContain('connecting');
+  });
+
+  it('says it is connected once the far end has spoken', async () => {
+    const { backend, window, controller } = makeApp();
+    await controller.attach();
+
+    backend.emit({ type: 'ConnectionChanged', state: 'Connected' });
+
+    expect(window.statuses).toContain('connected');
+  });
+
+  /** A far end that goes away leaves the window saying so, and stops claiming to be
+   * connected to something that is gone (spec A9, decision 4). */
+  it('says it is not connected when the far end goes away, and drops the name', () => {
+    const { backend, window, controller } = makeApp();
+    void controller.attach();
+
+    backend.emit({ type: 'ConnectionChanged', state: 'Disconnected' });
+
+    expect(window.statuses).toContain('not connected');
+    expect(window.titles).toContain(null);
+  });
+
+  /** Reconnecting has no producer until SSH, but a listener meeting it should hear
+   * something true rather than nothing. */
+  it('treats reconnecting as connecting rather than falling silent', () => {
+    const { backend, window, controller } = makeApp();
+    void controller.attach();
+
+    backend.emit({ type: 'ConnectionChanged', state: 'Reconnecting' });
+
+    expect(window.statuses).toContain('connecting');
   });
 });
 
@@ -308,6 +374,7 @@ describe('event rendering (decision 2)', () => {
       buffer,
       announcer,
       new FakeBeep(),
+      new FakeWindow(),
     );
     await controller.attach();
 

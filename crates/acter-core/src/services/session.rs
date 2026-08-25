@@ -44,10 +44,10 @@ use tokio::spawn;
 use tokio::sync::mpsc::{Receiver, Sender, UnboundedSender, channel, unbounded_channel};
 
 use crate::{
-    BoundaryEvent, BoundaryTracker, Clock, CommandId, EventSink, ExitCode, Integration, KeyAck,
-    KeyPress, LineId, LineRevision, PacingConfig, Region, Screen, SessionActor, SessionApi,
-    SessionEvent, SessionId, SessionInput, SessionIntent, ShellFacts, ShellMarkers, SubmitAck,
-    TerminalEngine, Timer, Transport, intent_for,
+    BoundaryEvent, BoundaryTracker, Clock, CommandId, ConnectionState, EventSink, ExitCode,
+    Integration, KeyAck, KeyPress, LineId, LineRevision, PacingConfig, Region, Screen,
+    SessionActor, SessionApi, SessionEvent, SessionId, SessionInput, SessionIntent, ShellFacts,
+    ShellMarkers, SubmitAck, TerminalEngine, Timer, Transport, intent_for,
 };
 
 /// Read buffering between the transport and the pump. Bounded, so a far end that floods
@@ -162,6 +162,7 @@ impl SessionService {
                 running: Arc::clone(&running),
                 integration: Integration::Pending,
                 drawing: None,
+                spoken: false,
                 markers,
                 submitted: VecDeque::new(),
                 echo: Echo::default(),
@@ -335,6 +336,13 @@ struct Pump {
     /// this one. Two readers of the same bytes with different lifetimes is the shape B4.5
     /// warned about, so each keeps what it needs.
     drawing: Option<String>,
+    /// Whether the far end has said anything yet.
+    ///
+    /// **What makes a session "connected" is the far end speaking**, not a process having
+    /// been spawned (spec A9, decision 3). A shell that was launched and has not drawn a
+    /// prompt is not one anybody can use, and a window that called it connected would be
+    /// telling a listener to go ahead and type.
+    spoken: bool,
     /// What the far end's prompt is able to say (spec B4.5). Only [`Pump::wants`] reads it
     /// here; the rest of the difference is the tracker's.
     markers: ShellMarkers,
@@ -419,8 +427,24 @@ impl Pump {
                 // The far end let go: the shell exited, the connection dropped, the
                 // scripted session ended. Not an error — the `Transport` port models the
                 // end of a session as its channel closing.
-                Woke::Read(None) => break,
-                Woke::Read(Some(bytes)) => self.feed(&bytes).await,
+                Woke::Read(None) => {
+                    // The window stops saying it is connected to something that is gone,
+                    // and keeps saying so rather than announcing it once and then looking
+                    // like a working session (spec A9, decision 4).
+                    self.send(SessionInput::Connection {
+                        state: ConnectionState::Disconnected,
+                    });
+                    break;
+                }
+                Woke::Read(Some(bytes)) => {
+                    if !self.spoken {
+                        self.spoken = true;
+                        self.send(SessionInput::Connection {
+                            state: ConnectionState::Connected,
+                        });
+                    }
+                    self.feed(&bytes).await;
+                }
                 // Every `SessionApi` handle is gone, so nothing can ask for anything
                 // again.
                 Woke::Request(None) => break,
