@@ -11,6 +11,8 @@ import { WindowChrome } from '../../src/adapters/window_chrome';
 let heading: HTMLElement;
 let status: HTMLElement;
 let chrome: WindowChrome;
+/** What the operating system's title bar was told, in order. */
+let native: string[];
 
 beforeEach(() => {
   document.body.innerHTML = `
@@ -19,13 +21,19 @@ beforeEach(() => {
   `;
   heading = document.getElementById('window-title') as HTMLElement;
   status = document.getElementById('connection-status') as HTMLElement;
-  chrome = new WindowChrome(heading, status, document);
+  native = [];
+  chrome = new WindowChrome(heading, status, document, (title) => native.push(title));
 });
 
 describe('what the window is called', () => {
-  it('names the far end in both titles at once', () => {
+  /** All three, from one value. The native title is the one the desktop reads out in the
+   * task switcher, and it is the one A9 shipped without: assigning `document.title` in a
+   * Tauri window leaves the native title alone, which the user's NVDA reported on
+   * 2026-08-25 while the document said something else. */
+  it('names the far end in the native title, the document and the heading', () => {
     chrome.connectedTo('PowerShell');
 
+    expect(native).toEqual(['Acter - PowerShell']);
     expect(document.title).toBe('Acter - PowerShell');
     expect(heading.textContent).toBe('Acter - PowerShell');
   });
@@ -35,6 +43,7 @@ describe('what the window is called', () => {
     chrome.connectedTo('PowerShell');
     chrome.connectedTo(null);
 
+    expect(native.at(-1)).toBe('Acter');
     expect(document.title).toBe('Acter');
     expect(heading.textContent).toBe('Acter');
   });

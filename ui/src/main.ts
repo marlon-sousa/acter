@@ -34,6 +34,7 @@ const windowChrome = new WindowChrome(
   byId('window-title'),
   byId('connection-status'),
   document,
+  (title) => void shell.setTitle(title),
 );
 const controller = new AppController(
   installDebugRecorder(new TauriBackend()),

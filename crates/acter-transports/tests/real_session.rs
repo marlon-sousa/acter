@@ -24,9 +24,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use acter_core::{
-    Announcement, Clock, CommandId, EventSink, ExitCode, InstalledShells, Key, KeyAck, KeyPress,
-    PacingConfig, SessionApi, SessionEvent, SessionId, SessionService, ShellAdapter, ShellFacts,
-    ShellLaunch, ShellMarkers, Timer,
+    Announcement, Clock, CommandId, ConnectionState, EventSink, ExitCode, InstalledShells, Key,
+    KeyAck, KeyPress, PacingConfig, SessionApi, SessionEvent, SessionId, SessionService,
+    ShellAdapter, ShellFacts, ShellLaunch, ShellMarkers, Timer,
 };
 use acter_shells::ThisMachine;
 use acter_term::AlacrittyEngine;
@@ -1048,6 +1048,93 @@ fn outside_the_session(command: &str) -> String {
         .next()
         .expect("md5sum prints a hash")
         .to_owned()
+}
+
+/// **The window attaches after the shell has already spoken, which is what actually
+/// happens** — the session starts when the process does and the frontend attaches when its
+/// page has loaded, and a shell that draws its prompt quickly does it into a sink nobody is
+/// holding yet.
+///
+/// Found by the user on 2026-08-25: the status bar sat on "connecting" forever and the
+/// session's first prompt never appeared, because both are emitted once, early, and were
+/// dropped. This attaches deliberately late and asserts that nothing said in the meantime
+/// was lost — and that a command submitted *afterwards* is still read aloud, which is the
+/// third symptom of the same report.
+#[tokio::test]
+#[ignore = "spawns a real shell"]
+async fn a_frontend_that_attaches_late_is_told_everything_it_missed() {
+    let adapter = acter_shells::adapter_for(POWERSHELL);
+    let launch = adapter.launch();
+    let args: Vec<&str> = launch.args.iter().map(String::as_str).collect();
+    let environment: Vec<(&str, &str)> = launch
+        .environment
+        .iter()
+        .map(|(name, value)| (name.as_str(), value.as_str()))
+        .collect();
+    let pty = LocalPty::spawn(&launch.program, &args, &environment, COLUMNS, SCREEN_LINES)
+        .expect("a shell starts");
+    let session = SessionService::start(
+        Box::new(pty),
+        Box::new(AlacrittyEngine::new(COLUMNS, SCREEN_LINES)),
+        Arc::new(RealClock::new()) as Arc<dyn Clock>,
+        PacingConfig::default(),
+        ShellFacts::of(adapter.as_ref()),
+    );
+
+    // The shell gets a head start: this is the webview loading.
+    tokio::time::sleep(Duration::from_secs(5)).await;
+
+    let events = Arc::new(Recorder::default());
+    session.attach_session(SESSION, Arc::clone(&events) as Arc<dyn EventSink>);
+    let session = RealSession { session, events };
+
+    let said = |session: &RealSession| -> Vec<SessionEvent> {
+        session
+            .events
+            .0
+            .lock()
+            .expect("recorder poisoned")
+            .iter()
+            .cloned()
+            .collect()
+    };
+
+    assert!(
+        said(&session).iter().any(|event| matches!(
+            event,
+            SessionEvent::ConnectionChanged {
+                state: ConnectionState::Connected
+            }
+        )),
+        "the window is told the session is usable, however late it asked: {:?}",
+        said(&session)
+    );
+    assert!(
+        said(&session)
+            .iter()
+            .any(|event| matches!(event, SessionEvent::PromptDrawn { .. })),
+        "and the prompt drawn before it attached is not lost: {:?}",
+        said(&session)
+    );
+
+    // The third symptom: a command run after all this is still read aloud.
+    let command = session.submit("echo acter-after-a-late-attach");
+    session
+        .until(command, "acter-after-a-late-attach", PATIENCE)
+        .await;
+    tokio::time::sleep(SETTLE).await;
+
+    assert!(
+        said(&session).iter().any(|event| matches!(
+            event,
+            SessionEvent::Announce {
+                announcement: Announcement::ReadAloud { text },
+                ..
+            } if text.contains("acter-after-a-late-attach")
+        )),
+        "output is still announced after a late attach: {:?}",
+        said(&session)
+    );
 }
 
 /// **B5.6 against a real shell**: the prompt PowerShell drew is reported, so a listener can
