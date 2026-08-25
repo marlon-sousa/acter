@@ -97,6 +97,24 @@ impl ShellAdapter for Wsl {
     fn markers(&self) -> ShellMarkers {
         ShellMarkers::Full
     }
+
+    /// **Nobody has measured what ends a bash session through this transport, so this says
+    /// so rather than guessing.**
+    ///
+    /// `0x04` is the obvious answer and it is probably right: bash reads from a
+    /// pseudoconsole whose line discipline turns that byte into end-of-file. But "probably
+    /// right" is exactly what B5.2 measured and disproved for the shell next door —
+    /// *neither* control byte that is supposed to end a PowerShell session does, both are
+    /// echoed as caret text, and a line submitted behind one runs as a command the user
+    /// never typed. A byte assumed here would fail in the same shape: silently, in front of
+    /// a user who pressed Ctrl+D and cannot see what happened.
+    ///
+    /// `None` means "Acter does not know how to end this shell", which the session reports
+    /// out loud. It becomes a byte the day somebody drives a real distribution and watches
+    /// the session close.
+    fn eof(&self) -> Option<Vec<u8>> {
+        None
+    }
 }
 
 /// Whether this program is the WSL client, however it was named.
@@ -112,6 +130,21 @@ pub(crate) fn is_wsl(program: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **The absence is the assertion.** Answering `None` is a claim that Acter does not
+    /// know how to end a bash session through this transport, and it is deliberate rather
+    /// than forgotten: `0x04` is the obvious byte, and B5.2 measured the equivalent
+    /// assumption to be wrong for PowerShell. This test exists so that supplying a byte
+    /// here is a decision somebody makes on purpose, with a measurement behind it, rather
+    /// than a plausible edit nobody notices.
+    #[test]
+    fn bash_under_wsl_has_no_measured_end_of_input_yet() {
+        assert_eq!(
+            Wsl::new("wsl.exe").eof(),
+            None,
+            "no byte is claimed until one is measured against a real distribution"
+        );
+    }
 
     #[test]
     fn the_wsl_client_is_recognized_however_it_was_named() {

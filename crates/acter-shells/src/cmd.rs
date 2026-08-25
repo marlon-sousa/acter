@@ -52,6 +52,17 @@ impl ShellAdapter for Cmd {
     fn markers(&self) -> ShellMarkers {
         MARKERS
     }
+
+    /// Nobody has measured what ends a `cmd.exe` session, so this says so.
+    ///
+    /// It is a gap rather than a claim: B5.2 measured PowerShell's answer and had no
+    /// reason to spawn a `cmd.exe` to find out about this one, and answering with a byte
+    /// that looked right in documentation is precisely the habit that spec exists to
+    /// break. A `Ctrl+D` in a cmd session therefore reports that there was nothing to act
+    /// on, which is true.
+    fn eof(&self) -> Option<Vec<u8>> {
+        None
+    }
 }
 
 /// The `PROMPT` value that makes `cmd.exe` mark its own prompt region and command line.

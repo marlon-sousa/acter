@@ -1923,7 +1923,7 @@ thing to pick up once the adapters land, not merely the next number.
     **22.14 is now re-measurable without the confound**, and has not been re-measured yet:
     that is a separate NVDA pass and is filed as such rather than assumed.
 
-23.2. B5.2, the PowerShell adapter. Spec:
+23.2. **Done** — B5.2, the PowerShell adapter. Spec:
     [b5.2-powershell-adapter.md](specs/b5.2-powershell-adapter.md) — agreed in conversation
     2026-08-23. The first shell that can emit `C` and `D`, so the first session where a
     verdict and an exit code are real rather than absent, and therefore the first real
@@ -1935,6 +1935,42 @@ thing to pick up once the adapters land, not merely the next number.
     **Carries EOF** (filed here by B6, decision 6): `SessionIntent` ships with `Interrupt`
     alone because EOF is shell knowledge — PowerShell wants Ctrl+Z, bash wants `0x04` —
     and it needs this port to have somewhere to live.
+
+    **What shipped, and what the measurement disproved.** Both editions behind one adapter,
+    started `-NoLogo -NoExit -Command <snippet>`, claiming `ShellMarkers::Full` — the first
+    shipped shell whose blocks close because the shell said so and whose exit codes are
+    real. Three of this entry's expectations did not survive contact with a real
+    pseudoconsole, and each is amended in the spec rather than footnoted:
+
+    **PowerShell 5.1 disables PSReadLine when it detects a screen reader**, and means it —
+    `PSConsoleHostReadLine` does not exist in that session, so the hook every other
+    terminal's PowerShell integration hangs `C` on is absent. PowerShell 7 keeps PSReadLine
+    and produced a *wrong* stream: `C` before the line was read, which puts the echoed
+    command line into a block's content instead of its heading. The snippet removes
+    PSReadLine, which is the call Microsoft already makes for 5.1, and `C` comes from
+    `PreCommandLookupAction` instead.
+
+    **`$LASTEXITCODE` is stale**: `cmd /c exit 3` followed by a failing `Get-Item` reported
+    `D;3` for the `Get-Item`. The shipped rule reports a changed `$LASTEXITCODE` and `1`
+    otherwise, and the spec says out loud what that rounds.
+
+    **Neither control byte ends a PowerShell session.** The line above is wrong: Ctrl+Z does
+    not do it, and neither does `0x04` — both are echoed as caret text and a line submitted
+    behind one runs as a command the user never typed. What ends it is the line `exit`, so
+    the port answers with *bytes*. Bash under WSL answers `None` for the same reason in
+    reverse: `0x04` is probably right and nobody has driven it, and this entry is the
+    evidence that "probably right" is not good enough.
+
+    **One box in its definition of done stays open on purpose.** Decision 4 said this entry
+    would be the first real test of B6.1's rewritten-echo rule against a live shell; with
+    PSReadLine removed, it is not. The golden transcript was captured *with* PSReadLine
+    active so the case is not lost, but a live proof is still owed and the spec keeps the box
+    unchecked rather than rewording it into something that passes.
+
+    **And one amendment came from merging rather than measuring**: `SessionService::start`
+    takes a `ShellFacts` value — markers and end-of-input together — because this entry gave
+    the domain a second thing to ask a shell while 23.3 reshaped the same seam differently.
+    Agreed in conversation 2026-08-25.
 
 23.3. **Done** — B5.3, the WSL adapter and distro discovery. Spec:
     [b5.3-wsl-adapter.md](specs/b5.3-wsl-adapter.md) — agreed in conversation 2026-08-23.
@@ -1976,6 +2012,73 @@ thing to pick up once the adapters land, not merely the next number.
     and of the three "no WSL here" situations, a machine without `wsl.exe` and a machine
     with WSL and no distribution could not be reproduced here — their sentences are unit
     tested, not observed. The NVDA pass is the PR body's.
+
+23.5. Ctrl+D is not reachable from the window. Spec: none yet → specify first, and the
+    specifying is small because the diagnosis is already complete. **Found 2026-08-25** in
+    B5.2's NVDA pass, and filed rather than fixed there: forwarding it is frontend work and
+    B5.2 is a shell adapter, so fixing it in that PR would have widened an entry that had
+    already grown once.
+
+    **What a listener meets.** In a real PowerShell session — the first shell that has an
+    end-of-input answer at all — pressing Ctrl+D in the edit field does *nothing*. Not an
+    error, not a refusal: silence, and the session is still there. Measured through the
+    screen-readers bridge, NVDA 2026.1.1, silent capture, `user` persona: the keystroke
+    produced no speech whatsoever, and a command submitted afterwards ran normally.
+
+    **The whole path exists except its first step.** `SessionIntent::Eof` is in the domain,
+    `intent_for` maps Ctrl+D to it, the session writes whatever bytes the shell's adapter
+    says end its input, and PowerShell's adapter answers with the line `exit` — proven by
+    `ctrl_d_ends_a_real_powershell_session`, which drives `send_key` directly and does end
+    the session. What is missing is the frontend: `isReportable` in
+    `ui/src/adapters/keyboard.ts` returns true for Ctrl+C and nothing else, so the keystroke
+    never leaves the page.
+
+    **Why this is worth an entry rather than a one-line fix.** Ctrl+D reaching the far end is
+    not the whole question. A shell that has no measured end-of-input answers
+    `KeyAck::NothingToActOn`, and what a listener should hear then is a sentence rather than
+    silence — the same problem A3.1 solved for "nothing running to stop". So the entry is:
+    forward the key, and decide what is said in each of the three cases (the session ended,
+    the shell has no answer, nothing is listening). That is a keystroke-map decision and a
+    pinned string, which is exactly the sort of thing this project decides in the open.
+
+23.6. The prompt stopped being spoken, and the better the integration the worse it is.
+    Spec: none yet → specify first. **Found by the user 2026-08-25**, listening to the first
+    real PowerShell session, and it is a regression this group caused rather than an old gap.
+
+    **What a listener meets.** In a session over a shell that marks all four boundaries —
+    PowerShell since 23.2, bash under WSL since 23.3 — the prompt is never read. Not after a
+    command, not ever. The user's words for why that matters: the prompt is where they learn
+    the working directory, the git branch, the virtualenv, "and everything else" about where
+    they are. A terminal user reads their prompt constantly; this one cannot hear it at all.
+
+    **Where it goes.** `SessionService::wants` decides what a block accepts, and it decides by
+    marker set:
+
+    - `PromptAndCommandLine` (cmd) accepts `Output` **and `Prompt`**, with a comment naming
+      22.12: with no `D` there is no verdict, so the returning prompt is the only ending such
+      a session has, and marking a session without that arm would take it away.
+    - `Full` (PowerShell, WSL) accepts `Output` alone. The prompt lives in `A..B`, which is
+      excluded, and `D` closes the block before the next prompt is drawn — so the prompt has
+      nowhere to land even if it were wanted.
+
+    **The mistake is a conflation, and naming it is most of the fix.** `D` replaces the prompt
+    as an *ending signal*: that reasoning is sound and is why the `Full` arm was written this
+    way. It replaces nothing about what the prompt *says*. Those are two different jobs the
+    same bytes were doing, and only one of them was handed over.
+
+    **So the shape of the answer is not "put the prompt back in the block".** A prompt read
+    as block content would arrive before the verdict and read as though the shell had printed
+    it; and DESIGN's echo exclusion exists for good reasons that this must not undo. The
+    questions the spec has to answer, in the open: when is the prompt spoken (after every
+    command, or only when it changes), where does it live in the buffer so it can be reviewed
+    and navigated, is there a key that reads it on demand, and how does this relate to
+    `Ctrl+Shift+S`, which DESIGN already reserves for a status announcement carrying the
+    working directory. **Announcing an unchanged prompt after every command is a real cost**
+    for a listener who runs twenty commands in a row, and pretending otherwise would trade
+    one annoyance for another.
+
+    Filed against 23 as a group rather than against 23.2 alone: 23.3 has the same defect for
+    the same reason, and any fix belongs above both adapters rather than inside either.
 
 24. **Done** — B6.1, correlation that cannot drift. Spec:
     [b6.1-correlation-that-cannot-drift.md](specs/b6.1-correlation-that-cannot-drift.md).

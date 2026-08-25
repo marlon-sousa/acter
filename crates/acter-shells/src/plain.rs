@@ -39,6 +39,12 @@ impl ShellAdapter for Plain {
     fn markers(&self) -> ShellMarkers {
         ShellMarkers::Full
     }
+
+    /// Nothing, and for this adapter that is the only possible answer: a shell Acter knows
+    /// nothing about is a shell whose end-of-input answer nobody could have measured.
+    fn eof(&self) -> Option<Vec<u8>> {
+        None
+    }
 }
 
 #[cfg(test)]

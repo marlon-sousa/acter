@@ -46,8 +46,8 @@ use tokio::sync::mpsc::{Receiver, Sender, UnboundedSender, channel, unbounded_ch
 use crate::{
     BoundaryEvent, BoundaryTracker, Clock, CommandId, EventSink, ExitCode, Integration, KeyAck,
     KeyPress, LineId, LineRevision, PacingConfig, Region, Screen, SessionActor, SessionApi,
-    SessionEvent, SessionId, SessionInput, SessionIntent, ShellMarkers, SubmitAck, TerminalEngine,
-    Timer, Transport, intent_for,
+    SessionEvent, SessionId, SessionInput, SessionIntent, ShellFacts, ShellMarkers, SubmitAck,
+    TerminalEngine, Timer, Transport, intent_for,
 };
 
 /// Read buffering between the transport and the pump. Bounded, so a far end that floods
@@ -96,6 +96,13 @@ pub struct SessionService {
     /// Whether a submitted command is outstanding, so [`SessionApi::send_key`] can
     /// answer "there was nothing to act on" without waiting on the pump.
     running: Arc<AtomicBool>,
+    /// What this shell wants written when the user says there is no more input, taken
+    /// from the adapter once at start.
+    ///
+    /// Held here rather than in the pump because the answer to the *invoke* depends on
+    /// it: a shell with no measured answer must be told apart from one whose answer went
+    /// out, and `KeyAck` is decided on this side of the channel (spec B5.2).
+    eof: Option<Vec<u8>>,
     /// Where events go, once the frontend has said where that is.
     sink: Arc<AttachedSink>,
 }
@@ -111,13 +118,21 @@ impl SessionService {
     ///
     /// Must be called from within a tokio runtime — the same requirement
     /// [`Transport::start`] and [`Clock::timer`] already carry, for the same reason.
+    ///
+    /// **The shell arrives as its adapter rather than as the one fact the session used to
+    /// need.** B4.5 passed `ShellMarkers` here because the marker declaration was all the
+    /// domain knew about a shell; B5.2 gave the same object a second domain-facing answer,
+    /// and a composition root forwarding facts one at a time is the branch B5.1 deleted
+    /// growing back a parameter at a time. Borrowed rather than held: both answers are
+    /// read once, here, and nothing below this line asks a shell anything (spec B5.2).
     pub fn start(
         mut transport: Box<dyn Transport>,
         engine: Box<dyn TerminalEngine + Send>,
         clock: Arc<dyn Clock>,
         config: PacingConfig,
-        markers: ShellMarkers,
+        shell: ShellFacts,
     ) -> Self {
+        let markers = shell.markers;
         let sink = Arc::new(AttachedSink::default());
         let (bytes, reads) = channel(READS);
         transport.start(bytes);
@@ -165,6 +180,7 @@ impl SessionService {
             requests,
             next_id,
             running,
+            eof: shell.eof,
             sink,
         }
     }
@@ -226,6 +242,21 @@ impl SessionApi for SessionService {
                     Err(_) => KeyAck::NothingToActOn,
                 }
             }
+            // Never gated on whether something is running, and that is the difference
+            // from the interrupt above rather than an omission: the shell sitting at its
+            // prompt is exactly who this is usually for, and a program reading standard
+            // input is entitled to it too. What it is gated on is whether this shell's
+            // answer was ever measured — a session over a shell Acter knows nothing about
+            // says so rather than writing a byte and hoping (spec B5.2).
+            SessionIntent::Eof => {
+                let Some(bytes) = self.eof.clone() else {
+                    return KeyAck::NothingToActOn;
+                };
+                match self.requests.try_send(Request::Eof { bytes }) {
+                    Ok(()) => KeyAck::Applied,
+                    Err(_) => KeyAck::NothingToActOn,
+                }
+            }
         }
     }
 }
@@ -233,8 +264,17 @@ impl SessionApi for SessionService {
 /// Something the frontend asked for, on its way to the one task that may touch the
 /// transport.
 enum Request {
-    Submit { command_id: CommandId, line: String },
+    Submit {
+        command_id: CommandId,
+        line: String,
+    },
     Interrupt,
+    /// The shell's own end-of-input answer, carried rather than looked up: the pump owns
+    /// the transport and nothing else, and which bytes end *this* shell is the service's
+    /// to have asked the adapter once.
+    Eof {
+        bytes: Vec<u8>,
+    },
 }
 
 /// The event sink the actor writes to, which forwards to whichever sink the frontend has
@@ -423,7 +463,26 @@ impl Pump {
         match request {
             Request::Submit { command_id, line } => self.submit(command_id, &line).await,
             Request::Interrupt => self.interrupt(),
+            Request::Eof { bytes } => self.end_input(&bytes),
         }
+    }
+
+    /// Writes the shell's end-of-input answer, and nothing else happens here.
+    ///
+    /// **No correlation id and no block**, deliberately. A submission is a command line
+    /// the user composed and is owed a heading and a verdict; this is a keystroke, and
+    /// giving it a block would put a command in the buffer that nobody typed. What the
+    /// far end does with the bytes it then echoes and runs, so a session ending this way
+    /// is still audible — measured against both PowerShell editions, where the answer is
+    /// the line `exit` and the last thing the user hears is their session ending rather
+    /// than silence (spec B5.2).
+    ///
+    /// **No cancel byte ahead of it either.** `cancel_pending_input` is for a line that
+    /// would otherwise be concatenated onto input the user never typed, and its gate is a
+    /// shell whose line editor discards on escape; the shell this arrived for is not one,
+    /// and a shell that is has no measured end-of-input answer to send.
+    fn end_input(&mut self, bytes: &[u8]) {
+        self.write(bytes);
     }
 
     /// A submitted line: correlated, then written.
@@ -1282,6 +1341,25 @@ mod tests {
         }
     }
 
+    /// What a shell tells the service about itself, built by hand — which is all a fake
+    /// needs to be, because this is a value rather than a port: knowledge, with nothing to
+    /// record and nothing to script (spec B5.1 decision 2, and the value B5.2 bundled it
+    /// into).
+    fn marking(markers: ShellMarkers) -> ShellFacts {
+        ShellFacts { markers, eof: None }
+    }
+
+    /// A shell that answers end-of-input with these bytes. Deliberately not the answer
+    /// PowerShell was measured to want: what the service must do is write *whatever the
+    /// shell said*, and a fake spelling out the one real answer would let a service that
+    /// hardcoded it pass.
+    fn ending_with(bytes: &[u8]) -> ShellFacts {
+        ShellFacts {
+            markers: ShellMarkers::Full,
+            eof: Some(bytes.to_vec()),
+        }
+    }
+
     /// One session under test, with the handles that drive it.
     struct Session {
         api: SessionService,
@@ -1301,6 +1379,13 @@ mod tests {
 
         /// A session over a far end whose prompt marks only what this says (spec B4.5).
         async fn of(config: PacingConfig, markers: ShellMarkers) -> Self {
+            Self::over(config, marking(markers)).await
+        }
+
+        /// A session over a far end that is a particular shell, which since B5.2 is what
+        /// the service is told about rather than one fact taken out of it. Most tests here
+        /// care only about the markers and reach this through [`Self::of`].
+        async fn over(config: PacingConfig, shell: ShellFacts) -> Self {
             let far_end = Arc::new(FarEnd::default());
             let clock = Arc::new(FakeClock::default());
             let events = Arc::new(Recorder::default());
@@ -1309,7 +1394,7 @@ mod tests {
                 Box::new(FakeEngine(Arc::clone(&far_end))),
                 Arc::clone(&clock) as Arc<dyn Clock>,
                 config,
-                markers,
+                shell,
             );
             api.attach_session(SessionId(1), Arc::clone(&events) as Arc<dyn EventSink>);
             let session = Self {
@@ -3077,6 +3162,86 @@ mod tests {
             session.submit("dir").await;
 
             assert_eq!(session.written(), "dir\r");
+        }
+    }
+
+    /// Saying there is no more input, which arrived with the first shell that had an
+    /// answer to give (spec B5.2, decision 5).
+    ///
+    /// What these tests pin is the *seam*: the session writes whatever the adapter said
+    /// and invents nothing, and it says so honestly when the adapter said nothing. Which
+    /// bytes are right for PowerShell is measured against a real one in
+    /// `acter-transports`' real-shell suite, because that is a fact about a shell rather
+    /// than about this service.
+    mod end_of_input {
+        use super::*;
+
+        /// The bytes are the adapter's, not this service's. A session that had learned one
+        /// shell's answer would be right for exactly one shell and silently wrong for the
+        /// next, which is the whole reason this is a port method.
+        #[tokio::test]
+        async fn the_session_writes_whatever_the_shell_said_ends_it() {
+            let session = Session::over(quick_grace(), ending_with(b"stop-this-shell")).await;
+
+            assert_eq!(session.press(ctrl('d')).await, KeyAck::Applied);
+            assert_eq!(session.written(), "stop-this-shell");
+        }
+
+        /// **A shell with no measured answer writes nothing at all**, which is the half
+        /// worth pinning: guessing at a control byte is how B5.2 found that `0x1a` reaches
+        /// PowerShell as caret text and turns the next submission into a command the user
+        /// never typed.
+        #[tokio::test]
+        async fn a_shell_with_no_answer_writes_nothing_and_says_so() {
+            let session = Session::with_config(quick_grace()).await;
+
+            assert_eq!(session.press(ctrl('d')).await, KeyAck::NothingToActOn);
+            assert_eq!(session.written(), "");
+        }
+
+        /// Unlike the interrupt beside it, this never asks whether a command is running: a
+        /// shell waiting at its prompt is the ordinary case for ending a session, and that
+        /// is precisely the moment when nothing is running.
+        #[tokio::test]
+        async fn nothing_needs_to_be_running_for_it_to_apply() {
+            let session = Session::over(quick_grace(), ending_with(b"stop-this-shell")).await;
+
+            assert_eq!(
+                session.press(ctrl('c')).await,
+                KeyAck::NothingToActOn,
+                "the interrupt has nothing to stop"
+            );
+            assert_eq!(
+                session.press(ctrl('d')).await,
+                KeyAck::Applied,
+                "and ending the session does not need one"
+            );
+        }
+
+        /// It opens no block and claims no correlation id: a keystroke is not a command the
+        /// user composed, and giving it a heading would put a line in the buffer that
+        /// nobody typed.
+        #[tokio::test]
+        async fn it_is_not_a_submission_and_gets_no_block() {
+            let session = Session::over(quick_grace(), ending_with(b"stop-this-shell")).await;
+            session.press(ctrl('d')).await;
+
+            assert!(
+                session.started().is_empty(),
+                "no command started: {:?}",
+                session.events()
+            );
+        }
+
+        /// The far end is never interrupted by it. Two keystrokes, two intents, and a
+        /// session that confused them would stop a running command when the user asked to
+        /// leave.
+        #[tokio::test]
+        async fn it_is_not_an_interrupt() {
+            let session = Session::over(quick_grace(), ending_with(b"stop-this-shell")).await;
+            session.press(ctrl('d')).await;
+
+            assert_eq!(session.interrupts(), 0);
         }
     }
 }

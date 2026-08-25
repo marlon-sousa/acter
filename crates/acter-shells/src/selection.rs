@@ -16,6 +16,7 @@ use acter_core::ShellAdapter;
 
 use crate::cmd::{self, Cmd};
 use crate::plain::Plain;
+use crate::powershell::{self, PowerShell};
 use crate::wsl::{self, Wsl};
 
 /// The adapter for the shell this program names, and [`Plain`](crate::Plain) for one this
@@ -26,6 +27,8 @@ use crate::wsl::{self, Wsl};
 pub fn adapter_for(program: &str) -> Box<dyn ShellAdapter> {
     if cmd::is_cmd(program) {
         Box::new(Cmd::new(program))
+    } else if powershell::is_powershell(program) {
+        Box::new(PowerShell::new(program))
     } else if wsl::is_wsl(program) {
         Box::new(Wsl::new(program))
     } else {
@@ -35,7 +38,7 @@ pub fn adapter_for(program: &str) -> Box<dyn ShellAdapter> {
 
 #[cfg(test)]
 mod tests {
-    use acter_core::ShellMarkers;
+    use acter_core::{ShellFacts, ShellMarkers};
 
     use super::*;
 
@@ -91,16 +94,88 @@ mod tests {
         }
     }
 
-    /// The null adapter is what is left over. `Full` markers alone stopped identifying it
-    /// in B5.3, since a real shell now claims them too, so this compares the whole launch —
-    /// which it already did, and which is why the change cost nothing here.
+    /// Both editions reach PowerShell's adapter, and each is started by the name it was
+    /// asked for: which edition a user gets is decided by which executable they named, so
+    /// resolving `pwsh.exe` to something that starts `powershell.exe` would hand them the
+    /// other PowerShell without saying so.
+    #[test]
+    fn either_powershell_edition_is_selected_however_it_was_named() {
+        for named in [
+            "powershell",
+            "powershell.exe",
+            "pwsh",
+            "PWSH.EXE",
+            r"C:\Program Files\PowerShell\7\pwsh.exe",
+        ] {
+            let adapter = adapter_for(named);
+
+            assert_eq!(adapter.launch().program, named, "started as it was named");
+            assert!(
+                adapter.launch().args.contains(&"-Command".to_owned()),
+                "{named} gets the snippet injection"
+            );
+            assert!(
+                adapter.eof().is_some(),
+                "{named} knows what ends one of its sessions"
+            );
+        }
+    }
+
+    /// The null adapter is what is left over — and **`Full` markers alone stopped
+    /// identifying it**, because two real shells now claim them as well. So this asserts
+    /// on the whole launch: what separates an unrecognised shell from PowerShell or from
+    /// WSL is that it is started exactly as it stands, with nothing injected into it and
+    /// no end-of-input anyone measured.
+    ///
+    /// `wslconfig.exe` is in the list deliberately: it begins with the four letters that
+    /// name the WSL client and is a different program, so a prefix match would claim it.
     #[test]
     fn a_shell_this_crate_does_not_know_gets_the_null_adapter() {
-        for named in ["powershell.exe", "pwsh", "bash", r"C:\bin\wslconfig.exe"] {
+        for named in ["bash", "nushell.exe", r"C:\bin\wslconfig.exe"] {
             let adapter = adapter_for(named);
 
             assert_eq!(adapter.markers(), ShellMarkers::Full, "{named} is unknown");
             assert_eq!(adapter.launch(), Plain::new(named).launch());
+            assert_eq!(
+                adapter.eof(),
+                None,
+                "{named} has no end-of-input answer anyone measured"
+            );
         }
+    }
+
+    /// **What the session is handed is the adapter's own answers, unedited.** `ShellFacts`
+    /// is the value `SessionService::start` takes, and the composition root builds it from
+    /// whichever adapter `adapter_for` returned — so a shell whose markers or end-of-input
+    /// were dropped or swapped on the way through would produce a session that behaves like
+    /// a different shell, which is the failure B4.5 measured and the reason the two travel
+    /// together at all.
+    #[test]
+    fn the_facts_handed_to_a_session_are_the_adapters_own() {
+        for named in ["cmd.exe", "powershell.exe", "wsl.exe", "nushell.exe"] {
+            let adapter = adapter_for(named);
+            let facts = ShellFacts::of(adapter.as_ref());
+
+            assert_eq!(facts.markers, adapter.markers(), "{named}'s markers");
+            assert_eq!(facts.eof, adapter.eof(), "{named}'s end-of-input");
+        }
+    }
+
+    /// The same, spelled out for the two shells that disagree about it, so that a change to
+    /// either is a change to this file too: PowerShell knows what ends one of its sessions
+    /// and cmd does not.
+    #[test]
+    fn a_shell_with_a_measured_ending_is_told_apart_from_one_without() {
+        assert!(
+            ShellFacts::of(adapter_for("powershell.exe").as_ref())
+                .eof
+                .is_some(),
+            "PowerShell was measured, so a session over it can be ended"
+        );
+        assert_eq!(
+            ShellFacts::of(adapter_for("cmd.exe").as_ref()).eof,
+            None,
+            "cmd was not, so Acter says so rather than guessing at a byte"
+        );
     }
 }
