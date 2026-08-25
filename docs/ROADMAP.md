@@ -2200,6 +2200,28 @@ thing to pick up once the adapters land, not merely the next number.
     with it. There is no `create` on the command line: profiles are files, and creating one
     from a shell whose output nobody can see is not a workflow this audience needs.
 
+27. B9, SSH: a far end that is not on this machine. Spec:
+    [b9-ssh.md](specs/b9-ssh.md) — **drafted 2026-08-25 for review, and deliberately not
+    agreed yet**: it ends with five questions whose answers change the shape of everything
+    above them, and it is not implemented until those are settled.
+
+    **The first transport that has to conduct a conversation before there is a session.**
+    Every far end so far could report failure as one speakable sentence; SSH asks the *user*
+    questions first — an unknown host key, a password, a key passphrase, an agent that may
+    not be running — and each of them has to be a real, labelled, screen-reader-driveable
+    dialog rather than text scraped out of a byte stream.
+
+    That is why it is a library rather than `ssh.exe`, which DESIGN already decided and this
+    spec gives the accessibility reason for: with `russh` a host-key check is a callback and
+    a password is a method call, so Acter *knows* a question was asked. With `ssh.exe` it
+    would be matching localised, version-dependent English in a terminal stream, and a blind
+    user's ability to answer would rest on that match.
+
+    Two things it inherits rather than invents: bash-over-SSH is the bash adapter 23.3
+    already measured, and `Transport` already models `interrupt` and `resize` as methods
+    rather than bytes — which is evidence the seam was cut in the right place, since over
+    SSH both are protocol messages.
+
 ## Convergence (requires B4, B5 and B6 all Done)
 
 Spec: none yet → specify when unblocked. The container swaps the scripted fake
