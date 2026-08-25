@@ -1923,7 +1923,7 @@ thing to pick up once the adapters land, not merely the next number.
     **22.14 is now re-measurable without the confound**, and has not been re-measured yet:
     that is a separate NVDA pass and is filed as such rather than assumed.
 
-23.2. B5.2, the PowerShell adapter. Spec:
+23.2. **Done** — B5.2, the PowerShell adapter. Spec:
     [b5.2-powershell-adapter.md](specs/b5.2-powershell-adapter.md) — agreed in conversation
     2026-08-23. The first shell that can emit `C` and `D`, so the first session where a
     verdict and an exit code are real rather than absent, and therefore the first real
@@ -1935,6 +1935,42 @@ thing to pick up once the adapters land, not merely the next number.
     **Carries EOF** (filed here by B6, decision 6): `SessionIntent` ships with `Interrupt`
     alone because EOF is shell knowledge — PowerShell wants Ctrl+Z, bash wants `0x04` —
     and it needs this port to have somewhere to live.
+
+    **What shipped, and what the measurement disproved.** Both editions behind one adapter,
+    started `-NoLogo -NoExit -Command <snippet>`, claiming `ShellMarkers::Full` — the first
+    shipped shell whose blocks close because the shell said so and whose exit codes are
+    real. Three of this entry's expectations did not survive contact with a real
+    pseudoconsole, and each is amended in the spec rather than footnoted:
+
+    **PowerShell 5.1 disables PSReadLine when it detects a screen reader**, and means it —
+    `PSConsoleHostReadLine` does not exist in that session, so the hook every other
+    terminal's PowerShell integration hangs `C` on is absent. PowerShell 7 keeps PSReadLine
+    and produced a *wrong* stream: `C` before the line was read, which puts the echoed
+    command line into a block's content instead of its heading. The snippet removes
+    PSReadLine, which is the call Microsoft already makes for 5.1, and `C` comes from
+    `PreCommandLookupAction` instead.
+
+    **`$LASTEXITCODE` is stale**: `cmd /c exit 3` followed by a failing `Get-Item` reported
+    `D;3` for the `Get-Item`. The shipped rule reports a changed `$LASTEXITCODE` and `1`
+    otherwise, and the spec says out loud what that rounds.
+
+    **Neither control byte ends a PowerShell session.** The line above is wrong: Ctrl+Z does
+    not do it, and neither does `0x04` — both are echoed as caret text and a line submitted
+    behind one runs as a command the user never typed. What ends it is the line `exit`, so
+    the port answers with *bytes*. Bash under WSL answers `None` for the same reason in
+    reverse: `0x04` is probably right and nobody has driven it, and this entry is the
+    evidence that "probably right" is not good enough.
+
+    **One box in its definition of done stays open on purpose.** Decision 4 said this entry
+    would be the first real test of B6.1's rewritten-echo rule against a live shell; with
+    PSReadLine removed, it is not. The golden transcript was captured *with* PSReadLine
+    active so the case is not lost, but a live proof is still owed and the spec keeps the box
+    unchecked rather than rewording it into something that passes.
+
+    **And one amendment came from merging rather than measuring**: `SessionService::start`
+    takes a `ShellFacts` value — markers and end-of-input together — because this entry gave
+    the domain a second thing to ask a shell while 23.3 reshaped the same seam differently.
+    Agreed in conversation 2026-08-25.
 
 23.3. **Done** — B5.3, the WSL adapter and distro discovery. Spec:
     [b5.3-wsl-adapter.md](specs/b5.3-wsl-adapter.md) — agreed in conversation 2026-08-23.
