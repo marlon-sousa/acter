@@ -2013,6 +2013,34 @@ thing to pick up once the adapters land, not merely the next number.
     with WSL and no distribution could not be reproduced here — their sentences are unit
     tested, not observed. The NVDA pass is the PR body's.
 
+23.5. Ctrl+D is not reachable from the window. Spec: none yet → specify first, and the
+    specifying is small because the diagnosis is already complete. **Found 2026-08-25** in
+    B5.2's NVDA pass, and filed rather than fixed there: forwarding it is frontend work and
+    B5.2 is a shell adapter, so fixing it in that PR would have widened an entry that had
+    already grown once.
+
+    **What a listener meets.** In a real PowerShell session — the first shell that has an
+    end-of-input answer at all — pressing Ctrl+D in the edit field does *nothing*. Not an
+    error, not a refusal: silence, and the session is still there. Measured through the
+    screen-readers bridge, NVDA 2026.1.1, silent capture, `user` persona: the keystroke
+    produced no speech whatsoever, and a command submitted afterwards ran normally.
+
+    **The whole path exists except its first step.** `SessionIntent::Eof` is in the domain,
+    `intent_for` maps Ctrl+D to it, the session writes whatever bytes the shell's adapter
+    says end its input, and PowerShell's adapter answers with the line `exit` — proven by
+    `ctrl_d_ends_a_real_powershell_session`, which drives `send_key` directly and does end
+    the session. What is missing is the frontend: `isReportable` in
+    `ui/src/adapters/keyboard.ts` returns true for Ctrl+C and nothing else, so the keystroke
+    never leaves the page.
+
+    **Why this is worth an entry rather than a one-line fix.** Ctrl+D reaching the far end is
+    not the whole question. A shell that has no measured end-of-input answers
+    `KeyAck::NothingToActOn`, and what a listener should hear then is a sentence rather than
+    silence — the same problem A3.1 solved for "nothing running to stop". So the entry is:
+    forward the key, and decide what is said in each of the three cases (the session ended,
+    the shell has no answer, nothing is listening). That is a keystroke-map decision and a
+    pinned string, which is exactly the sort of thing this project decides in the open.
+
 24. **Done** — B6.1, correlation that cannot drift. Spec:
     [b6.1-correlation-that-cannot-drift.md](specs/b6.1-correlation-that-cannot-drift.md).
     **An iteration entry from B6's manual NVDA pass**, not a planned step. B6's decision 3
