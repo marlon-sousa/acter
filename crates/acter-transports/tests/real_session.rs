@@ -21,7 +21,7 @@ use std::time::{Duration, Instant};
 
 use acter_core::{
     Clock, CommandId, EventSink, Key, KeyPress, PacingConfig, SessionApi, SessionEvent, SessionId,
-    SessionService, ShellMarkers, Timer,
+    SessionService, ShellLaunch, ShellMarkers, Timer,
 };
 use acter_term::AlacrittyEngine;
 use acter_transports::LocalPty;
@@ -107,16 +107,20 @@ struct RealSession {
 }
 
 impl RealSession {
-    fn start(args: &[&str]) -> Self {
-        Self::over(args, &[], ShellMarkers::Full)
-    }
-
-    /// A session over a shell started with this environment, declaring this much about its
-    /// own markers. The two travel together because they are one decision: injecting cmd's
-    /// prompt markers without telling the domain the shell emits no `C` produces a session
-    /// that receives markers and speaks nothing (spec B4.5).
-    fn over(args: &[&str], environment: &[(&str, &str)], markers: ShellMarkers) -> Self {
-        let pty = LocalPty::spawn(SHELL, args, environment, COLUMNS, SCREEN_LINES)
+    /// A session over a shell started exactly as this launch says, declaring this much
+    /// about its own markers. The launch and the markers travel together because they are
+    /// one decision: injecting cmd's prompt markers without telling the domain the shell
+    /// emits no `C` produces a session that receives markers and speaks nothing
+    /// (spec B4.5) — which is why since B5.1 both come from one adapter rather than from
+    /// two arguments this file assembles.
+    fn over(launch: &ShellLaunch, markers: ShellMarkers) -> Self {
+        let args: Vec<&str> = launch.args.iter().map(String::as_str).collect();
+        let environment: Vec<(&str, &str)> = launch
+            .environment
+            .iter()
+            .map(|(name, value)| (name.as_str(), value.as_str()))
+            .collect();
+        let pty = LocalPty::spawn(&launch.program, &args, &environment, COLUMNS, SCREEN_LINES)
             .expect("a shell starts");
         let events = Arc::new(Recorder::default());
         let session = SessionService::start(
@@ -133,10 +137,26 @@ impl RealSession {
         Self { session, events }
     }
 
-    /// `cmd.exe` with its own echo of submitted lines off and itself kept alive after each
-    /// command — `local_pty.rs`'s flags, for its reasons.
+    /// `cmd.exe` started the way the application starts it, but told nothing about its
+    /// markers and given no injection: the unintegrated session most of this file is
+    /// about, and the precondition B4.2 only exists under.
+    ///
+    /// The arguments come from the adapter since B5.1, so this suite and the product
+    /// cannot drift into measuring different streams; the injection is dropped
+    /// deliberately, which is the one thing that separates this from [`Self::marked`].
     fn cmd() -> Self {
-        Self::start(&["/Q", "/K"])
+        let launch = ShellLaunch {
+            environment: Vec::new(),
+            ..acter_shells::adapter_for(SHELL).launch()
+        };
+        Self::over(&launch, ShellMarkers::Full)
+    }
+
+    /// The same shell as the application runs it, integration and all: the launch and the
+    /// markers exactly as `acter_shells` states them.
+    fn marked() -> Self {
+        let adapter = acter_shells::adapter_for(SHELL);
+        Self::over(&adapter.launch(), adapter.markers())
     }
 
     fn submit(&self, line: &str) -> CommandId {
@@ -478,11 +498,7 @@ async fn a_backlog_released_by_an_interrupt_fills_its_own_blocks() {
 #[tokio::test]
 #[ignore = "spawns a real shell"]
 async fn a_real_cmd_carries_its_own_prompt_markers() {
-    let session = RealSession::over(
-        &["/Q", "/K"],
-        acter_shells::cmd::ENVIRONMENT,
-        acter_shells::cmd::MARKERS,
-    );
+    let session = RealSession::marked();
 
     let command = session.submit("echo acter-marked-line");
     let output = session.until(command, "acter-marked-line", PATIENCE).await;
@@ -521,11 +537,7 @@ async fn a_real_cmd_carries_its_own_prompt_markers() {
 #[tokio::test]
 #[ignore = "spawns a real shell"]
 async fn a_submission_behind_an_unread_device_query_answer_still_runs() {
-    let session = RealSession::over(
-        &["/Q", "/K"],
-        acter_shells::cmd::ENVIRONMENT,
-        acter_shells::cmd::MARKERS,
-    );
+    let session = RealSession::marked();
 
     let slow = session.submit(SLOW_CONSUMER);
     // Long enough for the query to be answered and for the far end to give up without
@@ -559,11 +571,7 @@ async fn a_submission_behind_an_unread_device_query_answer_still_runs() {
 #[tokio::test]
 #[ignore = "spawns a real shell"]
 async fn no_command_in_a_marked_session_reads_the_typed_line_back() {
-    let session = RealSession::over(
-        &["/Q", "/K"],
-        acter_shells::cmd::ENVIRONMENT,
-        acter_shells::cmd::MARKERS,
-    );
+    let session = RealSession::marked();
 
     let first = session.submit("echo acter-alpha");
     session.until(first, "acter-alpha", PATIENCE).await;
@@ -642,11 +650,7 @@ async fn a_line_typed_into_a_container_is_not_read_back() {
         return;
     }
 
-    let session = RealSession::over(
-        &["/Q", "/K"],
-        acter_shells::cmd::ENVIRONMENT,
-        acter_shells::cmd::MARKERS,
-    );
+    let session = RealSession::marked();
 
     // Waiting for the container's own prompt rather than for an echo of our own is what
     // keeps the outer `cmd.exe` from answering by mistake: until `sh` has drawn `/ #`, a

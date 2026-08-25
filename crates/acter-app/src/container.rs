@@ -13,7 +13,6 @@ use std::env;
 use std::sync::Arc;
 
 use acter_core::{Clock, PacingConfig, SessionApi, SessionService, ShellMarkers, Transport};
-use acter_shells::cmd;
 use acter_term::AlacrittyEngine;
 use acter_transports::{
     Chunking, FakeShell, LocalPty, ScriptedTransport, SessionTranscript, TranscriptShell, Unmarked,
@@ -38,7 +37,8 @@ const TRANSCRIPT_ENV: &str = "ACTER_TRANSCRIPT";
 /// **`cmd.exe` is now integrated, and nothing else is** (spec B4.5). Naming cmd here gets
 /// the OSC 133 prompt injection and real command boundaries; naming any other shell still
 /// gets a session with no integration at all, degrading exactly as DESIGN's reliability
-/// case 2 says it should, until B5 brings the PowerShell snippet.
+/// case 2 says it should, until B5.2 brings the PowerShell snippet. Which of those a name
+/// resolves to is `acter_shells::adapter_for`'s since B5.1, not this file's.
 const SHELL_ENV: &str = "ACTER_SHELL";
 
 /// The emulated screen the engine keeps. Eighty by twenty-four, the same as the
@@ -125,14 +125,20 @@ pub(crate) fn session() -> SessionService {
 fn transport(clock: Arc<dyn Clock>) -> (Box<dyn Transport>, ShellMarkers) {
     match env::var(SHELL_ENV) {
         Ok(program) => {
-            let (environment, markers) = if cmd::is_cmd(&program) {
-                (cmd::ENVIRONMENT, cmd::MARKERS)
-            } else {
-                (&[][..], ShellMarkers::Full)
-            };
-            let pty = LocalPty::spawn(&program, &[], environment, COLUMNS, SCREEN_LINES)
+            // The composition root names no shell since B5.1: which shell this is, what it
+            // is started with and what it can mark are one object's answers, and the same
+            // object answers them for the suites that measure a real one.
+            let adapter = acter_shells::adapter_for(&program);
+            let launch = adapter.launch();
+            let args: Vec<&str> = launch.args.iter().map(String::as_str).collect();
+            let environment: Vec<(&str, &str)> = launch
+                .environment
+                .iter()
+                .map(|(name, value)| (name.as_str(), value.as_str()))
+                .collect();
+            let pty = LocalPty::spawn(&launch.program, &args, &environment, COLUMNS, SCREEN_LINES)
                 .unwrap_or_else(|why| panic!("{why}"));
-            (Box::new(pty), markers)
+            (Box::new(pty), adapter.markers())
         }
         Err(_) => {
             let (shell, chunking) = far_end();

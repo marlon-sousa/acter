@@ -221,11 +221,70 @@ the answer to "what should we do now?".
     T2 gated the embedded WebDriver, so a release build injects no flag and constructs no
     recorder. `big.spec.ts` now reads the tape and asserts the beep's arming order, which
     is the recorder earning its place on the day it landed.
-12. A4, completion path. Spec: none yet → specify first. Scope sketch: fake
+12. A7, the menu bar and About. Spec:
+    [a7-menu-bar-and-about.md](specs/a7-menu-bar-and-about.md) — **agreed in conversation
+    2026-08-23**, ahead of implementation, with the five other entries this reorganisation
+    added. **Raised by the user 2026-08-23**: Acter has no application surface at all, only
+    a window with an edit field, and the far end is chosen by an environment variable.
+
+    A native window menu (Tauri `MenuBuilder`, a Win32 `HMENU` underneath, which NVDA
+    reads with no ARIA and no mode switch), carrying an **Acter** menu with Exit and an
+    **About** menu with About Acter. The About dialog is an HTML modal in the window and
+    carries the product name, version, copyright and MIT licence, read from the build
+    rather than typed a second time.
+
+    **Connect is deliberately not in this entry.** It arrives in 13, the day it works: a
+    menu item that opens nothing is worse than a menu that does not offer it yet.
+
+    **It opens with a measurement that can invalidate its own design**, found while
+    researching how a native menu is tested: Microsoft documents that application
+    accelerators do not fire while focus is inside the WebView2 control, and Acter's focus is
+    inside the webview essentially always. A menu bar a keyboard user cannot open is not a
+    menu bar, so whether Alt reaches it is a gate rather than a checklist item. If it does
+    not, the fallback is an Acter binding that activates the menu from Rust
+    (`WM_SYSCOMMAND` / `SC_KEYMENU`), and if that fails too, DESIGN's native-menu decision is
+    reopened with evidence rather than preference.
+
+    **Nothing in this project can test the menu end to end**: `MockRuntime` does not run the
+    native webview and WebDriver drives only the webview. So the menu is split — a pure
+    value describing it, which plain `cargo test` asserts on, and a thin construction layer
+    verified by the NVDA pass.
+13. A8, the Connect submenu. Spec: [a8-connect-submenu.md](specs/a8-connect-submenu.md) —
+    agreed in conversation 2026-08-23. **Depends on 25 (B7)**, which supplies the actions it
+    triggers; the lanes run in parallel, so this is the one cross-lane dependency in this
+    group and it is named here rather than discovered later.
+
+    Adds Connect to the Acter menu as a **submenu**, one item per thing the backend says can
+    be connected to: cmd, each installed PowerShell edition, one entry per installed WSL
+    distribution, any profile stored on disk, and in debug builds the scripted sessions.
+    Choosing one replaces the running session and the listener is told which far end they
+    are on now.
+
+    **The dialog this entry used to be was dropped 2026-08-23**, in the same conversation
+    that introduced profiles: a submenu needs no focus trap, no modal semantics and no
+    second surface, and arrowing a list is what menu navigation is already best at. What is
+    lost is that a submenu cannot be driven by WebDriver — which is why the entry it depends
+    on puts the whole of connecting behind actions that are testable without any UI at all.
+14. A4, completion path. Spec: none yet → specify first. Scope sketch: fake
     completion provider, Tab handling in the edit field, completion announcement.
-13. A5.3 and onward — iteration entries appear here as NVDA findings arrive.
+15. A5.3 and onward — iteration entries appear here as NVDA findings arrive.
 
 ## Status board — lane 2: domain (pure Rust; may start anytime, parallel to lane 1)
+
+**Ordering decision, 2026-08-23 — Decided.** The backends come before the iteration
+entries. Entries 23.1, 23.2, 23.3 and 25 — the `ShellAdapter` port, the cmd, PowerShell and
+WSL adapters, and sessions that can be started at runtime — run **ahead of the open 22.x
+entries**, which are deferred until the shell layer exists.
+
+The reason, raised by the user: 22.7 and the entries around it are optimisations over a
+layer that has not been built, and specifying them now means deciding adapter questions
+without adapters. 22.7 is the clearest case — the pager environment it proposes cannot
+reach a shell the user proxies into mid-session at all, which 22.6 measured, so its scope
+is not even knowable until it is clear which shells Acter sets up itself.
+
+**22.8 is the exception worth naming**: it is a defect rather than an optimisation — the
+completion beep reports a completion whose timing it cannot know — and it is the first
+thing to pick up once the adapters land, not merely the next number.
 
 14. **Done** — B1, foundations. Spec: [b1-foundations.md](specs/b1-foundations.md).
     `acter-core` gained `entities/session_state.rs` (mode/integration/screen state
@@ -1113,7 +1172,9 @@ the answer to "what should we do now?".
     buys exactness for the outer shell and the prompt region 22.9 wants — not the difference
     between structure and none.
 
-22.6. B4.6, does an interrupt survive a proxied shell? Spec: none yet → specify first.
+22.6. **Done** — B4.6, an interrupt through a proxied shell. It does survive one, and the
+    entry closes as a measurement with no product code. Spec:
+    [b4.6-an-interrupt-through-a-proxied-shell.md](specs/b4.6-an-interrupt-through-a-proxied-shell.md).
     **Raised by the user 2026-08-22**, immediately after B4.1 landed, and it bounds what
     B4.1 may be read as claiming.
 
@@ -1139,8 +1200,37 @@ the answer to "what should we do now?".
     way. That is precisely the shape of the confound that cost B4.1 four disproven
     mechanisms, so it gets measured on a machine with Docker rather than argued about.
 
-    Not measurable on the development machine as of 2026-08-22 — Docker is not installed —
-    which is itself why this is an entry and not a paragraph in the B4.1 spec.
+    **Measured 2026-08-23, and it is the first outcome on every signature.** The entry
+    recorded that this was not measurable here because Docker was not installed; it is
+    installed and running (29.7.2, Linux daemon), so that paragraph is gone rather than
+    amended. A real `cmd.exe` on a real `LocalPty` enters `docker run -it alpine sh` and
+    starts a loop printing one tick a second, which makes the container's own stdout a
+    clock. Within 16 to 22 milliseconds of the `0x03` our stream carries `^C` and the
+    container's prompt — the *container's* tty echoing the control character — and
+    `docker logs` stops at exactly the tick our stream stopped at, so the loop is dead
+    inside the container rather than merely inaudible. The container is still running, only
+    its `sh` is left in `docker top`, and `uname -s` afterwards still answers `Linux`. Three
+    runs of three, identical. The other outcome, the client dying and the container being
+    orphaned, is excluded on all of it. **The same measurement through `wsl.exe`** gives the
+    same shape, so this is about `0x03` being data all the way down rather than about
+    Docker, and `ssh` and `kubectl exec` need no measurement of their own.
+
+    **Two consequences worth carrying forward.** There is nothing for B5's `ShellAdapter` to
+    declare: "is this a proxy" looks like a shell question, and Acter cannot tell and does
+    not need to, because the correct behaviour is identical either way. And an interrupt at
+    a proxied *idle* prompt is as harmless as it is in `cmd.exe` — `^C`, a redrawn prompt, a
+    container still running — which is one thing 22.8 does not have to treat separately.
+
+    **And the leaked containers are not ours**, which is the other thing this entry
+    measured. `LocalPty::drop` kills `docker.exe` and the container survives, `--rm`
+    notwithstanding — twenty-four of them had accumulated here, seventeen still running. But
+    closing a real `cmd.exe` window that is running `docker run -it --rm` leaves the
+    container up and un-removed in exactly the same way: Windows delivers its close event,
+    the client does not stop the container, and the end state is identical. Acter matches
+    the platform, and doing better would mean terminating something outside our process tree
+    that was never our child — the stance B4.1 settled. Recorded in the spec rather than
+    filed as an entry, so that the next person to find two dozen leaked containers does not
+    file it as one.
 
 22.7. B4.7, the results buffer is the pager. Spec: none yet → specify first.
     **Measured 2026-08-22**, from the user's `git diff` case, and the cheapest large win
@@ -1761,21 +1851,67 @@ the answer to "what should we do now?".
     it is no longer something a listener meets, which is why it is filed here rather than
     fixed in a hurry.
 
-23. B5, PowerShell adapter. Spec: none yet → specify first. Scope sketch: OSC 133
-    injection snippet; record the first golden transcripts as fixtures, in B2's format
-    — so a captured real session is replayable as a fake session.
-    **Also carries EOF** (filed here by B6, decision 6). `SessionIntent` ships with
-    `Interrupt` alone, and EOF is the obvious second member deliberately left out: by
-    DESIGN's own transport-versus-shell criterion it is *shell* knowledge — PowerShell on
-    ConPTY wants Ctrl+Z, bash over WSL wants `0x04`, same transport and different answers
-    — so it needs `ShellAdapter`, which is this entry. When it lands it is one variant, one
-    keybinding-table row and one adapter method; nothing above it changes, which is the
-    point of putting the binding table behind the port in B6.
-    **And the null `ShellAdapter` and the profile slot it fills** — B6 left both out for
-    the same reason B1 refused to declare a trait with only a fake implementer: this is
-    when the trait first ships with PowerShell behind it, and when the scripted session
-    needs something in a profile's shell-adapter slot to be "selectable like any real
-    shell" as DESIGN Decided.
+23. B5, the shell adapters. **Split into three entries 2026-08-23**, agreed in
+    conversation, because "the PowerShell adapter" was three components wearing one number:
+    the port itself, and then one implementer per shell, each of which is a measurement
+    against a real pseudoconsole before it is code. The scope this entry carried is
+    distributed below and nothing is dropped.
+
+23.1. **Done** — B5.1, the `ShellAdapter` port, with cmd behind it. Spec:
+    [b5.1-shell-adapter-port.md](specs/b5.1-shell-adapter-port.md) — agreed in conversation
+    2026-08-23. A refactor with no behaviour change: ARCHITECTURE has named this port since
+    the beginning, and `acter-shells::cmd` is already its first implementer in constant
+    form. The composition root's two-arm `if is_cmd(...)` becomes the trait, and the null
+    adapter — a shell Acter knows nothing about — becomes a type rather than an `else`.
+
+    **It also carries the args a shell is started with**, which is not cosmetic: production
+    spawns `cmd.exe` with no arguments while every test spawns it with `/Q`, so cmd's own
+    command echo is **on** in the app and **off** in the suites. That difference is a
+    candidate explanation for 22.14's empty block, whose measurement compared a `/Q` test
+    against a no-`/Q` app and concluded the frontend was implicated. Whether it is the cause
+    or not, one place must own it, and that place is the adapter.
+
+    **What shipped.** `ShellAdapter` and `ShellLaunch` in `acter-core`, `Cmd` and `Plain`
+    in `acter-shells`, and `adapter_for` — one match from a program name to a shell — in a
+    module of its own rather than in the facade, which is the spec's one amendment and is
+    recorded in it. The composition root now names no shell at all.
+
+    **The argument drift is closed, and it was the only one.** Both real-shell suites take
+    their arguments from the adapter, so `/Q` and `/K` are spelled out nowhere but in cmd's
+    own module. The injection is a different matter and stays where each suite wants it:
+    `local_pty.rs` is about the pipe and keeps its unmarked stream, and `RealSession::cmd`
+    keeps the unintegrated session B4.2 only exists inside, while `RealSession::marked` is
+    the whole launch as the application performs it.
+
+    **22.14 is now re-measurable without the confound**, and has not been re-measured yet:
+    that is a separate NVDA pass and is filed as such rather than assumed.
+
+23.2. B5.2, the PowerShell adapter. Spec:
+    [b5.2-powershell-adapter.md](specs/b5.2-powershell-adapter.md) — agreed in conversation
+    2026-08-23. The first shell that can emit `C` and `D`, so the first session where a
+    verdict and an exit code are real rather than absent, and therefore the first real
+    exercise of everything B6 built for markers. Both editions are discovered rather than
+    assumed: Windows PowerShell 5.1 is always present, PowerShell 7 is offered when it is
+    installed. Injection is measured off a real pseudoconsole the way B4.5 measured cmd's
+    `PROMPT`, never taken from documentation.
+
+    **Carries EOF** (filed here by B6, decision 6): `SessionIntent` ships with `Interrupt`
+    alone because EOF is shell knowledge — PowerShell wants Ctrl+Z, bash wants `0x04` —
+    and it needs this port to have somewhere to live.
+
+23.3. B5.3, the WSL adapter and distro discovery. Spec:
+    [b5.3-wsl-adapter.md](specs/b5.3-wsl-adapter.md) — agreed in conversation 2026-08-23.
+    A bash far end reached through `wsl.exe`, and the first adapter whose *variants* are
+    discovered at runtime: the installed distributions, behind a port of their own because
+    running `wsl.exe -l -q` is I/O rather than knowledge. Measured 2026-08-23 on this
+    machine: that output is **UTF-16LE**, and it lists `docker-desktop` beside real
+    distributions.
+
+    **The first far end Acter sets up that is not in its own process tree**, which 22.6
+    measured from two directions: environment variables do not cross into the distribution
+    without `WSLENV`, and an interrupt does cross, because it travels as data. Injection
+    has to survive the user's own `.bashrc`, which is what makes this the hardest of the
+    three.
 
 24. **Done** — B6.1, correlation that cannot drift. Spec:
     [b6.1-correlation-that-cannot-drift.md](specs/b6.1-correlation-that-cannot-drift.md).
@@ -1818,6 +1954,50 @@ the answer to "what should we do now?".
     nothing, and an event meaning "this never ran" would be new protocol surface plus a
     pinned string, decided in the open with a listener present rather than as a side
     effect.
+
+25. B7, sessions that start at runtime. Spec:
+    [b7-sessions-that-start-at-runtime.md](specs/b7-sessions-that-start-at-runtime.md) —
+    agreed in conversation 2026-08-23. **What Connect needs and what does not exist**: the
+    composition root builds exactly one session at startup from an environment variable and
+    `AppState` holds it as a fixed `Arc<dyn SessionApi>`, so there is no way to start a
+    second far end without restarting the application.
+
+    This entry makes the session replaceable, and it does it as **actions rather than as a
+    user interface** — the shape the user proposed 2026-08-23 to answer "nothing can test the
+    menu": `connectable` and `use`, named operations that the menu triggers, that the launch
+    path triggers, and that a test triggers directly with no window, no webview and no
+    screen reader in the way. The menu becomes the thinnest possible caller, and everything
+    behind it is provable.
+
+    So: the action listing what can be connected to (built from the adapters of 23.1 to
+    23.3 and — in debug builds only — the scripted sessions), the action that uses one, the
+    teardown of the outgoing session, and the event that tells a listener which far end they
+    are on now.
+
+    **And the window now starts unconnected**, per DESIGN: nothing is spawned until a
+    profile is used, so the first thing this entry has to get right is that an empty window
+    says it is empty, and that a line submitted before connecting is answered rather than
+    swallowed.
+
+    **A failed use must not be a panic.** There is a user standing in front of it, possibly
+    a working session behind it, and a speakable sentence is the only acceptable answer.
+
+26. B8, the profile store and `--profile`. Spec:
+    [b8-profile-store.md](specs/b8-profile-store.md) — agreed in conversation 2026-08-23.
+    Profiles stop being a section of DESIGN and become files: JSON under `%APPDATA%\acter`
+    on Windows, with `ACTER_PROFILES_DIR` pointing somewhere else for development, tests and
+    the NVDA fixture — which is what makes a manual accessibility pass repeatable instead of
+    dependent on what this machine happens to have installed. Other operating systems get
+    their own locations when they get their own builds.
+
+    Stored profiles join the discovered shells in what 25 lists, so a fresh install is
+    useful with no configuration and a configured one is the user's own.
+
+    **And the one command-line switch**: `acter --profile <name>` starts that profile's
+    session. Arguments are parsed, never printed — a windowed binary has no console, so a
+    name that resolves to nothing opens the window unconnected and *says* what was wrong
+    with it. There is no `create` on the command line: profiles are files, and creating one
+    from a shell whose output nobody can see is not a workflow this audience needs.
 
 ## Convergence (requires B4, B5 and B6 all Done)
 
