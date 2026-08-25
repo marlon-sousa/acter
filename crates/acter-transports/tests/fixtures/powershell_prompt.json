@@ -1,0 +1,64 @@
+{
+  "on_start": [
+    {
+      "payload": {
+        "file": "powershell_prompt.bin"
+      }
+    }
+  ],
+  "rules": [
+    {
+      "match": "echo acter-hello",
+      "steps": [
+        {
+          "payload": {
+            "text": "\u001b]133;C\u001b\\"
+          }
+        },
+        {
+          "delay": {
+            "min_ms": 100,
+            "max_ms": 100
+          },
+          "payload": {
+            "text": "acter-hello\r\n"
+          }
+        },
+        {
+          "payload": {
+            "text": "\u001b]133;D;0\u001b\\\u001b]133;A\u001b\\PS C:\\> \u001b]133;B\u001b\\"
+          }
+        }
+      ]
+    },
+    {
+      "match": "cmd /c exit 3",
+      "steps": [
+        {
+          "payload": {
+            "text": "\u001b]133;C\u001b\\"
+          }
+        },
+        {
+          "payload": {
+            "text": "\u001b]133;D;3\u001b\\\u001b]133;A\u001b\\PS C:\\> \u001b]133;B\u001b\\"
+          }
+        }
+      ]
+    }
+  ],
+  "default": {
+    "steps": [
+      {
+        "payload": {
+          "text": "\u001b]133;C\u001b\\"
+        }
+      },
+      {
+        "payload": {
+          "text": "\u001b]133;D;1\u001b\\\u001b]133;A\u001b\\PS C:\\> \u001b]133;B\u001b\\"
+        }
+      }
+    ]
+  }
+}

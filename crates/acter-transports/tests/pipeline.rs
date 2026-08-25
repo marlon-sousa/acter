@@ -28,8 +28,8 @@ use std::time::Duration;
 
 use acter_core::{
     Announcement, Clock, CommandId, EventSink, ExitCode, Key, KeyAck, KeyPress, PacingConfig,
-    SessionApi, SessionEvent, SessionId, SessionService, ShellMarkers, Timer, Transport,
-    TransportError,
+    SessionApi, SessionEvent, SessionId, SessionService, ShellAdapter, ShellLaunch, ShellMarkers,
+    Timer, Transport, TransportError,
 };
 use acter_term::AlacrittyEngine;
 use acter_transports::{
@@ -47,6 +47,33 @@ const SCREEN_LINES: u16 = 24;
 
 /// The one session every test drives.
 const SESSION: SessionId = SessionId(1);
+
+/// The shell behind a scripted far end: no process to start, and it marks whatever the
+/// transcript under test was written to mark.
+///
+/// Since B5.2 the service asks a `ShellAdapter` what it needs instead of being handed the
+/// marker declaration, so a suite whose far end is a file still has to name a shell. There
+/// is no end-of-input answer because there is nothing to end: a transcript ends when its
+/// steps run out.
+struct Scripted(ShellMarkers);
+
+impl ShellAdapter for Scripted {
+    fn launch(&self) -> ShellLaunch {
+        ShellLaunch {
+            program: "scripted".to_owned(),
+            args: Vec::new(),
+            environment: Vec::new(),
+        }
+    }
+
+    fn markers(&self) -> ShellMarkers {
+        self.0
+    }
+
+    fn eof(&self) -> Option<Vec<u8>> {
+        None
+    }
+}
 
 /// The grace period these tests run under. Two hundred milliseconds rather than the
 /// shipped five seconds, so a session that is going to be flagged is flagged inside the
@@ -223,7 +250,7 @@ impl Pipeline {
                 integration_grace: GRACE,
                 ..PacingConfig::default()
             },
-            markers,
+            &Scripted(markers),
         );
         session.attach_session(SESSION, Arc::clone(&events) as Arc<dyn EventSink>);
 
@@ -1040,6 +1067,35 @@ const CASES: &[Case] = &[
         far_end: "cmd_prompt.json",
         warmup: 0,
         submissions: &[("dir", 1_000), ("quiet", 2_000)],
+    },
+    // **A real PowerShell session, recorded** (spec B5.2, decision 6). The startup payload
+    // is a capture off a real pseudoconsole rather than something anyone wrote, and it is
+    // the first fixture here whose markers are terminated the way a real shell terminates
+    // them — `ESC \`, not the `BEL` every hand-authored fixture reaches for. What it buys
+    // is that everything above the transport can be tested against real PowerShell
+    // behaviour without PowerShell.
+    //
+    // **What is recorded is the prompt the shell drew, and the host's startup chatter in
+    // front of it is not.** The capture opened with a cursor-position query, mode sets, a
+    // title and Windows PowerShell's own notice that it has turned PSReadLine off in front
+    // of a screen reader — followed by an absolute cursor move to the row below all that.
+    // A transcript far end is not a console: the query has nobody to answer it here
+    // (`device_query.json` is where that path is tested deliberately), and the cursor move
+    // lands the fake shell's echo on top of a row the capture had already written, which
+    // makes what a block contains depend on where the reads were cut. None of that is the
+    // shell talking, so none of it is what this fixture is for.
+    //
+    // Three commands, because the shape differs: one with output, one that prints nothing
+    // and ends nonzero, and one whose rule nothing matches.
+    Case {
+        name: "powershell_prompt.json",
+        far_end: "powershell_prompt.json",
+        warmup: 0,
+        submissions: &[
+            ("echo acter-hello", 1_000),
+            ("cmd /c exit 3", 2_000),
+            ("nothing scripted this", 3_000),
+        ],
     },
     Case {
         name: "device_query.json",

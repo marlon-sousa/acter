@@ -12,7 +12,8 @@
 use std::env;
 use std::sync::Arc;
 
-use acter_core::{Clock, PacingConfig, SessionApi, SessionService, ShellMarkers, Transport};
+use acter_core::{Clock, PacingConfig, SessionApi, SessionService, ShellAdapter, Transport};
+use acter_shells::Plain;
 use acter_term::AlacrittyEngine;
 use acter_transports::{
     Chunking, FakeShell, LocalPty, ScriptedTransport, SessionTranscript, TranscriptShell, Unmarked,
@@ -34,14 +35,15 @@ const TRANSCRIPT_ENV: &str = "ACTER_TRANSCRIPT";
 /// buys now is that B4 can be *heard*: a manual accessibility run needs a way to say
 /// which session it is testing, which is the same reason `ACTER_TRANSCRIPT` exists.
 ///
-/// **Two shells are integrated: `cmd.exe` and `wsl.exe`.** Naming cmd gets the OSC 133
-/// prompt injection and boundaries around the prompt and the command line (spec B4.5);
-/// naming wsl gets a bash session in whatever distribution WSL calls the default, marking
-/// the full cycle with real exit codes (spec B5.3), which makes it the one name here that
-/// produces a session with a *verdict* in it. Naming any other shell still gets a session
-/// with no integration at all, degrading exactly as DESIGN's reliability case 2 says it
-/// should, until B5.2 brings the PowerShell snippet. Which of those a name resolves to is
-/// `acter_shells::adapter_for`'s since B5.1, not this file's.
+/// **Three shells are integrated now: `cmd.exe`, either PowerShell, and `wsl.exe`.**
+/// Naming cmd gets the OSC 133 prompt injection and boundaries around the prompt and the
+/// command line, and nothing about output or exit codes (spec B4.5). Naming `powershell` or
+/// `pwsh` gets the snippet injection and the full cycle including a real exit code (spec
+/// B5.2); naming wsl gets a bash session in whatever distribution WSL calls the default,
+/// marking the full cycle too (spec B5.3). Naming any other shell still gets a session with
+/// no integration at all, degrading exactly as DESIGN's reliability case 2 says it should.
+/// Which of those a name resolves to is `acter_shells::adapter_for`'s since B5.1, not this
+/// file's.
 const SHELL_ENV: &str = "ACTER_SHELL";
 
 /// The emulated screen the engine keeps. Eighty by twenty-four, the same as the
@@ -106,13 +108,13 @@ pub fn run() {
 /// The one session: a far end on a real pipeline.
 pub(crate) fn session() -> SessionService {
     let clock: Arc<dyn Clock> = Arc::new(SystemClock::new());
-    let (transport, markers) = transport(Arc::clone(&clock));
+    let (transport, shell) = transport(Arc::clone(&clock));
     SessionService::start(
         transport,
         Box::new(AlacrittyEngine::new(COLUMNS, SCREEN_LINES)),
         clock,
         PacingConfig::default(),
-        markers,
+        shell.as_ref(),
     )
 }
 
@@ -123,11 +125,18 @@ pub(crate) fn session() -> SessionService {
 /// wrote, for the same reason a transcript that cannot be loaded is one: a window that
 /// opens onto a session that will never say anything is worse than one that does not
 /// open, and worst of all for a user who cannot see that it is empty.
-/// It returns what the far end can mark alongside the far end itself, because the two are
-/// one decision: injecting cmd's prompt markers without telling the domain that this shell
-/// emits no `C` produces a session that receives markers, opens no block and speaks
-/// nothing at all — measured before either half was written (ROADMAP 22.5).
-fn transport(clock: Arc<dyn Clock>) -> (Box<dyn Transport>, ShellMarkers) {
+/// It returns the shell alongside the far end itself, because the two are one decision:
+/// injecting cmd's prompt markers without telling the domain that this shell emits no `C`
+/// produces a session that receives markers, opens no block and speaks nothing at all —
+/// measured before either half was written (ROADMAP 22.5). Since B5.2 the session asks the
+/// adapter for both of the answers it needs rather than being handed one of them, so this
+/// hands the object over and takes nothing out of it.
+///
+/// A scripted far end is a shell Acter knows nothing about, which is what [`Plain`] is:
+/// the transcript speaks the markers itself, and nothing is injected into a fake.
+///
+/// [`Plain`]: acter_shells::Plain
+fn transport(clock: Arc<dyn Clock>) -> (Box<dyn Transport>, Box<dyn ShellAdapter>) {
     match env::var(SHELL_ENV) {
         Ok(program) => {
             // The composition root names no shell since B5.1: which shell this is, what it
@@ -143,17 +152,22 @@ fn transport(clock: Arc<dyn Clock>) -> (Box<dyn Transport>, ShellMarkers) {
                 .collect();
             let pty = LocalPty::spawn(&launch.program, &args, &environment, COLUMNS, SCREEN_LINES)
                 .unwrap_or_else(|why| panic!("{why}"));
-            (Box::new(pty), adapter.markers())
+            (Box::new(pty), adapter)
         }
         Err(_) => {
             let (shell, chunking) = far_end();
             (
                 Box::new(ScriptedTransport::with_shell(shell, chunking, clock)),
-                ShellMarkers::Full,
+                Box::new(Plain::new(SCRIPTED)),
             )
         }
     }
 }
+
+/// What a scripted session is started as, for the one place a name is still needed: the
+/// null adapter carries the program it was selected by, and no process is ever spawned
+/// from this one.
+const SCRIPTED: &str = "scripted";
 
 /// Resolves `ACTER_TRANSCRIPT` to a far end and a delivery strategy.
 ///

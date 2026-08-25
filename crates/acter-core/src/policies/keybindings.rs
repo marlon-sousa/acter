@@ -22,6 +22,12 @@ use crate::{Key, KeyPress, SessionIntent};
 /// `Ctrl+C` without a selection to the running command, and the selection half of that
 /// sentence never reaches here — a `Ctrl+C` *with* a selection is a copy the edit field
 /// consumed locally and never reported.
+///
+/// **`Ctrl+D` is layer 2 rather than a new default binding** (spec B5.2): DESIGN lists
+/// default bindings only for layer 1, the `Ctrl+Shift` combinations that are Acter's own,
+/// and says of layer 2 that contextual keys keep their native meaning per focus. In an
+/// edit field standing in for a terminal's command line, `Ctrl+D`'s native meaning is end
+/// of input. What that costs in bytes is the shell's answer, not this table's.
 pub fn intent_for(press: &KeyPress) -> Option<SessionIntent> {
     match press {
         KeyPress {
@@ -30,6 +36,12 @@ pub fn intent_for(press: &KeyPress) -> Option<SessionIntent> {
             shift: false,
             alt: false,
         } => Some(SessionIntent::Interrupt),
+        KeyPress {
+            key: Key::Char('d'),
+            ctrl: true,
+            shift: false,
+            alt: false,
+        } => Some(SessionIntent::Eof),
         _ => None,
     }
 }
@@ -47,28 +59,42 @@ mod tests {
         }
     }
 
-    /// The table, stated as a table. Every row that is not the one binding is `None`,
+    /// The table, stated as a table. Every row that is not a binding is `None`,
     /// which is the half worth pinning: a session that guessed at unbound keys would
     /// act on keystrokes the user aimed somewhere else.
     #[test]
-    fn the_table_binds_ctrl_c_and_nothing_else() {
+    fn the_table_binds_ctrl_c_and_ctrl_d_and_nothing_else() {
         let rows = [
             (
                 press('c', true, false, false),
                 Some(SessionIntent::Interrupt),
             ),
-            // The plain letter is text the edit field owns.
+            (press('d', true, false, false), Some(SessionIntent::Eof)),
+            // The plain letters are text the edit field owns.
             (press('c', false, false, false), None),
+            (press('d', false, false, false), None),
             // A different modifier combination is a different keystroke, and DESIGN's
             // layer 1 (Ctrl+Shift+letter) is Acter's own and never arrives here at all.
             (press('c', true, true, false), None),
             (press('c', true, false, true), None),
-            (press('d', true, false, false), None),
+            (press('d', true, true, false), None),
+            (press('d', true, false, true), None),
             (press('x', false, false, false), None),
         ];
         for (press, expected) in rows {
             assert_eq!(intent_for(&press), expected, "for {press:?}");
         }
+    }
+
+    /// The two bindings are two intents, which is the whole reason the table is a
+    /// function rather than a boolean: a session that collapsed them would stop a
+    /// running command when the user asked to end the session.
+    #[test]
+    fn interrupting_and_ending_are_not_the_same_keystroke() {
+        assert_ne!(
+            intent_for(&press('c', true, false, false)),
+            intent_for(&press('d', true, false, false))
+        );
     }
 
     /// Pure in the sense that matters: the same keystroke always answers the same thing.
