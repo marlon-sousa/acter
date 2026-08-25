@@ -2041,8 +2041,8 @@ thing to pick up once the adapters land, not merely the next number.
     the shell has no answer, nothing is listening). That is a keystroke-map decision and a
     pinned string, which is exactly the sort of thing this project decides in the open.
 
-23.6. The prompt stopped being spoken, and the better the integration the worse it is.
-    Spec: none yet → specify first. **Found by the user 2026-08-25**, listening to the first
+23.6. **Done** — the prompt is spoken again in an integrated session. Spec:
+    [b5.6-the-prompt-is-spoken.md](specs/b5.6-the-prompt-is-spoken.md). **Found by the user 2026-08-25**, listening to the first
     real PowerShell session, and it is a regression this group caused rather than an old gap.
 
     **What a listener meets.** In a session over a shell that marks all four boundaries —
