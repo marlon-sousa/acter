@@ -2041,6 +2041,45 @@ thing to pick up once the adapters land, not merely the next number.
     the shell has no answer, nothing is listening). That is a keystroke-map decision and a
     pinned string, which is exactly the sort of thing this project decides in the open.
 
+23.6. The prompt stopped being spoken, and the better the integration the worse it is.
+    Spec: none yet → specify first. **Found by the user 2026-08-25**, listening to the first
+    real PowerShell session, and it is a regression this group caused rather than an old gap.
+
+    **What a listener meets.** In a session over a shell that marks all four boundaries —
+    PowerShell since 23.2, bash under WSL since 23.3 — the prompt is never read. Not after a
+    command, not ever. The user's words for why that matters: the prompt is where they learn
+    the working directory, the git branch, the virtualenv, "and everything else" about where
+    they are. A terminal user reads their prompt constantly; this one cannot hear it at all.
+
+    **Where it goes.** `SessionService::wants` decides what a block accepts, and it decides by
+    marker set:
+
+    - `PromptAndCommandLine` (cmd) accepts `Output` **and `Prompt`**, with a comment naming
+      22.12: with no `D` there is no verdict, so the returning prompt is the only ending such
+      a session has, and marking a session without that arm would take it away.
+    - `Full` (PowerShell, WSL) accepts `Output` alone. The prompt lives in `A..B`, which is
+      excluded, and `D` closes the block before the next prompt is drawn — so the prompt has
+      nowhere to land even if it were wanted.
+
+    **The mistake is a conflation, and naming it is most of the fix.** `D` replaces the prompt
+    as an *ending signal*: that reasoning is sound and is why the `Full` arm was written this
+    way. It replaces nothing about what the prompt *says*. Those are two different jobs the
+    same bytes were doing, and only one of them was handed over.
+
+    **So the shape of the answer is not "put the prompt back in the block".** A prompt read
+    as block content would arrive before the verdict and read as though the shell had printed
+    it; and DESIGN's echo exclusion exists for good reasons that this must not undo. The
+    questions the spec has to answer, in the open: when is the prompt spoken (after every
+    command, or only when it changes), where does it live in the buffer so it can be reviewed
+    and navigated, is there a key that reads it on demand, and how does this relate to
+    `Ctrl+Shift+S`, which DESIGN already reserves for a status announcement carrying the
+    working directory. **Announcing an unchanged prompt after every command is a real cost**
+    for a listener who runs twenty commands in a row, and pretending otherwise would trade
+    one annoyance for another.
+
+    Filed against 23 as a group rather than against 23.2 alone: 23.3 has the same defect for
+    the same reason, and any fix belongs above both adapters rather than inside either.
+
 24. **Done** — B6.1, correlation that cannot drift. Spec:
     [b6.1-correlation-that-cannot-drift.md](specs/b6.1-correlation-that-cannot-drift.md).
     **An iteration entry from B6's manual NVDA pass**, not a planned step. B6's decision 3
