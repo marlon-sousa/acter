@@ -50,13 +50,12 @@ pub(crate) fn distributions(bytes: &[u8]) -> Vec<String> {
 /// standard error empty.
 pub(crate) fn decode_utf16le(bytes: &[u8]) -> String {
     let bytes = bytes.strip_prefix(&[0xff, 0xfe]).unwrap_or(bytes);
-    // `chunks_exact` drops a trailing odd byte rather than inventing a character from it.
-    // Truncated output is far likelier than a WSL that emits an odd number of bytes, and
-    // half a character is not something anyone can read either way.
-    let units: Vec<u16> = bytes
-        .chunks_exact(2)
-        .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
-        .collect();
+    // `as_chunks` hands back the whole pairs and the leftover separately, and only the
+    // whole pairs are taken: a trailing odd byte is dropped rather than turned into half a
+    // character. Truncated output is far likelier than a WSL that emits an odd number of
+    // bytes, and half a character is not something anyone can read either way.
+    let (pairs, _leftover) = bytes.as_chunks::<2>();
+    let units: Vec<u16> = pairs.iter().copied().map(u16::from_le_bytes).collect();
     char::decode_utf16(units)
         .map(|character| character.unwrap_or(char::REPLACEMENT_CHARACTER))
         .collect()
