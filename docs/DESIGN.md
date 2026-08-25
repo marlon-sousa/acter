@@ -204,32 +204,76 @@ Agreed in conversation 2026-08-23. This is the first user-facing surface over th
 machinery above, and it is what turns Acter from "a session chosen by an environment
 variable at launch" into an application a user drives.
 
-### The menu bar is native — **Decided**
+### The menu bar is in the document — **Decided, revised 2026-08-24**
 
-A real window menu, built with Tauri's `MenuBuilder` and attached to the main window.
-Underneath, Tauri's `muda` builds a Win32 `HMENU`, which Windows exposes to a screen
-reader with no work from us: NVDA announces a menu bar, Alt reaches it, arrows navigate it,
-and there is no browse-mode/focus-mode switch anywhere in the interaction.
+**This reverses the decision recorded here on 2026-08-23, on measurement rather than on
+preference.** That decision said the menu bar was native — a Win32 `HMENU` under Tauri's
+`MenuBuilder` — and rejected an in-page ARIA `menubar` "not narrowly", on the grounds that
+it would put a browse-mode/focus-mode switch in front of the one control every user of this
+product must reach. A7 opened with the measurement that decision assumed the answer to, and
+the answer came back the other way.
 
-**An in-page ARIA `menubar` was rejected**, and not narrowly: it would put a mode switch in
-front of the one control every user of this product must be able to reach, in exchange for
-E2E testability. The cost is real and accepted — WebDriver drives the webview only, so a
-native menu is covered by Rust tests over its definition plus a manual NVDA pass, which is
-the same trade the product already makes for anything below the webview.
+**What was measured** (spec A7 carries the numbers and NVDA's own stacks): a native menu
+bar attached to Acter's window does everything the old decision expected — Alt reaches it
+from inside the webview, NVDA announces the bar, arrows and Enter behave — and **opening it
+freezes NVDA for twenty to sixty-eight seconds**, every time. The reader's main thread
+stops, not merely its announcement. It reproduces in a release build, with the keystroke
+injected from outside NVDA, with the tester's add-ons disabled, and finally in a **vanilla
+Tauri application built from Tauri's own window-menu tutorial**, which has no Acter code in
+it at all. Alt+Tab out of the same window is clean, so it is the native menu *taking* focus
+that does it. NVDA's log names the mechanism: synchronous accessibility calls into the
+WebView2 renderer, each cancelled by COM's message filter after ten seconds.
+
+So the trade the old decision weighed was not the real one. It compared a mode switch
+against E2E testability; the actual comparison is a mode switch against a screen reader
+that dies for half a minute whenever the user opens a menu.
+
+**The menu bar is therefore a WAI-ARIA `menubar` in the page**, and the mode problem the
+old decision was right to fear is answered rather than accepted: the bar is wrapped in
+`role="application"`, so the arrows belong to the widget whatever the reader's automatic
+focus mode setting happens to be. Measured immediate at every step, with no freeze.
+
+**Two ways in, both measured working**: **F10**, the platform's own "give me the menu bar",
+and **Alt on its own** — answered on keyup and disarmed by any other key, a click, or the
+window losing focus, so Alt+Tab and Alt+F4 pass through untouched. The key that made a
+native menu worth wanting now works without one.
+
+**Nothing else in the window is an application.** The command line was tried that way and
+reverted the same day: wrapping it does force focus mode, but it removes browse mode from
+the one place a listener uses it deliberately — turning focus mode off at the edit field
+and arrowing up to hear the tail of the last command. The results buffer is a document for
+the same reason, and more obviously. The mode at the command line is the reader's own
+business; only the menu bar, where there is nothing to read and the arrows must reach the
+widget, is stated as an application.
+
+**Windows only.** This exists because Windows is where a native menu freezes the reader. On
+macOS a menu belongs in the system bar and not in the window at all, and Linux is likely to
+want its own answer, so the backend answers which platform this is and the frontend removes
+the region entirely off Windows.
+
+**What this buys back, unexpectedly**: the menu is now inside the webview, so WebDriver can
+drive it end to end. "Nothing in this project can test the menu" was written about the
+native design and stops being true.
 
 Two menus, and no more until something earns one:
 
-- **Acter** — Connect (a submenu, one item per thing that can be connected to), Exit.
-- **About** — About Acter. A top-level menu holding one item rather than a top-level item
-  that acts, because a menu bar entry that fires instead of opening is a surprise to
-  anyone navigating by arrow keys.
+- **File** — Connect (see below), Exit.
+- **Help** — About Acter. A menu holding one item rather than a top-level item that acts,
+  because a menu bar entry that fires instead of opening is a surprise to anyone navigating
+  by arrow keys.
 
 ### Dialogs are HTML modals in the window — **Decided**
 
-The menu is native; what it opens is not. A `<dialog>` in the main window reuses the focus
-discipline, the announcer and the test suites the product already has, its text is
-browse-mode readable and copyable, and both vitest and WebDriver can drive it. Native
-message boxes would add a dependency and a surface neither suite can reach.
+A `<dialog>` in the main window reuses the focus discipline, the announcer and the test
+suites the product already has, its text is browse-mode readable and copyable, and both
+vitest and WebDriver can drive it. Native message boxes would add a dependency and a
+surface neither suite can reach. Since the menu bar itself became a document (above), this
+is no longer a contrast — it is the same reasoning applied twice.
+
+**One thing the platform does not do for us**, measured through NVDA on 2026-08-24: in a
+modal dialog with a single focusable control, Tab leaves that control for the dialog's own
+document, which drops the reader back into browse mode. A dialog traps Tab explicitly
+rather than trusting the element to.
 
 ### Connecting replaces the session — **Decided**
 
@@ -244,30 +288,47 @@ ask the session whether a command is outstanding, and that answer is currently s
 every single time teaches the user to dismiss it, which is worse than not having one.
 It becomes buildable when 22.8 lands, and is reconsidered then rather than guessed at now.
 
-### Connect is a submenu, and its list comes from the backend — **Decided**
+### Connect is a dialog: a kind, then what that kind needs — **Decided, revised 2026-08-24**
 
-**One item per thing that can be connected to, directly in the menu.** No dialog: a submenu
-needs no focus trap, no modal semantics and no second surface, and arrowing through a list
-of items — with first-letter navigation — is the thing menu navigation is already best at
-for a screen reader user. A dialog would earn its place only when connecting needs more
-than a choice, which it does not.
+**This reverses the submenu decision recorded here on 2026-08-23**, which said "no dialog:
+connecting needs no more than a choice". It does. SSH needs a host, a port and a user, and
+those are a form rather than a choice — a submenu cannot hold one, and shipping a submenu
+for the easy kinds beside a dialog for SSH would leave the product with two ways to do one
+thing. The old decision's argument was navigational and remains true as far as it goes: a
+conditional second control is harder to navigate non-visually than a list of equals. It is
+answered below rather than ignored.
 
-**Flat, one entry per connectable thing** — "WSL: Ubuntu" is an entry, not a WSL entry with
-a nested distro choice. A conditional second control that appears only for one option is
-harder to navigate non-visually than a longer list of equals.
+**File → Connect opens one dialog**, and it has two parts:
 
-The frontend and the menu hardcode nothing. The backend answers what can be connected to,
-and it answers with two things joined:
+- **A list of connection kinds.** Today: cmd and PowerShell. Later: WSL, SSH, and saved
+  connections.
+- **A panel below it holding whatever that kind needs.** For cmd and PowerShell that is
+  nothing at all, and the dialog is a list and a Connect button. For WSL it is the list of
+  distributions installed on this machine. For SSH it is host, port, user and the rest.
 
-- **Shells discovered on this machine** — cmd, each installed PowerShell edition, one entry
-  per installed WSL distribution. This is what makes a fresh install useful with no
-  configuration at all.
-- **Profiles stored on disk**, which is where a user's own settings live (starting
-  directory, auto-read threshold, which shell) as the profiles section above describes.
+**The panel changes under you, so it announces itself.** That is the whole of the old
+decision's worry, and it is a solved problem rather than an accepted cost: changing the
+kind announces what the panel now holds, and Tab from the kind list lands in it. A silent
+swap of controls is the trap; a spoken one is a form.
 
-The scripted fake sessions join the list in debug builds, which is what that section
-promised: the fake is a permanent, selectable session kind rather than a launch-time
-environment variable.
+**Saving comes after it works, not before.** A connection is *probed* — attempted for real —
+and only a connection that came up is offered for saving. This is what turns profiles from
+files a user hand-edits into something the application creates: the saved connections
+appear as their own kind in the list, and the profile section above stops describing a
+thing only an editor can make. It also settles the ordering: **the JSON profile store is
+built after WSL lands**, because a save flow with only cmd and PowerShell behind it saves
+nothing a user could not retype in a second.
+
+**A failed connection is spoken and leaves the running session alone.** Connecting at
+runtime makes a shell that will not start an ordinary event rather than a startup panic,
+and that is the requirement this dialog puts on the action behind it.
+
+The frontend hardcodes no list. The backend answers what can be connected to: shells
+discovered on this machine — cmd, each installed PowerShell edition, one entry per
+installed WSL distribution — joined with the connections the user has saved. The scripted
+fake sessions join the list in debug builds, which is what the profiles section promised:
+the fake is a permanent, selectable session kind rather than a launch-time environment
+variable.
 
 ### Acter starts unconnected, and `--profile` is the only switch — **Decided**
 

@@ -21,7 +21,8 @@
         "title": "Acter",
         "url": "src/views/main_window.html",
         "width": 900,
-        "height": 600
+        "height": 600,
+        "devtools": false
       }
     ],
     "security": {

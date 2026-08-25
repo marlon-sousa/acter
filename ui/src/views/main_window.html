@@ -10,8 +10,82 @@
     <link rel="stylesheet" href="/src/styles.css" />
   </head>
   <body>
+    <!-- The menu bar lives in the document rather than in the window frame. A native
+         Win32 menu was measured first (spec A7) and freezes NVDA for tens of seconds
+         every time it opens, in Acter and in a twenty-line Tauri application alike,
+         because the menu's modal loop blocks the accessibility calls the reader makes
+         into the webview. An in-document menu bar never takes focus out of the webview,
+         so none of that applies.
+
+         The structure is the WAI-ARIA menubar pattern, written out statically here so it
+         is inspectable without executing anything; the keyboard behaviour is in
+         src/adapters/menu_bar.ts. One item carries tabindex="0" so Tab reaches the bar;
+         the adapter moves that as focus moves (roving tabindex).
+
+         **Windows only, and hidden until the platform says so.** A native menu bar is
+         the right thing on macOS, where it lives in the system bar rather than in the
+         window, and probably on Linux too; what is measured here is Windows, where a
+         native `HMENU` freezes the reader. So this region starts `hidden` and
+         src/main.ts reveals it only on Windows, removing it entirely elsewhere rather
+         than leaving an empty landmark in the document.
+
+         **`role="application"` around it, deliberately.** NVDA reads a document in browse
+         mode, where the arrows move its own cursor rather than reaching the widget, and it
+         only switches to focus mode by itself if the user has left that setting on — which
+         is a setting, not a guarantee. A menu bar whose arrows depend on somebody's
+         configuration is not a menu bar, so the wrapper states that this subtree is an
+         application and the keys belong to it. It wraps only the bar: the buffer and the
+         edit field are still an ordinary document, where browse mode is exactly what a
+         reader wants. -->
+    <div id="menu-bar-region" role="application" aria-label="Acter menu bar" hidden>
+      <ul id="menu-bar" role="menubar" aria-label="Acter">
+        <li role="none">
+          <span
+            role="menuitem"
+            id="menu-acter"
+            aria-haspopup="true"
+            aria-expanded="false"
+            tabindex="0"
+            >Acter</span
+          >
+          <ul role="menu" aria-label="Acter" hidden>
+            <li role="none">
+              <span role="menuitem" id="menu-exit" tabindex="-1">Exit</span>
+            </li>
+          </ul>
+        </li>
+        <li role="none">
+          <span
+            role="menuitem"
+            id="menu-about"
+            aria-haspopup="true"
+            aria-expanded="false"
+            tabindex="-1"
+            >About</span
+          >
+          <ul role="menu" aria-label="About" hidden>
+            <li role="none">
+              <span role="menuitem" id="menu-about-acter" tabindex="-1">About Acter</span>
+            </li>
+          </ul>
+        </li>
+      </ul>
+    </div>
     <main>
+      <!-- The results buffer is a document and must stay one: browse mode is how a
+           listener reads output back, heading by heading, and `role="application"`
+           here would take that away. -->
       <div id="results" role="region" aria-label="Results" tabindex="-1"></div>
+      <!-- The command line is deliberately NOT an application, and it was tried the
+           other way first. Wrapping it does force focus mode, so typed letters are text
+           rather than quick-navigation — but it also removes the browsable document
+           here, and with it a workflow this product exists to serve: turning focus mode
+           off at the edit field and arrowing up to hear the tail of the last command.
+           Measured with the tester's NVDA on 2026-08-24: wrapped, the edit field cannot
+           be put into browse mode at all. Reading the output wins; the mode at the
+           command line stays the reader's own business. The menu bar keeps its wrapper,
+           because there the arrows must belong to the widget and there is nothing to
+           read. -->
       <form id="command-form">
         <label for="command-input">Command input</label>
         <input
@@ -23,6 +97,18 @@
         />
       </form>
     </main>
+    <!-- About. A modal <dialog> rather than a native window: the platform traps focus
+         and answers Escape for us, and it stays inside the webview, which is the whole
+         reason the menu bar above is in the document too (spec A7). Its four facts are
+         filled from the build by adapters/about_dialog.ts. -->
+    <dialog id="about-dialog" aria-labelledby="about-title">
+      <h1 id="about-title">About Acter</h1>
+      <p id="about-name"></p>
+      <p id="about-version"></p>
+      <p id="about-copyright"></p>
+      <p id="about-licence"></p>
+      <button id="about-close" type="button">Close</button>
+    </dialog>
     <!-- The live region lives at the very end of the document, outside <main>, and
          never moves. It must stay in the accessibility tree to be announced, so its
          text is browse-mode reachable while present; placing it last keeps it out of

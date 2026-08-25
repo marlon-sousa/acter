@@ -4,8 +4,12 @@
 //! companion items (`__cmd__<name>` etc.) that `generate_handler!` resolves
 //! alongside the function, and a named re-export would leave them behind.
 
+mod about;
+mod platform;
 mod session;
 
+pub(crate) use about::*;
+pub(crate) use platform::*;
 pub(crate) use session::*;
 
 #[cfg(test)]

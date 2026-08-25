@@ -40,3 +40,45 @@ main {
   white-space: nowrap;
   border: 0;
 }
+
+/* The in-document menu bar (spec A7). Kept deliberately plain: what matters about it is
+   its roles and its keyboard, and a sighted reviewer should still be able to see where
+   it is. `[hidden]` is asserted first, because a `display` rule on the menu would
+   otherwise override the attribute the adapter uses to open and close submenus. */
+[hidden] {
+  display: none !important;
+}
+
+#menu-bar {
+  display: flex;
+  gap: 0.25rem;
+  margin: 0;
+  padding: 0.25rem;
+  list-style: none;
+  border-bottom: 1px solid currentColor;
+}
+
+#menu-bar > li {
+  position: relative;
+}
+
+#menu-bar [role='menuitem'] {
+  display: block;
+  padding: 0.2rem 0.6rem;
+  cursor: default;
+}
+
+#menu-bar [role='menuitem']:focus {
+  outline: 2px solid currentColor;
+}
+
+#menu-bar [role='menu'] {
+  position: absolute;
+  z-index: 1;
+  margin: 0;
+  padding: 0.25rem 0;
+  min-width: 12rem;
+  list-style: none;
+  border: 1px solid currentColor;
+  background: Canvas;
+}
