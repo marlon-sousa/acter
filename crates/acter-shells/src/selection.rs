@@ -38,7 +38,7 @@ pub fn adapter_for(program: &str) -> Box<dyn ShellAdapter> {
 
 #[cfg(test)]
 mod tests {
-    use acter_core::ShellMarkers;
+    use acter_core::{ShellFacts, ShellMarkers};
 
     use super::*;
 
@@ -142,5 +142,40 @@ mod tests {
                 "{named} has no end-of-input answer anyone measured"
             );
         }
+    }
+
+    /// **What the session is handed is the adapter's own answers, unedited.** `ShellFacts`
+    /// is the value `SessionService::start` takes, and the composition root builds it from
+    /// whichever adapter `adapter_for` returned — so a shell whose markers or end-of-input
+    /// were dropped or swapped on the way through would produce a session that behaves like
+    /// a different shell, which is the failure B4.5 measured and the reason the two travel
+    /// together at all.
+    #[test]
+    fn the_facts_handed_to_a_session_are_the_adapters_own() {
+        for named in ["cmd.exe", "powershell.exe", "wsl.exe", "nushell.exe"] {
+            let adapter = adapter_for(named);
+            let facts = ShellFacts::of(adapter.as_ref());
+
+            assert_eq!(facts.markers, adapter.markers(), "{named}'s markers");
+            assert_eq!(facts.eof, adapter.eof(), "{named}'s end-of-input");
+        }
+    }
+
+    /// The same, spelled out for the two shells that disagree about it, so that a change to
+    /// either is a change to this file too: PowerShell knows what ends one of its sessions
+    /// and cmd does not.
+    #[test]
+    fn a_shell_with_a_measured_ending_is_told_apart_from_one_without() {
+        assert!(
+            ShellFacts::of(adapter_for("powershell.exe").as_ref())
+                .eof
+                .is_some(),
+            "PowerShell was measured, so a session over it can be ended"
+        );
+        assert_eq!(
+            ShellFacts::of(adapter_for("cmd.exe").as_ref()).eof,
+            None,
+            "cmd was not, so Acter says so rather than guessing at a byte"
+        );
     }
 }

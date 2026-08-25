@@ -131,6 +131,21 @@ pub(crate) fn is_wsl(program: &str) -> bool {
 mod tests {
     use super::*;
 
+    /// **The absence is the assertion.** Answering `None` is a claim that Acter does not
+    /// know how to end a bash session through this transport, and it is deliberate rather
+    /// than forgotten: `0x04` is the obvious byte, and B5.2 measured the equivalent
+    /// assumption to be wrong for PowerShell. This test exists so that supplying a byte
+    /// here is a decision somebody makes on purpose, with a measurement behind it, rather
+    /// than a plausible edit nobody notices.
+    #[test]
+    fn bash_under_wsl_has_no_measured_end_of_input_yet() {
+        assert_eq!(
+            Wsl::new("wsl.exe").eof(),
+            None,
+            "no byte is claimed until one is measured against a real distribution"
+        );
+    }
+
     #[test]
     fn the_wsl_client_is_recognized_however_it_was_named() {
         for named in ["wsl", "wsl.exe", "WSL.EXE", r"C:\Windows\system32\wsl.exe"] {
