@@ -25,7 +25,10 @@ describe('speech: a long single-utterance announcement', () => {
       { timeout: 5000, timeoutMsg: 'the long announcement never appeared in full' },
     )) as string;
 
-    expect(text.startsWith('long announcement starting.')).toBe(true);
-    expect(text.endsWith('long announcement finished')).toBe(true);
+    // The whole phrase reached the region as one utterance — asserted by finding it
+    // entire rather than by owning both ends of the region, which stopped being true when
+    // B5.6 gave a marked session a prompt to announce beside it.
+    expect(text).toContain('long announcement starting.');
+    expect(text).toContain('long announcement finished');
   });
 });

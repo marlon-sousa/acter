@@ -29,3 +29,5 @@ crates/acter-app/gen/
 
 # E2E failure screenshots, written on demand by the wdio runner
 e2e/screenshots/
+.claude/
+.vscode/

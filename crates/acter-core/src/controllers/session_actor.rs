@@ -46,6 +46,11 @@ pub enum SessionInput {
         text: String,
     },
     /// The running command ended on its own.
+    /// The shell drew a prompt. Carried through the actor untouched: what it says is the
+    /// shell's business, and whether it is spoken is the frontend's (spec B5.6).
+    PromptDrawn {
+        text: String,
+    },
     CommandEnded {
         command_id: CommandId,
         exit_code: ExitCode,
@@ -207,6 +212,13 @@ impl SessionActor {
                 exit_code,
             } => self.command_ended(command_id, exit_code),
             SessionInput::CommandInterrupted { command_id } => self.command_interrupted(command_id),
+            // Passed straight through, and deliberately not routed past the pacing policy:
+            // a prompt is neither output nor a verdict, nothing about it accumulates, and
+            // it is short by construction — the babble guard exists for a shell that will
+            // not stop talking, which is not what drawing a prompt is (spec B5.6).
+            SessionInput::PromptDrawn { text } => {
+                self.sink.send(SessionEvent::PromptDrawn { text })
+            }
             SessionInput::MarkersObserved => self.session = self.session.markers_observed(),
             SessionInput::GracePeriodExpired => {
                 let next = self.session.grace_period_expired();

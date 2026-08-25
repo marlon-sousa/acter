@@ -161,6 +161,7 @@ impl SessionService {
                 next_id: Arc::clone(&next_id),
                 running: Arc::clone(&running),
                 integration: Integration::Pending,
+                drawing: None,
                 markers,
                 submitted: VecDeque::new(),
                 echo: Echo::default(),
@@ -325,6 +326,15 @@ struct Pump {
     /// (decision 10). Both copies are driven by the same two facts and the pump is the
     /// source of both, so they cannot come to disagree.
     integration: Integration,
+    /// The prompt the far end is drawing, accumulated across the lines it arrives on, and
+    /// emitted once it is complete (spec B5.6).
+    ///
+    /// **Kept here rather than read out of the echo tracker**, which keeps its own copy for
+    /// a different job: that one exists to be stripped off the front of a rewritten row, so
+    /// it is cleared and rebuilt on rules that suit *that* question and would be wrong for
+    /// this one. Two readers of the same bytes with different lifetimes is the shape B4.5
+    /// warned about, so each keeps what it needs.
+    drawing: Option<String>,
     /// What the far end's prompt is able to say (spec B4.5). Only [`Pump::wants`] reads it
     /// here; the rest of the difference is the tracker's.
     markers: ShellMarkers,
@@ -448,6 +458,10 @@ impl Pump {
                     self.send(SessionInput::AltScreenLeft);
                 }
             }
+            // Checked inside the loop rather than after it: a batch can carry a whole
+            // prompt and the command's output behind it, and the prompt has to be spoken
+            // in the order it was drawn rather than after everything else in the read.
+            self.prompt_finished();
         }
 
         // An emulator does not answer a device query itself, and a program that asked one
@@ -658,7 +672,61 @@ impl Pump {
     /// until the echo admissible: it can never cost text.
     ///
     /// **Does this region belong to the open block?** [`Pump::wants`], unchanged.
+    /// Accumulates the prompt while the far end draws it, and emits it once it is done.
+    ///
+    /// **"Done" is the region changing away from `Prompt`**, which is `B` arriving — the
+    /// shell saying it has finished drawing and is reading a command line. That is the
+    /// moment a sighted user's prompt is on screen and complete, and it is before the user
+    /// types anything, so a listener hears where they are while deciding what to run rather
+    /// than after committing to it.
+    ///
+    /// Only a `Full` session emits: a shell marking less already has its prompt in the
+    /// block as content (spec B4.5, decision 4), and saying it twice would be worse than
+    /// the silence this fixes.
+    fn drawn(&mut self, region: Region, text: &str, revision: LineRevision) {
+        if self.markers != ShellMarkers::Full {
+            return;
+        }
+        match region {
+            Region::Prompt => {
+                let drawing = self.drawing.get_or_insert_with(String::new);
+                match revision {
+                    LineRevision::Appended => drawing.push_str(text),
+                    LineRevision::Rewritten | LineRevision::Settled => {
+                        drawing.clear();
+                        drawing.push_str(text);
+                    }
+                }
+            }
+            _ => self.prompt_finished(),
+        }
+    }
+
+    /// Emits the prompt if the far end has finished drawing one.
+    ///
+    /// **Asked of the tracker's region rather than of the next line**, which is the thing
+    /// this got wrong first: a prompt ends at `B`, and `B` is a marker rather than text, so
+    /// waiting for another line meant the prompt was not announced until the *next* command
+    /// produced output — one command late, and after the wrong verdict. The region is
+    /// checked once per read instead, so the announcement lands in the same batch the shell
+    /// finished its prompt in.
+    ///
+    /// A prompt of nothing but whitespace is not read out: some shells draw across two rows
+    /// and the first of them is blank.
+    fn prompt_finished(&mut self) {
+        if self.tracker.region() == Region::Prompt {
+            return;
+        }
+        if let Some(drawn) = self.drawing.take()
+            && !drawn.trim().is_empty()
+        {
+            self.send(SessionInput::PromptDrawn { text: drawn });
+        }
+    }
+
     async fn line(&mut self, region: Region, id: LineId, text: String, revision: LineRevision) {
+        self.drawn(region, &text, revision);
+
         // Read before anything else looks at the line, and read from every region: what
         // the prompt put on a row is what tells a rewrite of that row apart from the
         // command line on it.
@@ -2947,6 +3015,131 @@ mod tests {
 
     /// Spec B4.5's two halves as the pump sees them: a shell that marks only `A` and `B`,
     /// and a device-query answer the far end never read.
+    /// **B5.6: the prompt is spoken again.** A session over a shell that marks all four
+    /// boundaries had no way to say what its prompt says — the `A..B` region is excluded
+    /// from block content, and `D` closes the block before the next prompt is drawn, so
+    /// the working directory and the git branch a listener navigates by were audible
+    /// nowhere at all.
+    mod the_prompt_a_marked_shell_draws {
+        use super::*;
+
+        async fn marked() -> Session {
+            Session::of(quick_grace(), ShellMarkers::Full).await
+        }
+
+        /// A prompt drawn and then finished, which is what `B` means: the shell has
+        /// stopped drawing and is reading a command line.
+        fn prompt(row: u64, at: &str) -> Vec<TerminalItem> {
+            vec![
+                marker(Osc133Marker::PromptStart),
+                line(row, at),
+                marker(Osc133Marker::CommandStart),
+            ]
+        }
+
+        fn prompts(session: &Session) -> Vec<String> {
+            session
+                .events()
+                .into_iter()
+                .filter_map(|event| match event {
+                    SessionEvent::PromptDrawn { text } => Some(text),
+                    _ => None,
+                })
+                .collect()
+        }
+
+        /// The session's very first prompt, before anything has been run: a listener starts
+        /// knowing where they are rather than having to run a command to find out.
+        #[tokio::test]
+        async fn is_spoken_before_any_command_has_run() {
+            let session = marked().await;
+            session.emit(prompt(1, PROMPT)).await;
+            session.advance_to(1_000).await;
+
+            assert_eq!(prompts(&session), vec![PROMPT.to_owned()]);
+        }
+
+        /// **The regression this entry exists for.** After a command ends, the next prompt
+        /// is drawn, and it has to be heard: it is where the working directory and the
+        /// branch changed.
+        #[tokio::test]
+        async fn is_spoken_again_after_every_command() {
+            let session = marked().await;
+            session.emit(prompt(1, PROMPT)).await;
+            let command = session.submit("cd project").await;
+            session
+                .emit(vec![marker(Osc133Marker::OutputStart), line(2, "done")])
+                .await;
+            session
+                .emit(vec![marker(Osc133Marker::CommandEnd(Some(ExitCode(0))))])
+                .await;
+            session.emit(prompt(3, r"C:\project>")).await;
+            session.advance_to(1_000).await;
+
+            assert_eq!(
+                prompts(&session),
+                vec![PROMPT.to_owned(), r"C:\project>".to_owned()],
+                "both prompts, and the second says where the command left the user"
+            );
+            assert!(
+                !session.output_of(command).contains(r"C:\project>"),
+                "and it is not block content: {:?}",
+                session.output_of(command)
+            );
+        }
+
+        /// It arrives after the block has closed, which is the order a listener needs:
+        /// what happened, then where they are now. This falls out of the byte order — the
+        /// shell draws its prompt after `D` — and is asserted so a later change cannot
+        /// quietly reverse it.
+        #[tokio::test]
+        async fn arrives_after_the_command_it_follows_has_finished() {
+            let session = marked().await;
+            session.emit(prompt(1, PROMPT)).await;
+            session.submit("dir").await;
+            session
+                .emit(vec![marker(Osc133Marker::OutputStart), line(2, "one.txt")])
+                .await;
+            session
+                .emit(vec![marker(Osc133Marker::CommandEnd(Some(ExitCode(0))))])
+                .await;
+            session.emit(prompt(3, PROMPT)).await;
+            session.advance_to(1_000).await;
+
+            let events = session.events();
+            let finished = events
+                .iter()
+                .position(|event| matches!(event, SessionEvent::CommandFinished { .. }))
+                .expect("the command finished");
+            let spoken = events
+                .iter()
+                .rposition(|event| matches!(event, SessionEvent::PromptDrawn { .. }))
+                .expect("the prompt was drawn");
+
+            assert!(
+                finished < spoken,
+                "the verdict comes before the new prompt, and the events were {events:?}"
+            );
+        }
+
+        /// A prompt of nothing but whitespace is not something to read out: some shells
+        /// draw across two rows and the first is blank.
+        #[tokio::test]
+        async fn an_empty_prompt_is_not_announced() {
+            let session = marked().await;
+            session
+                .emit(vec![
+                    marker(Osc133Marker::PromptStart),
+                    line(1, "   "),
+                    marker(Osc133Marker::CommandStart),
+                ])
+                .await;
+            session.advance_to(1_000).await;
+
+            assert!(prompts(&session).is_empty());
+        }
+    }
+
     mod a_shell_that_marks_no_output_start {
         use super::*;
 

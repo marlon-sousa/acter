@@ -33,10 +33,20 @@ async function recordAnnouncements(): Promise<void> {
     if (announcer === null) {
       return;
     }
-    new MutationObserver(() => {
-      const said = announcer.textContent ?? '';
-      if (said !== '') {
-        target.__spoken?.push(said);
+    // Records what was ADDED, not what the region currently holds. Each announcement is
+    // its own child node (the announcer is a drained queue), so the added nodes are the
+    // utterances — and reading `textContent` instead would report everything still in the
+    // region, including announcements from an earlier test that had not cleared yet. That
+    // distinction was invisible until B5.6 gave a marked session a prompt to announce,
+    // which added mutations and made the stale text reachable.
+    new MutationObserver((records) => {
+      for (const record of records) {
+        for (const added of Array.from(record.addedNodes)) {
+          const said = added.textContent ?? '';
+          if (said !== '') {
+            target.__spoken?.push(said);
+          }
+        }
       }
     }).observe(announcer, { childList: true, subtree: true, characterData: true });
   });

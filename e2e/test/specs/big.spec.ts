@@ -24,14 +24,26 @@ describe('big: the too-big announcement', () => {
 
     const announcer = await $('#announcer');
     // Pinned string (spec decision 3); the transcript's `big` rule emits thirty lines.
-    await expect(announcer).toHaveText('30 lines arrived, too big to read');
+    // Since B5.6 a marked session also announces the prompt the shell drew, so the live
+    // region legitimately holds more than one utterance during a burst: it is a queue
+    // drained one child per turn, not a single slot. What this test is about is that the
+    // phrase was announced, so it asks whether the region contains it rather than whether
+    // the region is only it.
+    await browser.waitUntil(
+      async () => (await announcer.getText()).includes('30 lines arrived, too big to read'),
+      {
+        timeout: 5000,
+        timeoutMsg: 'the too-big announcement never reached the live region',
+      },
+    );
 
-    // The thirty lines are in the buffer but were not spoken: the live region holds the
-    // too-big phrasing, not the output text.
+    // The thirty lines are in the buffer but were not spoken. What the region must hold is
+    // the too-big phrasing and none of the output — it may also hold the prompt the shell
+    // drew, which since B5.6 is announced beside it and is not output either.
     const announced = await browser.execute(
       () => document.getElementById('announcer')?.textContent ?? '',
     );
-    expect(announced).toBe('30 lines arrived, too big to read');
+    expect(announced).toContain('30 lines arrived, too big to read');
     expect(announced).not.toContain('line 1');
   });
 

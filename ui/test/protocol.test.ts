@@ -54,6 +54,8 @@ function describeEvent(event: SessionEvent): string {
       return `connection ${event.state}`;
     case 'Announce':
       return `announce ${event.command_id}: ${describeAnnouncement(event.announcement)}`;
+    case 'PromptDrawn':
+      return `prompt ${event.text}`;
     default:
       return assertNever(event);
   }

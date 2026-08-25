@@ -454,6 +454,16 @@ fn announce(announcement: Announcement) -> SessionEvent {
     }
 }
 
+/// The prompt the transcript draws, as the frontend now hears it (spec B5.6). Before that
+/// entry a marked session could not say what its prompt said at all: the `A..B` region is
+/// excluded from block content, so the working directory and the branch a listener steers by
+/// were audible nowhere.
+fn prompt(text: &str) -> SessionEvent {
+    SessionEvent::PromptDrawn {
+        text: text.to_owned(),
+    }
+}
+
 /// The happy path, and the first time DESIGN's echo exclusion has been tested against
 /// something that actually echoes: the prompt the shell drew and the command line it
 /// echoed back are both in the byte stream, and neither reaches the frontend as output.
@@ -461,9 +471,12 @@ fn announce(announcement: Announcement) -> SessionEvent {
 async fn a_command_produces_its_output_and_nothing_the_shell_said_around_it() {
     let mut pipeline = Pipeline::start(SessionTranscript::builtin());
     pipeline.run_until(0).await;
+    // Nothing has been read yet, so nothing has been said. The prompt the transcript draws
+    // arrives with the first read and is asserted below, where it now leads the sequence:
+    // drawing a prompt is not a command, but since B5.6 it is not silence either.
     assert!(
         pipeline.events().is_empty(),
-        "drawing a prompt is not a command: {:?}",
+        "nothing read, nothing said: {:?}",
         pipeline.events()
     );
 
@@ -473,6 +486,7 @@ async fn a_command_produces_its_output_and_nothing_the_shell_said_around_it() {
     assert_eq!(
         pipeline.events(),
         vec![
+            prompt("acter>"),
             started("small"),
             output("hello from acter"),
             // The last word on the output comes before the event that ends the command:
@@ -523,6 +537,7 @@ async fn a_failing_command_carries_its_exit_code_out_of_the_marker() {
     assert_eq!(
         pipeline.events(),
         vec![
+            prompt("acter>"),
             started("fail"),
             output("error: the command reported a problem"),
             // The error text, then the ending, then the verdict about it. A6 decision 2
@@ -558,9 +573,12 @@ async fn entering_the_alternate_screen_reaches_the_actor_in_stream_order() {
             .unwrap_or_else(|| panic!("expected {wanted:?} in {events:?}"))
     };
 
-    assert_eq!(events.first(), Some(&started("nano")));
+    // The session's own prompt comes first now (spec B5.6), and what this test is about
+    // begins after it: the command, then the screen switch, in the order they were read.
+    assert_eq!(events.first(), Some(&prompt("acter>")));
+    assert_eq!(events.get(1), Some(&started("nano")));
     assert_eq!(
-        events.get(1),
+        events.get(2),
         Some(&SessionEvent::AltScreenEntered),
         "the switch is placed before the repaint that shared its read"
     );

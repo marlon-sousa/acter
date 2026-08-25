@@ -97,12 +97,17 @@ class FakeEditField implements EditFieldView {
 class FakeBuffer implements BufferView {
   opened: Array<{ commandId: CommandId; commandLine: string }> = [];
   appended: Array<{ commandId: CommandId; text: string }> = [];
+  /** Prompts the shell drew, in the order the buffer was asked to keep them (B5.6). */
+  prompts: string[] = [];
   focused = false;
   openBlock(commandId: CommandId, commandLine: string): void {
     this.opened.push({ commandId, commandLine });
   }
   appendOutput(commandId: CommandId, text: string): void {
     this.appended.push({ commandId, text });
+  }
+  appendPrompt(text: string): void {
+    this.prompts.push(text);
   }
   focus(): void {
     this.focused = true;
@@ -162,6 +167,44 @@ describe('submit', () => {
     expect(backend.submitted).toEqual(['']);
     expect(buffer.opened).toEqual([]);
     expect(editField.clearedCount).toBe(1);
+  });
+});
+
+describe('the prompt a marked shell drew (spec B5.6)', () => {
+  /** A shell that marks all four boundaries puts its prompt in the `A..B` region, which
+   * block content excludes — so before this entry the working directory and the git branch
+   * a listener steers by were audible nowhere at all. */
+  it('speaks the prompt and keeps it in the buffer', async () => {
+    const { backend, buffer, announcer, controller } = makeApp();
+    await controller.attach();
+
+    backend.emit({ type: 'PromptDrawn', text: 'C:\projects\acter (main)>' });
+
+    expect(buffer.prompts).toEqual(['C:\projects\acter (main)>']);
+    expect(announcer.announcements).toContain('C:\projects\acter (main)>');
+  });
+
+  /** Every time, not only when it changes: the same command run twice in two directories
+   * has to say where each one ran (spec B5.6, decision 3). */
+  it('speaks an unchanged prompt again rather than falling silent', async () => {
+    const { backend, announcer, controller } = makeApp();
+    await controller.attach();
+
+    backend.emit({ type: 'PromptDrawn', text: 'acter>' });
+    backend.emit({ type: 'PromptDrawn', text: 'acter>' });
+
+    expect(announcer.announcements.filter((said) => said === 'acter>')).toHaveLength(2);
+  });
+
+  /** It opens nothing: a prompt is not a command, and a block opened for one would put an
+   * empty heading into the sequence a listener walks with `h`. */
+  it('opens no block', async () => {
+    const { backend, buffer, controller } = makeApp();
+    await controller.attach();
+
+    backend.emit({ type: 'PromptDrawn', text: 'acter>' });
+
+    expect(buffer.opened).toEqual([]);
   });
 });
 
@@ -246,6 +289,9 @@ describe('event rendering (decision 2)', () => {
     const buffer: BufferView = {
       openBlock: () => {},
       appendOutput: () => {
+        order.push('buffer');
+      },
+      appendPrompt: () => {
         order.push('buffer');
       },
       focus: () => {},

@@ -22,6 +22,17 @@ export class BufferDom implements BufferView {
 
   constructor(private readonly region: HTMLElement) {}
 
+  appendPrompt(text: string): void {
+    // A paragraph rather than a heading, and outside any block: the prompt belongs to the
+    // gap between what just finished and what runs next, which is exactly where it is
+    // drawn. Closing the current block first would be wrong — blocks are closed by the
+    // shell, not by the buffer — so this is simply appended at the end of the region.
+    const prompt = this.region.ownerDocument.createElement('p');
+    prompt.className = 'prompt';
+    prompt.textContent = text;
+    this.region.append(prompt);
+  }
+
   openBlock(commandId: CommandId, commandLine: string): void {
     // Idempotent. If the block already exists (an event opened it before the submit
     // ack arrived), a non-empty line updates its heading; an empty line leaves it be,
