@@ -2243,6 +2243,43 @@ thing to pick up once the adapters land, not merely the next number.
     for in a way a listener can hear fully and refuse easily. That last one is why this is
     its own entry rather than a corner of 27.
 
+    **Recognising the shell is the far end's job, and it happens once, at install.** No
+    terminal identifies a shell it did not name — kitty matches a basename, VS Code injects
+    per configured profile, WezTerm ships `assume_shell` because it cannot tell, and Windows
+    Terminal does not inject at all. Acter has the same limit and it bites hardest here: a
+    `shell` request lets *sshd* choose the program, from the account's passwd entry, so the
+    one thing we never learn from asking for a session is which shell we got.
+
+    Install time dissolves that rather than solving it. A snippet in `~/.zshrc` runs only
+    when zsh starts, so **the file written is the identification** — the shell answers by
+    being itself and nothing guesses. It is also the only point where the answer can be put
+    to the user as a sentence they can refuse: "this account's login shell is zsh; write the
+    snippet to ~/.zshrc?" is a dialog, where a runtime heuristic is invisible and wrong
+    silently.
+
+    **Ask the far end, on a channel of its own.** Reading `$SHELL` is the cheap probe, and
+    it must not be typed into the user's session: a command nobody typed, echoed into the
+    buffer and read aloud, is B4.9's problem re-entered — the same objection that helped
+    settle 27. SSH allows more than one channel per connection, so the probe belongs on a
+    second `session` channel with an `exec` request, where its output never reaches the
+    terminal buffer at all. `exec` also answers exactly the right question, because sshd
+    runs it through the account's own shell: `$SHELL` there is the passwd value, which is
+    the program a `shell` request would have started.
+
+    Reliability runs `$SHELL`, then `$0`, then the version variables. `$SHELL` is the
+    account's configured shell and is usually right; `$0` is what is actually running and
+    carries the login shell's leading `-` (which is why kitty strips one before matching);
+    `$BASH_VERSION`, `$ZSH_VERSION` and `$FISH_VERSION` are what a shell says about itself
+    and are the most certain of the three. The widget can afford all of them — it runs once,
+    behind a button.
+
+    **Login versus non-login is the trap, and the rig exists to catch it.** A `shell`
+    request starts a *login* shell — sshd sets `argv[0]` to `-bash` — so bash reads
+    `/etc/profile` and then the first of `~/.bash_profile`, `~/.bash_login`, `~/.profile`
+    that exists, and does **not** read `~/.bashrc`. A snippet written to `~/.bashrc` works
+    perfectly in every local test and never runs over SSH. That a `.bash_profile` shadows
+    `.profile` entirely is the second half of the same trap.
+
 ## Convergence (requires B4, B5 and B6 all Done)
 
 Spec: none yet → specify when unblocked. The container swaps the scripted fake

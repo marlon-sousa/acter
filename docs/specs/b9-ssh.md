@@ -248,4 +248,10 @@ What follows, each with its own checklist when it lands:
   install-snippet entry has to measure, and the rig is built to take it.
 - **What the install widget writes, and where.** Which file on the far end, what it does
   about a shell that is not bash, and how consent to modify somebody's remote account is
-  asked for in a way a listener can refuse. Its own entry, and its own accessibility pass.
+  asked for in a way a listener can refuse. Roadmap 27.1 carries the reasoning; two things
+  in it are measurable on this rig today, and should be measured before that entry is
+  specced. A `shell` request starts a **login** shell, so bash reads `~/.bash_profile` or
+  `~/.profile` and never `~/.bashrc` — a snippet in the wrong file passes every local test
+  and never runs over SSH. And `exec` on a second channel returns `$SHELL` without a byte
+  reaching the session buffer, which is how the far end can be asked what it is without
+  re-entering B4.9.
