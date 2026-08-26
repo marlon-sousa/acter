@@ -188,6 +188,17 @@ What it buys, and each is worth having on its own:
 - **The ground 27.1 stands on.** The same probe notices a snippet *already* installed,
   whether Acter put it there or the user's own iTerm2 or VS Code setup did.
 
+**Match the name, and fall back honestly when unsure** — which is behaviour the code
+already has, once it is given a name: `adapter_for` returns
+[`Plain`](../../crates/acter-shells/src/plain.rs) for anything it does not recognise, and
+`Plain` is exactly "start it as it stands, inject nothing, claim nothing". Three states,
+and they are three different sentences: a **measured** shell is integrated; a shell **known
+of but unmeasured** (zsh, fish) is unintegrated and *named*; an **unrecognised** shell, or a
+probe that failed, is unintegrated with no name. The identity may be guessed from the name;
+the injection may never be — knowing a far end is zsh licenses saying so and nothing else
+until a zsh injection has been measured the way B5.3 measured bash's. Roadmap 23.8 applies
+the same rule to WSL, which had the same unexamined assumption.
+
 **Advisory, and never a gate.** `exec` can be refused: a server with `ForceCommand`, a
 restricted shell, or `internal-sftp` alone will not run it, and under `ForceCommand` it can
 return an answer about something else entirely. So a probe that fails, hangs or lies must

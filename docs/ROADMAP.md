@@ -2108,6 +2108,55 @@ thing to pick up once the adapters land, not merely the next number.
     spinner in words**: a listener needs to know that waiting is correct, and to be told when
     waiting stopped being correct.
 
+23.8. WSL assumes the far end is bash, and never checks. Spec: none yet → specify first.
+    **Found in conversation 2026-08-26**, while deciding how SSH would recognise a shell it
+    did not name. WSL has the same shape and it had gone unnoticed.
+
+    **What is assumed.** `wsl.exe` is a client, not a shell: what it starts is whatever login
+    shell that distribution's account is configured with, from the distribution's own passwd.
+    `Wsl` injects bash's `PROMPT_COMMAND` regardless. An account using zsh, fish or anything
+    else gets an injection its shell never reads.
+
+    **What a listener meets when that happens.** Nothing, for a while. The session looks
+    exactly like an integrated one — it simply never emits a marker — so the only thing that
+    ever says otherwise is the pacing policy's grace period expiring into a generic
+    `IntegrationUnavailable`. The user is told late, and told nothing about why.
+
+    **The fix is to ask, and asking is cheap here** — cheaper than over SSH, which is where
+    this was worked out (spec B9, decision 7). No channel and no protocol: another `wsl.exe`
+    invocation with its output captured, which cannot reach the terminal buffer because it is
+    not the session. `InstalledShells` already shells out to `wsl.exe -l -q` and is the port
+    this belongs on: "which shell does this distribution's account use" is the same kind of
+    question about the same machine.
+
+    **Then match, and fall back honestly** — which is the behaviour the code already has, once
+    it is given a name. `adapter_for` returns `Plain` for anything it does not recognise, and
+    `Plain` is exactly "start it as it stands, inject nothing, claim nothing". So the rule is
+    three states, and they are three different sentences:
+
+    - a shell that has been **measured** (bash) is integrated as it is today;
+    - a shell that is **known of but unmeasured** (zsh, fish) is unintegrated and *named*, so
+      a listener hears "zsh, which Acter does not integrate yet" rather than a timeout;
+    - a shell that is **unrecognised, or a probe that failed**, is unintegrated and says so
+      without a name.
+
+    **The identity may be guessed from the name; the injection may never be.** B5.3's bash
+    program cost real measurement — a `DEBUG` trap cannot remove itself from inside a
+    function, and a trap armed inside one fires for the statements after it — and the version
+    built on the wrong assumption emitted four `C` markers per command. So knowing a far end
+    is zsh licenses saying so, and licenses nothing else until a zsh injection has been
+    measured the same way. That is a later entry, not this one.
+
+    **Advisory, and never a gate**, for 23.7's reason: a probe that fails or hangs must cost a
+    listener nothing, because it sits in the seconds before there is a prompt, which is
+    already the worst place in the product to add work.
+
+    This narrows a **Decided** item rather than overturning it. B5.3, decision 3 says a
+    session whose `PROMPT_COMMAND` is clobbered by the user's own `.bashrc` degrades quietly,
+    and that stays true — clobbering is a different question and is not what this probe
+    answers. What changes is the assumption sitting beside it, which was never written down:
+    that the login shell is bash at all.
+
 24. **Done** — B6.1, correlation that cannot drift. Spec:
     [b6.1-correlation-that-cannot-drift.md](specs/b6.1-correlation-that-cannot-drift.md).
     **An iteration entry from B6's manual NVDA pass**, not a planned step. B6's decision 3
