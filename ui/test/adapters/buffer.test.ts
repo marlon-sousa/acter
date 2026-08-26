@@ -166,3 +166,52 @@ describe('clear', () => {
     expect(headings[0]?.textContent).toBe('ls');
   });
 });
+
+// **The buffer is in the document only while it has something in it** (spec A10). Since B7
+// an empty buffer is what every launch opens with rather than a state that lasts until the
+// first prompt arrives, and a region a listener arrows onto to hear nothing is worse than no
+// region at all.
+describe('being there at all', () => {
+  it('is hidden until something is put in it', () => {
+    const region = makeRegion();
+    region.hidden = true;
+    const buffer = new BufferDom(region);
+
+    expect(region.hidden).toBe(true);
+
+    buffer.openBlock(1, 'git status');
+    expect(region.hidden).toBe(false);
+  });
+
+  it('appears for output and for a prompt as well as for a block', () => {
+    for (const put of [
+      (buffer: BufferDom) => {
+        buffer.appendPrompt('C:\>');
+      },
+      (buffer: BufferDom) => {
+        buffer.openBlock(1, 'ls');
+        buffer.appendOutput(1, 'a file');
+      },
+    ]) {
+      const region = makeRegion();
+      region.hidden = true;
+      const buffer = new BufferDom(region);
+
+      put(buffer);
+
+      expect(region.hidden).toBe(false);
+    }
+  });
+
+  /** Clearing is what happens between one session and the next, so the empty buffer of a
+   * window that has just connected is not in the document either. */
+  it('goes away again when it is cleared', () => {
+    const region = makeRegion();
+    const buffer = new BufferDom(region);
+    buffer.openBlock(1, 'git status');
+
+    buffer.clear();
+
+    expect(region.hidden).toBe(true);
+  });
+});

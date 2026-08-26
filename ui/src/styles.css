@@ -147,3 +147,17 @@ main {
   margin: 0;
   max-width: 40rem;
 }
+
+/* The window with no session: the state, then the button that answers it (spec A10). */
+#not-connected {
+  margin: 1rem 0;
+}
+
+#not-connected p {
+  margin: 0 0 0.5rem;
+}
+
+#connect-button {
+  font-size: 1rem;
+  padding: 0.25rem 1rem;
+}

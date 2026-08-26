@@ -165,11 +165,16 @@ class FakeBeep implements BeepView {
 class FakeWindow implements WindowView {
   titles: Array<string | null> = [];
   statuses: string[] = [];
+  /** Whether the terminal window was shown or taken away, in order (spec A10). */
+  terminals: boolean[] = [];
   connectedTo(name: string | null): void {
     this.titles.push(name);
   }
   status(text: string): void {
     this.statuses.push(text);
+  }
+  showTerminal(live: boolean): void {
+    this.terminals.push(live);
   }
 }
 
@@ -243,6 +248,7 @@ async function makeApp(connect: FakeConnect = new FakeConnect()) {
   announcer.announcements = [];
   window.titles = [];
   window.statuses = [];
+  window.terminals = [];
   return {
     backend,
     connect,
@@ -984,13 +990,23 @@ describe('a window connected to nothing (spec B7, decision 3)', () => {
     return { backend, connect, editField, buffer, announcer, window, controller };
   }
 
-  it('announces that it is not connected and where to go', async () => {
+  it('announces that it is not connected and what to do about it', async () => {
     const { announcer, window } = await emptyWindow();
 
     expect(announcer.announcements).toEqual([notConnectedMessage]);
-    expect(announcer.announcements[0]).toContain('F10');
+    // It names the control the listener is already on rather than a keystroke to hunt for:
+    // A10 put a Connect button under focus, so the route to describe is that button.
+    expect(announcer.announcements[0]).toContain('Connect');
     expect(window.statuses).toEqual(['not connected']);
     expect(window.titles).toEqual([null]);
+  });
+
+  /** **The window has no terminal in it** (spec A10): no results buffer to arrow onto and
+   * hear nothing from, and no edit field that could submit nothing. */
+  it('shows no terminal window at all', async () => {
+    const { window } = await emptyWindow();
+
+    expect(window.terminals).toEqual([false]);
   });
 
   it('attaches to nothing, because there is nothing to attach to', async () => {
@@ -1119,5 +1135,74 @@ describe('connecting to a profile (spec B7)', () => {
     const { connect, controller } = await makeApp();
 
     expect(await controller.connectable()).toEqual(connect.rows);
+  });
+});
+
+// **The window has two faces** (spec A10), and which one it shows follows the session
+// rather than anything the user did. The terminal window — a results buffer and an edit
+// field — belongs to a session; with none there is a Connect button and nothing to type
+// into.
+describe('the two faces of the window (spec A10)', () => {
+  it('brings the terminal window up when a profile is used', async () => {
+    const connect = new FakeConnect();
+    connect.atStartup = null;
+    const { window, controller } = await makeApp(connect);
+
+    await controller.connectTo({ profile: 'Shell', kind: 'Cmd' });
+
+    expect(window.terminals).toEqual([true]);
+  });
+
+  it('shows it before attaching, so nothing arrives at a window of the wrong shape', async () => {
+    const connect = new FakeConnect();
+    connect.atStartup = null;
+    const { backend, window, controller } = await makeApp(connect);
+
+    await controller.connectTo({ profile: 'Shell', kind: 'Cmd' });
+
+    expect(window.terminals).toEqual([true]);
+    expect(backend.attachedTo).toEqual([2]);
+  });
+
+  /** **The disconnect rule.** The buffer is the record of a session that ended, and a user
+   * who typed `exit` by accident must not lose it; the edit field has nothing left to
+   * submit to, so it goes. */
+  it('takes the edit field away when the far end goes, and keeps the buffer', async () => {
+    const { backend, buffer, window, controller } = await makeApp();
+    backend.emit({ type: 'Output', command_id: 1, text: 'some history' });
+    const before = buffer.cleared;
+
+    backend.emit({ type: 'ConnectionChanged', state: 'Disconnected' });
+
+    expect(window.terminals).toEqual([false]);
+    expect(buffer.cleared).toBe(before);
+    expect(buffer.appended).toHaveLength(1);
+    expect(window.statuses).toContain('not connected');
+    expect(window.titles).toContain(null);
+    expect(controller.editFieldHasSelection()).toBe(false);
+  });
+
+  it('says it is not connected when the far end goes', async () => {
+    const { backend, announcer } = await makeApp();
+    announcer.announcements = [];
+
+    backend.emit({ type: 'ConnectionChanged', state: 'Disconnected' });
+
+    expect(announcer.announcements).toEqual([notConnectedMessage]);
+  });
+
+  /** And a line typed into what is left is refused rather than run: the session is gone, so
+   * the controller no longer names one. */
+  it('refuses a line after the far end has gone', async () => {
+    const { backend, editField, announcer, controller } = await makeApp();
+    backend.emit({ type: 'ConnectionChanged', state: 'Disconnected' });
+    announcer.announcements = [];
+    editField.text = 'dir';
+
+    await controller.submit();
+
+    expect(backend.submitted).toEqual([]);
+    expect(editField.text).toBe('dir');
+    expect(announcer.announcements).toEqual([notConnectedMessage]);
   });
 });

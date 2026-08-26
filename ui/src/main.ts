@@ -31,12 +31,16 @@ const beep = new BeepAudio();
 // release build it hands the router straight back and installs nothing.
 // What the window says it is: the operating system's title, the document's heading, and
 // the connection status, all from one adapter (spec A9).
-const windowChrome = new WindowChrome(
-  byId('window-title'),
-  byId('connection-status'),
+const windowChrome = new WindowChrome({
+  heading: byId('window-title'),
+  statusRegion: byId('connection-status'),
+  form: byId('command-form'),
+  notConnected: byId('not-connected'),
+  editField,
+  connectButton: byId('connect-button'),
   document,
-  (title) => void shell.setTitle(title),
-);
+  setNativeTitle: (title: string) => void shell.setTitle(title),
+});
 const connectApi = new TauriConnect();
 const controller = new AppController(
   installDebugRecorder(new TauriBackend()),
@@ -63,12 +67,13 @@ const connectDialog = new ConnectDialog(
   connectApi,
   (id) => controller.connectTo(id),
   announcer,
-  editField,
+  windowChrome,
 );
+byId('connect-button').addEventListener('click', () => void connectDialog.open());
 const aboutDialog = new AboutDialog(
   byId<HTMLDialogElement>('about-dialog'),
   shell,
-  editField,
+  windowChrome,
 );
 // Windows only, and asked rather than assumed: a native menu bar is the right answer on
 // macOS, where menus live in the system bar, and this one exists because Windows is the
@@ -88,7 +93,11 @@ void shell.platform().then((os) => {
       exit: () => void shell.exit(),
       about: () => void aboutDialog.open(),
     },
-    editField,
+    // Where the menu returns to is "whatever this window is showing" rather than the edit
+    // field by name: since A10 there is not always one, and focusing a hidden input does
+    // nothing at all — which left a listener stranded on the menu item they had just closed
+    // (measured with NVDA 2026-08-26).
+    windowChrome,
   );
 });
 
@@ -101,5 +110,7 @@ bindKeys(controller, byId<HTMLFormElement>('command-form'), commandInput);
 // listener in front of a window that says nothing (spec B7, decision 3). Naming the far end
 // is part of the same call now: a session can be replaced while the window is open, so the
 // title comes from the connection rather than from what the process was started with.
+// **Focus is the controller's now**, because where it belongs depends on which of the two
+// faces the window opens with: the edit field when a launch brought a session, the Connect
+// button when it did not (spec A10). `WindowChrome.showTerminal` places it as it shows.
 void controller.start();
-editField.focus();

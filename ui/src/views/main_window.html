@@ -83,10 +83,30 @@
            can disagree eventually will (spec A9, decision 1). Level 1, with command blocks
            at level 2, which is the structure the buffer already implied. -->
       <h1 id="window-title">Acter</h1>
+      <!-- **The terminal window**: one session's results buffer and its edit field, which
+           are one thing rather than two that happen to sit together. Phase 1 has exactly one
+           and it lives here; **tabs make this many**, one per session, and this wrapper is
+           where that change will land — so the two halves are grouped now rather than being
+           untangled from `<main>` later (DESIGN, one session per tab).
+
+           It carries no role and no label deliberately: an unnamed `div` is invisible to a
+           screen reader, so grouping the two costs a listener nothing today and gives the
+           tab panel a place to be when it exists.
+
+           There is no `hidden` on the wrapper itself. Its two halves each know when they
+           belong in the document, and a wrapper whose children are both hidden is already
+           nothing at all to a reader. -->
+      <div id="terminal">
       <!-- The results buffer is a document and must stay one: browse mode is how a
            listener reads output back, heading by heading, and `role="application"`
-           here would take that away. -->
-      <div id="results" role="region" aria-label="Results" tabindex="-1"></div>
+           here would take that away.
+
+           **Hidden while it is empty** (spec A10). A region with nothing in it is a thing a
+           listener arrows onto and hears nothing useful from, and since B7 an empty buffer
+           is what every launch opens with rather than a state that lasts until a prompt
+           arrives. It appears with its first content and stays afterwards — including after
+           the far end has gone, because by then it is the record of what happened. -->
+      <div id="results" role="region" aria-label="Results" tabindex="-1" hidden></div>
       <!-- The command line is deliberately NOT an application, and it was tried the
            other way first. Wrapping it does force focus mode, so typed letters are text
            rather than quick-navigation — but it also removes the browsable document
@@ -97,7 +117,7 @@
            command line stays the reader's own business. The menu bar keeps its wrapper,
            because there the arrows must belong to the widget and there is nothing to
            read. -->
-      <form id="command-form">
+      <form id="command-form" hidden>
         <label for="command-input">Command input</label>
         <input
           id="command-input"
@@ -107,6 +127,37 @@
           spellcheck="false"
         />
       </form>
+      </div>
+      <!-- What a window with no session shows instead of the edit field (spec A10).
+
+           **A button rather than an instruction.** B7's window told the listener to press
+           F10 and find Connect in a menu, which is a route to describe rather than a thing
+           to do; this is one control, under focus when the window opens, and Enter connects.
+           The menu item stays, because a menu is where a user looks for a command they
+           already know.
+
+           It carries the state as well as the action: a listener arriving here reads "not
+           connected" before the button that answers it. The status bar says the same thing
+           at the foot of the window, and that is not a duplicate — one is what you read on
+           the way past, the other is what announces itself when it changes. -->
+      <div id="not-connected">
+        <p>Not connected.</p>
+        <!-- **`role="application"` around the button alone**, and for A7's measured reason
+             applied to a new place. NVDA reads a freshly opened document in browse mode,
+             where Enter acts on its own cursor rather than on the focus — and the cursor
+             ends up wherever NVDA's initial read of the document finished, which is not the
+             control the window put focus on. Measured 2026-08-26: the window opened with
+             this button focused and announced, and Enter did nothing at all because the
+             cursor was sitting on the status bar.
+
+             The wrapper says the keys in here belong to the widget, so focus mode applies
+             and Enter presses what is focused. It covers the button only: the line above it
+             stays ordinary browsable text, which is what a listener reading the window
+             top to bottom needs to meet. -->
+        <div role="application">
+          <button id="connect-button" type="button">Connect</button>
+        </div>
+      </div>
     </main>
     <!-- The status bar, at the end of the document the way a status bar sits at the bottom
          of a window, and reachable three ways.

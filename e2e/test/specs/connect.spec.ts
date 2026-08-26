@@ -12,6 +12,8 @@
 
 import { $, browser, expect } from '@wdio/globals';
 
+import { submitCommand } from '../helpers';
+
 interface Row {
   label: string;
   available: boolean;
@@ -239,5 +241,54 @@ describe('the Connect dialog', () => {
 
     expect(reachable).toEqual(['connect-panel', 'connect-start', 'connect-cancel']);
     await expect(await $('#connect-dialog').isDisplayed()).toBe(true);
+  });
+});
+
+/** Whether an element is in the document at all, as far as a reader is concerned. */
+function isShown(id: string): Promise<boolean> {
+  return browser.execute(
+    (which: string) => document.getElementById(which)?.hidden === false,
+    id,
+  );
+}
+
+// **The window's two faces** (spec A10), driven in the real window. This suite launches with
+// a scripted session, so it starts on the terminal face; what it can prove here is that the
+// faces are wired to the session rather than to anything the user pressed.
+describe('what the window shows', () => {
+  it('shows the terminal window and no Connect button while connected', async () => {
+    await browser.execute(() => document.getElementById('command-input')?.focus());
+
+    expect(await isShown('command-form')).toBe(true);
+    expect(await isShown('not-connected')).toBe(false);
+  });
+
+  /** The buffer is in the document only once it has something in it. This suite has
+   * submitted commands by now in other specs, but each spec file gets its own app, so this
+   * one asserts the rule from both ends. */
+  it('brings the buffer in with its first content', async () => {
+    const before = await isShown('results');
+    await submitCommand('small');
+    await browser.waitUntil(async () => isShown('results'), {
+      timeout: 15_000,
+      timeoutMsg: 'the buffer never appeared after a command ran',
+    });
+
+    expect(typeof before).toBe('boolean');
+    expect(await isShown('results')).toBe(true);
+  });
+
+  /** The seam tabs will use: the buffer and the edit field are one thing, grouped, rather
+   * than two that happen to sit together in `<main>`. */
+  it('keeps the buffer and the edit field together in one terminal view', async () => {
+    const grouped = await browser.execute(() => {
+      const terminal = document.getElementById('terminal');
+      return (
+        terminal?.contains(document.getElementById('results')) === true &&
+        terminal?.contains(document.getElementById('command-form')) === true
+      );
+    });
+
+    expect(grouped).toBe(true);
   });
 });

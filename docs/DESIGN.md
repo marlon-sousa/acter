@@ -336,10 +336,43 @@ Launched with no arguments, Acter opens a window with **no session**: nothing is
 until the user connects. Launched as `acter --profile <name>`, it starts that profile's
 session immediately.
 
-**An unconnected window must say so.** It announces that it is not connected and where to
-go — the Acter menu — and a line submitted before connecting is answered with the same
-sentence rather than swallowed. A window that opens onto silence is the failure shape this
-product can least afford, and one that accepts typing into nothing is a worse version of it.
+**An unconnected window must say so.** It announces that it is not connected and what to do
+about it. A window that opens onto silence is the failure shape this product can least
+afford.
+
+### The window has two faces, and the connected one is the terminal window — **Decided 2026-08-26**
+
+**A window with no session shows no terminal window**: no results buffer, and no edit field.
+It holds the heading, a line saying it is not connected, and a **Connect button**, which is
+where focus lands when the window opens. With a session it holds the terminal window — the
+results buffer and the edit field — and no Connect button.
+
+This supersedes the rule above about a line submitted before connecting being answered: with
+no edit field there is nowhere to type one. The answer survives in the protocol as the
+refusal a submission gets when it names a session that has since ended, which is a race
+rather than a thing a user can do on purpose.
+
+**Why a button rather than the menu.** The earlier wording sent the listener to the Acter
+menu, which is a route to describe rather than a thing to do — and describing a route is what
+this product exists to stop doing. One control, under focus, and Enter connects. The menu
+item stays, because a menu is where a user looks for a command they already know.
+
+**Why the empty buffer and field had to go.** A region holding nothing is something a
+listener arrows onto and hears nothing useful from, and a field that can submit nothing is a
+control they have to pass to reach the only thing that would help them. Two obstacles in
+front of the one action available is the shape of an interface designed by looking at it.
+
+**When the far end goes away, the buffer stays and the edit field goes.** The buffer is by
+then the record of what happened, and a user who typed `exit` by accident must not lose it;
+the field has nothing left to submit to. Focus is rescued rather than stolen: it moves into
+whatever is now showing only if it was in what just went away, so somebody reading the buffer
+when their shell exits keeps their place.
+
+**The terminal window is a unit, because tabs will make it many.** Phase 1 has one session
+and therefore one terminal window; the buffer and the edit field are grouped as one thing in
+the document rather than left as siblings, so the day a tab holds each of them is a change in
+one place. The rules above are then per-tab: a tab whose session ended keeps its buffer and
+loses its edit field, and a window with no tabs at all is the Connect button.
 
 **Command-line arguments are parsed, never printed.** Acter is a windowed binary with no
 console attached, so `--profile something-that-does-not-exist` cannot report itself on
