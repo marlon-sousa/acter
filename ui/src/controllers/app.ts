@@ -171,8 +171,12 @@ export class AppController {
    * **A failure is spoken and nothing else happens**: the session that was running is
    * still running and still attached, so what the user loses by choosing something that
    * would not start is nothing at all.
+   *
+   * Answers whether the window is on the new far end now, because the caller has something
+   * to decide with it: the connect dialog closes on success and stays open on failure, so
+   * the user is left somewhere they can choose again (spec A8, decision 4).
    */
-  async connectTo(id: ProfileId): Promise<void> {
+  async connectTo(id: ProfileId): Promise<boolean> {
     let connected: Connected;
     try {
       connected = await this.connect.use(id);
@@ -181,10 +185,11 @@ export class AppController {
       // Every other announced string in this file is pinned here; this one is the
       // exception and the reason is that a pinned string could only say "it failed".
       this.announcer.announce(reason(why));
-      return;
+      return false;
     }
     await this.show(connected);
     this.announcer.announce(connectedMessage(connected.label));
+    return true;
   }
 
   /**

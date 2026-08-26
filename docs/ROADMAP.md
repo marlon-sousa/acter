@@ -278,7 +278,7 @@ the answer to "what should we do now?".
     native webview and WebDriver drives only the webview. So the menu is split — a pure
     value describing it, which plain `cargo test` asserts on, and a thin construction layer
     verified by the NVDA pass.
-13. A8, the Connect dialog. Spec: [a8-connect-dialog.md](specs/a8-connect-dialog.md) —
+13. **Done** — A8, the Connect dialog. Spec: [a8-connect-dialog.md](specs/a8-connect-dialog.md) —
     agreed in conversation 2026-08-23. **Depends on 25 (B7)**, which supplies the actions it
     triggers; the lanes run in parallel, so this is the one cross-lane dependency in this
     group and it is named here rather than discovered later.
@@ -302,6 +302,21 @@ the answer to "what should we do now?".
     concluded connecting "needs no more than a choice". SSH needs a form. And the
     testability half of the trade reversed too — a dialog inside the webview is drivable by
     WebDriver end to end, which the native submenu never was.
+    **Built on 2026-08-26, with six amendments recorded in the spec.** Two came from the
+    reader and changed the design rather than only the code. **A modal dialog is inert to the
+    document's live region** — `showModal` makes everything outside it leave the
+    accessibility tree — so the announcement decision 2 is built on reached nobody at all:
+    arrowing the kinds said each one and nothing about the panel. A dialog that wants to be
+    heard now carries its own live region. And **Tab escaped the dialog**, landing on the
+    dialog element rather than cycling — the same defect A7 measured in About, so the fix
+    moved into a module both dialogs call rather than being written twice.
+
+    The other four are smaller and worth knowing: `connectable()` groups now, so WSL is one
+    row carrying its distributions rather than one row each; the panel's variants are a combo
+    box, because `Alt+Down` works from any reading mode where a second listbox would need its
+    own; the announcement stopped repeating the kind, because the listbox already says it;
+    and Connect joins the **Acter** menu above Exit, there being no File menu since A7.
+
 13.1. **Done** — A9, the window says what it is connected to. Spec:
     [a9-the-window-says-where-you-are.md](specs/a9-the-window-says-where-you-are.md) —
     agreed in conversation 2026-08-25, raised by the user straight after 23.6: having made
@@ -347,6 +362,23 @@ the answer to "what should we do now?".
     **Why it is worth an entry now.** It has been reachable since A1, and B7 is what makes
     it ordinary: an empty results buffer used to last as long as it took a session to draw
     its first prompt, and it is now the state every launch opens in until the user connects.
+
+13.3. The far end a connection reached is not always spoken. Spec: none yet → specify
+    first. **Found 2026-08-26** in A8's NVDA pass and filed rather than fixed there, because
+    the cause is not established and a guess at a timing constant is not a fix.
+
+    **What a listener meets.** Connecting from the dialog announces "connected to Windows
+    PowerShell" and then the shell's own prompt — measured, twice — but on the first connect
+    of the session it was not spoken at all: the status region said "connected", the prompt
+    was read, and the sentence naming the far end was missing. Both runs were NVDA 2026.1.1,
+    silent capture, `user` persona, minutes apart in one window.
+
+    **What is suspected and what is not.** The announcement is queued while the dialog is
+    still open and drained after it closes, so it crosses the moment the dialog leaves the
+    top layer and focus returns to the edit field. Whether what is lost is the drain landing
+    in a region that is going away, or the reader dropping an utterance while focus moves,
+    is not established — and the two want different fixes. It is worth an entry because the
+    sentence is the one that tells a listener what they are now typing into.
 
 14. A4, completion path. Spec: none yet → specify first. Scope sketch: fake
     completion provider, Tab handling in the edit field, completion announcement.

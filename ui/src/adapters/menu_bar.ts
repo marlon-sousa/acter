@@ -13,6 +13,7 @@
 /// What the two leaf items do. Passed in rather than reached for, so this adapter knows
 /// about menus and nothing about sessions, windows or dialogs.
 export interface MenuActions {
+  connect(): void;
   exit(): void;
   about(): void;
 }
@@ -188,7 +189,9 @@ export function installMenuBar(
 
   function activate(item: HTMLElement): void {
     closeAll();
-    if (item.id === 'menu-exit') {
+    if (item.id === 'menu-connect') {
+      actions.connect();
+    } else if (item.id === 'menu-exit') {
       actions.exit();
     } else if (item.id === 'menu-about-acter') {
       actions.about();

@@ -18,6 +18,7 @@ const SKELETON = `
     <li role="none">
       <span role="menuitem" id="menu-acter" aria-haspopup="true" aria-expanded="false" tabindex="0">Acter</span>
       <ul role="menu" aria-label="Acter" hidden>
+        <li role="none"><span role="menuitem" id="menu-connect" tabindex="-1">Connect</span></li>
         <li role="none"><span role="menuitem" id="menu-exit" tabindex="-1">Exit</span></li>
       </ul>
     </li>
@@ -31,7 +32,7 @@ const SKELETON = `
   <input id="command-input" />
 `;
 
-let actions: { exited: number; abouts: number };
+let actions: { connects: number; exited: number; abouts: number };
 let returned: number;
 
 function byId(id: string): HTMLElement {
@@ -71,12 +72,15 @@ function expanded(id: string): string | null {
 
 beforeEach(() => {
   document.body.innerHTML = SKELETON;
-  actions = { exited: 0, abouts: 0 };
+  actions = { connects: 0, exited: 0, abouts: 0 };
   returned = 0;
   const editField = byId('command-input');
   installMenuBar(
     byId('menu-bar'),
     {
+      connect: () => {
+        actions.connects += 1;
+      },
       exit: () => {
         actions.exited += 1;
       },
@@ -157,7 +161,7 @@ describe('walking it', () => {
     press('F10');
     press('ArrowDown');
 
-    expect(focused()).toBe('menu-exit');
+    expect(focused()).toBe('menu-connect');
     expect(expanded('menu-acter')).toBe('true');
   });
 
@@ -198,9 +202,21 @@ describe('choosing something', () => {
     press('ArrowDown');
     press('Enter');
 
-    expect(actions.exited).toBe(1);
-    expect(actions.abouts).toBe(0);
+    expect(actions.connects).toBe(1);
+    expect(actions.exited + actions.abouts).toBe(0);
     expect(expanded('menu-acter')).toBe('false');
+  });
+
+  /** Connect is the item this menu is mostly opened for since B7, and Exit is below it —
+   * so the one that ends the application is not what an accidental Enter lands on. */
+  it('exit is the second item, below connect', () => {
+    press('F10');
+    press('ArrowDown');
+    press('ArrowDown');
+    press('Enter');
+
+    expect(actions.exited).toBe(1);
+    expect(actions.connects).toBe(0);
   });
 
   /** Focus must not be left on a hidden menu item, so it falls back to the edit field —
@@ -251,7 +267,7 @@ describe('choosing something', () => {
     press('ArrowDown');
     press(' ');
 
-    expect(actions.exited).toBe(1);
+    expect(actions.connects).toBe(1);
   });
 
   /** The assertion that catches a real bug: every item that can be chosen runs something.
@@ -262,15 +278,15 @@ describe('choosing something', () => {
     );
 
     for (const leaf of leaves) {
-      actions = { exited: 0, abouts: 0 };
+      actions = { connects: 0, exited: 0, abouts: 0 };
       leaf.dispatchEvent(new MouseEvent('click', { bubbles: true }));
 
       expect(
-        actions.exited + actions.abouts,
+        actions.connects + actions.exited + actions.abouts,
         `${leaf.id} is a menu item nothing happens for`,
       ).toBe(1);
     }
 
-    expect(leaves.length).toBe(2);
+    expect(leaves.length).toBe(3);
   });
 });
