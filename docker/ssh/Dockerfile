@@ -13,9 +13,10 @@
 #
 # **The default `.bashrc` is part of the test, not an accident.** `useradd -m` copies
 # Debian's own `/etc/skel/.bashrc`, which sets `PS1`, defines aliases and returns early when
-# the shell is not interactive. Spec B9, decision 2 requires measuring whether the injection
-# survives a remote `.bashrc`; a container with an empty one would answer a question nobody
-# asked.
+# the shell is not interactive. Since decision 2 leaves an SSH session unintegrated, the
+# prompt that `.bashrc` draws is exactly what a listener hears and what Acter has to render
+# without marker help — and it is the file the deferred install-snippet entry would modify.
+# A container with an empty one would answer a question nobody asked.
 
 FROM debian:bookworm-slim
 

@@ -30,9 +30,10 @@ AllowAgentForwarding no
 # against this container and against nothing a user actually connects to. That is B4.5's
 # lesson exactly — "should" is not evidence — and the honest rig is the restrictive one.
 #
-# Whatever B9 ends up doing instead (a command rather than a login shell, or writing the
-# setup into the channel after connecting) has to work here, unchanged, with this line
-# absent.
+# **This measurement is what settled decision 2**: an SSH session is unintegrated. The line
+# stays absent permanently, not pending a workaround. A later entry offers to install an
+# integration snippet on the far end with the user's consent, and that entry is measured
+# here too — against a server that accepts nothing, which is the server people have.
 
 # Keep the greeting out of the byte stream: a banner would arrive before the shell says
 # anything and would be indistinguishable from output to everything above the transport.

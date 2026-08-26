@@ -1,8 +1,9 @@
 # B9 — SSH: a far end that is not on this machine
 
-Roadmap entry 27. **Drafted 2026-08-25 for review**, and deliberately not implemented: the
-questions at the end are the user's, and several of them decide the shape of everything
-above them.
+Roadmap entry 27. Drafted 2026-08-25, **agreed 2026-08-26** after the five open questions
+were decided and the rig in `docker/ssh/` had measured the one that mattered most. One of
+those answers reverses this spec's own first recommendation, and the reversal is written
+where the recommendation was rather than quietly replacing it.
 
 ## Why this is different from every transport before it
 
@@ -40,7 +41,7 @@ protocol and reconnection. `ssh2` (libssh2 bindings) would move some of that int
 price of a build dependency and a blocking API that fits `Transport` less well. `russh` is
 pure Rust, async, and already in DESIGN.
 
-### 2. SSH is a transport, and bash-over-SSH is the bash adapter
+### 2. SSH is a transport, and the session it carries is unintegrated
 
 DESIGN says combinations are free: the shell adapter and the transport are different axes.
 So this entry builds an `SshTransport` behind the existing `Transport` port and reuses
@@ -50,10 +51,51 @@ Two things the port already accounts for, which is evidence the seam is in the r
 `interrupt` is a method rather than a byte because over SSH it is a channel request, and
 `resize` is a method because a window change is a protocol message.
 
-**What has to be measured rather than assumed**: whether the injection survives a remote
-`.bashrc` the way it did under WSL, and whether OSC 133 markers cross the connection intact
-(DESIGN says they should — they are just bytes in the output stream — and B4.5's lesson is
-that "should" is not evidence).
+**How the injection reaches the far end: it does not — Decided 2026-08-26.** An SSH
+session is **unintegrated**. Acter opens a plain shell channel and makes no attempt to make
+the far end emit markers.
+
+This was decided after measuring, and against the earlier draft of this section, which chose
+to request a command instead. The measurement is below under "the injection has no carrier":
+there is no environment variable a client can send that an unmodified server will pass
+through, because OpenSSH's stock `AcceptEnv` is `LANG` and `LC_*` and a server belonging to
+somebody else has not been configured for us.
+
+The two ways around that were each refused for what they cost:
+
+- **Requesting a command rather than a shell** — starting bash with the setup already
+  applied. It works against an unmodified server, but it replaces the user's login shell
+  invocation with ours, and whether what it sets survives the remote `.bashrc` that runs
+  afterwards was still unmeasured. It buys integration by making every SSH session subtly
+  not the session `ssh` would have given.
+- **Writing the setup into the channel after connecting** needs no server cooperation at
+  all, but the first thing the session would do is type a line the user did not type, and
+  swallowing that echo is B4.9's whole subject — a hard problem re-entered for no gain.
+
+**Prior art says this is the ordinary answer, not a shortfall.** VS Code documents that its
+automatic injection does not work through a regular `ssh` session and tells the user to
+install its script on the remote. WezTerm ships an SSH client and leaves remote integration
+to the user. iTerm2, which invented shell integration, says "you should do this on every
+host you ssh to". Only kitty automates it, and it does so by transmitting a compressed
+tarball over the TTY and unpacking it with a bootstrap script — the scale of machinery that
+answer actually costs. Three of four mature terminals ship exactly what this decision ships.
+
+**What an unintegrated session still is**, which is most of it: output rendered into the
+buffer and readable, keys and interrupt and resize crossing the connection, the edit field,
+the transcript. What it loses is command boundaries — so no blocks, no exit codes, and no
+autoread of a finished command.
+
+**Acter has to say which state it is in**, and this is the accessibility requirement rather
+than a nicety. A listener cannot distinguish "this session has no boundaries" from "the
+markers broke" from "Acter is broken": all three sound like silence where an announcement
+should have been. B6 already announces shell integration as unavailable, and an SSH session
+uses that same sentence — said once, at connection, not repeated per command.
+
+**A later entry offers to fix it at the far end.** A button that writes the integration
+snippet into the remote account's shell startup, with the user's consent, so the *next*
+connection to that host is integrated — the same bargain iTerm2 and VS Code offer, made
+reachable instead of documented. Deferred rather than refused, and it is why the marker
+question below stays open rather than being struck out.
 
 ### 3. Host key verification is a dialog, and the default is refusal
 
@@ -89,9 +131,22 @@ is asked for each time unless the platform's own credential store is used, which
 entry and not this one.
 
 Host keys are Acter's own file, in the profile directory, in `known_hosts` format so it is
-inspectable and portable. **Not the user's `~/.ssh/known_hosts`**: writing to a file other
-tools depend on is a side effect a terminal has no business having, and reading it is the
-open question below.
+inspectable and portable. **Acter reads the user's `~/.ssh/known_hosts` and never writes it**
+— Decided 2026-08-26. Reading it means a host they already trust connects without being asked
+again, which is what they expect and what stops a populated `known_hosts` turning into a
+sequence of prompts. Not writing it means a bug here breaks Acter and not their `ssh`.
+
+`~/.ssh/config` is deliberately not read in this entry. Making `acter ssh myhost` mean what it
+means everywhere else is a genuine convenience, and it costs parsing a format with a great
+many directives most of which would be silently ignored — and silently ignoring a directive a
+user has relied on is a worse failure than not reading the file at all. Its own entry.
+
+**A passphrase lives in memory for the life of the process** — Decided 2026-08-26. Asked once
+per launch, held, never written anywhere, gone when Acter closes. Asking every time is safest
+and genuinely hostile now that B7 has made reconnecting an ordinary action; the Windows
+Credential Manager survives restarts and is the platform's own store, but persisting a secret
+deserves its own consent flow and its own accessibility pass, so it is a later entry rather
+than a default.
 
 ### 6. Connecting is asynchronous and says so
 
@@ -111,7 +166,9 @@ and the two should share one mechanism rather than inventing a second.
 
 ## Definition of done (sketch)
 
-- [ ] A session over SSH to a real server, with markers measured across the connection.
+- [ ] A session over SSH to a real server: output rendered, readable, correct — with no
+      shell integration and nothing pretending otherwise.
+- [ ] The session announces that shell integration is unavailable, once, at connection.
 - [ ] An unknown host key is announced, decided by the user, and remembered.
 - [ ] A **changed** host key is announced differently, and refusing it is the default.
 - [ ] A password never reaches the buffer, the announcer, a log, or the debug tape.
@@ -154,34 +211,41 @@ exactly.
 
 **What follows, and it is a real design consequence.** `LC_*` gets a value across but nothing
 on the far end acts on it: bash will not treat `LC_ACTER` as `PROMPT_COMMAND`. Something
-remote still has to assign it, which means B9 cannot open a plain shell channel and set an
-environment variable — it has to *request a command*, and then the question becomes whether
-what that command sets survives the remote `.bashrc` that runs after it. That is the next
-measurement, and the rig is built to take it.
+*remote* still has to assign it — which is the whole reason decision 2 leaves an SSH session
+unintegrated rather than reaching for a carrier that does not exist. The variable arriving is
+not the same as the far end doing anything with it, and that gap is not closable from this
+side of the connection.
 
-## Questions for you, before any of this is built
+It stays worth knowing, because the deferred install-snippet entry closes it from the other
+side: a snippet on the far end could read `LC_ACTER` and act on it, which makes this
+measurement the foundation of that entry rather than a dead end.
 
-1. **Do we read the user's existing `~/.ssh/config` and `known_hosts`?** Reading config
-   would let `acter ssh myhost` mean what it means everywhere else, which is a real
-   convenience — at the cost of parsing a format with a great many directives, most of
-   which we would silently ignore. My inclination is to **read `known_hosts` and not write
-   it**, and to leave `config` for later. What do you want?
-2. **Agent support in the first version, or keys and passwords only?** Pageant and
-   OpenSSH's agent both exist on Windows and they are different protocols. Skipping the
-   agent makes the first version much smaller; including it is what most people actually
-   use day to day.
-3. **Where do passphrases live between connections?** Nowhere (ask every time), in memory
-   for the life of the process, or in the Windows Credential Manager? The middle option is
-   the usual compromise and the one I would default to.
-4. **Is a jump host / ProxyJump in scope at all?** It is common in the environments where
-   people live in terminals, and it multiplies the auth conversation by the number of hops.
-5. **How much does this entry take on?** It could be "one host, password auth, a session"
-   and grow, or the whole auth surface at once. I would rather ship the first and let the
-   accessibility checklist for each auth method arrive with the method itself.
-6. **How does the shell integration reach the far end?** Added 2026-08-26, after the
-   measurement above: there is no environment carrier, so the choice is between requesting a
-   command instead of a shell (`bash` started with the setup already applied), writing the
-   setup into the channel after connecting and swallowing its echo, or accepting that an SSH
-   session is unintegrated and degrades the way DESIGN's reliability case 2 describes. The
-   third is a real option and should not be dismissed: it costs command boundaries, which is
-   most of what non-interactive mode is.
+## Scope — Decided 2026-08-26
+
+**One host, password authentication, a session.** Plus host-key verification, which is not
+optional at any size: connecting without it is connecting to whatever answers.
+
+The reason is the accessibility checklist rather than the code. Every authentication method
+brings its own flow to drive with a screen reader, and one entry carrying five of them is one
+checklist nobody can complete in a single pass — which is how a checked box stops meaning
+anything.
+
+What follows, each with its own checklist when it lands:
+
+- **B9.1 — public key authentication**, including a passphrase-protected key.
+- **B9.2 — the agent.** Pageant and OpenSSH's agent both exist on Windows and are different
+  protocols; it is what most people use day to day, which is exactly why it deserves its own
+  entry rather than a corner of this one.
+- **B9.3 — `~/.ssh/config`**, if it earns its place.
+- **B9.4 — `ProxyJump`.** Common in the environments where people live in terminals, and it
+  multiplies the authentication conversation by the number of hops — so it is the last of
+  these rather than the first.
+
+## Still open
+
+- **Do OSC 133 markers cross the connection intact?** Expected, unmeasured, and not needed
+  by this entry — an unintegrated session emits none. It is the first thing the deferred
+  install-snippet entry has to measure, and the rig is built to take it.
+- **What the install widget writes, and where.** Which file on the far end, what it does
+  about a shell that is not bash, and how consent to modify somebody's remote account is
+  asked for in a way a listener can refuse. Its own entry, and its own accessibility pass.

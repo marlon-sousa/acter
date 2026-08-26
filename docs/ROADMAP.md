@@ -2201,9 +2201,11 @@ thing to pick up once the adapters land, not merely the next number.
     from a shell whose output nobody can see is not a workflow this audience needs.
 
 27. B9, SSH: a far end that is not on this machine. Spec:
-    [b9-ssh.md](specs/b9-ssh.md) — **drafted 2026-08-25 for review, and deliberately not
-    agreed yet**: it ends with five questions whose answers change the shape of everything
-    above them, and it is not implemented until those are settled.
+    [b9-ssh.md](specs/b9-ssh.md) — **agreed 2026-08-26 and ready to implement.** The five
+    questions it was drafted with are decided in the spec: one host and password
+    authentication in scope, `known_hosts` read but never written, a passphrase held in
+    memory for the life of the process, and — decided against the draft's own
+    recommendation, after measuring — **an SSH session is unintegrated**.
 
     **The first transport that has to conduct a conversation before there is a session.**
     Every far end so far could report failure as one speakable sentence; SSH asks the *user*
@@ -2221,6 +2223,25 @@ thing to pick up once the adapters land, not merely the next number.
     already measured, and `Transport` already models `interrupt` and `resize` as methods
     rather than bytes — which is evidence the seam was cut in the right place, since over
     SSH both are protocol messages.
+
+    **What it deliberately does not inherit is shell integration.** Measured against the
+    rig in `docker/ssh/`: `PROMPT_COMMAND` sent with `SendEnv` arrives empty, because
+    OpenSSH's stock `AcceptEnv` accepts `LANG` and `LC_*` and nothing else, and a server
+    belonging to somebody else has not been configured for us. So the session is
+    unintegrated and *says so* — no blocks, no exit codes, no autoread, everything else
+    intact. VS Code, WezTerm and iTerm2 all ship exactly this; only kitty automates it, and
+    it does so by shipping a tarball over the TTY.
+
+27.1. B9.5, offer to integrate the far end. Spec: none yet → specify when 27 is Done.
+
+    A button that writes the integration snippet into the remote account's shell startup,
+    with consent, so the *next* connection to that host has blocks and exit codes — the
+    bargain iTerm2 and VS Code document, made reachable instead of written down. Three
+    things it has to answer, none of them small: which file it writes and what it does
+    about a shell that is not bash; whether OSC 133 markers actually cross the connection
+    (expected, unmeasured); and how consent to modify somebody's remote account is asked
+    for in a way a listener can hear fully and refuse easily. That last one is why this is
+    its own entry rather than a corner of 27.
 
 ## Convergence (requires B4, B5 and B6 all Done)
 
