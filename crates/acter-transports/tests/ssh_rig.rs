@@ -28,9 +28,14 @@ use std::time::Duration;
 use acter_core::{
     HostKeyAnswer, HostKeyQuestion, HostKeyState, PasswordQuestion, Secret, SshQuestions, Transport,
 };
-use acter_transports::{KnownHosts, SshTransport};
+use acter_transports::{KnownHosts, SshTarget, SshTransport};
 use tokio::sync::mpsc::{Receiver, channel};
 use tokio::time::{Instant, timeout};
+
+/// The account whose login shell is `dash`, which is the control for the probe: dash has
+/// no behaviour of setting `$SHELL` itself, so a correct value arriving for it can only
+/// have come from sshd (see the Dockerfile).
+const DASH_USER: &str = "dashuser";
 
 /// The rig, as `docker/ssh/README.md` runs it: loopback only, so nothing on any network
 /// this machine joins can reach it.
@@ -170,14 +175,28 @@ struct Session {
 
 impl Session {
     async fn open(hosts: Arc<KnownHosts>, answers: Arc<Answers>) -> Result<Self, String> {
+        Self::open_as(USER, hosts, answers, acter_transports::probe_patience()).await
+    }
+
+    /// The same, for the two tests that need another account or another deadline.
+    async fn open_as(
+        user: &str,
+        hosts: Arc<KnownHosts>,
+        answers: Arc<Answers>,
+        patience: Duration,
+    ) -> Result<Self, String> {
+        let target = SshTarget {
+            host: HOST.to_owned(),
+            port: PORT,
+            user: user.to_owned(),
+        };
         let mut transport = SshTransport::connect(
-            HOST,
-            PORT,
-            USER,
+            &target,
             hosts,
             answers as Arc<dyn SshQuestions>,
             COLUMNS,
             SCREEN_LINES,
+            patience,
         )
         .await?;
         let (sender, reads) = channel(READS);
@@ -624,4 +643,129 @@ async fn read_for(channel: &mut russh::Channel<russh::client::Msg>, patience: Du
         }
     }
     seen
+}
+
+// --- What the far end is, asked on a channel of its own -------------------------------
+
+/// The probe answers, and it answers with the shell's own account of itself.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore]
+async fn the_far_end_says_what_shell_it_is() {
+    let scratch = Scratch::new();
+    let session = Session::open(scratch.empty(), Answers::accepting())
+        .await
+        .expect("the rig connects");
+
+    let far_end = session.transport.far_end();
+
+    assert_eq!(far_end.name().as_deref(), Some("bash"));
+    assert_eq!(far_end.shell.as_deref(), Some("/bin/bash"));
+    assert_eq!(
+        far_end.flavour.as_deref(),
+        Some("bash"),
+        "bash sets a version variable, which is the most certain evidence there is"
+    );
+}
+
+/// **The control for decision 7.** `dash` never sets `$SHELL` for itself, so a correct
+/// answer for this account can only have come from sshd's own reading of the passwd entry —
+/// which is what makes the probe trustworthy for the accounts it exists to serve rather
+/// than only for the one that would have flattered it.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore]
+async fn an_account_whose_shell_is_not_bash_is_still_named_correctly() {
+    let scratch = Scratch::new();
+    let session = Session::open_as(
+        DASH_USER,
+        scratch.empty(),
+        Answers::accepting(),
+        acter_transports::probe_patience(),
+    )
+    .await
+    .expect("the rig connects as the dash account");
+
+    let far_end = session.transport.far_end();
+
+    assert_eq!(far_end.shell.as_deref(), Some("/bin/dash"));
+    assert_eq!(
+        far_end.flavour, None,
+        "dash sets no version variable, so nothing could have been invented"
+    );
+    assert_eq!(far_end.name().as_deref(), Some("dash"));
+}
+
+/// **Never a gate.** A deadline that has already passed costs the answer and nothing else:
+/// the session opens, works, and simply has no name for its far end.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore]
+async fn a_probe_that_runs_out_of_time_still_gives_a_working_session() {
+    let scratch = Scratch::new();
+    let mut session = Session::open_as(USER, scratch.empty(), Answers::accepting(), Duration::ZERO)
+        .await
+        .expect("a probe that answered nothing is not a failure to connect");
+
+    assert_eq!(
+        session.transport.far_end().name(),
+        None,
+        "nothing is claimed about a far end that did not answer in time"
+    );
+    session.submit(&spoken("working"));
+    session.wait_for("working").await;
+}
+
+/// **The answer never reaches the terminal buffer**, which is why it is a channel of its
+/// own rather than a line typed into the session — a command nobody typed, read aloud, is
+/// B4.9's whole subject.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore]
+async fn the_probe_is_never_heard_by_the_session() {
+    let scratch = Scratch::new();
+    let mut session = Session::open(scratch.empty(), Answers::accepting())
+        .await
+        .expect("the rig connects");
+    assert!(
+        session.transport.far_end().name().is_some(),
+        "the probe did answer, so this test is about where the answer went"
+    );
+
+    session.submit(&spoken("afterwards"));
+    let seen = session.wait_for("afterwards").await;
+
+    assert!(
+        !seen.contains("ACTER SHELL="),
+        "the probe's own output never reached the session: {seen:?}"
+    );
+    assert!(
+        !seen.contains("BASH_VERSION") && !seen.contains("printf"),
+        "and neither did the question: {seen:?}"
+    );
+}
+
+/// **What ends a bash session over this transport**, measured rather than assumed.
+///
+/// Spec B9, decision 7 says "bash ends on `0x04`" as though it were settled. It was not:
+/// `acter-shells`' own bash adapter answers `None` for end-of-input on purpose, because the
+/// obvious control byte is exactly what B5.2 measured and *disproved* for PowerShell, where
+/// neither candidate ends a session and both are echoed as caret text. So the byte is sent
+/// here and the far end is watched.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore]
+async fn the_byte_that_ends_a_bash_session_over_ssh() {
+    let scratch = Scratch::new();
+    let mut session = Session::open(scratch.empty(), Answers::accepting())
+        .await
+        .expect("the rig connects");
+    session.submit(&spoken("ready"));
+    session.wait_for("ready").await;
+
+    session
+        .transport
+        .write(&[0x04])
+        .expect("the session is open");
+
+    assert!(
+        session.ended().await,
+        "0x04 at an empty bash prompt ends the session: {:?}",
+        session.seen
+    );
 }

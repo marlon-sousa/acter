@@ -15,7 +15,9 @@
 //! Facade: this file only declares modules and re-exports.
 
 mod known_hosts;
+pub(crate) mod probe;
 mod transport;
 
 pub use known_hosts::KnownHosts;
-pub use transport::SshTransport;
+pub use probe::FarEnd;
+pub use transport::{SshTarget, SshTransport};

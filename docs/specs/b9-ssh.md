@@ -331,6 +331,43 @@ request with a pty answers `-bash`. The leading `-` is the login-shell marker, w
 kitty strips before matching, and it is a second confirmation that a `shell` request really
 does start a login shell.
 
+### Amended in implementation: the runtime probe does not ask `$0`, and fish is why
+
+Decision 7 lists the probe as asking `$SHELL`, then `$0`, then the version variables. The
+implementation asks `$SHELL` and the version variables only.
+
+`$0` is a **parse error in fish** — a variable name cannot begin with a digit — and a parse
+error takes the whole `-c` string with it, so including it would cost the other two answers
+on precisely the shell least likely to be identified by any other means. It also buys
+nothing at runtime: what `$0` established on the rig is that a `shell` request starts a
+*login* shell (`-bash`) where an `exec` request does not (`bash`), and the probe only ever
+runs on an `exec` channel — where its answer is the basename `$SHELL` has already given. The
+rig measurement that used it stands; the runtime question is the one that changed.
+
+The question asked is one `printf` rather than an `echo`, because `echo`'s treatment of
+backslashes and flags differs between exactly these shells, and the values come back inside
+brackets so an empty answer is distinguishable from a missing one.
+
+### Measured 2026-08-26: bash over SSH really does end on `0x04`
+
+Decision 7 argues for the probe partly on the grounds that it buys "a correct end-of-input",
+and states as settled that "bash ends on `0x04`". That was an assumption, and the code had
+already refused to make it: `acter-shells`' own bash-under-WSL adapter answers `None` for
+end-of-input **on purpose**, with a comment saying that `0x04` "is the obvious answer and it
+is probably right" and that B5.2 measured and disproved exactly such an obvious answer for
+PowerShell — where *neither* candidate byte ends a session, both are echoed as caret text,
+and a line submitted behind one runs as a command the user never typed.
+
+So it was sent: `0x04` at an empty prompt on a real SSH session closes the channel and the
+session ends (`the_byte_that_ends_a_bash_session_over_ssh`). `acter-shells::over_ssh` claims
+it for bash on that evidence and for no other shell — `dash`, `zsh` and `fish` are *named*
+and nothing more.
+
+**The scope of the measurement includes the transport, deliberately.** This does not
+generalise to bash under WSL, which still answers `None`; the same shell over a different
+transport is a different cell of the matrix and roadmap 23.8's subject. What licenses a
+claim here is that somebody sent the byte and watched.
+
 ### Measured 2026-08-26: both interrupts work, and the byte is the one that always would
 
 Decision 2 says `interrupt` is a method rather than a byte "because over SSH it is a channel

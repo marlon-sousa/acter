@@ -53,6 +53,23 @@ RUN useradd --create-home --shell /bin/bash "${SSH_USER}" \
     && chmod 700 "/home/${SSH_USER}/.ssh" \
     && chown -R "${SSH_USER}:${SSH_USER}" "/home/${SSH_USER}/.ssh"
 
+# **A second account whose login shell is not bash, and it is the control for decision 7.**
+#
+# The probe reads `$SHELL` on an `exec` channel to find out what the far end runs. Against
+# the `acter` account that proves less than it looks: **bash sets `$SHELL` itself when it is
+# unset**, so a value coming back could have been bash's own invention rather than sshd's
+# answer from the account's passwd entry. `dash` has no such behaviour, so a correct value
+# arriving for *this* account can only have come from sshd — which is what makes the probe
+# trustworthy for the accounts it exists to serve rather than only for the one that would
+# have flattered it.
+#
+# Measured 2026-08-26 with the account added by hand; it is in the image now so the
+# measurement can be repeated by anybody who builds the rig, which is the whole point of
+# having a rig in the repository.
+ARG DASH_USER=dashuser
+RUN useradd --create-home --shell /bin/dash "${DASH_USER}" \
+    && echo "${DASH_USER}:${SSH_PASSWORD}" | chpasswd
+
 # A public key baked in at build time, for testing key authentication without mounting
 # anything. Optional: left empty, only password authentication works.
 #   docker build --build-arg "SSH_PUBKEY=$(cat ~/.ssh/id_ed25519.pub)" ...

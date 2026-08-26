@@ -26,6 +26,7 @@
 //! `ssh` would start it.
 
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use acter_core::{
     HostKeyAnswer, HostKeyState, PasswordQuestion, SshQuestions, Transport, TransportError, ended,
@@ -37,6 +38,7 @@ use russh::{ChannelReadHalf, ChannelWriteHalf, Sig};
 use tokio::sync::mpsc::{Sender, UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 use crate::ssh::KnownHosts;
+use crate::ssh::probe::{self, FarEnd};
 
 /// What the far end is told this terminal is.
 ///
@@ -57,6 +59,18 @@ const TERM: &str = "xterm-256color";
 /// `SIGINT`, and the request is what a server that implements it would act on.
 const INTERRUPT: u8 = 0x03;
 
+/// Which far end to reach, as one value.
+///
+/// **Three fields that only mean anything together**, and the shape B8's saved connections
+/// will hold: a host with somebody else's port, or somebody else's account, is a different
+/// machine as far as both `known_hosts` and the user are concerned.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SshTarget {
+    pub host: String,
+    pub port: u16,
+    pub user: String,
+}
+
 /// One session over one SSH connection.
 pub struct SshTransport {
     /// What the pump is told to do. Dropping it is what ends the session: the pump's
@@ -66,6 +80,8 @@ pub struct SshTransport {
     /// Taken by [`Transport::start`], which is what makes starting twice a no-op rather
     /// than two pumps racing over one channel.
     ready: Option<Ready>,
+    /// What the far end said it was, asked before this session's channel was opened.
+    far_end: FarEnd,
 }
 
 /// Everything the pump needs, held between connecting and starting.
@@ -96,14 +112,15 @@ impl SshTransport {
     /// The error is a whole spoken sentence, because it reaches somebody who has just
     /// filled in a form and is waiting to hear what happened (CLAUDE.md).
     pub async fn connect(
-        host: &str,
-        port: u16,
-        user: &str,
+        target: &SshTarget,
         hosts: Arc<KnownHosts>,
         questions: Arc<dyn SshQuestions>,
         columns: u16,
         screen_lines: u16,
+        patience: Duration,
     ) -> Result<Self, String> {
+        let SshTarget { host, port, user } = target;
+        let (host, port, user) = (host.as_str(), *port, user.as_str());
         questions.tell(&format!("Connecting to {host}."));
 
         let refusal = Arc::new(Mutex::new(None));
@@ -150,6 +167,13 @@ impl SshTransport {
 
         authenticate(&mut connection, host, user, &questions).await?;
 
+        // **Before the session channel, which is the whole of decision 7.** Signing in
+        // finishes at the protocol level and no shell exists yet, so this is the one moment
+        // the far end can be asked what it is without a command nobody typed appearing in
+        // the terminal buffer — and the answer is in hand before `ShellFacts` are needed and
+        // before there is anything to announce.
+        let far_end = probe::ask(&mut connection, patience).await;
+
         questions.tell("Opening a shell.");
         let channel = connection.channel_open_session().await.map_err(|why| {
             ended(format!(
@@ -189,7 +213,17 @@ impl SshTransport {
                 inbox,
                 connection,
             }),
+            far_end,
         })
+    }
+
+    /// What the far end said it was, for whoever turns a name into facts.
+    ///
+    /// **This transport does not decide what a name means**, deliberately: which shells have
+    /// been measured, and what ends one's input, is shell knowledge and lives in
+    /// `acter-shells`. What crosses this seam is what the far end actually said.
+    pub fn far_end(&self) -> &FarEnd {
+        &self.far_end
     }
 
     /// Queues one thing for the pump, saying the session has ended if it is no longer
