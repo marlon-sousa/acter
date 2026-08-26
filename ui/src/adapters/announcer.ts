@@ -24,6 +24,15 @@
 //
 // Whether status announcements should live in a SEPARATE region from output (with their
 // own interrupt/order semantics) is an open DESIGN question — not decided here.
+//
+// **A modal dialog needs a live region of its own, and this adapter finds it.** `showModal`
+// puts the dialog in the top layer and makes the rest of the document inert — everything
+// outside it leaves the accessibility tree — so the region at the end of `<body>` changes
+// where nothing is listening. Measured with NVDA 2026.1.1 on 2026-08-26, driving the
+// Connect dialog: arrowing its list announced each kind and said nothing at all about the
+// panel, which is precisely the silent-change trap that announcement exists to prevent.
+// Any dialog that wants to be heard therefore carries `data-live-region`, and drains go
+// there while it is open.
 
 import type { AnnouncerView } from '../ports/announcer_view';
 
@@ -123,22 +132,40 @@ export class AnnouncerDom implements AnnouncerView {
     }, wait);
   }
 
+  /**
+   * Where an announcement goes right now: an open dialog's own region if there is one,
+   * and the document's otherwise.
+   *
+   * Found by attribute rather than by name, so this adapter knows that dialogs exist and
+   * nothing about which ones — a second dialog that needs to be heard adds the attribute
+   * and needs no change here.
+   */
+  private liveRegion(): HTMLElement {
+    return (
+      this.region.ownerDocument.querySelector<HTMLElement>(
+        'dialog[open] [data-live-region]',
+      ) ?? this.region
+    );
+  }
+
   private drainOne(): void {
     const text = this.queue.shift();
     if (text === undefined) {
       return;
     }
+    const region = this.liveRegion();
     const line = document.createElement('div');
     line.textContent = text;
-    this.region.append(line);
+    region.append(line);
     this.lastDrainAt = Date.now();
 
     // Restart the idle countdown on every drained announcement, so a burst accumulates
     // and is cleared only once it has settled — never out from under its own latest
-    // entry.
+    // entry. The region cleared is the one written to, not whichever is current when the
+    // timer fires: a dialog that closes in between must not leave its last words behind.
     clearTimeout(this.clearTimer);
     this.clearTimer = setTimeout(() => {
-      this.region.replaceChildren();
+      region.replaceChildren();
     }, CLEAR_AFTER_MS);
 
     if (this.queue.length > 0) {

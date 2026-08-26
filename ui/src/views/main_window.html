@@ -49,6 +49,12 @@
             >Acter</span
           >
           <ul role="menu" aria-label="Acter" hidden>
+            <!-- Connect comes before Exit because it is what this menu is mostly opened
+                 for: since B7 a window starts connected to nothing, and this item is the
+                 only way out of that state (spec A8). -->
+            <li role="none">
+              <span role="menuitem" id="menu-connect" tabindex="-1">Connect</span>
+            </li>
             <li role="none">
               <span role="menuitem" id="menu-exit" tabindex="-1">Exit</span>
             </li>
@@ -126,6 +132,59 @@
       <p id="about-copyright"></p>
       <p id="about-licence"></p>
       <button id="about-close" type="button">Close</button>
+    </dialog>
+    <!-- Connect. A modal <dialog> for About's reasons, and one more of its own: a failed
+         connection has to leave the user somewhere they can try again, which a submenu
+         that closed on activation could never do (spec A8, decision 4).
+
+         **Two parts**: a list of connection kinds, and a panel below it holding whatever
+         that kind needs — nothing for cmd, the installed distributions for WSL, and the
+         reason plus the instructions for a kind this machine cannot start. Both are filled
+         by adapters/connect_dialog.ts from `connectable()`, asked fresh every time this
+         opens, so a distribution installed while Acter is running appears with no restart.
+
+         **`role="application"` around the kinds list only**, and for A7's measured reason:
+         NVDA reads a document in browse mode, where the arrows move its own cursor rather
+         than reaching the widget, and it switches to focus mode by itself only if the user
+         left that setting on — which is a setting, not a guarantee. A list whose arrows
+         depend on somebody's configuration is not a list. The wrapper covers the listbox
+         and nothing else: the panel below it is read-only prose a listener has to be able
+         to *read*, and instructions naming what to install would be unreachable inside an
+         application region. -->
+    <dialog id="connect-dialog" aria-labelledby="connect-title">
+      <h1 id="connect-title">Connect</h1>
+      <div role="application" aria-label="Connection kind">
+        <ul
+          id="connect-kinds"
+          role="listbox"
+          aria-label="Connection kind"
+          tabindex="0"
+        ></ul>
+      </div>
+      <!-- The panel names itself, because what it holds changes as the kind changes and a
+           section a listener tabs into unannounced is the trap decision 2 exists to answer.
+           Its heading text is rewritten with its contents. -->
+      <div
+        id="connect-panel"
+        role="group"
+        aria-labelledby="connect-panel-title"
+        tabindex="-1"
+      >
+        <h2 id="connect-panel-title">Options</h2>
+        <div id="connect-panel-body"></div>
+      </div>
+      <button id="connect-start" type="button">Connect</button>
+      <button id="connect-cancel" type="button">Cancel</button>
+      <!-- This dialog's own live region, and it is not a duplicate. `showModal` makes
+           everything outside the dialog inert, so the announcer's region at the end of the
+           document changes where no reader is listening — measured with NVDA on 2026-08-26,
+           where arrowing this list said nothing about the panel at all. The announcer
+           finds this by its `data-live-region` attribute while the dialog is open. -->
+      <div
+        data-live-region
+        aria-live="polite"
+        class="visually-hidden"
+      ></div>
     </dialog>
     <!-- The live region lives at the very end of the document, outside <main>, and
          never moves. It must stay in the accessibility tree to be announced, so its

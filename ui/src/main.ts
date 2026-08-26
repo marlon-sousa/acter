@@ -8,6 +8,7 @@ import { installDebugRecorder } from './adapters/debug_recorder';
 import { AboutDialog } from './adapters/about_dialog';
 import { EditFieldDom } from './adapters/edit_field';
 import { bindKeys } from './adapters/keyboard';
+import { ConnectDialog } from './adapters/connect_dialog';
 import { installMenuBar } from './adapters/menu_bar';
 import { WindowChrome } from './adapters/window_chrome';
 import { AppController } from './controllers/app';
@@ -36,9 +37,10 @@ const windowChrome = new WindowChrome(
   document,
   (title) => void shell.setTitle(title),
 );
+const connectApi = new TauriConnect();
 const controller = new AppController(
   installDebugRecorder(new TauriBackend()),
-  new TauriConnect(),
+  connectApi,
   editField,
   buffer,
   announcer,
@@ -50,6 +52,19 @@ const controller = new AppController(
 // into it (spec A7). Its two items are handed the things they act on, so the bar itself
 // knows about neither the shell nor the dialog.
 const shell = new TauriShell();
+// Connecting is three named backend actions and this is the thinnest caller of them: the
+// dialog renders what `connectable()` answered and hands a chosen profile back to the
+// controller, which owns the buffer, the titles and the words (spec A8).
+const connectDialog = new ConnectDialog(
+  byId<HTMLDialogElement>('connect-dialog'),
+  byId('connect-kinds'),
+  byId('connect-panel-title'),
+  byId('connect-panel-body'),
+  connectApi,
+  (id) => controller.connectTo(id),
+  announcer,
+  editField,
+);
 const aboutDialog = new AboutDialog(
   byId<HTMLDialogElement>('about-dialog'),
   shell,
@@ -69,6 +84,7 @@ void shell.platform().then((os) => {
   installMenuBar(
     byId('menu-bar'),
     {
+      connect: () => void connectDialog.open(),
       exit: () => void shell.exit(),
       about: () => void aboutDialog.open(),
     },

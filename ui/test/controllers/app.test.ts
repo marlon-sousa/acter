@@ -186,6 +186,7 @@ class FakeConnect implements ConnectApi {
       label: 'Command Prompt',
       available: true,
       instructions: null,
+      variants: [],
     },
   ];
   atStartup: Connected | null = { session: 1, label: 'Command Prompt' };
