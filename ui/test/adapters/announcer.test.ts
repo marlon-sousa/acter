@@ -45,9 +45,40 @@ describe('AnnouncerDom', () => {
     document.body.replaceChildren();
   });
 
+  /** **The session's first words are the ones a live region loses.** A region changed while
+   * the page is still loading is not announced at all — the reader is still building its
+   * view of the document, so the mutation lands before anything is watching. The user met
+   * this as an opening prompt that was in the buffer and had never been spoken, while every
+   * prompt after it spoke normally (2026-08-25). */
+  it('holds the first announcement of a session until the reader could be listening', () => {
+    const region = document.createElement('div');
+    const announcer = new AnnouncerDom(region, 1_000);
+
+    announcer.announce('where you are');
+    vi.advanceTimersByTime(500);
+    expect(region.textContent).toBe('');
+
+    vi.advanceTimersByTime(600);
+    expect(region.textContent).toBe('where you are');
+  });
+
+  /** And it costs nothing afterwards: the hold is the session's opening, not a tax on every
+   * announcement. */
+  it('does not hold anything after its first', () => {
+    const region = document.createElement('div');
+    const announcer = new AnnouncerDom(region, 1_000);
+
+    announcer.announce('first');
+    vi.advanceTimersByTime(1_100);
+    announcer.announce('second');
+    vi.advanceTimersByTime(300);
+
+    expect(region.textContent).toContain('second');
+  });
+
   it('does not touch the region until a drain turn; then it lands as a single node', () => {
     const region = makeRegion();
-    const announcer = new AnnouncerDom(region);
+    const announcer = new AnnouncerDom(region, 0);
 
     announcer.announce('hello from acter');
 
@@ -61,7 +92,7 @@ describe('AnnouncerDom', () => {
 
   it('costs a lone announcement no waiting: the gap is between announcements, not before one', () => {
     const region = makeRegion();
-    const announcer = new AnnouncerDom(region);
+    const announcer = new AnnouncerDom(region, 0);
 
     // Nothing has been drained, so this announcement cannot share a mutation batch with
     // anything and must not be made to wait out the spacing.
@@ -79,7 +110,7 @@ describe('AnnouncerDom', () => {
 
   it('still spaces an announcement arriving just after a drain, though the queue is empty', () => {
     const region = makeRegion();
-    const announcer = new AnnouncerDom(region);
+    const announcer = new AnnouncerDom(region, 0);
 
     announcer.announce('error: the command reported a problem');
     idleDrainTurn();
@@ -102,7 +133,7 @@ describe('AnnouncerDom', () => {
 
   it('drains back-to-back announcements in separate turns so neither shares a mutation batch', () => {
     const region = makeRegion();
-    const announcer = new AnnouncerDom(region);
+    const announcer = new AnnouncerDom(region, 0);
 
     announcer.announce('error: the command reported a problem');
     announcer.announce('command failed, exit code 2');
@@ -125,7 +156,7 @@ describe('AnnouncerDom', () => {
 
   it('empties the region after the clear delay without replacing the node', () => {
     const region = makeRegion();
-    const announcer = new AnnouncerDom(region);
+    const announcer = new AnnouncerDom(region, 0);
     announcer.announce('hello from acter');
     idleDrainTurn();
 
@@ -142,7 +173,7 @@ describe('AnnouncerDom', () => {
 
   it('restarts the idle countdown on each drained announcement so a burst is never cut short', () => {
     const region = makeRegion();
-    const announcer = new AnnouncerDom(region);
+    const announcer = new AnnouncerDom(region, 0);
 
     // The first item drains, starting a clear countdown measured from that drain.
     announcer.announce('phase one');

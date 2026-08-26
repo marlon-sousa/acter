@@ -33,6 +33,14 @@ export class BufferDom implements BufferView {
     this.region.append(prompt);
   }
 
+  clear(): void {
+    // The blocks map goes with the DOM. Leaving it behind would make the next session's
+    // first command id — which starts again at 1 — find a block belonging to a shell that
+    // is gone, and append its output under the previous shell's heading.
+    this.region.replaceChildren();
+    this.blocks.clear();
+  }
+
   openBlock(commandId: CommandId, commandLine: string): void {
     // Idempotent. If the block already exists (an event opened it before the submit
     // ack arrived), a non-empty line updates its heading; an empty line leaves it be,

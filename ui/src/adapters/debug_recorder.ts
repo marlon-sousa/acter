@@ -18,7 +18,13 @@
 // hands back the backend it was given, unwrapped, and nothing is installed on `window`.
 
 import type { BackendApi } from '../ports/backend_api';
-import type { KeyAck, KeyPress, SessionEvent, SubmitAck } from '../protocol';
+import type {
+  KeyAck,
+  KeyPress,
+  SessionEvent,
+  SessionId,
+  SubmitAck,
+} from '../protocol';
 
 /** How many entries the ring holds before the oldest is dropped. */
 const CAPACITY = 1000;
@@ -79,26 +85,32 @@ class RecordingBackend implements BackendApi {
     private readonly ring: Ring,
   ) {}
 
-  attachSession(onEvent: (event: SessionEvent) => void): Promise<void> {
-    this.ring.push('call', 'attachSession', null);
+  // The session id is recorded with every call since B7: a window that connected twice
+  // has two sessions in its record, and which one a call belonged to is exactly the sort
+  // of ordering question this ring exists to answer.
+  attachSession(
+    session: SessionId,
+    onEvent: (event: SessionEvent) => void,
+  ): Promise<void> {
+    this.ring.push('call', 'attachSession', { session });
     // Recorded before the controller sees it, so the record is the arrival order rather
     // than the handling order — which is the distinction an ordering bug turns on.
-    return this.inner.attachSession((event) => {
+    return this.inner.attachSession(session, (event) => {
       this.ring.push('event', event.type, event);
       onEvent(event);
     });
   }
 
-  async submitCommand(line: string): Promise<SubmitAck> {
-    this.ring.push('call', 'submitCommand', { line });
-    const ack = await this.inner.submitCommand(line);
+  async submitCommand(session: SessionId, line: string): Promise<SubmitAck> {
+    this.ring.push('call', 'submitCommand', { session, line });
+    const ack = await this.inner.submitCommand(session, line);
     this.ring.push('ack', 'submitCommand', ack);
     return ack;
   }
 
-  async sendKey(key: KeyPress): Promise<KeyAck> {
-    this.ring.push('call', 'sendKey', key);
-    const ack = await this.inner.sendKey(key);
+  async sendKey(session: SessionId, key: KeyPress): Promise<KeyAck> {
+    this.ring.push('call', 'sendKey', { session, key });
+    const ack = await this.inner.sendKey(session, key);
     this.ring.push('ack', 'sendKey', ack);
     return ack;
   }

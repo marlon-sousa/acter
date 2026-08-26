@@ -15,6 +15,16 @@ export interface AboutFacts {
 
 export interface AppShell {
   about(): Promise<AboutFacts>;
+  /// Set the operating system's window title — what the desktop reads out in the task
+  /// switcher, and what NVDA's report-title command answers.
+  ///
+  /// **A call rather than `document.title`**, which is what A9 tried first and what the
+  /// user's NVDA disproved on 2026-08-25: assigning the document's title updates the page,
+  /// and the native window keeps the title its configuration gave it.
+  setTitle(title: string): Promise<void>;
+  // What this window is connected to used to be asked here, and since B7 it is not: a
+  // launch is no longer the only way to have a session, so the only answer that stays true
+  // while the window is open is `ConnectApi.connected`'s.
   /// Which operating system this build runs on, so the frontend can decide where the
   /// menu bar belongs: in the document on Windows, in the system bar on macOS.
   platform(): Promise<string>;

@@ -22,8 +22,8 @@ use tokio::sync::mpsc;
 use crate::entities::{ReadMode, UnspokenText};
 use crate::policies::{PacingAction, measure, on_command_end, on_output, on_wake};
 use crate::{
-    Announcement, Clock, CommandId, EventSink, ExitCode, Mode, PacingConfig, PacingState,
-    SessionEvent, SessionState, Timer,
+    Announcement, Clock, CommandId, ConnectionState, EventSink, ExitCode, Mode, PacingConfig,
+    PacingState, SessionEvent, SessionState, Timer,
 };
 
 /// A domain fact the actor is told about. Deliberately not bytes: extraction, OSC 133
@@ -50,6 +50,12 @@ pub enum SessionInput {
     /// shell's business, and whether it is spoken is the frontend's (spec B5.6).
     PromptDrawn {
         text: String,
+    },
+    /// The transport's connection state changed: the far end spoke for the first time, or
+    /// it went away. Passed through untouched — what a window does with it is the
+    /// frontend's (spec A9).
+    Connection {
+        state: ConnectionState,
     },
     CommandEnded {
         command_id: CommandId,
@@ -212,6 +218,9 @@ impl SessionActor {
                 exit_code,
             } => self.command_ended(command_id, exit_code),
             SessionInput::CommandInterrupted { command_id } => self.command_interrupted(command_id),
+            SessionInput::Connection { state } => {
+                self.sink.send(SessionEvent::ConnectionChanged { state })
+            }
             // Passed straight through, and deliberately not routed past the pacing policy:
             // a prompt is neither output nor a verdict, nothing about it accumulates, and
             // it is short by construction — the babble guard exists for a shell that will

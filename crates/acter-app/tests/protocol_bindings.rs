@@ -13,8 +13,8 @@ use std::fs;
 use std::path::PathBuf;
 
 use acter_core::{
-    CommandId, ConnectionState, ExitCode, Key, KeyAck, KeyPress, Mode, SessionEvent, SessionId,
-    SubmitAck,
+    CommandId, Connectable, Connected, ConnectionKind, ConnectionState, ExitCode, Key, KeyAck,
+    KeyPress, Mode, ProfileId, SessionEvent, SessionId, SubmitAck,
 };
 use specta::Types;
 use specta_typescript::Typescript;
@@ -45,7 +45,14 @@ fn render() -> String {
         .register::<CommandId>()
         .register::<ExitCode>()
         .register::<Mode>()
-        .register::<ConnectionState>();
+        .register::<ConnectionState>()
+        // B7's connect surface. `ProfileId` and `ConnectionKind` come along through
+        // `Connectable`, and are listed for the same reason the others are: the whole
+        // protocol is emitted here, not only the parts something happens to reference.
+        .register::<Connectable>()
+        .register::<Connected>()
+        .register::<ProfileId>()
+        .register::<ConnectionKind>();
 
     Typescript::default()
         .header(HEADER)

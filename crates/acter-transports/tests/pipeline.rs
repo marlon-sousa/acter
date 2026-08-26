@@ -27,9 +27,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use acter_core::{
-    Announcement, Clock, CommandId, EventSink, ExitCode, Key, KeyAck, KeyPress, PacingConfig,
-    SessionApi, SessionEvent, SessionId, SessionService, ShellFacts, ShellMarkers, Timer,
-    Transport, TransportError,
+    Announcement, Clock, CommandId, ConnectionState, EventSink, ExitCode, Key, KeyAck, KeyPress,
+    PacingConfig, SessionApi, SessionEvent, SessionId, SessionService, ShellFacts, ShellMarkers,
+    SubmitAck, Timer, Transport, TransportError,
 };
 use acter_term::AlacrittyEngine;
 use acter_transports::{
@@ -237,7 +237,12 @@ impl Pipeline {
 
     /// Submits a line the way the frontend's edit field would.
     fn submit(&mut self, line: &str) -> CommandId {
-        self.session.submit_command(SESSION, line).command_id
+        // The one place in these suites that reads an ack apart: a running session always
+        // accepts, and the other answer belongs to a window with no session at all.
+        match self.session.submit_command(SESSION, line) {
+            SubmitAck::Accepted { command_id } => command_id,
+            SubmitAck::NotConnected => panic!("a running session accepts a line"),
+        }
     }
 
     /// Presses Ctrl+C the way the frontend will once A3.2 lands: the keystroke, not the
@@ -454,6 +459,15 @@ fn announce(announcement: Announcement) -> SessionEvent {
     }
 }
 
+/// The moment the far end first spoke, which is what A9 calls connected — not the moment a
+/// process was spawned, because a shell that has not said anything is not one anybody can
+/// use. It leads every session, so it leads every expectation here.
+fn connected() -> SessionEvent {
+    SessionEvent::ConnectionChanged {
+        state: ConnectionState::Connected,
+    }
+}
+
 /// The prompt the transcript draws, as the frontend now hears it (spec B5.6). Before that
 /// entry a marked session could not say what its prompt said at all: the `A..B` region is
 /// excluded from block content, so the working directory and the branch a listener steers by
@@ -474,11 +488,9 @@ async fn a_command_produces_its_output_and_nothing_the_shell_said_around_it() {
     // Nothing has been read yet, so nothing has been said. The prompt the transcript draws
     // arrives with the first read and is asserted below, where it now leads the sequence:
     // drawing a prompt is not a command, but since B5.6 it is not silence either.
-    assert!(
-        pipeline.events().is_empty(),
-        "nothing read, nothing said: {:?}",
-        pipeline.events()
-    );
+    // The first read is the far end saying hello, which is A9's definition of connected;
+    // nothing else has happened yet.
+    assert_eq!(pipeline.events(), vec![connected()]);
 
     pipeline.submit("small");
     pipeline.run_until(1_000).await;
@@ -486,6 +498,7 @@ async fn a_command_produces_its_output_and_nothing_the_shell_said_around_it() {
     assert_eq!(
         pipeline.events(),
         vec![
+            connected(),
             prompt("acter>"),
             started("small"),
             output("hello from acter"),
@@ -537,6 +550,7 @@ async fn a_failing_command_carries_its_exit_code_out_of_the_marker() {
     assert_eq!(
         pipeline.events(),
         vec![
+            connected(),
             prompt("acter>"),
             started("fail"),
             output("error: the command reported a problem"),
@@ -575,10 +589,11 @@ async fn entering_the_alternate_screen_reaches_the_actor_in_stream_order() {
 
     // The session's own prompt comes first now (spec B5.6), and what this test is about
     // begins after it: the command, then the screen switch, in the order they were read.
-    assert_eq!(events.first(), Some(&prompt("acter>")));
-    assert_eq!(events.get(1), Some(&started("nano")));
+    assert_eq!(events.first(), Some(&connected()));
+    assert_eq!(events.get(1), Some(&prompt("acter>")));
+    assert_eq!(events.get(2), Some(&started("nano")));
     assert_eq!(
-        events.get(2),
+        events.get(3),
         Some(&SessionEvent::AltScreenEntered),
         "the switch is placed before the repaint that shared its read"
     );
@@ -770,15 +785,21 @@ async fn a_session_with_no_markers_degrades_honestly_instead_of_going_silent() {
     pipeline.run_until(500).await;
     assert_eq!(
         pipeline.events(),
-        vec![SessionEvent::IntegrationUnavailable],
+        // Connected first, because the far end spoke: an unmarked session is still a
+        // session, and A9's state is about the transport rather than about integration.
+        // Then the flag, which is what this test is here for.
+        vec![connected(), SessionEvent::IntegrationUnavailable],
         "the session says what happened to it before anything else happens"
     );
 
     pipeline.submit("forever");
     pipeline.run_until(14_000).await;
 
+    // The flag is still the first thing said *about the session's integration*; what comes
+    // before it is the transport reporting that the far end spoke at all (A9).
+    assert_eq!(pipeline.events().first(), Some(&connected()));
     assert_eq!(
-        pipeline.events().first(),
+        pipeline.events().get(1),
         Some(&SessionEvent::IntegrationUnavailable)
     );
     assert!(

@@ -56,13 +56,42 @@ const CLEAR_AFTER_MS = 1500;
 // coarser than this gap: in the `burst` scenario the queue never reached depth 2.
 const DRAIN_SPACING_MS = 250;
 
+// How long the first announcement of a session waits before it is put into the region.
+//
+// **A live region changed while the page is still loading is not announced.** The reader is
+// still building its view of the document when the change happens, so the mutation lands
+// before there is anything watching for it — and the announcement is not late, it is gone.
+// This is not theoretical: the user met it on 2026-08-25 as a session whose opening prompt
+// was in the buffer and had never been spoken, while every prompt after it spoke normally.
+// It is the session's *first* words that are lost, which are the ones telling a listener
+// where they are.
+//
+// The hold applies once, to the first drain of the session, so nothing afterwards pays for
+// it. The value is a starting point rather than a measurement: unlike DRAIN_SPACING_MS,
+// which was measured against a real reader, nobody has yet found where the threshold sits
+// here. It should be tuned by ear and this comment corrected when it is.
+const STARTUP_HOLD_MS = 1_000;
+
 export class AnnouncerDom implements AnnouncerView {
   private readonly queue: string[] = [];
   private drainScheduled = false;
   private lastDrainAt = Number.NEGATIVE_INFINITY;
   private clearTimer: ReturnType<typeof setTimeout> | undefined;
+  /** The earliest moment anything may be put into the region. See STARTUP_HOLD_MS. */
+  private readonly openAt: number;
 
-  constructor(private readonly region: HTMLElement) {}
+  /**
+   * `startupHold` is a parameter rather than a constant read directly, so a test can say
+   * "no hold" and go on asserting the timing rules that were measured against a real
+   * reader — chief among them that a lone announcement waits for nothing. Production
+   * passes nothing and gets the hold.
+   */
+  constructor(
+    private readonly region: HTMLElement,
+    startupHold: number = STARTUP_HOLD_MS,
+  ) {
+    this.openAt = Date.now() + startupHold;
+  }
 
   announce(text: string): void {
     this.queue.push(text);
@@ -81,7 +110,13 @@ export class AnnouncerDom implements AnnouncerView {
     }
     this.drainScheduled = true;
     const sinceLastDrain = Date.now() - this.lastDrainAt;
-    const wait = Math.max(0, DRAIN_SPACING_MS - sinceLastDrain);
+    // Whichever is further away: the gap after the previous announcement, or the hold that
+    // keeps the session's first words out of a region nothing is watching yet.
+    const wait = Math.max(
+      0,
+      DRAIN_SPACING_MS - sinceLastDrain,
+      this.openAt - Date.now(),
+    );
     setTimeout(() => {
       this.drainScheduled = false;
       this.drainOne();

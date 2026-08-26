@@ -72,6 +72,11 @@
       </ul>
     </div>
     <main>
+      <!-- The document's top, and what `Ctrl+Home` and heading navigation land on. It says
+           the same thing as the window title, from the same value, because two titles that
+           can disagree eventually will (spec A9, decision 1). Level 1, with command blocks
+           at level 2, which is the structure the buffer already implied. -->
+      <h1 id="window-title">Acter</h1>
       <!-- The results buffer is a document and must stay one: browse mode is how a
            listener reads output back, heading by heading, and `role="application"`
            here would take that away. -->
@@ -97,6 +102,19 @@
         />
       </form>
     </main>
+    <!-- The status bar, at the end of the document the way a status bar sits at the bottom
+         of a window, and reachable three ways.
+         `<footer>` as a direct child of `<body>` is the `contentinfo` landmark, so landmark
+         navigation finds it; `aria-label` names it, so arriving there says what it is rather
+         than reading a bare word; and `role="status"` on the text makes a change announce
+         itself politely — never interrupting output being read, never taking focus, because
+         the state changes while the user is busy elsewhere (spec A9, decision 2).
+         The label is on the landmark and not on the live region deliberately: a name on the
+         region itself is read out with every change, and "connection status connected" every
+         time is the sort of repetition a listener learns to tune out. -->
+    <footer aria-label="Connection status">
+      <p id="connection-status" role="status">connecting</p>
+    </footer>
     <!-- About. A modal <dialog> rather than a native window: the platform traps focus
          and answers Escape for us, and it stays inside the webview, which is the whole
          reason the menu bar above is in the document too (spec A7). Its four facts are

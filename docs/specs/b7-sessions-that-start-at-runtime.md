@@ -137,6 +137,135 @@ not hide them, it never constructs them.
 the suites and the manual passes use them; B8's `--profile` is what replaces them, and they
 are retired when it has.
 
+## Amendments made while implementing, 2026-08-25
+
+This spec was agreed on 2026-08-23. Three entries landed between then and the
+implementation — B5.4 (the catalogue), B5.6 (the prompt is spoken) and A9 (the window says
+what it is connected to) — and two of them changed what this one has to build. Each
+amendment below rides in the implementing PR, as CLAUDE.md requires.
+
+### A. A row of the connect list carries availability and what to do about it
+
+Decision 6 gave `Connectable` an id and a label, and that was written before B5.4 existed.
+B5.4 then decided that a kind this machine *cannot* start stays in the list, sorts last,
+says `(not available)` in its accessible name, and shows read-only instructions naming what
+is missing and what to type. That is what B7 and A8 render, so the row has to carry it:
+
+```rust
+pub struct Connectable {
+    pub id: ProfileId,
+    pub label: String,
+    pub available: bool,
+    pub instructions: Option<String>,
+}
+```
+
+The instructions travel as text rather than as a kind the frontend would map for itself,
+for the reason every other spoken string travels as text: there is one place the words are
+decided, and it is not the presentation layer.
+
+**And WSL answers with its own reason rather than the catalogue's.** B5.3 decision 6 gives
+three sentences for three situations — WSL not installed, WSL broken, WSL with no
+distribution — and a listener who has never installed it and one whose install is broken
+must not be read the same thing. The catalogue's single generic sentence is what a machine
+that has not been asked yet has to say; once it has been asked, the better answer exists.
+
+### B. A third action: which far end this window is on
+
+A9 shipped a `connection` command that read `ACTER_SHELL` and answered the program name,
+and its own doc says why it is temporary: "once that catalogue reaches a running session
+this command hands the same string back". That is now. `ConnectApi` gains
+
+```rust
+fn connected(&self) -> Option<Connected>;
+```
+
+and the `connection` command is deleted rather than left beside it. Two answers to "what is
+this window on" is one answer too many, and the one that reads an environment variable stops
+being true the first time a user connects to something else.
+
+It is a question rather than an action, which is why it is a third method here rather than a
+port of its own — and it is what the frontend asks at startup to decide between the two
+windows this entry creates.
+
+### C. `SubmitAck` becomes two answers
+
+Decision 3 requires that a line submitted into an unconnected window is refused rather than
+swallowed, and a struct carrying a correlation id has no way to say so:
+
+```rust
+pub enum SubmitAck {
+    Accepted { command_id: CommandId },
+    NotConnected,
+}
+```
+
+The frontend answers both with the same pinned sentence and keeps the typed text either
+way. `NotConnected` also covers a submission naming a session that has since been replaced,
+which is amendment D.
+
+`send_key` needed no new answer: `KeyAck::NothingToActOn` already means "there was nothing
+to act on", which is exactly true of a window with no session, and a fourth variant would
+have been a second way of saying what the window said when it opened.
+
+### D. The session id is minted per connection, and it is checked
+
+Phase 1 carried `SessionId` on every call and ignored it — there was one session and it
+lasted as long as the process. Now that a window can be on one far end and then another, an
+id that identifies nothing is a hazard: a line submitted a moment before the user replaced
+their shell would otherwise run in the new one, in a working directory and on a machine they
+never chose for it.
+
+So `Connected::session` counts up, the frontend holds it and passes it, and
+`ConnectService` answers `NotConnected` for any other id. The frontend's `SESSION_ID = 1`
+constant is gone.
+
+### E. `ProfileId` is a typed value, and one of its shapes is a program
+
+Decision 1 wrote `&ProfileId` without saying what one is. It is an enum, so the factory
+matches exhaustively and a variant cannot be added without somebody deciding how to start
+it:
+
+```rust
+pub enum ProfileId {
+    Shell { kind: ConnectionKind },
+    Distribution { name: String },
+    Program { program: String },
+    Scripted { name: String },
+}
+```
+
+`Program` is the shape decision 7 needs without having named it: `ACTER_SHELL` carries a
+program rather than a kind, and so will B8's saved profiles. It also means **the launch path
+and the menu path are the same path** — a launch that names a shell calls `use_profile` like
+anything else — which is worth more than the tidiness of it, because it is the launch path
+that the manual accessibility passes exercise.
+
+### F. The scripted names are supplied, not known
+
+Decision 7 said the gate is `#[cfg(debug_assertions)]` "at the factory and at the list". It
+is at the composition root in both places: the list is what the root passed in, and a
+release build passes none. What a scripted session *is* — a transcript, a chunking, a
+decorator over either — is a transport composition, and `acter-core` holding four names for
+compositions it cannot build would have been knowledge in the wrong crate.
+
+### G. `ConnectService` implements `SessionApi` as well as `ConnectApi`
+
+Decision 3 says the unconnected window is a state rather than a session that does nothing,
+and something has to hold that state. It is the same object, because it owns which session
+is current: a submitted line has to reach whichever session is running *now*, and a window
+with none has to answer rather than swallow it. Neither is answerable by something that does
+not own the swap, and a holder shared between two objects would be two places that can
+disagree about whether there is a session while a user is typing into one.
+
+### H. A shell the launch named and could not start no longer takes the window with it
+
+The composition root used to panic when `ACTER_SHELL` named something that would not start,
+and B4 was right that this was better than a window onto a session that will never speak.
+It stops being right the moment there is a window that can say what went wrong: it opens
+unconnected, and the reason is the first thing it says. The same is true of a transcript
+that cannot be loaded.
+
 ## Files touched
 
 - `crates/acter-core/src/ports/driving/connect_api.rs`,
@@ -146,27 +275,31 @@ are retired when it has.
 - `crates/acter-core/src/services/connect.rs` — `ConnectService` (new).
 - `crates/acter-app/src/container.rs` — the factory, the debug-gated scripted profiles, and
   `AppState` holding a session that can be swapped or absent.
-- `crates/acter-app/src/routers/session.rs` — the two commands, and submission while
-  unconnected.
-- `ui/src/protocol.ts`, `ui/src/ports/backend_api.ts`, `ui/src/routers/tauri.ts`,
-  `ui/src/controllers/app.ts` — the frontend side, including the two pinned strings the
-  unconnected state needs.
+- `crates/acter-app/src/routers/connect.rs` — the three commands (new), replacing A9's
+  `routers/connection.rs`, which is deleted.
+- `ui/src/protocol.ts`, `ui/src/ports/connect_api.ts` (new), `ui/src/ports/backend_api.ts`,
+  `ui/src/routers/tauri.ts`, `ui/src/controllers/app.ts` — the frontend side, including the
+  two pinned strings the unconnected state needs.
+- `ui/src/ports/buffer_view.ts`, `ui/src/adapters/buffer.ts` — `clear()`, which is what the
+  frontend does between the two calls of decision 1.
+- `crates/acter-transports/tests/real_session.rs` — the ignored real-shell test proving
+  decision 4 against two live PowerShell processes.
 
 ## Definition of done
 
-- [ ] `connectable()` lists cmd, every installed PowerShell edition, one entry per installed
+- [x] `connectable()` lists cmd, every installed PowerShell edition, one entry per installed
       WSL distribution, and — in debug builds only — the four scripted sessions.
-- [ ] `use_profile` builds the new session before dropping the old one; a failure leaves the
+- [x] `use_profile` builds the new session before dropping the old one; a failure leaves the
       running session working and returns a speakable sentence.
-- [ ] A replaced session's shell is gone: its transport channel closes and its far end
+- [x] A replaced session's shell is gone: its transport channel closes and its far end
       exits. Tested, not assumed. Connecting twice leaves exactly one shell running.
-- [ ] An unconnected window announces that it is unconnected, and a line submitted into it
+- [x] An unconnected window announces that it is unconnected, and a line submitted into it
       is refused with a sentence and left in the edit field.
-- [ ] `ConnectService` is tested with a fake factory and fake `InstalledShells` — no
+- [x] `ConnectService` is tested with a fake factory and fake `InstalledShells` — no
       process, no runtime, no Tauri — including the failure path and the replace path.
-- [ ] Router tests cover both commands through the real IPC pipeline, as T1 requires.
-- [ ] A release build constructs no scripted profile, verified the way T2's gate is.
-- [ ] `cargo fmt`, `cargo clippy --workspace --all-targets`, workspace tests, vitest clean.
+- [x] Router tests cover both commands through the real IPC pipeline, as T1 requires.
+- [x] A release build constructs no scripted profile, verified the way T2's gate is.
+- [x] `cargo fmt`, `cargo clippy --workspace --all-targets`, workspace tests, vitest clean.
 
 ## Accessibility checklist for the PR body
 

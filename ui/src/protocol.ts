@@ -29,10 +29,99 @@ export type Announcement =
 export type CommandId = number;
 
 /**
+ *  One thing a user can connect to, as [`ConnectApi::connectable`](crate::ConnectApi)
+ *  answers and the connect list renders it.
+ * 
+ *  **Not the same value as [`Connection`](crate::Connection), and the difference is the
+ *  point.** B5.4's catalogue is a pure function over connection *kinds*: it decides what
+ *  belongs on this platform, in what order, and how a missing one reads. This is what that
+ *  catalogue becomes once a real machine has answered — one row per WSL distribution
+ *  rather than one row for WSL, the scripted sessions appended in a debug build, and every
+ *  row carrying the id that starts it.
+ */
+export type Connectable = {
+	/**  What to hand [`ConnectApi::use_profile`](crate::ConnectApi) to start this one. */
+	id: ProfileId,
+	/**
+	 *  What the user hears: "Command Prompt", "PowerShell 7", "WSL: Ubuntu", with
+	 *  `(not available)` on the end when this machine cannot start it.
+	 * 
+	 *  **The label belongs to the profile, not to the adapter** (spec B5.1, decision 3),
+	 *  which is how two rows can share one adapter — the two PowerShell editions do, and
+	 *  so does every WSL distribution.
+	 */
+	label: string,
+	/**
+	 *  Whether choosing this row can start a session.
+	 * 
+	 *  A row that cannot is still listed, still focusable and still says so in its name,
+	 *  because a list that silently omits WSL teaches a listener that Acter does not
+	 *  support it (spec B5.4).
+	 */
+	available: boolean,
+	/**
+	 *  What to say about a row that cannot be connected to, and `None` when it can — a
+	 *  panel of instructions under a working row is noise a listener has to arrow past.
+	 */
+	instructions: string | null,
+};
+
+/**
+ *  Which far end this window is on now, and what to call it.
+ * 
+ *  Returned by both `use_profile` and `connected`, because they answer the same question:
+ *  the first having just changed the answer, the second having merely been asked.
+ */
+export type Connected = {
+	/**
+	 *  The new session's id, which every later invoke about it carries.
+	 * 
+	 *  **Minted per connection rather than fixed at 1**, so a line submitted to the
+	 *  session the user just replaced is refused rather than run in the new one — the id
+	 *  finally identifies something (spec B7, decision 4).
+	 */
+	session: SessionId,
+	/**
+	 *  What to call it: the same words the connect list used, so what a user chose and
+	 *  what the window then calls itself are not two different names for one thing
+	 *  (spec A9).
+	 */
+	label: string,
+};
+
+/**
+ *  One thing a user can choose to connect to.
+ * 
+ *  Deliberately not carrying the adapter that starts it: this is what the connect list is
+ *  made of, and the list exists on machines where the thing cannot be started at all.
+ */
+export type ConnectionKind = 
+/**  `cmd.exe`, which is on every Windows machine and cannot be removed. */
+"Cmd" | 
+/**  Windows PowerShell 5.1, which ships with Windows. */
+"WindowsPowerShell" | 
+/**  PowerShell 7 or later, which is installed separately. */
+"PowerShellSeven" | 
+/**  Bash inside a WSL distribution. */
+"Wsl";
+
+/**
  *  Transport connection state. The local transport is always [`ConnectionState::Connected`]
  *  in Phase 1; the other states are exercised once SSH lands.
  */
-export type ConnectionState = "Connected" | "Reconnecting" | "Disconnected";
+export type ConnectionState = 
+/**
+ *  The session has been started and is not usable yet: a process was spawned, or a
+ *  network connection is being made, and the far end has not said anything.
+ * 
+ *  **Added by A9 because it is the state a user meets first**, and the one they were
+ *  never told about: a window opening onto PowerShell sat silent for seconds while the
+ *  shell started, which a listener cannot tell from a session that is broken (roadmap
+ *  23.7). It is deliberately not "the process exists" — a shell that has not drawn a
+ *  prompt is not one anybody can use, and reporting it as connected is a lie a listener
+ *  would act on.
+ */
+"Connecting" | "Connected" | "Reconnecting" | "Disconnected";
 
 /**  Process exit status. Nonzero is a failure, announced distinctly from success. */
 export type ExitCode = number;
@@ -92,6 +181,42 @@ export type Mode =
 "NonInteractive" | 
 /**  Full terminal pass-through for ncurses/full-screen programs. */
 "Interactive";
+
+/**
+ *  One thing that can be started: which far end, and which of it.
+ * 
+ *  **A typed value rather than an opaque string**, so the factory that turns one into a
+ *  running session matches exhaustively and a variant cannot be added without somebody
+ *  deciding how to start it. It crosses the wire because the connect list is rendered by
+ *  the frontend and handed back unchanged.
+ */
+export type ProfileId = 
+/**
+ *  One of the catalogue's kinds, started however that kind is started.
+ * 
+ *  `Wsl` here is legal and means "whatever distribution WSL calls the default", which
+ *  is a real session and the one `wsl.exe` with no arguments opens. The connect list
+ *  never offers it, because that list can name the distributions and a user choosing
+ *  by ear is better served by a name than by "the default".
+ */
+{ profile: "Shell"; kind: ConnectionKind } | 
+/**  Bash inside one named WSL distribution, spelled as `wsl.exe -l -q` spelled it. */
+{ profile: "Distribution"; name: string } | 
+/**
+ *  A program named directly rather than chosen from a list: what `ACTER_SHELL` carries
+ *  today, and what B8's saved profiles will carry.
+ * 
+ *  Started with whatever adapter recognises the name, and with none at all if nothing
+ *  does — which is a session Acter supports and says nothing about.
+ */
+{ profile: "Program"; program: string } | 
+/**
+ *  One of the scripted far ends: a built-in name, or a path to a transcript.
+ * 
+ *  **Debug builds only.** A release build does not hide these — it never lists them
+ *  and never constructs them (spec B7, decision 7).
+ */
+{ profile: "Scripted"; name: string };
 
 /**  Everything the backend streams to the frontend about one session. */
 export type SessionEvent = 
@@ -202,9 +327,26 @@ export type SessionEvent =
 export type SessionId = number;
 
 /**
- *  The immediate return of `submit_command`: the id correlating this submission with
- *  its `CommandStarted` / `Output` / `CommandFinished` events.
+ *  The immediate answer to `submit_command`.
+ * 
+ *  **Two answers rather than one since B7**, because there are now two things that can
+ *  become of a submitted line. A window that is not connected to anything is a state a
+ *  user can be in from the moment Acter opens, and a line typed into it has to be
+ *  *answered* rather than swallowed: silence is indistinguishable from a shell that is
+ *  thinking, and the text the user typed has to survive so they can connect and press
+ *  Enter again (spec B7, decision 3).
  */
-export type SubmitAck = {
-	command_id: CommandId,
-};
+export type SubmitAck = 
+/**
+ *  Accepted: this is the id correlating this submission with its `CommandStarted` /
+ *  `Output` / `CommandFinished` events.
+ */
+{ status: "Accepted"; command_id: CommandId } | 
+/**
+ *  There is no session behind this window, so nothing was written anywhere.
+ * 
+ *  Carries no sentence: what a listener hears is the frontend's pinned string, the
+ *  same one the unconnected window announced when it opened, because hearing the same
+ *  words twice is how a user learns this is one state rather than two problems.
+ */
+{ status: "NotConnected" };

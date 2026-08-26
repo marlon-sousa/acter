@@ -9,8 +9,9 @@ import { AboutDialog } from './adapters/about_dialog';
 import { EditFieldDom } from './adapters/edit_field';
 import { bindKeys } from './adapters/keyboard';
 import { installMenuBar } from './adapters/menu_bar';
+import { WindowChrome } from './adapters/window_chrome';
 import { AppController } from './controllers/app';
-import { TauriBackend, TauriShell } from './routers/tauri';
+import { TauriBackend, TauriConnect, TauriShell } from './routers/tauri';
 
 function byId<T extends HTMLElement>(id: string): T {
   const element = document.getElementById(id);
@@ -27,12 +28,22 @@ const announcer = new AnnouncerDom(byId('announcer'));
 const beep = new BeepAudio();
 // In a debug build this wraps the router and installs `window.__acterDebug`; in a
 // release build it hands the router straight back and installs nothing.
+// What the window says it is: the operating system's title, the document's heading, and
+// the connection status, all from one adapter (spec A9).
+const windowChrome = new WindowChrome(
+  byId('window-title'),
+  byId('connection-status'),
+  document,
+  (title) => void shell.setTitle(title),
+);
 const controller = new AppController(
   installDebugRecorder(new TauriBackend()),
+  new TauriConnect(),
   editField,
   buffer,
   announcer,
   beep,
+  windowChrome,
 );
 
 // The menu bar is in the document rather than in the window frame, and F10 is the way
@@ -69,7 +80,10 @@ void shell.platform().then((os) => {
 // has focus (DESIGN, layer 2), and the adapter enforces that by listening on the element
 // rather than on the document.
 bindKeys(controller, byId<HTMLFormElement>('command-form'), commandInput);
-// The fake is the default backend, connected automatically on load with no user
-// action (decision 9): attach the session so scenario events start flowing.
-void controller.attach();
+// What this window opens onto: the session the launch brought, or nothing at all — which
+// since B7 is the ordinary case, and which the controller announces rather than leaving a
+// listener in front of a window that says nothing (spec B7, decision 3). Naming the far end
+// is part of the same call now: a session can be replaced while the window is open, so the
+// title comes from the connection rather than from what the process was started with.
+void controller.start();
 editField.focus();
