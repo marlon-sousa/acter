@@ -141,6 +141,7 @@ mod tests {
                 connected: Connected {
                     session: SessionId(2),
                     label: "SSH: acter at acter-ssh".to_owned(),
+                    note: None,
                 },
             },
             ConnectStep::Failed {

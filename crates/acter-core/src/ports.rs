@@ -9,6 +9,6 @@ mod driving;
 pub use driven::{
     Clock, ConnectSink, EventSink, HostKeyAnswer, HostKeyQuestion, HostKeyState, InstalledShells,
     NoDistributions, PasswordQuestion, Secret, SessionFactory, ShellAdapter, ShellFacts,
-    ShellLaunch, SshQuestions, TerminalEngine, Timer, Transport, TransportError, Unasked,
+    ShellLaunch, SshQuestions, Started, TerminalEngine, Timer, Transport, TransportError, Unasked,
 };
 pub use driving::{ConnectApi, SessionApi};

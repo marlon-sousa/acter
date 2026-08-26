@@ -29,7 +29,7 @@ pub use policies::{
 pub use ports::{
     Clock, ConnectApi, ConnectSink, EventSink, HostKeyAnswer, HostKeyQuestion, HostKeyState,
     InstalledShells, NoDistributions, PasswordQuestion, Secret, SessionApi, SessionFactory,
-    ShellAdapter, ShellFacts, ShellLaunch, SshQuestions, TerminalEngine, Timer, Transport,
+    ShellAdapter, ShellFacts, ShellLaunch, SshQuestions, Started, TerminalEngine, Timer, Transport,
     TransportError, Unasked,
 };
 pub use services::{ConnectService, Conversation, SessionService};

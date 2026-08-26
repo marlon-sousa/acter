@@ -16,7 +16,10 @@ import type {
 } from '../../src/protocol';
 import type { AnnouncerView } from '../../src/ports/announcer_view';
 import type { BackendApi } from '../../src/ports/backend_api';
-import type { ConnectApi } from '../../src/ports/connect_api';
+import type {
+  ConnectApi,
+  ConnectListener,
+} from '../../src/ports/connect_api';
 import type { BeepView } from '../../src/ports/beep_view';
 import type { BufferView } from '../../src/ports/buffer_view';
 import type { WindowView } from '../../src/ports/window_view';
@@ -194,7 +197,11 @@ class FakeConnect implements ConnectApi {
       variants: [],
     },
   ];
-  atStartup: Connected | null = { session: 1, label: 'Command Prompt' };
+  atStartup: Connected | null = { session: 1, label: 'Command Prompt', note: null };
+  /** What the far end has to say about itself, once, at connection (spec B9). */
+  note: string | null = null;
+  /** What it says while it is connecting (spec B9, decision 6). */
+  progress: string[] = [];
   /** The sentence `use` rejects with instead of connecting, when a test wants a failure. */
   refuses: string | null = null;
   used: ProfileId[] = [];
@@ -203,8 +210,11 @@ class FakeConnect implements ConnectApi {
   connectable(): Promise<Connectable[]> {
     return Promise.resolve(this.rows);
   }
-  use(id: ProfileId): Promise<Connected> {
+  use(id: ProfileId, listener?: ConnectListener): Promise<Connected> {
     this.used.push(id);
+    for (const said of this.progress) {
+      listener?.onProgress?.(said);
+    }
     if (this.refuses !== null) {
       return Promise.reject(this.refuses);
     }
@@ -212,6 +222,7 @@ class FakeConnect implements ConnectApi {
     return Promise.resolve({
       session: this.nextSession,
       label: id.profile === 'Distribution' ? `WSL: ${id.name}` : 'Command Prompt',
+      note: this.note,
     });
   }
   connected(): Promise<Connected | null> {
@@ -1083,6 +1094,73 @@ describe('connecting to a profile (spec B7)', () => {
     expect(backend.attachedTo).toEqual([1, 2]);
     expect(window.titles).toEqual(['WSL: Ubuntu']);
     expect(announcer.announcements).toEqual([connectedMessage('WSL: Ubuntu')]);
+  });
+
+  /**
+   * **One sentence rather than two** (spec B9, decision 7).
+   *
+   * An SSH far end is asked what it is *before* the session channel is opened, so the
+   * answer is in hand before there is anything to announce. What a listener hears is the
+   * connection, the far end, and the state of it, in one utterance — where a bare "shell
+   * integration unavailable" arriving two seconds later names nothing and speaks over
+   * whatever was being said.
+   */
+  it('says what the far end is in the same sentence as the connection', async () => {
+    const { connect, announcer, controller } = await makeApp();
+    connect.note = 'bash, with no shell integration set up on this host';
+
+    await controller.connectTo(ubuntu);
+
+    expect(announcer.announcements).toEqual([
+      'connected to WSL: Ubuntu, bash, with no shell integration set up on this host',
+    ]);
+  });
+
+  /**
+   * And having said it, the session does not say it again.
+   *
+   * `IntegrationUnavailable` fires when the startup grace period expires with no markers,
+   * which for an unintegrated far end is certain rather than diagnostic. Hearing the same
+   * fact twice, the second time without the far end's name, teaches a listener that Acter
+   * repeats itself.
+   */
+  it('does not repeat the integration warning the connection already gave', async () => {
+    const { backend, connect, announcer, controller } = await makeApp();
+    connect.note = 'bash, with no shell integration set up on this host';
+    await controller.connectTo(ubuntu);
+    announcer.announcements.length = 0;
+
+    backend.emit({ type: 'IntegrationUnavailable' });
+
+    expect(announcer.announcements).toEqual([]);
+  });
+
+  /** A connection that said nothing about integration leaves the session free to say it. */
+  it('still warns when the connection said nothing about integration', async () => {
+    const { backend, announcer, controller } = await makeApp();
+    await controller.connectTo(ubuntu);
+    announcer.announcements.length = 0;
+
+    backend.emit({ type: 'IntegrationUnavailable' });
+
+    expect(announcer.announcements).toEqual([integrationUnavailableMessage]);
+  });
+
+  /**
+   * **Progress is said while it happens** (spec B9, decision 6), because a listener with no
+   * feedback cannot tell a slow network from a dead one — and an SSH connection can take
+   * seconds before anything is certain.
+   */
+  it('says what a connection is doing while it does it', async () => {
+    const { connect, announcer, controller } = await makeApp();
+    connect.progress = ['Connecting to acter-ssh.', 'Signing in.'];
+
+    await controller.connectTo(ubuntu);
+
+    expect(announcer.announcements.slice(0, 2)).toEqual([
+      'Connecting to acter-ssh.',
+      'Signing in.',
+    ]);
   });
 
   /** The id is what every later invoke names, so a line submitted after connecting goes to

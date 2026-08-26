@@ -14,6 +14,20 @@ use std::sync::Arc;
 
 use crate::{ProfileId, SessionApi, SshQuestions};
 
+/// A session that started, and what there is to say about the far end it reached.
+///
+/// **Two things rather than one, since B9.** Every far end before SSH was fully described
+/// by the row the user chose, so a session was the whole answer. An SSH far end is asked
+/// what it is *while it is being connected to* (spec B9, decision 7), and what it said is
+/// known only here — so it travels back with the session rather than being reconstructed
+/// by something that never spoke to the server.
+pub struct Started {
+    /// The session itself.
+    pub session: Arc<dyn SessionApi>,
+    /// One clause about this far end, to be said once at connection, or `None`.
+    pub note: Option<String>,
+}
+
 /// Where a session comes from.
 ///
 /// `Send + Sync` because the composition root hands one to a service the routers call from
@@ -41,5 +55,5 @@ pub trait SessionFactory: Send + Sync {
         &self,
         profile: &ProfileId,
         questions: &Arc<dyn SshQuestions>,
-    ) -> Result<Arc<dyn SessionApi>, String>;
+    ) -> Result<Started, String>;
 }

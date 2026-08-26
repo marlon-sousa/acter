@@ -2463,8 +2463,8 @@ thing to pick up once the adapters land, not merely the next number.
     with it. There is no `create` on the command line: profiles are files, and creating one
     from a shell whose output nobody can see is not a workflow this audience needs.
 
-27. B9, SSH: a far end that is not on this machine. Spec:
-    [b9-ssh.md](specs/b9-ssh.md) — **agreed 2026-08-26 and ready to implement.** The five
+27. **Done** — B9, SSH: a far end that is not on this machine. Spec:
+    [b9-ssh.md](specs/b9-ssh.md) — agreed 2026-08-26, implemented in four PRs (below). The five
     questions it was drafted with are decided in the spec: one host and password
     authentication in scope, `known_hosts` read but never written, a passphrase held in
     memory for the life of the process, and — decided against the draft's own

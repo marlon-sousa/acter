@@ -586,3 +586,88 @@ describe('a kind whose variants can be missing', () => {
     expect(byId<HTMLDialogElement>('connect-dialog').open).toBe(true);
   });
 });
+
+/**
+ * SSH as the connect dialog holds it: the one kind that is a **form** rather than a choice.
+ *
+ * A submenu is the right shape for a pure choice and connecting to cmd is one; a host, a
+ * port and an account are not (spec A8, decision 1). These pin the two things that would
+ * otherwise go wrong quietly — that the panel says what it now holds, and that what the
+ * Connect button starts is what was typed rather than the empty row.
+ */
+describe('the kind that is a form', () => {
+  function ssh(): Connectable {
+    return {
+      // The row names no machine: what to connect to comes from the panel.
+      id: { profile: 'Ssh', host: '', port: 22, user: '' },
+      label: 'SSH',
+      available: true,
+      instructions: null,
+      variants: [],
+    };
+  }
+
+  beforeEach(() => {
+    connect.rows = [cmd(), ssh()];
+  });
+
+  /** Counted and named, so a listener knows whether it is worth tabbing into the panel. */
+  it('says how many fields the panel now holds', async () => {
+    await dialog.open();
+    byId('connect-kinds').dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }),
+    );
+
+    expect(byId('connect-panel-title').textContent).toBe('3 fields');
+    expect(announcer.announcements).toContain('3 fields');
+  });
+
+  it('offers a host, a port and an account, with the usual port filled in', async () => {
+    await dialog.open();
+    byId('connect-kinds').dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }),
+    );
+
+    expect(byId<HTMLInputElement>('connect-ssh-host').value).toBe('');
+    expect(byId<HTMLInputElement>('connect-ssh-port').value).toBe('22');
+    expect(byId<HTMLInputElement>('connect-ssh-user').value).toBe('');
+    // Labelled, because an unlabelled text box announces as "edit" and nothing else.
+    expect(document.querySelector('label[for="connect-ssh-host"]')?.textContent).toBe(
+      'Host',
+    );
+  });
+
+  it('connects to what was typed rather than to the empty row', async () => {
+    await dialog.open();
+    byId('connect-kinds').dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }),
+    );
+    byId<HTMLInputElement>('connect-ssh-host').value = 'acter-ssh';
+    byId<HTMLInputElement>('connect-ssh-port').value = '2222';
+    byId<HTMLInputElement>('connect-ssh-user').value = 'acter';
+
+    byId('connect-start').click();
+    await Promise.resolve();
+
+    expect(attempted).toEqual([
+      { profile: 'Ssh', host: 'acter-ssh', port: 2222, user: 'acter' },
+    ]);
+  });
+
+  /**
+   * **An unfilled form is handed over unfilled**, and the backend refuses it with the
+   * sentence it already has. One path, one place the words are decided, and no disabled
+   * button that reads differently from how it looks (spec A8, decision 4).
+   */
+  it('hands over the empty row when nothing was typed, rather than blocking', async () => {
+    await dialog.open();
+    byId('connect-kinds').dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }),
+    );
+
+    byId('connect-start').click();
+    await Promise.resolve();
+
+    expect(attempted).toEqual([{ profile: 'Ssh', host: '', port: 22, user: '' }]);
+  });
+});

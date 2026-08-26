@@ -202,6 +202,22 @@ export type Connected = {
 	 *  (spec A9).
 	 */
 	label: string,
+	/**
+	 *  What else there is to say about this far end, **once, at connection** — and `None`
+	 *  when there is nothing.
+	 * 
+	 *  **It exists so that a listener hears one sentence rather than two** (spec B9,
+	 *  decision 7). An SSH session is unintegrated and has to say so, and it can now also
+	 *  say *what it is*: "bash, with no shell integration set up on this host" names the far
+	 *  end and points at the fix, where a bare "unavailable" arriving two seconds later
+	 *  names nothing and interrupts whatever was being said. The frontend appends this to
+	 *  the connection announcement and then suppresses the session's own one.
+	 * 
+	 *  Only the far end knows it — which shell answered the probe, and whether anything
+	 *  was learned at all — so it travels with the connection rather than being composed
+	 *  from the label.
+	 */
+	note: string | null,
 };
 
 /**
@@ -229,7 +245,15 @@ export type ConnectionKind =
 /**  PowerShell 7 or later, which is installed separately. A variant, as above. */
 "PowerShellSeven" | 
 /**  Bash inside a WSL distribution. */
-"Wsl";
+"Wsl" | 
+/**
+ *  A far end that is not on this machine, reached over SSH.
+ * 
+ *  **The one kind that is not a program on this computer**, and the only one whose row
+ *  needs a form rather than a choice: a host, a port and an account are four fields, not
+ *  a variant to pick (spec A8, decision 1).
+ */
+"Ssh";
 
 /**
  *  Transport connection state. The local transport is always [`ConnectionState::Connected`]
@@ -336,6 +360,16 @@ export type ProfileId =
  *  does — which is a session Acter supports and says nothing about.
  */
 { profile: "Program"; program: string } | 
+/**
+ *  A machine that is not this one, reached over SSH.
+ * 
+ *  **Three fields rather than a string to parse.** `user@host:port` is a spelling, and
+ *  a spelling has to be parsed and can be got wrong; these are the facts, and the form
+ *  that collects them is the connect dialog's (spec A8, decision 3). Nothing is stored
+ *  here — a password is asked for every time and never written down (spec B9,
+ *  decision 5).
+ */
+{ profile: "Ssh"; host: string; port: number; user: string } | 
 /**
  *  One of the scripted far ends: a built-in name, or a path to a transcript.
  * 

@@ -15,7 +15,7 @@ pub use clock::{Clock, Timer};
 pub use connect_sink::ConnectSink;
 pub use event_sink::EventSink;
 pub use installed_shells::{InstalledShells, NoDistributions};
-pub use session_factory::SessionFactory;
+pub use session_factory::{SessionFactory, Started};
 pub use shell_adapter::{ShellAdapter, ShellFacts, ShellLaunch};
 pub use ssh_questions::{
     HostKeyAnswer, HostKeyQuestion, HostKeyState, PasswordQuestion, Secret, SshQuestions, Unasked,

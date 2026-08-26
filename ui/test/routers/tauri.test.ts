@@ -70,12 +70,13 @@ describe('TauriConnect.use', () => {
 
     steps?.onmessage?.({
       step: 'Arrived',
-      connected: { session: 3, label: 'Scripted: builtin' },
+      connected: { session: 3, label: 'Scripted: builtin', note: null },
     });
 
     await expect(connecting).resolves.toEqual({
       session: 3,
       label: 'Scripted: builtin',
+      note: null,
     });
   });
 
@@ -103,7 +104,7 @@ describe('TauriConnect.use', () => {
     await settle();
 
     steps?.onmessage?.({ step: 'Progress', said: 'Connecting to acter-ssh.' });
-    steps?.onmessage?.({ step: 'Arrived', connected: { session: 1, label: 'x' } });
+    steps?.onmessage?.({ step: 'Arrived', connected: { session: 1, label: 'x', note: null } });
     await connecting;
 
     expect(said).toEqual(['Connecting to acter-ssh.']);
@@ -126,7 +127,7 @@ describe('TauriConnect.use', () => {
       args: { attempt: 42, answer: { answer: 'Trust' } },
     });
 
-    steps?.onmessage?.({ step: 'Arrived', connected: { session: 1, label: 'x' } });
+    steps?.onmessage?.({ step: 'Arrived', connected: { session: 1, label: 'x', note: null } });
     await connecting;
   });
 
@@ -157,7 +158,7 @@ describe('TauriConnect.use', () => {
     const connecting = new TauriConnect().use(PROFILE);
     await settle();
 
-    steps?.onmessage?.({ step: 'Arrived', connected: { session: 1, label: 'x' } });
+    steps?.onmessage?.({ step: 'Arrived', connected: { session: 1, label: 'x', note: null } });
     await connecting;
     await settle();
 

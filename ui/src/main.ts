@@ -9,10 +9,13 @@ import { AboutDialog } from './adapters/about_dialog';
 import { EditFieldDom } from './adapters/edit_field';
 import { bindKeys } from './adapters/keyboard';
 import { ConnectDialog } from './adapters/connect_dialog';
+import { HostKeyDialog } from './adapters/host_key_dialog';
+import { PasswordDialog } from './adapters/password_dialog';
 import { installMenuBar } from './adapters/menu_bar';
 import { WindowChrome } from './adapters/window_chrome';
 import { AppController } from './controllers/app';
 import { TauriBackend, TauriConnect, TauriShell } from './routers/tauri';
+import type { ConnectAnswer, ConnectQuestion } from './protocol';
 
 function byId<T extends HTMLElement>(id: string): T {
   const element = document.getElementById(id);
@@ -47,6 +50,29 @@ const windowChrome = new WindowChrome({
   setNativeTitle: (title: string) => void shell.setTitle(title),
 });
 const connectApi = new TauriConnect();
+// The two questions an SSH connection asks, each its own dialog (spec B9, decisions 3
+// and 4). They are built before the controller because it is handed the thing that asks,
+// and they know nothing about connecting — one shows a fingerprint and comes back with a
+// decision, the other shows a masked field and comes back with a secret.
+const hostKeyDialog = new HostKeyDialog(
+  byId<HTMLDialogElement>('host-key-dialog'),
+  byId('host-key-title'),
+  byId('host-key-body'),
+);
+const passwordDialog = new PasswordDialog(
+  byId<HTMLDialogElement>('password-dialog'),
+  byId('password-prompt'),
+  byId<HTMLInputElement>('password-field'),
+);
+// Which dialog a question goes to is decided by the question's own shape, so a variant
+// added to the protocol without a dialog to put it in fails to compile rather than
+// silently reaching nobody.
+const questions = {
+  ask: (question: ConnectQuestion): Promise<ConnectAnswer> =>
+    question.question === 'HostKey'
+      ? hostKeyDialog.ask(question)
+      : passwordDialog.ask(question),
+};
 const controller = new AppController(
   installDebugRecorder(new TauriBackend()),
   connectApi,
@@ -55,6 +81,7 @@ const controller = new AppController(
   announcer,
   beep,
   windowChrome,
+  questions,
 );
 
 // The menu bar is in the document rather than in the window frame, and F10 is the way

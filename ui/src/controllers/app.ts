@@ -18,6 +18,7 @@ import type { BackendApi } from '../ports/backend_api';
 import type { BeepView } from '../ports/beep_view';
 import type { BufferView } from '../ports/buffer_view';
 import type { ConnectApi } from '../ports/connect_api';
+import type { QuestionView } from '../ports/question_view';
 import type { WindowView } from '../ports/window_view';
 import type { EditFieldView } from '../ports/edit_field_view';
 
@@ -86,8 +87,15 @@ export const disconnectedStatus = 'not connected';
 export const notConnectedMessage = 'not connected. Choose Connect to start a shell';
 // And what a listener hears when one starts, which is the connect list's own label — so
 // what they chose and what the window now calls itself are the same words (spec A9).
-export function connectedMessage(label: string): string {
-  return `connected to ${label}`;
+//
+// **One sentence rather than two, since B9** (decision 7). A far end that has something more
+// to say about itself says it here, in the same utterance: "connected to SSH: acter at
+// acter-ssh, bash, with no shell integration set up on this host". The alternative was the
+// name arriving now and the integration state arriving a second or two later, interrupting
+// whatever was being said — an asynchronous fact speaking over the thing it describes.
+export function connectedMessage(label: string, note?: string | null): string {
+  const said = `connected to ${label}`;
+  return note === undefined || note === null ? said : `${said}, ${note}`;
 }
 
 // Unreachable while Ctrl+C is both the only key reported and the only key bound. It is
@@ -132,6 +140,18 @@ export class AppController {
   // Commands whose heading came from the shell's own echo, so the optimistic heading
   // from a submit ack never overwrites it (spec B6.1, decision 1).
   private readonly echoed = new Set<CommandId>();
+  // Whether the connection announcement already said this session has no shell
+  // integration, so the session's own announcement of it is not said a second time.
+  //
+  // **The two say the same thing and only one of them can name the far end** (spec B9,
+  // decision 7). `IntegrationUnavailable` arrives when the startup grace period expires with
+  // no markers, which for an SSH session is always — and by then the connection has already
+  // said "bash, with no shell integration set up on this host", which is the same fact with
+  // a subject. Hearing it twice teaches a listener that Acter repeats itself.
+  //
+  // Reset per connection rather than latched, so a later session that is unintegrated for
+  // its own reasons still says so.
+  private noteSaidIntegrationIsMissing = false;
   // Which session every invoke names, or null for a window connected to nothing.
   //
   // Held here rather than as a constant in the router since B7: a window can be connected
@@ -147,6 +167,11 @@ export class AppController {
     private readonly announcer: AnnouncerView,
     private readonly beep: BeepView,
     private readonly window: WindowView,
+    // **Optional, and its absence is an answer rather than a gap** (spec B9, decision 3):
+    // a window with nothing that can ask a person refuses a host key rather than trusting
+    // one because nobody was there to object. Every far end except SSH asks nothing, so
+    // this is only supplied where the dialogs are.
+    private readonly questions?: QuestionView,
   ) {}
 
   /**
@@ -179,7 +204,16 @@ export class AppController {
   async connectTo(id: ProfileId): Promise<boolean> {
     let connected: Connected;
     try {
-      connected = await this.connect.use(id);
+      connected = await this.connect.use(id, {
+        // **Said while it happens, because a listener with no feedback cannot tell a slow
+        // network from a dead one** (spec B9, decision 6). These are the backend's own
+        // sentences: only it knows which stage a connection has reached.
+        onProgress: (said) => this.announcer.announce(said),
+        onQuestion: (question) =>
+          this.questions === undefined
+            ? Promise.resolve({ answer: 'GiveUp' as const })
+            : this.questions.ask(question),
+      });
     } catch (why) {
       // The sentence is the backend's, because only the backend knows what went wrong.
       // Every other announced string in this file is pinned here; this one is the
@@ -188,7 +222,7 @@ export class AppController {
       return false;
     }
     await this.show(connected);
-    this.announcer.announce(connectedMessage(connected.label));
+    this.announcer.announce(connectedMessage(connected.label, connected.note));
     return true;
   }
 
@@ -201,6 +235,10 @@ export class AppController {
    * a session that never happened.
    */
   private async show(connected: Connected | null): Promise<void> {
+    // Set here rather than beside the announcement, because a launch that brought a session
+    // reaches this without going through `connectTo` at all.
+    this.noteSaidIntegrationIsMissing =
+      connected?.note?.includes('shell integration') ?? false;
     this.buffer.clear();
     this.openBlocks.clear();
     this.tooBig.clear();
@@ -361,7 +399,14 @@ export class AppController {
       case 'IntegrationUnavailable':
         // Session-scoped, like the alt-screen pair: it carries no command id because it
         // fires before any command exists.
-        this.announcer.announce(integrationUnavailableMessage);
+        //
+        // **Said once per session, and not at all when the connection already said it.**
+        // For an SSH far end this event is certain rather than diagnostic — the session is
+        // unintegrated by construction (spec B9, decision 2) — and the connection announced
+        // it with the far end's name attached, which is strictly more use.
+        if (!this.noteSaidIntegrationIsMissing) {
+          this.announcer.announce(integrationUnavailableMessage);
+        }
         break;
       case 'AltScreenEntered':
         this.announcer.announce(altScreenEnteredMessage);

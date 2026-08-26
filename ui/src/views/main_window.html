@@ -257,6 +257,50 @@
         class="visually-hidden"
       ></div>
     </dialog>
+    <!-- **The security decision in SSH, as a dialog rather than a wall of text** (spec B9,
+         decision 3). It is an application region for the reason the Connect dialog is one:
+         the keys inside it belong to the widget rather than to a browse-mode cursor whose
+         behaviour depends on a setting somebody may have changed.
+
+         The refusing button comes first in the document as well as holding initial focus,
+         so the safe answer is the one a listener meets first and the one Enter gives them.
+         `formmethod="dialog"` makes each button close the dialog with its own value, and
+         anything else that closes it — Escape included — leaves the value empty, which the
+         adapter reads as giving up. -->
+    <dialog id="host-key-dialog" aria-label="Unknown server">
+      <div role="application" aria-label="Server identity">
+        <h1 id="host-key-title">Unknown server</h1>
+        <div id="host-key-body"></div>
+        <form method="dialog">
+          <button id="host-key-refuse" type="submit" value="refuse">
+            Do not connect
+          </button>
+          <button id="host-key-trust" type="submit" value="trust">
+            Connect and remember this server
+          </button>
+        </form>
+      </div>
+    </dialog>
+    <!-- **A masked field of its own, never the session's edit field** (spec B9, decision 4).
+         A password typed into the command line would be rendered into the buffer, read
+         aloud, and carried into the transcript and the debug tape on the way. -->
+    <dialog id="password-dialog" aria-label="Password">
+      <div role="application" aria-label="Password">
+        <h1>Password</h1>
+        <p id="password-prompt" tabindex="0"></p>
+        <form method="dialog">
+          <label for="password-field">Password</label>
+          <input
+            id="password-field"
+            type="password"
+            autocomplete="off"
+            spellcheck="false"
+          />
+          <button id="password-submit" type="submit" value="submit">Sign in</button>
+          <button id="password-cancel" type="submit" value="cancel">Cancel</button>
+        </form>
+      </div>
+    </dialog>
     <!-- The live region lives at the very end of the document, outside <main>, and
          never moves. It must stay in the accessibility tree to be announced, so its
          text is browse-mode reachable while present; placing it last keeps it out of

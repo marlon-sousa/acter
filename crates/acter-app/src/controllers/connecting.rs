@@ -211,6 +211,7 @@ mod tests {
             outcome: Ok(Connected {
                 session: SessionId(4),
                 label: "Scripted: builtin".to_owned(),
+                note: None,
             }),
         });
 
@@ -234,6 +235,7 @@ mod tests {
             outcome: Ok(Connected {
                 session: SessionId(1),
                 label: "SSH".to_owned(),
+                note: None,
             }),
         });
 

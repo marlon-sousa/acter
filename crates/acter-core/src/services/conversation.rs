@@ -345,6 +345,7 @@ mod tests {
         conversation.finished(Ok(Connected {
             session: SessionId(3),
             label: "SSH: acter at acter-ssh".to_owned(),
+            note: None,
         }));
         conversation.finished(Err("Acter could not reach acter-ssh.".to_owned()));
 

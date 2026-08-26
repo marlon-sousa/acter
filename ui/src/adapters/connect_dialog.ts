@@ -25,6 +25,25 @@ import type { Connectable, ProfileId } from '../protocol';
 
 /** What the panel says when the chosen kind needs nothing. */
 const NO_OPTIONS = 'no options';
+
+/**
+ * The fields an SSH connection needs, in the order they are filled in.
+ *
+ * **Three fields and a port, rather than one box holding `user@host:port`.** A spelling has
+ * to be parsed and can be got wrong, and getting it wrong for somebody who cannot see the
+ * box is a silent failure; these are the facts themselves (spec B9). The port is filled in
+ * with 22, because that is what it is unless somebody moved it.
+ */
+const SSH_FIELDS = [
+  { name: 'host', label: 'Host', type: 'text', value: '' },
+  { name: 'port', label: 'Port', type: 'number', value: '22' },
+  { name: 'user', label: 'Account', type: 'text', value: '' },
+] as const;
+
+/** Whether this row is the one that needs a form. */
+function isSsh(row: Connectable): boolean {
+  return row.id.profile === 'Ssh';
+}
 /** What it says for a kind this machine cannot start; the instructions follow it. */
 const NOT_AVAILABLE = 'not available';
 
@@ -39,6 +58,12 @@ const NOT_AVAILABLE = 'not available';
 export function panelSummary(row: Connectable): string {
   if (!row.available) {
     return NOT_AVAILABLE;
+  }
+  // **The one kind that is a form rather than a choice** (spec A8, decision 1). Counting
+  // the fields is what tells a listener whether it is worth tabbing into the panel, which
+  // is the same job the variant count does for the other kinds.
+  if (isSsh(row)) {
+    return `${SSH_FIELDS.length} fields`;
   }
   if (row.variants.length === 0) {
     return NO_OPTIONS;
@@ -192,6 +217,10 @@ export class ConnectDialog {
       this.panelBody.append(this.instructions(row.instructions ?? ''));
       return;
     }
+    if (isSsh(row)) {
+      this.showSshForm();
+      return;
+    }
     if (row.variants.length === 0) {
       return;
     }
@@ -222,6 +251,54 @@ export class ConnectDialog {
     });
     this.panelBody.append(label, select);
     this.showVariantInstructions(row);
+  }
+
+  /**
+   * The form for a far end that is not on this machine.
+   *
+   * **Ordinary labelled inputs, and no widget of its own.** A text box inside an
+   * application region is one of the few things that behaves identically in every reading
+   * mode, so this is the part of the dialog that needs the least explaining — which is
+   * exactly what a form asking for a host and an account should be.
+   */
+  private showSshForm(): void {
+    const document = this.panelBody.ownerDocument;
+    for (const field of SSH_FIELDS) {
+      const label = document.createElement('label');
+      label.htmlFor = `connect-ssh-${field.name}`;
+      label.textContent = field.label;
+      const input = document.createElement('input');
+      input.id = `connect-ssh-${field.name}`;
+      input.type = field.type;
+      input.value = field.value;
+      // Nothing here is remembered between openings: a saved connection is B8's, and a
+      // form that half-remembered would be a form a listener has to check before trusting.
+      input.autocomplete = 'off';
+      this.panelBody.append(label, input);
+    }
+  }
+
+  /** What the form was filled in with, as the profile that starts it. */
+  private sshProfile(fallback: ProfileId): ProfileId {
+    const read = (name: string): string =>
+      this.panelBody
+        .querySelector<HTMLInputElement>(`#connect-ssh-${name}`)
+        ?.value.trim() ?? '';
+    const host = read('host');
+    if (host === '') {
+      // **Left to the backend to refuse**, with the sentence it already has for an unfilled
+      // form — one path, one place the words are decided, and no disabled control that
+      // reads differently from how it looks (the reasoning decision 4 applies to an
+      // unavailable kind).
+      return fallback;
+    }
+    const port = Number(read('port'));
+    return {
+      profile: 'Ssh',
+      host,
+      port: Number.isFinite(port) && port > 0 ? port : 22,
+      user: read('user'),
+    };
   }
 
   /** What to do about the chosen variant, when there is nothing to be done with it. */
@@ -375,6 +452,9 @@ export class ConnectDialog {
   }
 
   private profile(row: Connectable): ProfileId {
+    if (isSsh(row)) {
+      return this.sshProfile(row.id);
+    }
     if (row.variants.length === 0) {
       return row.id;
     }
