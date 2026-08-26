@@ -78,7 +78,8 @@ pub fn run() {
             crate::routers::submit_command,
             crate::routers::send_key,
             crate::routers::about,
-            crate::routers::platform
+            crate::routers::platform,
+            crate::routers::connection
         ]);
 
     // Embedded WebDriver server for E2E tests (spec T2): debug builds only, so
@@ -142,6 +143,15 @@ pub(crate) fn session() -> SessionService {
 fn transport(clock: Arc<dyn Clock>) -> (Box<dyn Transport>, Box<dyn ShellAdapter>) {
     match env::var(SHELL_ENV) {
         Ok(program) => {
+            // **Trimmed, because `cmd.exe` hands us the whitespace.** `set ACTER_SHELL=x &&
+            // acter` puts everything up to the `&&` into the value, trailing space
+            // included — and a name with a stray space matches no adapter, so the session
+            // silently became an unintegrated shell with no injection, no markers and no
+            // prompt. Found by the user on 2026-08-25, who met it as "no prompt is coming",
+            // which is as far from "your environment variable has a space in it" as a
+            // symptom can get. A shell nobody recognises is a real state this product
+            // supports; being pushed into it by punctuation is not.
+            let program = program.trim().to_owned();
             // The composition root names no shell since B5.1: which shell this is, what it
             // is started with and what it can mark are one object's answers, and the same
             // object answers them for the suites that measure a real one.

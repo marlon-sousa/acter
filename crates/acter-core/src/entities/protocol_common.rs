@@ -38,6 +38,16 @@ pub enum Mode {
 /// in Phase 1; the other states are exercised once SSH lands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
 pub enum ConnectionState {
+    /// The session has been started and is not usable yet: a process was spawned, or a
+    /// network connection is being made, and the far end has not said anything.
+    ///
+    /// **Added by A9 because it is the state a user meets first**, and the one they were
+    /// never told about: a window opening onto PowerShell sat silent for seconds while the
+    /// shell started, which a listener cannot tell from a session that is broken (roadmap
+    /// 23.7). It is deliberately not "the process exists" — a shell that has not drawn a
+    /// prompt is not one anybody can use, and reporting it as connected is a lie a listener
+    /// would act on.
+    Connecting,
     Connected,
     Reconnecting,
     Disconnected,

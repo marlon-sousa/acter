@@ -44,10 +44,10 @@ use tokio::spawn;
 use tokio::sync::mpsc::{Receiver, Sender, UnboundedSender, channel, unbounded_channel};
 
 use crate::{
-    BoundaryEvent, BoundaryTracker, Clock, CommandId, EventSink, ExitCode, Integration, KeyAck,
-    KeyPress, LineId, LineRevision, PacingConfig, Region, Screen, SessionActor, SessionApi,
-    SessionEvent, SessionId, SessionInput, SessionIntent, ShellFacts, ShellMarkers, SubmitAck,
-    TerminalEngine, Timer, Transport, intent_for,
+    BoundaryEvent, BoundaryTracker, Clock, CommandId, ConnectionState, EventSink, ExitCode,
+    Integration, KeyAck, KeyPress, LineId, LineRevision, PacingConfig, Region, Screen,
+    SessionActor, SessionApi, SessionEvent, SessionId, SessionInput, SessionIntent, ShellFacts,
+    ShellMarkers, SubmitAck, TerminalEngine, Timer, Transport, intent_for,
 };
 
 /// Read buffering between the transport and the pump. Bounded, so a far end that floods
@@ -162,6 +162,7 @@ impl SessionService {
                 running: Arc::clone(&running),
                 integration: Integration::Pending,
                 drawing: None,
+                spoken: false,
                 markers,
                 submitted: VecDeque::new(),
                 echo: Echo::default(),
@@ -284,22 +285,65 @@ enum Request {
 /// The session starts before any frontend exists and outlives a webview reload, while
 /// `attach_session` may be called more than once — a reload re-establishes the Channel.
 /// So the actor is handed something stable, and this holds the part that changes.
+/// How many events are held for a frontend that has not attached yet.
+///
+/// Generous, because the window it covers is milliseconds to seconds — a shell starting
+/// while a webview loads — and because the alternative is losing the opening of a session.
+/// If it is ever reached, nothing is attached and nothing is going to be: a session with
+/// ten thousand events and no frontend is headless, and holding more would only grow.
+const BACKLOG: usize = 10_000;
+
 #[derive(Default)]
-struct AttachedSink(Mutex<Option<Arc<dyn EventSink>>>);
+struct Attached {
+    sink: Option<Arc<dyn EventSink>>,
+    /// What the session said before anyone was listening.
+    backlog: Vec<SessionEvent>,
+}
+
+#[derive(Default)]
+struct AttachedSink(Mutex<Attached>);
 
 impl AttachedSink {
+    /// Attaches, and hands over everything said before now.
+    ///
+    /// **The backlog is the whole point of this type since A9.** A session starts the
+    /// moment the window does, and the frontend attaches when its page has loaded — so a
+    /// shell that draws its prompt quickly does it into a sink nobody is holding. What was
+    /// lost was not decoration: the session's first prompt, which is where a listener reads
+    /// their working directory, and `ConnectionChanged`, which is how the window knows to
+    /// stop saying "connecting". Both are emitted once and never repeated, so dropping them
+    /// left the window permanently wrong rather than briefly late.
+    ///
+    /// A reload attaches again; by then the backlog is empty and this is the assignment it
+    /// always was.
     fn attach(&self, sink: Arc<dyn EventSink>) {
-        *self.0.lock().expect("sink lock poisoned") = Some(sink);
+        let mut attached = self.0.lock().expect("sink lock poisoned");
+        attached.sink = Some(Arc::clone(&sink));
+        // Sent while the lock is held, which is deliberate: see `send`.
+        for event in std::mem::take(&mut attached.backlog) {
+            sink.send(event);
+        }
     }
 }
 
 impl EventSink for AttachedSink {
-    /// The lock is released before the forwarded send, so nothing a sink does while
-    /// sending can deadlock against an attach.
+    /// **Forwarded under the lock, and that is a change of stance worth stating.** This
+    /// used to clone the sink and release the lock first, so that nothing a sink did while
+    /// sending could deadlock against an attach. Holding it costs that guarantee and buys
+    /// ordering: with the lock released, an event sent during an attach could overtake the
+    /// backlog being flushed beside it, and order is load-bearing here — render before
+    /// announce, the verdict before the next prompt. Nothing this product attaches
+    /// re-enters the sink while sending (the frontend's is a Tauri channel), so the
+    /// deadlock the old comment guarded against is not reachable, while the reordering is.
     fn send(&self, event: SessionEvent) {
-        let attached = self.0.lock().expect("sink lock poisoned").clone();
-        if let Some(sink) = attached {
-            sink.send(event);
+        let mut attached = self.0.lock().expect("sink lock poisoned");
+        match &attached.sink {
+            Some(sink) => sink.send(event),
+            None => {
+                if attached.backlog.len() < BACKLOG {
+                    attached.backlog.push(event);
+                }
+            }
         }
     }
 }
@@ -335,6 +379,13 @@ struct Pump {
     /// this one. Two readers of the same bytes with different lifetimes is the shape B4.5
     /// warned about, so each keeps what it needs.
     drawing: Option<String>,
+    /// Whether the far end has said anything yet.
+    ///
+    /// **What makes a session "connected" is the far end speaking**, not a process having
+    /// been spawned (spec A9, decision 3). A shell that was launched and has not drawn a
+    /// prompt is not one anybody can use, and a window that called it connected would be
+    /// telling a listener to go ahead and type.
+    spoken: bool,
     /// What the far end's prompt is able to say (spec B4.5). Only [`Pump::wants`] reads it
     /// here; the rest of the difference is the tracker's.
     markers: ShellMarkers,
@@ -419,8 +470,24 @@ impl Pump {
                 // The far end let go: the shell exited, the connection dropped, the
                 // scripted session ended. Not an error — the `Transport` port models the
                 // end of a session as its channel closing.
-                Woke::Read(None) => break,
-                Woke::Read(Some(bytes)) => self.feed(&bytes).await,
+                Woke::Read(None) => {
+                    // The window stops saying it is connected to something that is gone,
+                    // and keeps saying so rather than announcing it once and then looking
+                    // like a working session (spec A9, decision 4).
+                    self.send(SessionInput::Connection {
+                        state: ConnectionState::Disconnected,
+                    });
+                    break;
+                }
+                Woke::Read(Some(bytes)) => {
+                    if !self.spoken {
+                        self.spoken = true;
+                        self.send(SessionInput::Connection {
+                            state: ConnectionState::Connected,
+                        });
+                    }
+                    self.feed(&bytes).await;
+                }
                 // Every `SessionApi` handle is gone, so nothing can ask for anything
                 // again.
                 Woke::Request(None) => break,

@@ -82,3 +82,35 @@ main {
   border: 1px solid currentColor;
   background: Canvas;
 }
+
+/* The status bar sits at the bottom of the window, and that position is functional rather
+   than decorative. NVDA's report-status-line command does not look for an ARIA role: it
+   takes the bottom-left PIXEL of the foreground window, asks the accessibility tree what
+   object is there, and walks up from it looking for one whose role is STATUSBAR
+   (`api.getStatusBar`, read from NVDA's own source). An element that is merely last in the
+   document is not under that pixel, so the command finds nothing.
+
+   Pinning it is the half we control. **The other half does not work, and was measured:**
+   with the bar pinned here, NVDA's report-status-line command still answers nothing
+   (2026-08-25). So either Chromium does not expose `role="status"` as ROLE_SYSTEM_STATUSBAR,
+   or the window's bottom edge belongs to the frame rather than to the webview — and either
+   way no markup on this side will make that command answer. The route that does work is a
+   keystroke Acter owns, which DESIGN already reserves as Ctrl+Shift+S.
+
+   The bar stays pinned regardless: a status bar belongs at the bottom of a window, it is
+   reachable as a labelled `contentinfo` landmark, and it announces itself when it changes. */
+footer[aria-label='Connection status'] {
+  position: fixed;
+  left: 0;
+  bottom: 0;
+  width: 100%;
+  margin: 0;
+  padding: 0.15rem 0.5rem;
+  border-top: 1px solid currentColor;
+  background: Canvas;
+}
+
+/* So the last line of output is never hidden behind it. */
+main {
+  padding-bottom: 2.5rem;
+}

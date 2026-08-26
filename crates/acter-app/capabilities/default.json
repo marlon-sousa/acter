@@ -3,5 +3,9 @@
   "identifier": "default",
   "description": "Baseline capability for the main window.",
   "windows": ["main"],
-  "permissions": ["core:default", "wdio-webdriver:default"]
+  "permissions": [
+    "core:default",
+    "wdio-webdriver:default",
+    "core:window:allow-set-title"
+  ]
 }

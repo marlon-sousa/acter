@@ -9,6 +9,7 @@ import { AboutDialog } from './adapters/about_dialog';
 import { EditFieldDom } from './adapters/edit_field';
 import { bindKeys } from './adapters/keyboard';
 import { installMenuBar } from './adapters/menu_bar';
+import { WindowChrome } from './adapters/window_chrome';
 import { AppController } from './controllers/app';
 import { TauriBackend, TauriShell } from './routers/tauri';
 
@@ -27,12 +28,21 @@ const announcer = new AnnouncerDom(byId('announcer'));
 const beep = new BeepAudio();
 // In a debug build this wraps the router and installs `window.__acterDebug`; in a
 // release build it hands the router straight back and installs nothing.
+// What the window says it is: the operating system's title, the document's heading, and
+// the connection status, all from one adapter (spec A9).
+const windowChrome = new WindowChrome(
+  byId('window-title'),
+  byId('connection-status'),
+  document,
+  (title) => void shell.setTitle(title),
+);
 const controller = new AppController(
   installDebugRecorder(new TauriBackend()),
   editField,
   buffer,
   announcer,
   beep,
+  windowChrome,
 );
 
 // The menu bar is in the document rather than in the window frame, and F10 is the way
@@ -64,6 +74,11 @@ void shell.platform().then((os) => {
     editField,
   );
 });
+
+// What this window is connected to, asked once at startup. Until B7 makes the far end
+// something that can change while the app runs, this is a fact about the launch — so it is
+// read once rather than watched, and `ConnectionChanged` keeps the *state* current.
+void shell.connection().then((name) => windowChrome.connectedTo(name));
 
 // The edit field is passed because the session hears a keystroke only while that field
 // has focus (DESIGN, layer 2), and the adapter enforces that by listening on the element

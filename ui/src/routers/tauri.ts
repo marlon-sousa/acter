@@ -33,6 +33,14 @@ export class TauriShell implements AppShell {
     return invoke<AboutFacts>('about');
   }
 
+  setTitle(title: string): Promise<void> {
+    return getCurrentWindow().setTitle(title);
+  }
+
+  connection(): Promise<string | null> {
+    return invoke<string | null>('connection');
+  }
+
   platform(): Promise<string> {
     return invoke<string>('platform');
   }
