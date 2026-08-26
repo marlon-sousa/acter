@@ -155,6 +155,51 @@ connecting, authenticating — because a listener with no feedback cannot tell a
 from a dead one. This is the same gap roadmap 23.7 filed for local shells that start slowly,
 and the two should share one mechanism rather than inventing a second.
 
+### 7. What the far end is, asked once, on a channel of its own — Decided 2026-08-26
+
+Soon after the session channel opens, Acter opens a **second** channel and asks the far end
+what it is: `$SHELL`, then `$0`, then the version variables `$BASH_VERSION`,
+`$ZSH_VERSION`, `$FISH_VERSION`. The first is the account's configured shell, the second is
+what is actually running and carries a login shell's leading `-`, and the third is what a
+shell says about itself and is the most certain.
+
+**A second channel, not a line typed into the session.** SSH allows many channels over one
+connection, and an `exec` request on a fresh one produces output that never reaches the
+terminal buffer. Typing the probe into the session instead would put a command nobody typed
+in front of a screen reader — B4.9's subject, and the same objection that settled decision 2
+two paragraphs above. `exec` also answers the right question rather than an adjacent one:
+sshd runs it through the account's own shell, so `$SHELL` there is the program a `shell`
+request would have started.
+
+**It does not make the session integrated, and decision 2 stands.** Knowing the far end is
+bash does not make bash emit OSC 133; without a snippet installed there, nothing does. The
+probe changes what Acter can *say* and what it *knows*, not what the far end emits.
+
+What it buys, and each is worth having on its own:
+
+- **A sentence with a subject.** "Shell integration is unavailable" tells a listener nothing
+  they can act on. "Connected to acter-ssh. bash, with no shell integration set up on this
+  host" names what they are talking to and points at the fix.
+- **A correct end-of-input.** This is the one `ShellAdapter` fact that survives without
+  integration and it is not cosmetic: bash ends on `0x04`, PowerShell ends on the literal
+  line `exit` and on neither control byte (measured, B5.2). A session that cannot be ended
+  properly is a real defect, and without the probe every SSH session would have to answer
+  `None` — "Acter does not know how" — for a shell it could simply have asked about.
+- **The ground 27.1 stands on.** The same probe notices a snippet *already* installed,
+  whether Acter put it there or the user's own iTerm2 or VS Code setup did.
+
+**Advisory, and never a gate.** `exec` can be refused: a server with `ForceCommand`, a
+restricted shell, or `internal-sftp` alone will not run it, and under `ForceCommand` it can
+return an answer about something else entirely. So a probe that fails, hangs or lies must
+cost nothing — the session is already open and stays open, and Acter falls back to the
+unnamed sentence. The probe is never on the path between the user and their shell.
+
+**Two announcements must not race**, which is the accessibility half of this. The probe's
+answer arrives after the connection is established, so the naive shape speaks twice and the
+second interrupts the first. Whether the connection sentence waits briefly for the probe or
+the detail follows as its own sentence is settled with 23.7's progress mechanism, because it
+is the same problem: an asynchronous fact arriving after the thing it describes.
+
 ## Files touched (sketch)
 
 - `crates/acter-transports/src/ssh.rs` — the transport (new).
@@ -173,6 +218,10 @@ and the two should share one mechanism rather than inventing a second.
 - [ ] A **changed** host key is announced differently, and refusing it is the default.
 - [ ] A password never reaches the buffer, the announcer, a log, or the debug tape.
 - [ ] Interrupt and resize cross the connection.
+- [ ] The far end is asked what it is on its own channel, and the answer never
+      reaches the terminal buffer.
+- [ ] A server that refuses `exec` still gives a working session, announced without
+      the shell's name rather than not announced.
 - [ ] A connection that fails says why, in one sentence a listener can act on.
 - [ ] Accessibility checklist: every auth flow driven end to end with a screen reader.
 

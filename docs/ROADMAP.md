@@ -2232,6 +2232,15 @@ thing to pick up once the adapters land, not merely the next number.
     intact. VS Code, WezTerm and iTerm2 all ship exactly this; only kitty automates it, and
     it does so by shipping a tarball over the TTY.
 
+    **What it does still learn is what the far end is** (decision 7): a second channel, an
+    `exec` request, and `$SHELL` — never a line typed into the session, where a command
+    nobody typed would be read aloud. That does not make the session integrated, since
+    knowing it is bash does not make bash emit markers. It buys a sentence with a subject
+    ("bash, with no shell integration set up on this host" rather than a bare "unavailable")
+    and a correct end-of-input, which is the one shell fact that survives without markers
+    and the difference between a session that can be ended properly and one that answers
+    "Acter does not know how".
+
 27.1. B9.5, offer to integrate the far end. Spec: none yet → specify when 27 is Done.
 
     A button that writes the integration snippet into the remote account's shell startup,
@@ -2257,21 +2266,11 @@ thing to pick up once the adapters land, not merely the next number.
     snippet to ~/.zshrc?" is a dialog, where a runtime heuristic is invisible and wrong
     silently.
 
-    **Ask the far end, on a channel of its own.** Reading `$SHELL` is the cheap probe, and
-    it must not be typed into the user's session: a command nobody typed, echoed into the
-    buffer and read aloud, is B4.9's problem re-entered — the same objection that helped
-    settle 27. SSH allows more than one channel per connection, so the probe belongs on a
-    second `session` channel with an `exec` request, where its output never reaches the
-    terminal buffer at all. `exec` also answers exactly the right question, because sshd
-    runs it through the account's own shell: `$SHELL` there is the passwd value, which is
-    the program a `shell` request would have started.
-
-    Reliability runs `$SHELL`, then `$0`, then the version variables. `$SHELL` is the
-    account's configured shell and is usually right; `$0` is what is actually running and
-    carries the login shell's leading `-` (which is why kitty strips one before matching);
-    `$BASH_VERSION`, `$ZSH_VERSION` and `$FISH_VERSION` are what a shell says about itself
-    and are the most certain of the three. The widget can afford all of them — it runs once,
-    behind a button.
+    **The probe this needs is already in 27.** Spec B9, decision 7 asks the far end what it
+    is on a channel of its own, soon after connecting, so this entry inherits the answer
+    rather than asking again — and inherits the same probe noticing a snippet that is
+    *already* installed, whether Acter put it there or the user's own iTerm2 or VS Code
+    setup did.
 
     **Login versus non-login is the trap, and the rig exists to catch it.** A `shell`
     request starts a *login* shell — sshd sets `argv[0]` to `-bash` — so bash reads
