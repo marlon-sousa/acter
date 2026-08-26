@@ -101,13 +101,20 @@
           spellcheck="false"
         />
       </form>
-      <!-- The connection's state, announced when it changes and readable whenever the user
-           wants it. `role="status"` is polite: it never interrupts output being read, and it
-           never takes focus — the state changes while the user is doing something else,
-           which is exactly why a status they must go and find would be a status nobody has
-           (spec A9, decision 2). -->
-      <p id="connection-status" role="status">connecting</p>
     </main>
+    <!-- The status bar, at the end of the document the way a status bar sits at the bottom
+         of a window, and reachable three ways.
+         `<footer>` as a direct child of `<body>` is the `contentinfo` landmark, so landmark
+         navigation finds it; `aria-label` names it, so arriving there says what it is rather
+         than reading a bare word; and `role="status"` on the text makes a change announce
+         itself politely — never interrupting output being read, never taking focus, because
+         the state changes while the user is busy elsewhere (spec A9, decision 2).
+         The label is on the landmark and not on the live region deliberately: a name on the
+         region itself is read out with every change, and "connection status connected" every
+         time is the sort of repetition a listener learns to tune out. -->
+    <footer aria-label="Connection status">
+      <p id="connection-status" role="status">connecting</p>
+    </footer>
     <!-- About. A modal <dialog> rather than a native window: the platform traps focus
          and answers Escape for us, and it stays inside the webview, which is the whole
          reason the menu bar above is in the document too (spec A7). Its four facts are

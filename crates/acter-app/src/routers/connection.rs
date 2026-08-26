@@ -19,7 +19,12 @@ const SHELL_ENV: &str = "ACTER_SHELL";
 /// far end anybody chose and has no name worth putting in a title bar.
 #[tauri::command]
 pub(crate) fn connection() -> Option<String> {
-    env::var(SHELL_ENV).ok().map(|program| named(&program))
+    // Trimmed for the container's reason: `cmd.exe` includes the space before a `&&` in
+    // the value, and a title reading "Acter - powershell.exe " is the visible half of a
+    // session that quietly lost its shell integration.
+    env::var(SHELL_ENV)
+        .ok()
+        .map(|program| named(program.trim()))
 }
 
 /// The program as the user named it, without the extension a title bar gains nothing from.
@@ -48,6 +53,15 @@ mod tests {
 
     /// A name with no extension at all survives, and so does one whose "extension" is part
     /// of the name.
+    /// What `cmd.exe` actually hands over: `set ACTER_SHELL=powershell.exe && acter` puts
+    /// the space before the `&&` into the value. The name still has to come out clean,
+    /// because the same string decides which adapter the session gets.
+    #[test]
+    fn whitespace_around_the_name_is_not_part_of_it() {
+        assert_eq!(named("powershell.exe ".trim()), "powershell");
+        assert_eq!(named(" cmd.exe".trim()), "cmd");
+    }
+
     #[test]
     fn nothing_else_is_trimmed() {
         assert_eq!(named("wsl"), "wsl");
