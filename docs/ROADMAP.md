@@ -418,6 +418,26 @@ the answer to "what should we do now?".
     protocol for the submission that races a session ending, which is what it was always
     really for.
 
+13.6. **Done** — A11, PowerShell is one kind and its editions are its variants. Spec:
+    [a11-powershell-is-one-kind.md](specs/a11-powershell-is-one-kind.md) — asked for by the
+    user on 2026-08-26 while A10 was being tested: *"create powershell as a single division,
+    and consider the different versions as connection properties, like you did with wsl"*.
+
+    The list had four kinds, two of which differed by one word, while WSL — which comes in as
+    many flavours as the machine has distributions — was already one row with a panel. The
+    asymmetry was an accident of history rather than a decision: B5.4 made the editions two
+    kinds because there was nowhere else to put them, and A8 built the panel that is where
+    they belong. Three rows now, however many editions and distributions a machine has.
+
+    **The one real difference between the two kinds decides the rest.** Which PowerShell
+    editions exist is the same answer on every machine in the world, so they are named and
+    asked about; which Linux distributions exist is the machine's answer twice over, so they
+    can only be enumerated. That is why a variant carries availability at all: a machine with
+    Windows PowerShell and no PowerShell 7 has the kind and one edition, and listing only
+    what is installed would teach that listener that Acter does not support the edition they
+    have read about — B5.4's argument, one level down. A missing edition keeps its place,
+    says so in its name, and shows what to type.
+
 13.5. The first Enter after a window opens does not always press the focused control.
     Spec: none yet → specify first. **Found 2026-08-26** in A10's NVDA pass, chased through
     two fixes, and filed rather than chased further, because the next step is a guess at a

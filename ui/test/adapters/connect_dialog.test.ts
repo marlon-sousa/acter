@@ -46,8 +46,18 @@ function wsl(): Connectable {
     available: true,
     instructions: null,
     variants: [
-      { id: { profile: 'Distribution', name: 'Ubuntu' }, label: 'Ubuntu' },
-      { id: { profile: 'Distribution', name: 'Debian' }, label: 'Debian' },
+      {
+        id: { profile: 'Distribution', name: 'Ubuntu' },
+        label: 'Ubuntu',
+        available: true,
+        instructions: null,
+      },
+      {
+        id: { profile: 'Distribution', name: 'Debian' },
+        label: 'Debian',
+        available: true,
+        instructions: null,
+      },
     ],
   };
 }
@@ -60,6 +70,31 @@ function missing(): Connectable {
     instructions:
       'PowerShell 7 is not installed. Install it by running winget install Microsoft.PowerShell from any terminal.',
     variants: [],
+  };
+}
+
+/** PowerShell as A11 shapes it: one kind, its editions as variants, one of them missing. */
+function powershell(): Connectable {
+  return {
+    id: { profile: 'Shell', kind: 'WindowsPowerShell' },
+    label: 'PowerShell',
+    available: true,
+    instructions: null,
+    variants: [
+      {
+        id: { profile: 'Shell', kind: 'WindowsPowerShell' },
+        label: 'Windows PowerShell',
+        available: true,
+        instructions: null,
+      },
+      {
+        id: { profile: 'Shell', kind: 'PowerShellSeven' },
+        label: 'PowerShell 7 (not available)',
+        available: false,
+        instructions:
+          'PowerShell 7 is not installed. Install it by running winget install Microsoft.PowerShell from any terminal.',
+      },
+    ],
   };
 }
 
@@ -439,3 +474,115 @@ function press2(key: string, shift = false): void {
     new KeyboardEvent('keydown', { key, shiftKey: shift, bubbles: true }),
   );
 }
+
+// **Enter is the dialog's default action, from anywhere in it.** It was handled on the
+// kinds list alone, so a user who tabbed into the panel, chose a distribution and pressed
+// Enter got nothing at all — reported by the user on 2026-08-26, choosing Debian.
+describe('Enter as the default action', () => {
+  function enterOn(id: string): void {
+    byId(id).dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }),
+    );
+  }
+
+  it('connects from the distribution combo box', async () => {
+    await dialog.open();
+    press('ArrowDown');
+    byId<HTMLSelectElement>('connect-variant').value = '1';
+
+    enterOn('connect-variant');
+    await Promise.resolve();
+
+    expect(attempted).toEqual([{ profile: 'Distribution', name: 'Debian' }]);
+  });
+
+  it('connects from the panel', async () => {
+    await dialog.open();
+    press('End');
+
+    enterOn('connect-panel');
+    await Promise.resolve();
+
+    expect(attempted).toEqual([{ profile: 'Shell', kind: 'PowerShellSeven' }]);
+  });
+
+  /** A button answers Enter itself, and answering it here as well would connect when the
+   * user pressed Cancel. */
+  it('leaves a button to answer its own Enter', async () => {
+    await dialog.open();
+
+    enterOn('connect-cancel');
+    await Promise.resolve();
+
+    expect(attempted).toEqual([]);
+  });
+});
+
+// **PowerShell is one kind with its editions as variants** (spec A11), the shape WSL
+// already had. What makes it different from WSL is that an edition can be *missing* while
+// the kind is not — so B5.4's rule applies one level down: it stays in the panel and says
+// what to do about it.
+describe('a kind whose variants can be missing', () => {
+  beforeEach(() => {
+    connect.rows = [powershell(), cmd()];
+  });
+
+  it('names the panel after what its variants are', async () => {
+    await dialog.open();
+
+    expect(byId('connect-panel-title').textContent).toBe('2 editions');
+    expect(document.querySelector('label[for="connect-variant"]')?.textContent).toBe(
+      'Edition',
+    );
+  });
+
+  it('lists the missing edition, saying so in its name', async () => {
+    await dialog.open();
+
+    const select = byId<HTMLSelectElement>('connect-variant');
+    expect(Array.from(select.options).map((option) => option.textContent)).toEqual([
+      'Windows PowerShell',
+      'PowerShell 7 (not available)',
+    ]);
+  });
+
+  /** Nothing to say about the edition that works, so the panel holds only the control. */
+  it('shows no instructions while an available edition is chosen', async () => {
+    await dialog.open();
+
+    expect(byId('connect-panel-body').querySelector('[data-instructions]')).toBeNull();
+  });
+
+  /** And the panel must not change in silence: choosing the missing one puts what to do
+   * about it in front of the listener, and says that it is there. */
+  it('shows and announces what to do when the missing edition is chosen', async () => {
+    await dialog.open();
+    announcer.announcements = [];
+    const select = byId<HTMLSelectElement>('connect-variant');
+
+    select.value = '1';
+    select.dispatchEvent(new Event('change'));
+
+    const said = byId('connect-panel-body').querySelector('[data-instructions]');
+    expect(said?.textContent).toContain('winget install');
+    // Focusable, because prose inside an application region cannot be arrowed.
+    expect((said as HTMLElement).tabIndex).toBe(0);
+    expect(announcer.announcements).toEqual(['not available']);
+  });
+
+  /** Choosing it anyway goes through: the backend refuses it with the very words the panel
+   * is showing, which is one path and one place the sentence is decided. */
+  it('still attempts the missing edition, and lets the backend refuse it', async () => {
+    succeeds = false;
+    await dialog.open();
+    const select = byId<HTMLSelectElement>('connect-variant');
+    select.value = '1';
+    select.dispatchEvent(new Event('change'));
+
+    byId('connect-start').click();
+    await Promise.resolve();
+
+    expect(attempted).toEqual([{ profile: 'Shell', kind: 'PowerShellSeven' }]);
+    expect(byId<HTMLDialogElement>('connect-dialog').open).toBe(true);
+  });
+});

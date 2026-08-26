@@ -46,14 +46,17 @@ const NOT_AVAILABLE: &str = " (not available)";
 /// The kinds this build offers at all, in the order they are listed when everything is
 /// available.
 ///
-/// cmd first because it is the one that is always there; then the two PowerShell editions
-/// in version order; then WSL, which is the heaviest thing to have installed and the least
-/// likely to be somebody's daily shell.
+/// cmd first because it is the one that is always there; then PowerShell; then WSL, which is
+/// the heaviest thing to have installed and the least likely to be somebody's daily shell.
+///
+/// **The two PowerShell editions are not here**, and neither are WSL's distributions: both
+/// are *variants* of a kind, chosen in the connect dialog's panel rather than arrowed as
+/// rows of their own (spec A11). A listener meets three kinds however many editions and
+/// distributions this machine happens to have.
 #[cfg(windows)]
 const ON_THIS_PLATFORM: &[ConnectionKind] = &[
     ConnectionKind::Cmd,
-    ConnectionKind::WindowsPowerShell,
-    ConnectionKind::PowerShellSeven,
+    ConnectionKind::PowerShell,
     ConnectionKind::Wsl,
 ];
 
@@ -150,32 +153,47 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn installing_something_moves_one_row_rather_than_reordering_the_list() {
-        let before = catalogue(|kind| {
-            !matches!(kind, ConnectionKind::PowerShellSeven | ConnectionKind::Wsl)
-        });
+        let order = [
+            ConnectionKind::Cmd,
+            ConnectionKind::PowerShell,
+            ConnectionKind::Wsl,
+        ];
+        let before =
+            catalogue(|kind| !matches!(kind, ConnectionKind::PowerShell | ConnectionKind::Wsl));
         let after = catalogue(|kind| kind != ConnectionKind::Wsl);
 
         assert_eq!(
             before.iter().map(|row| row.kind).collect::<Vec<_>>(),
-            [
-                ConnectionKind::Cmd,
-                ConnectionKind::WindowsPowerShell,
-                ConnectionKind::PowerShellSeven,
-                ConnectionKind::Wsl
-            ],
-            "PowerShell 7 missing sorts it beside WSL, both after what works"
+            order,
+            "PowerShell missing sorts it beside WSL, both after what works"
         );
         assert_eq!(
             after.iter().map(|row| row.kind).collect::<Vec<_>>(),
-            [
-                ConnectionKind::Cmd,
-                ConnectionKind::WindowsPowerShell,
-                ConnectionKind::PowerShellSeven,
-                ConnectionKind::Wsl
-            ],
+            order,
             "and installing it changes only whether it is available, not where it is"
         );
-        assert!(!before[2].available && after[2].available);
+        assert!(!before[1].available && after[1].available);
+    }
+
+    /// **The editions and the distributions are not rows** (spec A11). A listener meets
+    /// three kinds however many of either this machine has, and chooses between them in the
+    /// dialog's panel.
+    #[cfg(windows)]
+    #[test]
+    fn an_edition_is_never_a_row_of_its_own() {
+        let listed = catalogue(|_| true);
+
+        for edition in ConnectionKind::PowerShell.editions() {
+            assert!(
+                !listed.iter().any(|row| row.kind == *edition),
+                "{edition:?} is a variant of PowerShell, not a row"
+            );
+        }
+        assert!(
+            listed
+                .iter()
+                .any(|row| row.kind == ConnectionKind::PowerShell)
+        );
     }
 
     /// Platform gating, asserted for the build this runs on rather than in the abstract.
@@ -184,7 +202,7 @@ mod tests {
     fn a_windows_build_offers_the_windows_kinds() {
         let listed = catalogue(|_| true);
 
-        assert_eq!(listed.len(), 4);
+        assert_eq!(listed.len(), 3);
         assert!(listed.iter().any(|row| row.kind == ConnectionKind::Cmd));
         assert!(listed.iter().any(|row| row.kind == ConnectionKind::Wsl));
     }

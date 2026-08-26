@@ -101,8 +101,23 @@ pub struct Connectable {
 pub struct Variant {
     /// What to hand [`ConnectApi::use_profile`](crate::ConnectApi) to start this one.
     pub id: ProfileId,
-    /// What the user hears in the panel: "Ubuntu", not "WSL: Ubuntu".
+    /// What the user hears in the panel: "Ubuntu", not "WSL: Ubuntu", with
+    /// `(not available)` on the end when this machine cannot start it.
     pub label: String,
+    /// Whether choosing this one can start a session.
+    ///
+    /// **A variant can be missing while its kind is not**, which is what PowerShell needs:
+    /// a machine with Windows PowerShell and no PowerShell 7 has the kind and one of its two
+    /// editions. Listing only what is installed would teach that listener that Acter does
+    /// not support PowerShell 7, which is B5.4's whole argument, so a missing edition stays
+    /// in the panel and says what to do about it.
+    ///
+    /// Always true for a WSL distribution, and that is not an oversight: distributions are
+    /// *discovered* by asking `wsl.exe`, so one that is not installed cannot be enumerated
+    /// and has no name to list.
+    pub available: bool,
+    /// What to say about a variant that cannot be started, and `None` when it can.
+    pub instructions: Option<String>,
 }
 
 /// Which far end this window is on now, and what to call it.
@@ -405,6 +420,8 @@ mod tests {
                     name: "Ubuntu".to_owned(),
                 },
                 label: "Ubuntu".to_owned(),
+                available: true,
+                instructions: None,
             }],
         };
 

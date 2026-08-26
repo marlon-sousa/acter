@@ -37,6 +37,8 @@ const windowChrome = new WindowChrome({
   notConnectedWindow: byId('not-connected-window'),
   connectButton: byId('connect-button'),
   terminalWindow: byId('terminal-window'),
+  results: byId('results'),
+  buffer,
   form: byId('command-form'),
   editField,
   ended: byId('terminal-ended'),

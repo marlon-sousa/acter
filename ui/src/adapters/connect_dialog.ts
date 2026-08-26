@@ -43,9 +43,27 @@ export function panelSummary(row: Connectable): string {
   if (row.variants.length === 0) {
     return NO_OPTIONS;
   }
-  const noun =
-    row.variants[0]?.id.profile === 'Distribution' ? 'distribution' : 'option';
-  return `${row.variants.length} ${noun}${row.variants.length === 1 ? '' : 's'}`;
+  const count = row.variants.length;
+  return `${count} ${noun(row)}${count === 1 ? '' : 's'}`;
+}
+
+/**
+ * What this kind's variants are called on screen.
+ *
+ * **The frontend's knowledge, by A8's decision 3**: the backend says which things exist, and
+ * what they are called in a user interface is this side's. It is read off the variant's own
+ * shape rather than from the row, because that is the fact that decides it — a distribution
+ * is a distribution whichever kind carried it.
+ */
+function noun(row: Connectable): string {
+  switch (row.variants[0]?.id.profile) {
+    case 'Distribution':
+      return 'distribution';
+    case 'Shell':
+      return 'edition';
+    default:
+      return 'option';
+  }
 }
 
 /** What the dialog needs of whoever actually connects: did it work. */
@@ -82,6 +100,7 @@ export class ConnectDialog {
     this.dialog.addEventListener('keydown', (event) =>
       keepTabInside(this.dialog, event),
     );
+    this.dialog.addEventListener('keydown', (event) => this.enterConnects(event));
     this.kinds.addEventListener('keydown', (event) => this.navigate(event));
     this.kinds.addEventListener('click', (event) => this.clicked(event));
     this.dialog
@@ -170,13 +189,7 @@ export class ConnectDialog {
     if (!row.available) {
       // The instructions are prose to be *read*: what is missing, what to type, and where
       // (spec B5.4, decision 4). They are the backend's words, not this module's.
-      // **Focusable, because the dialog is an application region** and prose inside one
-      // cannot be arrowed. Tab reaches it and the reader says it; without the `tabindex`
-      // the one thing a user of an unavailable kind actually needs would be unreachable.
-      const said = document.createElement('p');
-      said.tabIndex = 0;
-      said.textContent = row.instructions ?? '';
-      this.panelBody.append(said);
+      this.panelBody.append(this.instructions(row.instructions ?? ''));
       return;
     }
     if (row.variants.length === 0) {
@@ -184,7 +197,10 @@ export class ConnectDialog {
     }
     const label = document.createElement('label');
     label.htmlFor = 'connect-variant';
-    label.textContent = 'Distribution';
+    // Capitalised because it names a control rather than counting things: "Distribution",
+    // "Edition". The summary above it does the counting.
+    const which = noun(row);
+    label.textContent = which.charAt(0).toUpperCase() + which.slice(1);
     const select = document.createElement('select');
     select.id = 'connect-variant';
     for (const [index, variant] of row.variants.entries()) {
@@ -193,7 +209,47 @@ export class ConnectDialog {
       option.textContent = variant.label;
       select.append(option);
     }
+    // **A variant can be unavailable while its kind is not** — PowerShell 7 on a machine
+    // that only has Windows PowerShell — so what to do about it has to appear when it is
+    // chosen, and be *said*, because a panel that changes silently under a listener is the
+    // trap decision 2 exists to answer.
+    select.addEventListener('change', () => {
+      this.showVariantInstructions(row);
+      const chosen = row.variants[Number(select.value)];
+      if (chosen !== undefined && !chosen.available) {
+        this.announcer.announce(NOT_AVAILABLE);
+      }
+    });
     this.panelBody.append(label, select);
+    this.showVariantInstructions(row);
+  }
+
+  /** What to do about the chosen variant, when there is nothing to be done with it. */
+  private showVariantInstructions(row: Connectable): void {
+    const existing = this.panelBody.querySelector('[data-instructions]');
+    existing?.remove();
+    const select =
+      this.panelBody.querySelector<HTMLSelectElement>('#connect-variant');
+    const chosen = row.variants[Number(select?.value ?? 0)];
+    if (chosen === undefined || chosen.available) {
+      return;
+    }
+    this.panelBody.append(this.instructions(chosen.instructions ?? ''));
+  }
+
+  /**
+   * Read-only prose, made focusable.
+   *
+   * The dialog is an application region, and prose inside one cannot be arrowed — so without
+   * a tab stop the one thing a user of an unavailable kind actually needs would be
+   * unreachable.
+   */
+  private instructions(text: string): HTMLElement {
+    const said = this.panelBody.ownerDocument.createElement('p');
+    said.setAttribute('data-instructions', '');
+    said.tabIndex = 0;
+    said.textContent = text;
+    return said;
   }
 
   /**
@@ -240,10 +296,6 @@ export class ConnectDialog {
       case 'End':
         to = last;
         break;
-      case 'Enter':
-        event.preventDefault();
-        void this.chosen();
-        return;
       default:
         return;
     }
@@ -253,6 +305,29 @@ export class ConnectDialog {
       this.select();
       this.describe();
     }
+  }
+
+  /**
+   * **Enter is the dialog's default action, from anywhere in it.**
+   *
+   * It used to be handled on the kinds list alone, which meant a user who tabbed into the
+   * panel, chose a distribution and pressed Enter got nothing at all — reported by the user
+   * on 2026-08-26, choosing Debian. Pressing Enter after making a choice is what every
+   * dialog on this platform does, and a dialog that answers it in one of its controls and
+   * not the others is one you have to learn by failing.
+   *
+   * A button is left alone, because it answers Enter itself: catching it here would connect
+   * when the user pressed Cancel.
+   */
+  private enterConnects(event: KeyboardEvent): void {
+    if (event.key !== 'Enter') {
+      return;
+    }
+    if ((event.target as HTMLElement).closest('button') !== null) {
+      return;
+    }
+    event.preventDefault();
+    void this.chosen();
   }
 
   private clicked(event: Event): void {

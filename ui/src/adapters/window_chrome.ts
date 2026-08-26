@@ -53,6 +53,10 @@ export interface WindowElements {
   connectButton: HTMLElement;
   /** The whole window shown from the first connection onward. */
   terminalWindow: HTMLElement;
+  /** The results region, asked only whether it has anything in it. */
+  results: HTMLElement;
+  /** How to put focus into that buffer, which lands on its most recent heading (A5). */
+  buffer: { focus(): void };
   /** The edit field's form: the terminal window's half that takes input. */
   form: HTMLElement;
   /** Where focus belongs while a session is live. */
@@ -96,14 +100,26 @@ export class WindowChrome implements WindowView {
     this.landing().focus();
   }
 
-  /** Whichever control the window that is showing keeps focus on. */
+  /**
+   * Whichever control the window that is showing keeps focus on.
+   *
+   * **A session that has ended leaves a transcript, and reading it is what a user does
+   * next** — so focus lands in the buffer rather than on the Connect button, which is one
+   * Tab away. The user met the opposite on 2026-08-26: focus on the button, and the
+   * history they had just been told was kept was not where they were.
+   *
+   * With no transcript there is nothing to land in, so the button it is.
+   */
   private landing(): { focus(): void } {
     if (this.elements.terminalWindow.hidden) {
       return this.elements.connectButton;
     }
-    return this.elements.ended.hidden
-      ? this.elements.editField
-      : this.elements.reconnectButton;
+    if (this.elements.ended.hidden) {
+      return this.elements.editField;
+    }
+    return this.elements.results.hidden
+      ? this.elements.reconnectButton
+      : this.elements.buffer;
   }
 
   connectedTo(name: string | null): void {

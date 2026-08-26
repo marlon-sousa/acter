@@ -15,6 +15,7 @@ let status: HTMLElement;
 let form: HTMLElement;
 let notConnected: HTMLElement;
 let terminal: HTMLElement;
+let results: HTMLElement;
 let ended: HTMLElement;
 let input: HTMLElement;
 let connectButton: HTMLElement;
@@ -48,6 +49,8 @@ beforeEach(() => {
   form = byId('command-form');
   notConnected = byId('not-connected-window');
   terminal = byId('terminal-window');
+  results = byId('results');
+  results.tabIndex = -1;
   ended = byId('terminal-ended');
   input = byId('command-input');
   connectButton = byId('connect-button');
@@ -62,6 +65,8 @@ beforeEach(() => {
       notConnectedWindow: notConnected,
       connectButton,
       terminalWindow: terminal,
+      results,
+      buffer: { focus: () => results.focus() },
       form,
       editField: { focus: () => input.focus() },
       ended,
@@ -179,14 +184,28 @@ describe('which face the window shows', () => {
   });
 
   /** **Focus is rescued, never stolen.** Hiding the element focus is inside strands it on
-   * the document body, where a listener has nothing under them and no obvious way back. */
-  it('moves focus out of what it is about to hide', () => {
+   * the document body, where a listener has nothing under them and no obvious way back.
+   *
+   * **A session that has ended leaves a transcript, and reading it is what a user does
+   * next.** The user met the opposite on 2026-08-26: focus on the Connect button, and the
+   * history they had just been told was kept was not where they were. */
+  it('moves focus into the transcript when the session ends', () => {
+    chrome.showTerminal(true);
+    results.hidden = false;
+    input.focus();
+
+    chrome.showTerminal(false);
+
+    expect(document.activeElement).toBe(results);
+  });
+
+  /** With nothing in the buffer there is nothing to land in, so the button it is. */
+  it('moves focus to the Connect button when there is no transcript', () => {
     chrome.showTerminal(true);
     input.focus();
 
     chrome.showTerminal(false);
 
-    // The terminal window's own Connect button, because that is the window still showing.
     expect(document.activeElement).toBe(reconnectButton);
   });
 
@@ -256,6 +275,18 @@ describe('coming back to the window', () => {
 
     expect(document.activeElement).toBe(reconnectButton);
   });
+
+  it('returns into the transcript when there is one to read', () => {
+    chrome.showTerminal(true);
+    results.hidden = false;
+    chrome.showTerminal(false);
+    heading.tabIndex = -1;
+    heading.focus();
+
+    chrome.focus();
+
+    expect(document.activeElement).toBe(results);
+  });
 });
 
 // **Focus moved while the page is still loading does not take the reader's browse cursor
@@ -271,6 +302,8 @@ describe('the startup hold', () => {
         notConnectedWindow: notConnected,
         connectButton,
         terminalWindow: terminal,
+        results,
+        buffer: { focus: () => results.focus() },
         form,
         editField: { focus: () => input.focus() },
         ended,

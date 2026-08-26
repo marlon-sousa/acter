@@ -104,21 +104,19 @@
            already know. -->
       <div id="not-connected-window">
         <p>Not connected.</p>
-        <!-- **`role="application"` around the button alone**, and for A7's measured reason
-             applied to a new place. NVDA reads a freshly opened document in browse mode,
-             where Enter acts on its own cursor rather than on the focus — and the cursor
-             ends up wherever NVDA's initial read of the document finished, which is not the
-             control the window put focus on. Measured 2026-08-26: the window opened with
-             this button focused and announced, and Enter did nothing at all because the
-             cursor was sitting on the status bar.
+        <!-- **No `role="application"` here, and that is a reversal worth recording.** It was
+             wrapped for a day, to make the first Enter after a window opens reach the focus
+             rather than the reader's browse cursor (roadmap 13.5). It half-worked, and it
+             cost something far larger: NVDA scopes browse mode to an application region, so
+             focus on a button inside one puts the rest of the document out of arrowing
+             reach. The user met that on 2026-08-26 in the *other* Connect button, where it
+             made the results buffer — the whole reason a disconnected session keeps one —
+             unreadable.
 
-             The wrapper says the keys in here belong to the widget, so focus mode applies
-             and Enter presses what is focused. It covers the button only: the line above it
-             stays ordinary browsable text, which is what a listener reading the window
-             top to bottom needs to meet. -->
-        <div role="application">
-          <button id="connect-button" type="button">Connect</button>
-        </div>
+             Both buttons are plain now, and behave the same, which is its own virtue in a
+             window learned by ear. A `<button>` needs no help in browse mode: `b` jumps to
+             it and Enter presses it. 13.5 stays open rather than being paid for in reading. -->
+        <button id="connect-button" type="button">Connect</button>
       </div>
 
       <!-- **The terminal window**: one session's results buffer and its edit field. It
@@ -166,9 +164,7 @@
              focus gets dropped. -->
         <div id="terminal-ended" hidden>
           <p>Not connected.</p>
-          <div role="application">
-            <button id="reconnect-button" type="button">Connect</button>
-          </div>
+          <button id="reconnect-button" type="button">Connect</button>
         </div>
       </div>
     </main>
@@ -207,14 +203,10 @@
          by adapters/connect_dialog.ts from `connectable()`, asked fresh every time this
          opens, so a distribution installed while Acter is running appears with no restart.
 
-         **`role="application"` around the kinds list only**, and for A7's measured reason:
-         NVDA reads a document in browse mode, where the arrows move its own cursor rather
-         than reaching the widget, and it switches to focus mode by itself only if the user
-         left that setting on — which is a setting, not a guarantee. A list whose arrows
-         depend on somebody's configuration is not a list. The wrapper covers the listbox
-         and nothing else: the panel below it is read-only prose a listener has to be able
-         to *read*, and instructions naming what to install would be unreachable inside an
-         application region. -->
+         **Enter connects, from anywhere in it that is not a button.** Pressing Enter after
+         making a choice is what every dialog on this platform does, and one that answers it
+         in a single control is one you learn by failing — reported by the user on
+         2026-08-26, who chose a distribution in the panel and got nothing. -->
     <dialog id="connect-dialog" aria-labelledby="connect-title">
       <!-- **The whole dialog is an application region**, not just its listbox. NVDA reads a
            document in browse mode, where the arrows move its own cursor and Enter acts on
