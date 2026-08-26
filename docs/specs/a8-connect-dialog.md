@@ -106,6 +106,81 @@ gains a field for each of them the day they exist rather than guessing now.
 - **No connection editing.** Saved connections can be chosen and saved, not renamed or
   deleted, until somebody asks for it.
 
+## Amendments made while implementing, 2026-08-26
+
+Three entries landed between this spec's rewrite on 2026-08-24 and its implementation —
+B5.4 (the catalogue), A9 (the window says what it is connected to) and B7 (the actions) —
+and the reader found two defects in the first build that changed the design rather than
+only the code.
+
+### A. The list is kinds with variants, and the backend groups them
+
+Decision 1 lists "cmd, PowerShell, and in debug builds the scripted sessions. Later: WSL",
+with the panel holding WSL's distributions. B7 shipped `connectable()` **flat**, one row per
+distribution, because it had no panel to put them in. It groups now: `Connectable` gains
+`variants`, and a WSL row carries the installed distributions rather than becoming several
+rows.
+
+The grouping is the backend's rather than the frontend's, which is decision 3 applied
+literally: the frontend knows what a kind *looks like*, the backend knows which things
+exist. A frontend that grouped would have had to recognise a distribution by its id and
+re-derive the label the backend had already written, which is two places deciding one set of
+words.
+
+The variants are named without their kind — "Ubuntu", not "WSL: Ubuntu" — because the row
+above has already said it. What a *window title* says is still the full name, because a title
+has no row above it to lean on.
+
+### B. A modal dialog is inert to the document's live region
+
+**Found by NVDA, and it disabled decision 2 completely.** `showModal` puts the dialog in the
+top layer and makes the rest of the document inert, so the announcer's live region at the end
+of `<body>` changes where nothing is listening. Measured on 2026-08-26: arrowing the kinds
+announced each one and said *nothing at all* about the panel — precisely the silent-change
+trap decision 2 exists to answer.
+
+So a dialog that wants to be heard carries its own live region marked `data-live-region`, and
+`AnnouncerDom` drains there while it is open. Found by attribute rather than by name, so the
+announcer knows that dialogs exist and nothing about which ones.
+
+**And the announcement stopped repeating the kind.** With the region working, the first
+wording — "WSL, 2 distributions" — was heard on top of the listbox's own "WSL 4 of 8", so a
+listener heard the kind twice for one arrow press. What the announcement adds is the half no
+widget can say for itself, so it says only that: "2 distributions". The same measurement made
+the dialog silent on *opening* onto an empty panel, because a reader reads a dialog as it
+opens, including a live region inside it that already has text.
+
+### C. Tab escapes a modal dialog, and now there is one implementation of not escaping
+
+Also found by NVDA on 2026-08-26: Tab past Cancel announced "dialog Connect" and left the
+reader on the dialog element rather than cycling back to the list. This is the same defect
+A7 measured in the About dialog on 2026-08-24 and fixed there with a private method — so the
+fix moved into `adapters/dialog_tab.ts` and both dialogs call it. Two copies of a focus rule
+are two things that can drift, and the one that drifts is the one nobody is testing that
+week.
+
+### D. The panel's variants are a combo box, not a second listbox
+
+Decision 1 says the panel holds "the distributions installed on this machine" without saying
+what shape they take. A second listbox would be a second widget with its own arrow handling
+and its own browse/focus-mode problem; a `<select>` is something a listener opens with
+`Alt+Down` and arrows from any mode, and that gesture is in the platform's own accessibility
+contract. Measured working: "Distribution combo box collapsed Ubuntu".
+
+### E. Connect joins the Acter menu, because there is no File menu
+
+Decision 1 says "File → Connect". A7 built one menu named **Acter** holding Exit, and a
+second named About. Connect goes into the Acter menu, above Exit — above, because it is what
+that menu is now mostly opened for, and because the item that ends the application should not
+be what an accidental Enter lands on.
+
+### F. `connectTo` answers whether it worked
+
+Decision 4 needs the dialog to close on success and stay open on failure, so B7's
+`AppController.connectTo` returns a boolean instead of swallowing the outcome. The sentence
+is still announced by the controller, because the words are the backend's and every other
+announced string in the frontend is pinned in one module.
+
 ## Files touched
 
 - `ui/src/views/main_window.html` — the dialog's static skeleton: the kinds listbox, the
@@ -121,16 +196,16 @@ gains a field for each of them the day they exist rather than guessing now.
 
 ## Definition of done
 
-- [ ] File → Connect opens the dialog; Escape and Cancel close it and leave focus in the
+- [x] File → Connect opens the dialog; Escape and Cancel close it and leave focus in the
       edit field.
-- [ ] The kinds come from `connectable()` and are asked for fresh each time it opens.
-- [ ] Changing the kind changes the panel and announces what it now holds.
-- [ ] Connecting to cmd and to PowerShell replaces the session, and the listener is told
+- [x] The kinds come from `connectable()` and are asked for fresh each time it opens.
+- [x] Changing the kind changes the panel and announces what it now holds.
+- [x] Connecting to cmd and to PowerShell replaces the session, and the listener is told
       which far end they are on.
-- [ ] A connection that fails announces why, keeps the dialog open, and leaves the running
+- [x] A connection that fails announces why, keeps the dialog open, and leaves the running
       session untouched — asserted against a kind that cannot start.
-- [ ] vitest over the dialog's behaviour, and an E2E spec driving the whole path.
-- [ ] `cargo fmt`, `cargo clippy --workspace --all-targets`, workspace tests, vitest and the
+- [x] vitest over the dialog's behaviour, and an E2E spec driving the whole path.
+- [x] `cargo fmt`, `cargo clippy --workspace --all-targets`, workspace tests, vitest and the
       E2E suite all clean.
 
 ## Accessibility checklist for the PR body

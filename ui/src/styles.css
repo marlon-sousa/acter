@@ -114,3 +114,50 @@ footer[aria-label='Connection status'] {
 main {
   padding-bottom: 2.5rem;
 }
+
+/* The Connect dialog. Readable defaults only, like the rest of this file — but the
+   selected kind has to be visible as well as announced, because a list whose selection can
+   only be heard is one a sighted person helping cannot follow (spec A8). */
+#connect-kinds {
+  list-style: none;
+  margin: 0.5rem 0;
+  padding: 0;
+  border: 1px solid;
+  max-height: 12rem;
+  overflow-y: auto;
+}
+
+#connect-kinds [role='option'] {
+  padding: 0.25rem 0.5rem;
+  cursor: default;
+}
+
+#connect-kinds [role='option'][aria-selected='true'] {
+  /* System colours, so this follows the user's contrast theme rather than fighting it. */
+  background: Highlight;
+  color: HighlightText;
+}
+
+#connect-panel h2 {
+  font-size: 1rem;
+  margin: 0.5rem 0 0.25rem;
+}
+
+#connect-panel p {
+  margin: 0;
+  max-width: 40rem;
+}
+
+/* The window with no session: the state, then the button that answers it (spec A10). */
+#not-connected {
+  margin: 1rem 0;
+}
+
+#not-connected p {
+  margin: 0 0 0.5rem;
+}
+
+#connect-button {
+  font-size: 1rem;
+  padding: 0.25rem 1rem;
+}

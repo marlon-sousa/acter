@@ -7,6 +7,7 @@
 // the edit field, because what opened this was a menu that no longer exists (spec A7,
 // decision 3).
 
+import { keepTabInside } from './dialog_tab';
 import type { AppShell } from '../ports/app_shell';
 
 export class AboutDialog {
@@ -19,33 +20,9 @@ export class AboutDialog {
     this.dialog
       .querySelector('#about-close')
       ?.addEventListener('click', () => this.dialog.close());
-    this.dialog.addEventListener('keydown', (event) => this.trap(event));
-  }
-
-  /// Tab stays inside, which the platform does not do for us here: a modal dialog with
-  /// one focusable control has nothing to cycle to, so Chromium sends focus to the
-  /// dialog's own document — measured through NVDA on 2026-08-24, where it dropped the
-  /// reader back into browse mode and took a second Escape to leave. Cycling explicitly
-  /// keeps the one control in hand however many there turn out to be later.
-  private trap(event: KeyboardEvent): void {
-    if (event.key !== 'Tab') {
-      return;
-    }
-    const focusable = Array.from(
-      this.dialog.querySelectorAll<HTMLElement>(
-        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
-      ),
+    this.dialog.addEventListener('keydown', (event) =>
+      keepTabInside(this.dialog, event),
     );
-    if (focusable.length === 0) {
-      return;
-    }
-    const at = focusable.indexOf(document.activeElement as HTMLElement);
-    const step = event.shiftKey ? -1 : 1;
-    const next = focusable[(at + step + focusable.length) % focusable.length];
-    if (next !== undefined) {
-      event.preventDefault();
-      next.focus();
-    }
   }
 
   async open(): Promise<void> {

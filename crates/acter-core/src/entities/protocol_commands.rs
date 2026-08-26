@@ -51,14 +51,21 @@ pub enum SubmitAck {
 /// **Not the same value as [`Connection`](crate::Connection), and the difference is the
 /// point.** B5.4's catalogue is a pure function over connection *kinds*: it decides what
 /// belongs on this platform, in what order, and how a missing one reads. This is what that
-/// catalogue becomes once a real machine has answered — one row per WSL distribution
-/// rather than one row for WSL, the scripted sessions appended in a debug build, and every
-/// row carrying the id that starts it.
+/// catalogue becomes once a real machine has answered — WSL carrying the distributions it
+/// actually found, the scripted sessions appended in a debug build, and every row carrying
+/// the id that starts it.
+///
+/// **One row per kind, not one per thing that can be started** (spec A8, decision 1). The
+/// dialog is a list of kinds with a panel below it holding whatever that kind needs, and a
+/// listener arrows five rows rather than four plus however many distributions this machine
+/// happens to have. What goes in the panel is [`variants`](Connectable::variants).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
 pub struct Connectable {
-    /// What to hand [`ConnectApi::use_profile`](crate::ConnectApi) to start this one.
+    /// What to hand [`ConnectApi::use_profile`](crate::ConnectApi) to start this row
+    /// itself, when the user has chosen no variant — which for WSL means the distribution
+    /// WSL calls the default, and for every other kind is the only thing the row means.
     pub id: ProfileId,
-    /// What the user hears: "Command Prompt", "PowerShell 7", "WSL: Ubuntu", with
+    /// What the user hears: "Command Prompt", "PowerShell 7", "WSL", with
     /// `(not available)` on the end when this machine cannot start it.
     ///
     /// **The label belongs to the profile, not to the adapter** (spec B5.1, decision 3),
@@ -73,6 +80,43 @@ pub struct Connectable {
     pub available: bool,
     /// What to say about a row that cannot be connected to, and `None` when it can — a
     /// panel of instructions under a working row is noise a listener has to arrow past.
+    pub instructions: Option<String>,
+    /// The things *within* this kind that a user chooses between: WSL's installed
+    /// distributions today, the user's saved connections of this kind with B8.
+    ///
+    /// Empty for a kind that is one thing — cmd is cmd — and empty for a kind this machine
+    /// cannot start, because there is nothing to enumerate inside something that is not
+    /// there. A row with variants starts the one the user chose; with none, it starts
+    /// itself.
+    pub variants: Vec<Variant>,
+}
+
+/// One thing inside a kind, as the connect dialog's panel lists it.
+///
+/// **Named without repeating its kind.** The row above already said WSL, and a panel that
+/// reads "WSL: Ubuntu, WSL: Debian" says the same word to a listener as many times as they
+/// have distributions. What [`Connected::label`] says is the full name, because a window
+/// title has no row above it to lean on.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+pub struct Variant {
+    /// What to hand [`ConnectApi::use_profile`](crate::ConnectApi) to start this one.
+    pub id: ProfileId,
+    /// What the user hears in the panel: "Ubuntu", not "WSL: Ubuntu", with
+    /// `(not available)` on the end when this machine cannot start it.
+    pub label: String,
+    /// Whether choosing this one can start a session.
+    ///
+    /// **A variant can be missing while its kind is not**, which is what PowerShell needs:
+    /// a machine with Windows PowerShell and no PowerShell 7 has the kind and one of its two
+    /// editions. Listing only what is installed would teach that listener that Acter does
+    /// not support PowerShell 7, which is B5.4's whole argument, so a missing edition stays
+    /// in the panel and says what to do about it.
+    ///
+    /// Always true for a WSL distribution, and that is not an oversight: distributions are
+    /// *discovered* by asking `wsl.exe`, so one that is not installed cannot be enumerated
+    /// and has no name to list.
+    pub available: bool,
+    /// What to say about a variant that cannot be started, and `None` when it can.
     pub instructions: Option<String>,
 }
 
@@ -352,11 +396,47 @@ mod tests {
             label: "PowerShell 7 (not available)".to_owned(),
             available: false,
             instructions: Some(ConnectionKind::PowerShellSeven.instructions().to_owned()),
+            variants: Vec::new(),
         };
 
         let back: Connectable =
             serde_json::from_value(serde_json::to_value(&row).unwrap()).unwrap();
         assert_eq!(row, back);
+    }
+
+    /// A row with variants carries them, and they are named without repeating the kind the
+    /// row above already said (spec A8, decision 1).
+    #[test]
+    fn a_row_with_variants_carries_them_named_for_the_panel() {
+        let row = Connectable {
+            id: ProfileId::Shell {
+                kind: ConnectionKind::Wsl,
+            },
+            label: "WSL".to_owned(),
+            available: true,
+            instructions: None,
+            variants: vec![Variant {
+                id: ProfileId::Distribution {
+                    name: "Ubuntu".to_owned(),
+                },
+                label: "Ubuntu".to_owned(),
+                available: true,
+                instructions: None,
+            }],
+        };
+
+        let back: Connectable =
+            serde_json::from_value(serde_json::to_value(&row).unwrap()).unwrap();
+        assert_eq!(row, back);
+        assert_eq!(
+            row.variants[0].label, "Ubuntu",
+            "the panel says the distribution"
+        );
+        assert_eq!(
+            row.variants[0].id.label(),
+            "WSL: Ubuntu",
+            "and the window title says which kind it is, having no row above it"
+        );
     }
 
     #[test]

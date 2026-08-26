@@ -80,10 +80,10 @@ export const disconnectedStatus = 'not connected';
 // is one state rather than two problems — and a line typed into an empty window has to be
 // *answered*, because silence is indistinguishable from a shell that is thinking.
 //
-// It names the way out rather than only the trouble, in the order a listener needs it: what
-// is wrong, then what to press.
-export const notConnectedMessage =
-  'not connected. Press F10 for the Acter menu, then choose Connect to start a shell';
+// **It stopped naming a keystroke with A10.** B7's window told the listener to press F10 and
+// find Connect in a menu, because a menu was the only way in; the window now opens with a
+// Connect button under focus, so the route to describe is the control they are already on.
+export const notConnectedMessage = 'not connected. Choose Connect to start a shell';
 // And what a listener hears when one starts, which is the connect list's own label — so
 // what they chose and what the window now calls itself are the same words (spec A9).
 export function connectedMessage(label: string): string {
@@ -171,8 +171,12 @@ export class AppController {
    * **A failure is spoken and nothing else happens**: the session that was running is
    * still running and still attached, so what the user loses by choosing something that
    * would not start is nothing at all.
+   *
+   * Answers whether the window is on the new far end now, because the caller has something
+   * to decide with it: the connect dialog closes on success and stays open on failure, so
+   * the user is left somewhere they can choose again (spec A8, decision 4).
    */
-  async connectTo(id: ProfileId): Promise<void> {
+  async connectTo(id: ProfileId): Promise<boolean> {
     let connected: Connected;
     try {
       connected = await this.connect.use(id);
@@ -181,10 +185,11 @@ export class AppController {
       // Every other announced string in this file is pinned here; this one is the
       // exception and the reason is that a pinned string could only say "it failed".
       this.announcer.announce(reason(why));
-      return;
+      return false;
     }
     await this.show(connected);
     this.announcer.announce(connectedMessage(connected.label));
+    return true;
   }
 
   /**
@@ -201,6 +206,10 @@ export class AppController {
     this.tooBig.clear();
     this.echoed.clear();
     this.session = connected === null ? null : connected.session;
+    // The terminal window belongs to a session: with none there is a Connect button and
+    // nothing to type into (spec A10). Done before the attach, so nothing the new session
+    // says arrives at a window still showing the last one's shape.
+    this.window.showTerminal(connected !== null);
 
     if (connected === null) {
       this.window.connectedTo(null);
@@ -219,9 +228,10 @@ export class AppController {
 
   async submit(): Promise<void> {
     const text = this.editField.value().trim();
-    // **A line typed into an unconnected window is answered, and the text is kept.** Not
-    // cleared, because it is what the user will press Enter on again once they have
-    // connected; not silent, because silence is what a shell that is thinking sounds like.
+    // **Unreachable from the window since A10**, which took the edit field away when there
+    // is no session — and kept as the guard it always was, for the submission that races a
+    // session ending. Answered rather than swallowed, and the text is kept: silence is what
+    // a shell that is thinking sounds like.
     if (this.session === null) {
       this.announcer.announce(notConnectedMessage);
       return;
@@ -404,6 +414,12 @@ export class AppController {
         this.window.status(disconnectedStatus);
         // Nothing is behind the window any more, so it stops claiming to be anything.
         this.window.connectedTo(null);
+        // **The buffer stays and the edit field goes** (spec A10). What is left is the
+        // record of a session that ended, which a user who typed `exit` by accident must
+        // not lose; what has no purpose left is a field with nothing to submit to.
+        this.session = null;
+        this.window.showTerminal(false);
+        this.announcer.announce(notConnectedMessage);
         break;
       default:
         assertNever(state);

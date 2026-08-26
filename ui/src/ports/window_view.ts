@@ -13,4 +13,16 @@ export interface WindowView {
   connectedTo(name: string | null): void;
   /** Say what the connection is doing, in words a listener hears when they change. */
   status(text: string): void;
+  /**
+   * Show the terminal window — the results buffer and the edit field — or show that there
+   * is no session to show one for (spec A10).
+   *
+   * A window with nothing behind it holds a Connect button and no edit field: a buffer with
+   * nothing in it and a field that can submit nothing are two controls a listener has to
+   * arrow past to reach the only thing that would help them.
+   *
+   * The buffer is deliberately not part of this. It appears with its first content and
+   * stays afterwards, because once a session has ended it is the record of what happened.
+   */
+  showTerminal(live: boolean): void;
 }

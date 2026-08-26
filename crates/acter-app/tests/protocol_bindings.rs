@@ -14,7 +14,7 @@ use std::path::PathBuf;
 
 use acter_core::{
     CommandId, Connectable, Connected, ConnectionKind, ConnectionState, ExitCode, Key, KeyAck,
-    KeyPress, Mode, ProfileId, SessionEvent, SessionId, SubmitAck,
+    KeyPress, Mode, ProfileId, SessionEvent, SessionId, SubmitAck, Variant,
 };
 use specta::Types;
 use specta_typescript::Typescript;
@@ -50,6 +50,7 @@ fn render() -> String {
         // `Connectable`, and are listed for the same reason the others are: the whole
         // protocol is emitted here, not only the parts something happens to reference.
         .register::<Connectable>()
+        .register::<Variant>()
         .register::<Connected>()
         .register::<ProfileId>()
         .register::<ConnectionKind>();

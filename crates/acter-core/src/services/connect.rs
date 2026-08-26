@@ -33,8 +33,9 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crate::{
-    ConnectApi, Connectable, Connected, ConnectionKind, EventSink, InstalledShells, KeyAck,
-    KeyPress, ProfileId, SessionApi, SessionFactory, SessionId, SubmitAck, catalogue,
+    ConnectApi, Connectable, Connected, Connection, ConnectionKind, EventSink, InstalledShells,
+    KeyAck, KeyPress, ProfileId, SessionApi, SessionFactory, SessionId, SubmitAck, Variant,
+    catalogue,
 };
 
 /// The one session, and everything needed to replace it.
@@ -112,6 +113,21 @@ impl ConnectService {
                 .wsl_distributions()
                 .map(|_| ())
                 .map_err(|why| why.to_string()),
+            // A kind that comes in editions is startable when any of them is, and what
+            // starts is the first that can — the same answer the row's own id carries.
+            ProfileId::Shell {
+                kind: kind @ ConnectionKind::PowerShell,
+            } => {
+                if kind
+                    .editions()
+                    .iter()
+                    .any(|edition| self.machine.is_available(edition.program()))
+                {
+                    Ok(())
+                } else {
+                    Err(kind.instructions().to_owned())
+                }
+            }
             ProfileId::Shell { kind } => {
                 if self.machine.is_available(kind.program()) {
                     Ok(())
@@ -126,37 +142,105 @@ impl ConnectService {
         }
     }
 
-    /// The connect list's WSL rows: one per distribution when there are any, and one
-    /// labelled row saying why when there are not.
-    fn wsl_rows(&self, unavailable_label: &str) -> Vec<Connectable> {
+    /// The connect list's WSL row: one row for the kind, carrying the installed
+    /// distributions as its variants, or one row saying why there are none.
+    ///
+    /// **The distributions are variants rather than rows of their own** (spec A8,
+    /// decision 1). They were rows in B7, which had no panel to put them in; the connect
+    /// dialog does, and a listener arrowing the kinds should meet "WSL" once rather than
+    /// once per distribution installed on a machine they may not have set up themselves.
+    ///
+    /// A row that cannot be started carries no variants, because there is nothing to
+    /// enumerate inside something that is not there — and the reason it gives is WSL's own,
+    /// which tells a user who has never installed it apart from one whose install is broken
+    /// (spec B5.3, decision 6).
+    fn wsl_row(&self, row: &Connection) -> Connectable {
+        let id = ProfileId::Shell {
+            kind: ConnectionKind::Wsl,
+        };
         match self.machine.wsl_distributions() {
-            Ok(names) => names
-                .into_iter()
-                .map(|name| {
-                    let id = ProfileId::Distribution { name };
-                    Connectable {
-                        label: id.label(),
-                        id,
+            Ok(names) => Connectable {
+                id,
+                label: row.label.clone(),
+                available: true,
+                instructions: None,
+                variants: names
+                    .into_iter()
+                    .map(|name| Variant {
+                        label: name.clone(),
+                        id: ProfileId::Distribution { name },
+                        // A distribution that is not installed cannot be enumerated, so
+                        // every one that has a name to list is one that can be started.
                         available: true,
                         instructions: None,
-                    }
-                })
-                .collect(),
-            Err(why) => vec![Connectable {
-                id: ProfileId::Shell {
-                    kind: ConnectionKind::Wsl,
-                },
-                label: unavailable_label.to_owned(),
+                    })
+                    .collect(),
+            },
+            Err(why) => Connectable {
+                id,
+                label: row.label.clone(),
                 available: false,
                 instructions: Some(why.to_string()),
-            }],
+                variants: Vec::new(),
+            },
+        }
+    }
+
+    /// The connect list's PowerShell row: one row for the kind, carrying its editions as
+    /// variants (spec A11).
+    ///
+    /// **A missing edition stays in the panel and says what to do about it**, which is the
+    /// difference from WSL and the reason [`Variant`] carries availability at all. A machine
+    /// with Windows PowerShell and no PowerShell 7 has the kind, and listing only what is
+    /// installed would teach that listener that Acter does not support the edition they
+    /// have read about — which is precisely B5.4's argument, one level down.
+    ///
+    /// The row is available when *any* edition is, and the id it carries is the first
+    /// edition that can actually be started, so choosing the row without opening the panel
+    /// starts something rather than failing.
+    fn powershell_row(&self, row: &Connection) -> Connectable {
+        let variants: Vec<Variant> = ConnectionKind::PowerShell
+            .editions()
+            .iter()
+            .map(|edition| {
+                let available = self.machine.is_available(edition.program());
+                Variant {
+                    id: ProfileId::Shell { kind: *edition },
+                    label: if available {
+                        edition.label().to_owned()
+                    } else {
+                        format!("{}{NOT_AVAILABLE}", edition.label())
+                    },
+                    available,
+                    instructions: (!available).then(|| edition.instructions().to_owned()),
+                }
+            })
+            .collect();
+
+        let first = variants.iter().find(|variant| variant.available);
+        Connectable {
+            id: first.map_or(
+                ProfileId::Shell {
+                    kind: ConnectionKind::PowerShell,
+                },
+                |variant| variant.id.clone(),
+            ),
+            label: row.label.clone(),
+            available: first.is_some(),
+            instructions: row.instructions().map(ToOwned::to_owned),
+            variants,
         }
     }
 }
 
+/// The suffix an unavailable variant carries, in its **name** rather than in a visual state,
+/// for the reason [`catalogue`](crate::catalogue) gives for a row: a greyed-out entry that
+/// looks different and reads the same is the failure this product exists to avoid.
+const NOT_AVAILABLE: &str = " (not available)";
+
 impl ConnectApi for ConnectService {
-    /// The catalogue, asked of this machine, with WSL expanded and the scripted sessions
-    /// appended.
+    /// The catalogue, asked of this machine, with WSL carrying its distributions and the
+    /// scripted sessions appended.
     ///
     /// **The machine is asked here rather than remembered**, twice over: `wsl.exe` is run
     /// and every program is looked up on every call. That is the cost of a list that is
@@ -165,21 +249,29 @@ impl ConnectApi for ConnectService {
     /// The scripted sessions go last, after everything real, because they are a developer's
     /// tools and a user arrowing this list should meet their own shells first.
     fn connectable(&self) -> Vec<Connectable> {
-        let mut listed = Vec::new();
-        for row in catalogue(|kind| match kind {
+        let mut listed: Vec<Connectable> = catalogue(|kind| match kind {
             ConnectionKind::Wsl => self.machine.wsl_distributions().is_ok(),
+            // A kind that comes in editions is available when any of them is: a machine with
+            // PowerShell 7 and no Windows PowerShell still has PowerShell.
+            ConnectionKind::PowerShell => ConnectionKind::PowerShell
+                .editions()
+                .iter()
+                .any(|edition| self.machine.is_available(edition.program())),
             other => self.machine.is_available(other.program()),
-        }) {
-            match row.kind {
-                ConnectionKind::Wsl => listed.extend(self.wsl_rows(&row.label)),
-                kind => listed.push(Connectable {
-                    id: ProfileId::Shell { kind },
-                    label: row.label.clone(),
-                    available: row.available,
-                    instructions: row.instructions().map(ToOwned::to_owned),
-                }),
-            }
-        }
+        })
+        .iter()
+        .map(|row| match row.kind {
+            ConnectionKind::Wsl => self.wsl_row(row),
+            ConnectionKind::PowerShell => self.powershell_row(row),
+            kind => Connectable {
+                id: ProfileId::Shell { kind },
+                label: row.label.clone(),
+                available: row.available,
+                instructions: row.instructions().map(ToOwned::to_owned),
+                variants: Vec::new(),
+            },
+        })
+        .collect();
         listed.extend(self.scripted.iter().map(|name| {
             let id = ProfileId::Scripted {
                 name: name.to_owned(),
@@ -189,6 +281,7 @@ impl ConnectApi for ConnectService {
                 id,
                 available: true,
                 instructions: None,
+                variants: Vec::new(),
             }
         }));
         listed
@@ -413,21 +506,23 @@ mod tests {
         listed.iter().map(|row| row.label.as_str()).collect()
     }
 
-    /// The acceptance criterion, spelled out: cmd, both editions, one row per distribution,
-    /// and the scripted sessions last.
+    /// The acceptance criterion, spelled out: cmd, both editions, WSL once, and the
+    /// scripted sessions last.
+    ///
+    /// **One row for WSL rather than one per distribution** since A8: the dialog has a
+    /// panel to put them in, so a listener arrows the kinds and meets "WSL" once however
+    /// many distributions this machine has.
     #[cfg(windows)]
     #[test]
-    fn the_list_is_every_shell_this_machine_has_with_one_row_per_distribution() {
+    fn the_list_is_every_kind_this_machine_has_with_the_scripted_ones_last() {
         let (service, _) = service(FakeMachine::complete(), &["builtin", "unmarked"]);
 
         assert_eq!(
             labels(&service.connectable()),
             [
                 "Command Prompt",
-                "Windows PowerShell",
-                "PowerShell 7",
-                "WSL: Ubuntu",
-                "WSL: Debian",
+                "PowerShell",
+                "WSL",
                 "Scripted: builtin",
                 "Scripted: unmarked",
             ]
@@ -435,19 +530,65 @@ mod tests {
         assert!(service.connectable().iter().all(|row| row.available));
     }
 
+    /// The distributions are what the dialog's panel holds, named without repeating the
+    /// kind — and each one carries the id that starts it, so choosing one in the panel is
+    /// as complete an answer as choosing a row.
+    #[cfg(windows)]
+    #[test]
+    fn wsl_carries_its_distributions_as_the_variants_the_panel_lists() {
+        let (service, _) = service(FakeMachine::complete(), &[]);
+        let listed = service.connectable();
+
+        let wsl = listed
+            .iter()
+            .find(|row| row.label == "WSL")
+            .expect("WSL is offered");
+        assert_eq!(
+            wsl.variants
+                .iter()
+                .map(|variant| variant.label.as_str())
+                .collect::<Vec<_>>(),
+            ["Ubuntu", "Debian"],
+            "in the order WSL reports them"
+        );
+        assert_eq!(
+            wsl.variants[0].id,
+            ProfileId::Distribution {
+                name: "Ubuntu".to_owned()
+            }
+        );
+        assert!(
+            listed
+                .iter()
+                .filter(|row| row.label == "Command Prompt")
+                .all(|row| row.variants.is_empty()),
+            "a kind that is one thing has nothing in its panel"
+        );
+    }
+
     /// **What the list is for, on a machine that is missing something.** The row stays, it
     /// says so in its name, it goes last among the real shells, and it carries what to do
     /// about it — which is B5.4's whole argument, now asked of a real machine.
+    /// **B5.4's argument, one level down** (spec A11). PowerShell 7 is an edition rather
+    /// than a row now, and a machine without it must still be told it exists — listing only
+    /// what is installed teaches a listener that Acter does not support the thing they have
+    /// read about.
     #[cfg(windows)]
     #[test]
-    fn a_shell_this_machine_lacks_is_still_listed_and_explains_itself() {
+    fn an_edition_this_machine_lacks_is_still_listed_and_explains_itself() {
         let (service, _) = service(FakeMachine::without("pwsh.exe"), &[]);
         let listed = service.connectable();
 
-        let missing = listed
+        let powershell = listed
             .iter()
-            .find(|row| row.label.starts_with("PowerShell 7"))
-            .expect("a missing kind is still offered");
+            .find(|row| row.label == "PowerShell")
+            .expect("the kind is available, because one edition is");
+        assert!(powershell.available);
+        let missing = powershell
+            .variants
+            .iter()
+            .find(|variant| variant.label.starts_with("PowerShell 7"))
+            .expect("a missing edition is still offered");
         assert_eq!(missing.label, "PowerShell 7 (not available)");
         assert!(!missing.available);
         assert!(
@@ -458,8 +599,36 @@ mod tests {
                 .contains("winget install"),
         );
         assert_eq!(
+            powershell.id,
+            ProfileId::Shell {
+                kind: ConnectionKind::WindowsPowerShell
+            },
+            "and choosing the row without opening the panel starts the edition that works"
+        );
+    }
+
+    /// A machine with neither edition has the kind, unavailable, saying so in its name — the
+    /// row-level rule, unchanged.
+    #[cfg(windows)]
+    #[test]
+    fn a_kind_whose_every_edition_is_missing_is_listed_as_unavailable() {
+        let mut machine = FakeMachine::complete();
+        machine
+            .programs
+            .retain(|have| !have.contains("powershell") && !have.contains("pwsh"));
+        let (service, _) = service(machine, &[]);
+        let listed = service.connectable();
+
+        let powershell = listed
+            .iter()
+            .find(|row| row.label.starts_with("PowerShell"))
+            .expect("the kind is still offered");
+        assert_eq!(powershell.label, "PowerShell (not available)");
+        assert!(!powershell.available);
+        assert!(powershell.instructions.is_some());
+        assert_eq!(
             listed.last().map(|row| row.label.as_str()),
-            Some("PowerShell 7 (not available)"),
+            Some("PowerShell (not available)"),
             "unavailable rows sort to the end"
         );
     }

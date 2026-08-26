@@ -35,15 +35,24 @@ export type CommandId = number;
  *  **Not the same value as [`Connection`](crate::Connection), and the difference is the
  *  point.** B5.4's catalogue is a pure function over connection *kinds*: it decides what
  *  belongs on this platform, in what order, and how a missing one reads. This is what that
- *  catalogue becomes once a real machine has answered — one row per WSL distribution
- *  rather than one row for WSL, the scripted sessions appended in a debug build, and every
- *  row carrying the id that starts it.
+ *  catalogue becomes once a real machine has answered — WSL carrying the distributions it
+ *  actually found, the scripted sessions appended in a debug build, and every row carrying
+ *  the id that starts it.
+ * 
+ *  **One row per kind, not one per thing that can be started** (spec A8, decision 1). The
+ *  dialog is a list of kinds with a panel below it holding whatever that kind needs, and a
+ *  listener arrows five rows rather than four plus however many distributions this machine
+ *  happens to have. What goes in the panel is [`variants`](Connectable::variants).
  */
 export type Connectable = {
-	/**  What to hand [`ConnectApi::use_profile`](crate::ConnectApi) to start this one. */
+	/**
+	 *  What to hand [`ConnectApi::use_profile`](crate::ConnectApi) to start this row
+	 *  itself, when the user has chosen no variant — which for WSL means the distribution
+	 *  WSL calls the default, and for every other kind is the only thing the row means.
+	 */
 	id: ProfileId,
 	/**
-	 *  What the user hears: "Command Prompt", "PowerShell 7", "WSL: Ubuntu", with
+	 *  What the user hears: "Command Prompt", "PowerShell 7", "WSL", with
 	 *  `(not available)` on the end when this machine cannot start it.
 	 * 
 	 *  **The label belongs to the profile, not to the adapter** (spec B5.1, decision 3),
@@ -64,6 +73,16 @@ export type Connectable = {
 	 *  panel of instructions under a working row is noise a listener has to arrow past.
 	 */
 	instructions: string | null,
+	/**
+	 *  The things *within* this kind that a user chooses between: WSL's installed
+	 *  distributions today, the user's saved connections of this kind with B8.
+	 * 
+	 *  Empty for a kind that is one thing — cmd is cmd — and empty for a kind this machine
+	 *  cannot start, because there is nothing to enumerate inside something that is not
+	 *  there. A row with variants starts the one the user chose; with none, it starts
+	 *  itself.
+	 */
+	variants: Variant[],
 };
 
 /**
@@ -98,9 +117,20 @@ export type Connected = {
 export type ConnectionKind = 
 /**  `cmd.exe`, which is on every Windows machine and cannot be removed. */
 "Cmd" | 
-/**  Windows PowerShell 5.1, which ships with Windows. */
+/**
+ *  PowerShell, whichever edition. **One row in the connect list, with the editions as
+ *  its variants** — the shape WSL already had, applied to the other kind that comes in
+ *  more than one (spec A11). A listener arrowing the kinds meets "PowerShell" once and
+ *  chooses an edition in the panel, rather than meeting two rows whose names differ by
+ *  one word.
+ */
+"PowerShell" | 
+/**
+ *  Windows PowerShell 5.1, which ships with Windows. A *variant* of [`Self::PowerShell`]
+ *  rather than a row of its own, and never listed at the top level.
+ */
 "WindowsPowerShell" | 
-/**  PowerShell 7 or later, which is installed separately. */
+/**  PowerShell 7 or later, which is installed separately. A variant, as above. */
 "PowerShellSeven" | 
 /**  Bash inside a WSL distribution. */
 "Wsl";
@@ -350,3 +380,37 @@ export type SubmitAck =
  *  words twice is how a user learns this is one state rather than two problems.
  */
 { status: "NotConnected" };
+
+/**
+ *  One thing inside a kind, as the connect dialog's panel lists it.
+ * 
+ *  **Named without repeating its kind.** The row above already said WSL, and a panel that
+ *  reads "WSL: Ubuntu, WSL: Debian" says the same word to a listener as many times as they
+ *  have distributions. What [`Connected::label`] says is the full name, because a window
+ *  title has no row above it to lean on.
+ */
+export type Variant = {
+	/**  What to hand [`ConnectApi::use_profile`](crate::ConnectApi) to start this one. */
+	id: ProfileId,
+	/**
+	 *  What the user hears in the panel: "Ubuntu", not "WSL: Ubuntu", with
+	 *  `(not available)` on the end when this machine cannot start it.
+	 */
+	label: string,
+	/**
+	 *  Whether choosing this one can start a session.
+	 * 
+	 *  **A variant can be missing while its kind is not**, which is what PowerShell needs:
+	 *  a machine with Windows PowerShell and no PowerShell 7 has the kind and one of its two
+	 *  editions. Listing only what is installed would teach that listener that Acter does
+	 *  not support PowerShell 7, which is B5.4's whole argument, so a missing edition stays
+	 *  in the panel and says what to do about it.
+	 * 
+	 *  Always true for a WSL distribution, and that is not an oversight: distributions are
+	 *  *discovered* by asking `wsl.exe`, so one that is not installed cannot be enumerated
+	 *  and has no name to list.
+	 */
+	available: boolean,
+	/**  What to say about a variant that cannot be started, and `None` when it can. */
+	instructions: string | null,
+};
