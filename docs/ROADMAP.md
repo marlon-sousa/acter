@@ -323,6 +323,31 @@ the answer to "what should we do now?".
     far end first speaks rather than when a process was spawned, because a shell that has
     not drawn a prompt is not one anybody can use.
 
+13.2. An empty results buffer reads as a bare letter. Spec: none yet → specify first, and
+    the specifying is small. **Found 2026-08-25** in B7's NVDA pass and filed rather than
+    fixed there, because the markup is A1's and A5's rather than B7's and nobody has
+    established the cause.
+
+    **What a listener meets.** In a window connected to nothing, arrowing down through the
+    document reads the results region as `Results região R` — the region's name, its role,
+    and then a bare letter `R` with no meaning. NVDA's report-current-line on that line says
+    only `R`, so the letter is what NVDA's virtual buffer holds for the line, not a
+    decoration on the announcement. The same line in a connected window reads
+    `Results região PS C:\Users\marlo>`, which is the region and its content — so the letter
+    is what an *empty* region renders as. Measured with NVDA 2026.1.1, silent capture,
+    `user` persona.
+
+    The `div` is genuinely empty in both the source and the built page
+    (`<div id="results" role="region" aria-label="Results" tabindex="-1"></div>`), and no
+    stylesheet puts generated content in it, so where the letter comes from is not yet
+    known — Chromium's exposure of an empty named region, or NVDA's rendering of one.
+    Answering that is an `expert` question about the reader rather than a `user` one about
+    Acter, which is why this entry starts by finding out rather than by changing markup.
+
+    **Why it is worth an entry now.** It has been reachable since A1, and B7 is what makes
+    it ordinary: an empty results buffer used to last as long as it took a session to draw
+    its first prompt, and it is now the state every launch opens in until the user connects.
+
 14. A4, completion path. Spec: none yet → specify first. Scope sketch: fake
     completion provider, Tab handling in the edit field, completion announcement.
 15. A5.3 and onward — iteration entries appear here as NVDA findings arrive.
