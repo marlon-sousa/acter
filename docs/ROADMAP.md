@@ -338,7 +338,11 @@ the answer to "what should we do now?".
     far end first speaks rather than when a process was spawned, because a shell that has
     not drawn a prompt is not one anybody can use.
 
-13.2. An empty results buffer reads as a bare letter. Spec: none yet → specify first, and
+13.2. **Closed by 13.4 (A10)** — an empty results buffer reads as a bare letter. A10 takes
+    the empty region out of the document rather than explaining it, so the line a listener
+    arrowed onto is not there to be read. Kept here with its evidence, because the *reason*
+    it happened is still unestablished and the next empty named region will meet it again.
+    Spec: none needed, and
     the specifying is small. **Found 2026-08-25** in B7's NVDA pass and filed rather than
     fixed there, because the markup is A1's and A5's rather than B7's and nobody has
     established the cause.
@@ -379,6 +383,85 @@ the answer to "what should we do now?".
     in a region that is going away, or the reader dropping an utterance while focus moves,
     is not established — and the two want different fixes. It is worth an entry because the
     sentence is the one that tells a listener what they are now typing into.
+
+13.4. **Done** — A10, the window has two faces, and the connected one is the terminal
+    window. Spec:
+    [a10-the-window-has-two-faces.md](specs/a10-the-window-has-two-faces.md) — agreed in
+    conversation 2026-08-26, immediately after A8 was built and driven with NVDA.
+
+    **Raised by the user, and obvious once said**: a window with no connection was still
+    showing an empty results buffer and an edit field that could submit nothing. They are not
+    merely useless — a region holding nothing is a thing a listener arrows onto and hears
+    nothing useful from, and a field that can submit nothing is a control they have to pass
+    to reach the only thing that would help them. Two obstacles in front of the one action
+    available.
+
+    So the window has two faces. With a session: the **terminal window**, which is a results
+    buffer and an edit field. With none: a line saying so and a **Connect button**, which is
+    where focus lands. A button rather than an instruction, because B7's window sent the
+    listener to a menu and describing a route is what this product exists to stop doing.
+
+    **The buffer's rule is emptiness, not sessions**, and that difference is the entry's one
+    subtlety: it appears with its first content and stays afterwards. So a window whose far
+    end has gone keeps the transcript — which a user who typed `exit` by accident must not
+    lose — while the edit field, having nothing to submit to, goes. Focus is rescued rather
+    than stolen: it moves only if it was in what just went away.
+
+    **And the terminal window is one thing in the document, because tabs will make it many.**
+    The user named that consequence while the entry was being built: one session per tab, one
+    terminal window per tab, so the buffer and the edit field are grouped now rather than
+    untangled from `<main>` later. The rules are then per-tab, and a window with no tabs at
+    all is the Connect button.
+
+    **Closes 13.2** and supersedes B7 decision 3's "a line submitted while unconnected is
+    answered": with no edit field there is nowhere to type one. The refusal stays in the
+    protocol for the submission that races a session ending, which is what it was always
+    really for.
+
+13.6. **Done** — A11, PowerShell is one kind and its editions are its variants. Spec:
+    [a11-powershell-is-one-kind.md](specs/a11-powershell-is-one-kind.md) — asked for by the
+    user on 2026-08-26 while A10 was being tested: *"create powershell as a single division,
+    and consider the different versions as connection properties, like you did with wsl"*.
+
+    The list had four kinds, two of which differed by one word, while WSL — which comes in as
+    many flavours as the machine has distributions — was already one row with a panel. The
+    asymmetry was an accident of history rather than a decision: B5.4 made the editions two
+    kinds because there was nowhere else to put them, and A8 built the panel that is where
+    they belong. Three rows now, however many editions and distributions a machine has.
+
+    **The one real difference between the two kinds decides the rest.** Which PowerShell
+    editions exist is the same answer on every machine in the world, so they are named and
+    asked about; which Linux distributions exist is the machine's answer twice over, so they
+    can only be enumerated. That is why a variant carries availability at all: a machine with
+    Windows PowerShell and no PowerShell 7 has the kind and one edition, and listing only
+    what is installed would teach that listener that Acter does not support the edition they
+    have read about — B5.4's argument, one level down. A missing edition keeps its place,
+    says so in its name, and shows what to type.
+
+13.5. The first Enter after a window opens does not always press the focused control.
+    Spec: none yet → specify first. **Found 2026-08-26** in A10's NVDA pass, chased through
+    two fixes, and filed rather than chased further, because the next step is a guess at a
+    constant and that is not a fix.
+
+    **What a listener meets.** An unconnected window opens with the Connect button focused
+    and announced as such, and Enter opens the *Acter menu* instead of pressing it — because
+    NVDA reads a freshly opened document in browse mode, where Enter acts on its own cursor
+    rather than on the focus, and the cursor is wherever NVDA's initial read of the document
+    finished. Any focus change afterwards fixes it, so Escape out of the menu and Enter again
+    works every time.
+
+    **Two things were tried, and both helped without settling it.** A startup hold before the
+    first focus placement moved focus onto the button reliably; Enter then did nothing at
+    all, the cursor having stopped on the status bar. `role="application"` around the button
+    made Enter reach the focus, and the first Enter worked — in one run out of two. It was
+    measured working at 10:15 and opening the menu at 10:14 on the same build, NVDA 2026.1.1,
+    silent capture, `user` persona.
+
+    **What it is probably about.** Both fixes race the same thing: how far NVDA has got with
+    building its view of a document that is still loading. A longer hold might win more
+    often, and "more often" is not a property worth shipping. What would settle it is knowing
+    what NVDA is actually doing at that moment, which is an `expert` question about the
+    reader rather than a `user` one about Acter.
 
 14. A4, completion path. Spec: none yet → specify first. Scope sketch: fake
     completion provider, Tab handling in the edit field, completion announcement.

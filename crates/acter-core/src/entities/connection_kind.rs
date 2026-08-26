@@ -23,9 +23,16 @@ use specta::Type;
 pub enum ConnectionKind {
     /// `cmd.exe`, which is on every Windows machine and cannot be removed.
     Cmd,
-    /// Windows PowerShell 5.1, which ships with Windows.
+    /// PowerShell, whichever edition. **One row in the connect list, with the editions as
+    /// its variants** — the shape WSL already had, applied to the other kind that comes in
+    /// more than one (spec A11). A listener arrowing the kinds meets "PowerShell" once and
+    /// chooses an edition in the panel, rather than meeting two rows whose names differ by
+    /// one word.
+    PowerShell,
+    /// Windows PowerShell 5.1, which ships with Windows. A *variant* of [`Self::PowerShell`]
+    /// rather than a row of its own, and never listed at the top level.
     WindowsPowerShell,
-    /// PowerShell 7 or later, which is installed separately.
+    /// PowerShell 7 or later, which is installed separately. A variant, as above.
     PowerShellSeven,
     /// Bash inside a WSL distribution.
     Wsl,
@@ -40,6 +47,7 @@ impl ConnectionKind {
     pub fn label(self) -> &'static str {
         match self {
             Self::Cmd => "Command Prompt",
+            Self::PowerShell => "PowerShell",
             Self::WindowsPowerShell => "Windows PowerShell",
             Self::PowerShellSeven => "PowerShell 7",
             Self::Wsl => "WSL",
@@ -66,6 +74,9 @@ impl ConnectionKind {
     pub fn program(self) -> &'static str {
         match self {
             Self::Cmd => "cmd.exe",
+            // The edition that ships with Windows, which is what "PowerShell" with no
+            // edition chosen means and what the machine is asked about for the row.
+            Self::PowerShell => "powershell.exe",
             Self::WindowsPowerShell => "powershell.exe",
             Self::PowerShellSeven => "pwsh.exe",
             Self::Wsl => "wsl.exe",
@@ -83,12 +94,30 @@ impl ConnectionKind {
     /// worse thing for a program to assume than for it to have a sentence it never says:
     /// a Windows install with no `cmd.exe` is broken rather than unsupported, and saying so
     /// is more use than a panic or an empty box.
+    /// The editions this kind comes in, before any machine is asked — empty for a kind that
+    /// is one thing.
+    ///
+    /// **Known rather than discovered, which is what separates it from WSL.** Which
+    /// PowerShell editions exist is the same answer on every machine in the world; which are
+    /// *installed* is the machine's, and which Linux distributions exist at all is the
+    /// machine's twice over. So these are named here and asked about, while a distribution
+    /// can only be enumerated by running `wsl.exe`.
+    pub fn editions(self) -> &'static [ConnectionKind] {
+        match self {
+            Self::PowerShell => &[Self::WindowsPowerShell, Self::PowerShellSeven],
+            _ => &[],
+        }
+    }
+
     pub fn instructions(self) -> &'static str {
         match self {
             Self::Cmd => {
                 "Command Prompt is missing from this Windows installation. It is part of \
                  Windows itself, so this usually means the system files are damaged. Run \
                  sfc /scannow from an administrator Command Prompt to check them."
+            }
+            Self::PowerShell => {
+                "No edition of PowerShell is installed on this computer. Windows PowerShell                  ships with Windows, so this usually means it was removed as an optional                  feature. Reinstall it from Settings, under System, Optional features."
             }
             Self::WindowsPowerShell => {
                 "Windows PowerShell is missing from this Windows installation. It ships \
@@ -114,8 +143,9 @@ impl ConnectionKind {
 mod tests {
     use super::*;
 
-    const EVERY_KIND: [ConnectionKind; 4] = [
+    const EVERY_KIND: [ConnectionKind; 5] = [
         ConnectionKind::Cmd,
+        ConnectionKind::PowerShell,
         ConnectionKind::WindowsPowerShell,
         ConnectionKind::PowerShellSeven,
         ConnectionKind::Wsl,
@@ -176,23 +206,50 @@ mod tests {
         }
     }
 
-    /// The two editions are two different executables, which is the whole reason they are
-    /// two kinds: a machine has one, the other, or both, and asking about the wrong file
-    /// would report an installed PowerShell 7 as missing.
     #[test]
-    fn every_kind_names_a_different_program() {
-        let mut seen = Vec::new();
+    fn every_kind_names_an_executable() {
         for kind in EVERY_KIND {
             let program = kind.program();
             assert!(
                 program.ends_with(".exe"),
                 "{kind:?} names an executable: {program}"
             );
-            assert!(
-                !seen.contains(&program),
-                "{kind:?} names the same program as something else"
-            );
-            seen.push(program);
+        }
+    }
+
+    /// **The two editions are two different executables**, which is the whole reason they
+    /// are two things at all: a machine has one, the other, or both, and asking about the
+    /// wrong file would report an installed PowerShell 7 as missing.
+    #[test]
+    fn the_editions_of_a_kind_name_different_programs() {
+        let editions = ConnectionKind::PowerShell.editions();
+
+        assert_eq!(editions.len(), 2);
+        assert_ne!(editions[0].program(), editions[1].program());
+    }
+
+    /// **A kind that comes in editions names one of them**, deliberately: choosing
+    /// "PowerShell" without opening the panel has to start something, and what it starts is
+    /// the edition that ships with Windows.
+    #[test]
+    fn a_kind_with_editions_names_one_of_them() {
+        let kind = ConnectionKind::PowerShell;
+
+        assert!(
+            kind.editions()
+                .iter()
+                .any(|edition| edition.program() == kind.program()),
+            "PowerShell names an edition rather than an executable of its own"
+        );
+        assert_eq!(kind.program(), ConnectionKind::WindowsPowerShell.program());
+    }
+
+    /// A kind that is one thing has no editions, and that is what tells the two apart in
+    /// the connect list: only a kind with editions gets a panel.
+    #[test]
+    fn a_kind_that_is_one_thing_has_no_editions() {
+        for kind in [ConnectionKind::Cmd, ConnectionKind::Wsl] {
+            assert!(kind.editions().is_empty(), "{kind:?} is one thing");
         }
     }
 

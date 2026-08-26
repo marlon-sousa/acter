@@ -22,6 +22,18 @@ export class BufferDom implements BufferView {
 
   constructor(private readonly region: HTMLElement) {}
 
+  /**
+   * The buffer is in the document only while it has something in it (spec A10).
+   *
+   * An empty region is a thing a listener arrows onto and hears nothing useful from, and
+   * since B7 an empty buffer is what every launch opens with rather than a state that lasts
+   * until the first prompt arrives. Every method that puts something in calls this; only
+   * `clear` takes it away again.
+   */
+  private show(): void {
+    this.region.hidden = false;
+  }
+
   appendPrompt(text: string): void {
     // A paragraph rather than a heading, and outside any block: the prompt belongs to the
     // gap between what just finished and what runs next, which is exactly where it is
@@ -31,6 +43,7 @@ export class BufferDom implements BufferView {
     prompt.className = 'prompt';
     prompt.textContent = text;
     this.region.append(prompt);
+    this.show();
   }
 
   clear(): void {
@@ -39,6 +52,7 @@ export class BufferDom implements BufferView {
     // is gone, and append its output under the previous shell's heading.
     this.region.replaceChildren();
     this.blocks.clear();
+    this.region.hidden = true;
   }
 
   openBlock(commandId: CommandId, commandLine: string): void {
@@ -70,6 +84,7 @@ export class BufferDom implements BufferView {
 
     this.region.append(...(heading === null ? [output] : [heading, output]));
     this.blocks.set(commandId, { heading, output });
+    this.show();
   }
 
   private newHeading(commandLine: string): HTMLElement {
@@ -91,6 +106,7 @@ export class BufferDom implements BufferView {
     const chunk = document.createElement('div');
     chunk.textContent = text;
     block.output.append(chunk);
+    this.show();
   }
 
   focus(): void {

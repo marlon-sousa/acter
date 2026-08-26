@@ -83,30 +83,90 @@
            can disagree eventually will (spec A9, decision 1). Level 1, with command blocks
            at level 2, which is the structure the buffer already implied. -->
       <h1 id="window-title">Acter</h1>
-      <!-- The results buffer is a document and must stay one: browse mode is how a
-           listener reads output back, heading by heading, and `role="application"`
-           here would take that away. -->
-      <div id="results" role="region" aria-label="Results" tabindex="-1"></div>
-      <!-- The command line is deliberately NOT an application, and it was tried the
-           other way first. Wrapping it does force focus mode, so typed letters are text
-           rather than quick-navigation — but it also removes the browsable document
-           here, and with it a workflow this product exists to serve: turning focus mode
-           off at the edit field and arrowing up to hear the tail of the last command.
-           Measured with the tester's NVDA on 2026-08-24: wrapped, the edit field cannot
-           be put into browse mode at all. Reading the output wins; the mode at the
-           command line stays the reader's own business. The menu bar keeps its wrapper,
-           because there the arrows must belong to the widget and there is nothing to
-           read. -->
-      <form id="command-form">
-        <label for="command-input">Command input</label>
-        <input
-          id="command-input"
-          type="text"
-          autocomplete="off"
-          autocapitalize="off"
-          spellcheck="false"
-        />
-      </form>
+      <!-- **Two windows, swapped as units** (spec A10). Not one window whose controls
+           wink in and out: a window with no session and a window with one are different
+           things, and the markup says so. Exactly one of the two below is in the document
+           at any moment.
+
+           This is also the seam **tabs** will use: a tab holds a terminal window, so the
+           buffer and the edit field are one thing here rather than two that happen to sit
+           together in `<main>`. -->
+
+      <!-- **The window with no session.** It has held one thing since A10: no results
+           buffer to arrow onto and hear nothing from, and no edit field that could submit
+           nothing. Two useless controls in front of the one action available is the shape of
+           an interface designed by looking at it rather than listening to it.
+
+           **A button rather than an instruction.** B7's window told the listener to press
+           F10 and find Connect in a menu, which is a route to describe rather than a thing
+           to do; this is one control, under focus when the window opens, and Enter connects.
+           The menu item stays, because a menu is where a user looks for a command they
+           already know. -->
+      <div id="not-connected-window">
+        <p>Not connected.</p>
+        <!-- **No `role="application"` here, and that is a reversal worth recording.** It was
+             wrapped for a day, to make the first Enter after a window opens reach the focus
+             rather than the reader's browse cursor (roadmap 13.5). It half-worked, and it
+             cost something far larger: NVDA scopes browse mode to an application region, so
+             focus on a button inside one puts the rest of the document out of arrowing
+             reach. The user met that on 2026-08-26 in the *other* Connect button, where it
+             made the results buffer — the whole reason a disconnected session keeps one —
+             unreadable.
+
+             Both buttons are plain now, and behave the same, which is its own virtue in a
+             window learned by ear. A `<button>` needs no help in browse mode: `b` jumps to
+             it and Enter presses it. 13.5 stays open rather than being paid for in reading. -->
+        <button id="connect-button" type="button">Connect</button>
+      </div>
+
+      <!-- **The terminal window**: one session's results buffer and its edit field. It
+           appears with the first connection and stays for the life of the window, because
+           what it holds after a session ends is the record of what happened — which a user
+           who typed `exit` by accident must not lose.
+
+           It carries no role and no label deliberately: an unnamed `div` is invisible to a
+           screen reader, so grouping its parts costs a listener nothing and gives the tab
+           panel a place to be when it exists. -->
+      <div id="terminal-window" hidden>
+        <!-- The results buffer is a document and must stay one: browse mode is how a
+             listener reads output back, heading by heading, and `role="application"`
+             here would take that away.
+
+             **Hidden while it is empty**, which is the buffer's own invariant rather than a
+             window state: a container with no content is not an unavailable control, it is
+             nothing to read. It appears with its first content and stays. Connecting clears
+             it, so one session's history never runs on into the next one's. -->
+        <div id="results" role="region" aria-label="Results" tabindex="-1" hidden></div>
+        <!-- The command line is deliberately NOT an application, and it was tried the
+             other way first. Wrapping it does force focus mode, so typed letters are text
+             rather than quick-navigation — but it also removes the browsable document
+             here, and with it a workflow this product exists to serve: turning focus mode
+             off at the edit field and arrowing up to hear the tail of the last command.
+             Measured with the tester's NVDA on 2026-08-24: wrapped, the edit field cannot
+             be put into browse mode at all. Reading the output wins; the mode at the
+             command line stays the reader's own business. -->
+        <form id="command-form">
+          <label for="command-input">Command input</label>
+          <input
+            id="command-input"
+            type="text"
+            autocomplete="off"
+            autocapitalize="off"
+            spellcheck="false"
+          />
+        </form>
+        <!-- **What the terminal window shows once its session has ended.** No connection, no
+             edit field — so this replaces it, in place, keeping the buffer above intact.
+
+             The Connect button here is a second element rather than the one above moved
+             about: the two windows are exclusive, so no listener ever meets both, and one
+             handler is bound to each. Moving a focused control between containers is how
+             focus gets dropped. -->
+        <div id="terminal-ended" hidden>
+          <p>Not connected.</p>
+          <button id="reconnect-button" type="button">Connect</button>
+        </div>
+      </div>
     </main>
     <!-- The status bar, at the end of the document the way a status bar sits at the bottom
          of a window, and reachable three ways.
@@ -143,24 +203,34 @@
          by adapters/connect_dialog.ts from `connectable()`, asked fresh every time this
          opens, so a distribution installed while Acter is running appears with no restart.
 
-         **`role="application"` around the kinds list only**, and for A7's measured reason:
-         NVDA reads a document in browse mode, where the arrows move its own cursor rather
-         than reaching the widget, and it switches to focus mode by itself only if the user
-         left that setting on — which is a setting, not a guarantee. A list whose arrows
-         depend on somebody's configuration is not a list. The wrapper covers the listbox
-         and nothing else: the panel below it is read-only prose a listener has to be able
-         to *read*, and instructions naming what to install would be unreachable inside an
-         application region. -->
+         **Enter connects, from anywhere in it that is not a button.** Pressing Enter after
+         making a choice is what every dialog on this platform does, and one that answers it
+         in a single control is one you learn by failing — reported by the user on
+         2026-08-26, who chose a distribution in the panel and got nothing. -->
     <dialog id="connect-dialog" aria-labelledby="connect-title">
+      <!-- **The whole dialog is an application region**, not just its listbox. NVDA reads a
+           document in browse mode, where the arrows move its own cursor and Enter acts on
+           that cursor rather than on the focus — and it switches to focus mode by itself
+           only if the user left that setting on, which is a setting rather than a guarantee.
+           A dialog whose arrows and Enter depend on somebody's configuration is not a
+           dialog. The wrapper says the keys in here belong to the widget.
+
+           The role goes on a `div` inside rather than on the `<dialog>` itself, which must
+           keep announcing as a dialog.
+
+           **What it costs, and what pays for it.** Inside an application region prose cannot
+           be arrowed, so the instructions panel — which is read-only text a listener has to
+           be able to *read* — is focusable, and Tab reaches it. That is the price of the
+           arrows working for everybody rather than only for people who have changed a
+           setting. -->
+      <div role="application" aria-label="Connect">
       <h1 id="connect-title">Connect</h1>
-      <div role="application" aria-label="Connection kind">
-        <ul
-          id="connect-kinds"
-          role="listbox"
-          aria-label="Connection kind"
-          tabindex="0"
-        ></ul>
-      </div>
+      <ul
+        id="connect-kinds"
+        role="listbox"
+        aria-label="Connection kind"
+        tabindex="0"
+      ></ul>
       <!-- The panel names itself, because what it holds changes as the kind changes and a
            section a listener tabs into unannounced is the trap decision 2 exists to answer.
            Its heading text is rewritten with its contents. -->
@@ -175,6 +245,7 @@
       </div>
       <button id="connect-start" type="button">Connect</button>
       <button id="connect-cancel" type="button">Cancel</button>
+      </div>
       <!-- This dialog's own live region, and it is not a duplicate. `showModal` makes
            everything outside the dialog inert, so the announcer's region at the end of the
            document changes where no reader is listening — measured with NVDA on 2026-08-26,

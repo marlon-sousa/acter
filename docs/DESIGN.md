@@ -336,10 +336,63 @@ Launched with no arguments, Acter opens a window with **no session**: nothing is
 until the user connects. Launched as `acter --profile <name>`, it starts that profile's
 session immediately.
 
-**An unconnected window must say so.** It announces that it is not connected and where to
-go — the Acter menu — and a line submitted before connecting is answered with the same
-sentence rather than swallowed. A window that opens onto silence is the failure shape this
-product can least afford, and one that accepts typing into nothing is a worse version of it.
+**An unconnected window must say so.** It announces that it is not connected and what to do
+about it. A window that opens onto silence is the failure shape this product can least
+afford.
+
+### The window has two windows, and the connected one is the terminal window — **Decided 2026-08-26**
+
+**A window with no session shows no terminal window**: no results buffer, and no edit field.
+It holds a line saying it is not connected and a **Connect button**, which is where focus
+lands when the window opens. With a session it holds the terminal window — the results buffer
+and the edit field.
+
+**They are two windows swapped as units, not one window whose controls appear and vanish.**
+Exactly one is in the document at any moment, and once a session has run the empty one never
+comes back: what answers a session ending is the terminal window's own ended state, which
+keeps the buffer and replaces the edit field with a Connect button of its own. To a screen
+reader `hidden` and "absent" are the same thing, so what matters here is the model rather
+than the mechanism.
+
+This supersedes the rule above about a line submitted before connecting being answered: with
+no edit field there is nowhere to type one. The answer survives in the protocol as the
+refusal a submission gets when it names a session that has since ended, which is a race
+rather than a thing a user can do on purpose.
+
+**Why a button rather than the menu.** The earlier wording sent the listener to the Acter
+menu, which is a route to describe rather than a thing to do — and describing a route is what
+this product exists to stop doing. One control, under focus, and Enter connects. The menu
+item stays, because a menu is where a user looks for a command they already know.
+
+**Why the empty buffer and field had to go.** A region holding nothing is something a
+listener arrows onto and hears nothing useful from, and a field that can submit nothing is a
+control they have to pass to reach the only thing that would help them. Two obstacles in
+front of the one action available is the shape of an interface designed by looking at it.
+
+**A new connection clears the buffer; a disconnection does not.** History is kept across the
+end of a session, because it is the record of what happened — and never joined across two,
+because a transcript stitched from two shells is a transcript of something that never
+happened.
+
+**When the far end goes away, the buffer stays and the edit field goes.** The buffer is by
+then the record of what happened, and a user who typed `exit` by accident must not lose it;
+the field has nothing left to submit to. Focus is rescued rather than stolen: it moves into
+whatever is now showing only if it was in what just went away, so somebody reading the buffer
+when their shell exits keeps their place.
+
+**A dialog's contents sit in an application region.** NVDA reads a document in browse mode,
+where the arrows move its own cursor and Enter acts on that cursor rather than on the focus,
+and it switches to focus mode by itself only if the user left that setting on — a setting
+rather than a guarantee. A dialog whose arrows depend on somebody's configuration is not a
+dialog. The role goes on a container inside the `<dialog>`, which must keep announcing as one.
+The cost is that prose inside cannot be arrowed, so read-only text in a dialog is focusable;
+About keeps no such region, being four paragraphs and a button with no widget keys to protect.
+
+**The terminal window is a unit, because tabs will make it many.** Phase 1 has one session
+and therefore one terminal window; the buffer and the edit field are grouped as one thing in
+the document rather than left as siblings, so the day a tab holds each of them is a change in
+one place. The rules above are then per-tab: a tab whose session ended keeps its buffer and
+loses its edit field, and a window with no tabs at all is the Connect button.
 
 **Command-line arguments are parsed, never printed.** Acter is a windowed binary with no
 console attached, so `--profile something-that-does-not-exist` cannot report itself on
