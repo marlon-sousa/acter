@@ -158,7 +158,8 @@ and the two should share one mechanism rather than inventing a second.
 ### 7. What the far end is, asked once, on a channel of its own — Decided 2026-08-26
 
 Before the session channel is opened at all, Acter asks the far end what it is on a channel
-of its own: `$SHELL`, then `$0`, then the version variables `$BASH_VERSION`,
+of its own — **measured against the rig rather than assumed**, including against an account
+whose login shell is not bash; see "the probe answers" below: `$SHELL`, then `$0`, then the version variables `$BASH_VERSION`,
 `$ZSH_VERSION`, `$FISH_VERSION`. The first is the account's configured shell, the second is
 what is actually running and carries a login shell's leading `-`, and the third is what a
 shell says about itself and is the most certain.
@@ -305,6 +306,57 @@ side of the connection.
 It stays worth knowing, because the deferred install-snippet entry closes it from the other
 side: a snippet on the far end could read `LC_ACTER` and act on it, which makes this
 measurement the foundation of that entry rather than a dead end.
+
+### Measured 2026-08-26: the probe answers, and where a snippet would have to go
+
+Decision 7 was written asserting that `$SHELL` is readable on an `exec` channel before the
+session's shell exists. That was an assumption, and the question it deserved — *if there is
+no shell yet, is the variable even there?* — is B4.5's lesson in one sentence. Measured
+against the rig, with a second account added whose login shell is dash.
+
+**`$SHELL` is present, and it is sshd's answer rather than bash's.** On an `exec` channel
+the environment sshd hands the command contains `SHELL=/bin/bash`, matching the account's
+passwd entry exactly. The dash account was the control, because **dash has no behaviour of
+assigning `$SHELL` when it is unset and bash does**: against `dashuser` the probe returned
+`SHELL=[/bin/dash] ZERO=[dash] BASH_VERSION=[]`. A value that arrives for a shell which
+cannot have invented it is sshd's, so the probe works for exactly the accounts it exists
+for rather than only for the one that would have flattered it.
+
+The rest of that environment is worth knowing, because it is smaller than a session's:
+`HOME`, `LOGNAME`, `PATH`, `PWD`, `SHELL`, `SHLVL`, `USER`, `SSH_CLIENT`, `SSH_CONNECTION`,
+`MOTD_SHOWN`. No `TERM`, no `LANG`.
+
+**`$0` tells the two channel kinds apart.** An `exec` request answers `bash`; a `shell`
+request with a pty answers `-bash`. The leading `-` is the login-shell marker, which is what
+kitty strips before matching, and it is a second confirmation that a `shell` request really
+does start a login shell.
+
+### Measured 2026-08-26: a snippet in `~/.bashrc` never runs, and nothing says so
+
+This is the trap roadmap 27.1 has to get right, and it is worse than "write to the other
+file".
+
+A login shell reads `/etc/profile`, then **the first that exists** of `~/.bash_profile`,
+`~/.bash_login`, `~/.profile`. It does not read `~/.bashrc` at all. On Debian `~/.bashrc`
+runs only because `~/.profile` sources it — and Debian's own `~/.profile` carries the
+warning in a comment at the top: *"This file is not read by bash(1), if ~/.bash_profile or
+~/.bash_login exists."*
+
+Measured both ways on the rig, changing one thing between them. With a `~/.bash_profile`
+present, a marker at the end of `~/.bashrc` never printed; with it removed and nothing else
+touched, the same marker printed.
+
+**And the session looked completely normal either way, which is the finding.** A prompt was
+still drawn while `~/.bashrc` was being skipped, because `/etc/profile` sources
+`/etc/bash.bashrc`, which sets a `PS1` of its own. The only visible difference was that the
+prompt lost its colour — `~/.bashrc`'s prompt is the coloured one, `/etc/bash.bashrc`'s is
+plain. A sighted user might notice that. **A listener cannot: colour is not spoken.**
+
+So the failure this produces is silent by construction. A snippet written to `~/.bashrc`
+works in every local test, never runs over SSH on an account that has a `~/.bash_profile`,
+and gives no signal at all to the person Acter is built for. 27.1 writes to the file bash
+will actually read, and verifies afterwards that the marker it installed comes back — it
+does not trust the write.
 
 ## Scope — Decided 2026-08-26
 

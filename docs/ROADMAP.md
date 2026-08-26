@@ -2325,12 +2325,22 @@ thing to pick up once the adapters land, not merely the next number.
     *already* installed, whether Acter put it there or the user's own iTerm2 or VS Code
     setup did.
 
-    **Login versus non-login is the trap, and the rig exists to catch it.** A `shell`
-    request starts a *login* shell — sshd sets `argv[0]` to `-bash` — so bash reads
-    `/etc/profile` and then the first of `~/.bash_profile`, `~/.bash_login`, `~/.profile`
-    that exists, and does **not** read `~/.bashrc`. A snippet written to `~/.bashrc` works
-    perfectly in every local test and never runs over SSH. That a `.bash_profile` shadows
-    `.profile` entirely is the second half of the same trap.
+    **Login versus non-login is the trap, and it was measured on the rig 2026-08-26.** A
+    `shell` request starts a *login* shell — `$0` comes back as `-bash` — so bash reads
+    `/etc/profile` and then the first that exists of `~/.bash_profile`, `~/.bash_login`,
+    `~/.profile`, and does **not** read `~/.bashrc`. On Debian `~/.bashrc` runs only because
+    `~/.profile` sources it, and Debian's own `~/.profile` warns in a comment that it is
+    skipped entirely when a `~/.bash_profile` exists. Measured both ways: with a
+    `~/.bash_profile` present a marker at the end of `~/.bashrc` never printed; with it
+    removed and nothing else changed, it did.
+
+    **The reason this is the trap and not merely a detail**: the session looked normal
+    either way. A prompt was still drawn while `~/.bashrc` was skipped, because
+    `/etc/profile` sources `/etc/bash.bashrc`, which sets a `PS1` of its own. The only
+    visible difference was that the prompt lost its colour — and colour is not spoken. So a
+    snippet in the wrong file passes every local test, never runs over SSH, and gives a
+    listener no signal whatsoever. This entry writes to the file bash will actually read and
+    then **verifies the marker comes back**, rather than trusting the write.
 
 ## Convergence (requires B4, B5 and B6 all Done)
 
