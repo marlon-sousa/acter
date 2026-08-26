@@ -331,6 +331,28 @@ request with a pty answers `-bash`. The leading `-` is the login-shell marker, w
 kitty strips before matching, and it is a second confirmation that a `shell` request really
 does start a login shell.
 
+### Measured 2026-08-26: both interrupts work, and the byte is the one that always would
+
+Decision 2 says `interrupt` is a method rather than a byte "because over SSH it is a channel
+request", and that is the right reason for the *port* to be shaped as it is. What the far end
+does about either mechanism was still an assumption, and B4.5's lesson is that "should" is not
+evidence — so each was sent **alone**, on a connection of its own, against the rig
+(`tests/ssh_rig.rs`, `what_actually_interrupts_a_remote_command`).
+
+Against OpenSSH 9.2 on Debian 12: **a `signal` channel request alone stops a running command,
+and the byte `0x03` alone stops it too.** The transport sends both, and the comment there says
+why: the byte is what a remote pty's line discipline turns into `SIGINT` on every server
+including old ones, and the request is what a server that implements it acts on.
+
+**The measurement had to be rebuilt before it meant anything, and that is the finding worth
+keeping.** The first version asserted that the shell came back by submitting `echo stopped` and
+waiting for "stopped" — which passes whether or not anything was interrupted, because a remote
+pty **echoes what is typed into it** regardless of what is running. Every assertion in the suite
+had the same hole. They now submit a line whose typed text and whose output differ
+(`echo stop''ped` prints `stopped`), so only the far end actually running the command can
+satisfy the wait. An interrupt test that cannot fail is worse than no interrupt test, and this
+one could not fail.
+
 ### Measured 2026-08-26: a snippet in `~/.bashrc` never runs, and nothing says so
 
 This is the trap roadmap 27.1 has to get right, and it is worse than "write to the other

@@ -2508,6 +2508,29 @@ thing to pick up once the adapters land, not merely the next number.
     and the difference between a session that can be ended properly and one that answers
     "Acter does not know how".
 
+    **Delivered in four PRs, in this order** — agreed 2026-08-26. B9 is one spec and one
+    entry, but it is a transport, a conversation, two dialogs and a connect-list kind, and
+    one PR carrying all of it would put the accessibility checklist and three thousand lines
+    of code in the same body. The entry flips to Done when the last of them lands.
+
+    1. **The transport, and what it knows about host keys.** `SshTransport` behind the
+       existing `Transport` port, `KnownHosts` reading the user's file and writing only
+       Acter's own, and the two questions as a driven port so the transport is measured
+       against the real rig with no window anywhere near it. Rig suite in
+       `crates/acter-transports/tests/ssh_rig.rs`, `#[ignore]`d like the local-shell ones.
+    2. **The far end says what it is** (decision 7): the probe on a channel of its own, with
+       its deadline, and the `ShellFacts` it produces.
+    3. **Connecting is a conversation**: the steps a connection reports, the answers coming
+       back as their own invokes, and the domain state machine behind them. Tauri offers no
+       way for the backend to ask the frontend anything and wait — events and channels are
+       one-way — and a sync `#[tauri::command]` runs on the main thread, so an invoke that
+       blocked on a dialog would deadlock the very answer it was waiting for. The steps go
+       out on a `Channel`, which is what `attach_session` already does.
+    4. **SSH is a kind you can choose**: the kind and the profile, the form in A8's panel,
+       the host-key and password dialogs, the factory wiring, the one-sentence connection
+       announcement — and the accessibility checklist, driven against all three host-key
+       states.
+
 27.1. B9.5, offer to integrate the far end. Spec: none yet → specify when 27 is Done.
 
     A button that writes the integration snippet into the remote account's shell startup,

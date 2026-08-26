@@ -12,7 +12,9 @@
 mod fake;
 mod local;
 mod scripted;
+mod ssh;
 
 pub use fake::{Chunking, FakeShell, Script, Submission, TranscriptShell, Unmarked};
 pub use local::LocalPty;
 pub use scripted::{ScriptedTransport, SessionTranscript};
+pub use ssh::{KnownHosts, SshTransport};

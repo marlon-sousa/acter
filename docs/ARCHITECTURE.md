@@ -32,8 +32,32 @@ Cargo workspace:
   escape-sequence parser over the byte stream and a second parser could disagree with the
   first about what is a real sequence (spec B2, decision 1); the command-boundary *state
   machine* it feeds stays in core.
-- `crates/acter-transports` — `LocalPty` (ConPTY via `portable-pty`) and `Ssh`
-  (`russh`, behind a feature flag; phase 1 builds don't pay for it).
+- `crates/acter-transports` — `LocalPty` (ConPTY via `portable-pty`) and `SshTransport`
+  (`russh`). **Not behind a feature flag — decided 2026-08-26, with B9**, against this
+  document's earlier plan: SSH is a connection kind a user chooses from the same list as
+  cmd and PowerShell, so a build that omitted it would be a second configuration with
+  different behaviour and no accessibility checklist run against it. `russh` is taken on its own
+  default crypto backend, `aws-lc-rs`, with one feature turned on in `aws-lc-sys`:
+  `prebuilt-nasm`.
+
+  **The backends are interchangeable as far as Acter is concerned** — no cipher, key
+  exchange, MAC or host-key algorithm is gated on either, so the same servers are reachable
+  whichever is chosen — which makes this a build-toolchain decision rather than a product
+  one. The default backend assembles its AES-GCM and ChaCha20-Poly1305 with NASM, which is
+  on neither a stock Windows machine nor the GitHub Windows runner (cmake, the tool usually
+  blamed, is on both and is not used by this build path). `prebuilt-nasm` falls back to the
+  object files the crate ships when NASM is absent, and still assembles from source when it
+  is present.
+
+  **This is not a new concession**: the alternative backend, `ring`, uses its own prebuilt
+  objects on Windows unconditionally and offers no way to assemble from source there at all.
+  Both were measured on 2026-08-26 — the default backend without the feature stops with
+  "NASM command not found! Build cannot continue", and with it builds clean on a machine
+  that has no NASM.
+
+  Nothing beyond Rust itself has to be installed to build Acter. The MSVC toolchain is
+  needed, as it is for any `windows-msvc` Rust build, and both backends compile C with `cc`
+  regardless of which is chosen.
 - `crates/acter-shells` — PowerShell / cmd / bash adapters: shell-integration
   injection snippets, quoting rules, completion strategy.
 - `crates/acter-app` — Tauri 2 app and composition root: wires concrete adapters into
@@ -465,3 +489,10 @@ Six tiers, cheapest first:
 
 - `clippy` with warnings denied, `rustfmt` enforced.
 - CI on a Windows runner from day one.
+- **Rust, and the MSVC build tools Rust itself requires — nothing else.** Written down
+  because it stopped being implicit with B9: crates in this tree compile C (both of
+  `russh`'s crypto backends do, and so does `ring`), and the C compiler `cc` uses on
+  Windows is `cl.exe`, which ships in the same MSVC toolset component as the `link.exe`
+  that `x86_64-pc-windows-msvc` already cannot build without. So a machine set up for Rust
+  on Windows is already set up for this; there is no separate C toolchain to install, and
+  no assembler either (see `acter-transports` above for why NASM is not needed).
