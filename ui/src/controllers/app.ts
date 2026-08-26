@@ -4,15 +4,20 @@
 
 import type {
   Announcement,
+  Connectable,
+  Connected,
   ConnectionState,
   CommandId,
   KeyPress,
+  ProfileId,
   SessionEvent,
+  SessionId,
 } from '../protocol';
 import type { AnnouncerView } from '../ports/announcer_view';
 import type { BackendApi } from '../ports/backend_api';
 import type { BeepView } from '../ports/beep_view';
 import type { BufferView } from '../ports/buffer_view';
+import type { ConnectApi } from '../ports/connect_api';
 import type { WindowView } from '../ports/window_view';
 import type { EditFieldView } from '../ports/edit_field_view';
 
@@ -68,6 +73,23 @@ export const connectingStatus = 'connecting';
 export const connectedStatus = 'connected';
 export const disconnectedStatus = 'not connected';
 
+// The two strings the unconnected window needs (spec B7, decision 3).
+//
+// **The first is said twice on purpose**: once when a window opens onto nothing, and again
+// for every line submitted into it. Hearing the same words is how a user learns that this
+// is one state rather than two problems — and a line typed into an empty window has to be
+// *answered*, because silence is indistinguishable from a shell that is thinking.
+//
+// It names the way out rather than only the trouble, in the order a listener needs it: what
+// is wrong, then what to press.
+export const notConnectedMessage =
+  'not connected. Press F10 for the Acter menu, then choose Connect to start a shell';
+// And what a listener hears when one starts, which is the connect list's own label — so
+// what they chose and what the window now calls itself are the same words (spec A9).
+export function connectedMessage(label: string): string {
+  return `connected to ${label}`;
+}
+
 // Unreachable while Ctrl+C is both the only key reported and the only key bound. It is
 // still spoken, because the first thing a second reported key must not do is vanish.
 export const unboundKeyMessage = 'that key does nothing here';
@@ -86,6 +108,21 @@ function assertNeverAnnouncement(announcement: never): never {
   );
 }
 
+/**
+ * The sentence out of a rejected connect.
+ *
+ * Tauri rejects with the `Err` string the backend wrote, which is already a whole spoken
+ * sentence. Anything else reaching here is a bug rather than a far end that would not
+ * start, and it still has to be *said*: a listener meeting silence has no way to tell a
+ * broken connect from one that is taking its time.
+ */
+function reason(why: unknown): string {
+  if (typeof why === 'string' && why.trim() !== '') {
+    return why;
+  }
+  return `the connection could not be started: ${String(why)}`;
+}
+
 export class AppController {
   // Commands with an open buffer block, so an event can find (or lazily open) one.
   private readonly openBlocks = new Set<CommandId>();
@@ -95,9 +132,16 @@ export class AppController {
   // Commands whose heading came from the shell's own echo, so the optimistic heading
   // from a submit ack never overwrites it (spec B6.1, decision 1).
   private readonly echoed = new Set<CommandId>();
+  // Which session every invoke names, or null for a window connected to nothing.
+  //
+  // Held here rather than as a constant in the router since B7: a window can be connected
+  // to one far end and then another, and a line submitted a moment before that happened
+  // must not run in the new one.
+  private session: SessionId | null = null;
 
   constructor(
     private readonly backend: BackendApi,
+    private readonly connect: ConnectApi,
     private readonly editField: EditFieldView,
     private readonly buffer: BufferView,
     private readonly announcer: AnnouncerView,
@@ -105,20 +149,97 @@ export class AppController {
     private readonly window: WindowView,
   ) {}
 
-  /** Attach to the session at startup; every SessionEvent flows to handleEvent. */
-  async attach(): Promise<void> {
-    await this.backend.attachSession((event) => this.handleEvent(event));
+  /**
+   * What the window opens with: the session the launch brought, or nothing.
+   *
+   * **Nothing is the ordinary case since B7** — an empty window is a state with
+   * obligations, and the first of them is that it says so rather than looking like a
+   * session that has gone quiet.
+   */
+  async start(): Promise<void> {
+    await this.show(await this.connect.connected());
+  }
+
+  /** What this machine offers, for whoever is rendering the connect list. */
+  connectable(): Promise<Connectable[]> {
+    return this.connect.connectable();
+  }
+
+  /**
+   * Connect to one profile, replacing whatever was running.
+   *
+   * **A failure is spoken and nothing else happens**: the session that was running is
+   * still running and still attached, so what the user loses by choosing something that
+   * would not start is nothing at all.
+   */
+  async connectTo(id: ProfileId): Promise<void> {
+    let connected: Connected;
+    try {
+      connected = await this.connect.use(id);
+    } catch (why) {
+      // The sentence is the backend's, because only the backend knows what went wrong.
+      // Every other announced string in this file is pinned here; this one is the
+      // exception and the reason is that a pinned string could only say "it failed".
+      this.announcer.announce(reason(why));
+      return;
+    }
+    await this.show(connected);
+    this.announcer.announce(connectedMessage(connected.label));
+  }
+
+  /**
+   * Point the window at a connection, or at nothing.
+   *
+   * **The buffer is cleared here, between the two calls**, which is the whole reason
+   * attaching is a separate call from using a profile (spec B7, decision 1): a buffer
+   * still holding one shell's output while another's arrives under it is a transcript of
+   * a session that never happened.
+   */
+  private async show(connected: Connected | null): Promise<void> {
+    this.buffer.clear();
+    this.openBlocks.clear();
+    this.tooBig.clear();
+    this.echoed.clear();
+    this.session = connected === null ? null : connected.session;
+
+    if (connected === null) {
+      this.window.connectedTo(null);
+      this.window.status(disconnectedStatus);
+      this.announcer.announce(notConnectedMessage);
+      return;
+    }
+    this.window.connectedTo(connected.label);
+    // The status is left to `ConnectionChanged`, which the session emits and holds until
+    // this attach collects it — so "connecting" and "connected" have one producer rather
+    // than two that could disagree about which one this window is in.
+    await this.backend.attachSession(connected.session, (event) => {
+      this.handleEvent(event);
+    });
   }
 
   async submit(): Promise<void> {
     const text = this.editField.value().trim();
+    // **A line typed into an unconnected window is answered, and the text is kept.** Not
+    // cleared, because it is what the user will press Enter on again once they have
+    // connected; not silent, because silence is what a shell that is thinking sounds like.
+    if (this.session === null) {
+      this.announcer.announce(notConnectedMessage);
+      return;
+    }
     // An empty field is submitted like any other line (spec B4.9). It used to return
     // here, so nothing was written, the shell never redrew its prompt and the user heard
     // nothing at all — and a blank line is ordinary input to a running program besides,
     // a REPL or a "press Enter to continue". What it does not do is open a block: an
     // empty submission matches no echo, so a bare Enter is a re-orient gesture rather
     // than a command, and the prompt it brings back is the answer to it.
-    const ack = await this.backend.submitCommand(text);
+    const ack = await this.backend.submitCommand(this.session, text);
+    // The session went away between the keypress and the invoke — replaced, or ended. The
+    // same answer as the check above, for the same reason: the line was not run anywhere,
+    // so the text stays where the user can send it again.
+    if (ack.status === 'NotConnected') {
+      this.announcer.announce(notConnectedMessage);
+      return;
+    }
     if (text === '') {
       this.editField.clear();
       return;
@@ -337,7 +458,14 @@ export class AppController {
    * arrives (spec A3.2 decision 1).
    */
   async reportKey(press: KeyPress): Promise<void> {
-    const ack = await this.backend.sendKey(press);
+    // Nothing to report a keystroke to. `NothingToActOn`'s words are what a window with no
+    // session would have said anyway — there is nothing running to stop — and saying them
+    // without a round trip keeps the answer immediate.
+    if (this.session === null) {
+      this.announcer.announce(nothingToStopMessage);
+      return;
+    }
+    const ack = await this.backend.sendKey(this.session, press);
     switch (ack) {
       case 'Applied':
         // Nothing: the session speaks for itself when the intent lands.

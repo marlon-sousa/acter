@@ -1,6 +1,8 @@
 //! Facade over the driving ports — what the world may ask of the domain, one file
 //! per port. Services implement these; controllers/routers depend on them.
 
+mod connect_api;
 mod session_api;
 
+pub use connect_api::ConnectApi;
 pub use session_api::SessionApi;

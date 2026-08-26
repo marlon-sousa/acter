@@ -29,7 +29,7 @@ use std::time::Duration;
 use acter_core::{
     Announcement, Clock, CommandId, ConnectionState, EventSink, ExitCode, Key, KeyAck, KeyPress,
     PacingConfig, SessionApi, SessionEvent, SessionId, SessionService, ShellFacts, ShellMarkers,
-    Timer, Transport, TransportError,
+    SubmitAck, Timer, Transport, TransportError,
 };
 use acter_term::AlacrittyEngine;
 use acter_transports::{
@@ -237,7 +237,12 @@ impl Pipeline {
 
     /// Submits a line the way the frontend's edit field would.
     fn submit(&mut self, line: &str) -> CommandId {
-        self.session.submit_command(SESSION, line).command_id
+        // The one place in these suites that reads an ack apart: a running session always
+        // accepts, and the other answer belongs to a window with no session at all.
+        match self.session.submit_command(SESSION, line) {
+            SubmitAck::Accepted { command_id } => command_id,
+            SubmitAck::NotConnected => panic!("a running session accepts a line"),
+        }
     }
 
     /// Presses Ctrl+C the way the frontend will once A3.2 lands: the keystroke, not the

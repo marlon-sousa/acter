@@ -133,3 +133,36 @@ describe('BufferDom.focus', () => {
     }
   });
 });
+
+// The buffer is emptied between one session ending and the next being attached to
+// (spec B7, decision 1), so no shell's output is ever appended under another's heading.
+describe('clear', () => {
+  it('empties the region so nothing of the previous session is left to navigate', () => {
+    const region = makeRegion();
+    const buffer = new BufferDom(region);
+    buffer.openBlock(1, 'git status');
+    buffer.appendOutput(1, 'on branch main');
+    buffer.appendPrompt('C:\>');
+
+    buffer.clear();
+
+    expect(region.querySelectorAll('h2')).toHaveLength(0);
+    expect(region.textContent).toBe('');
+  });
+
+  /** The map of blocks goes with the DOM. The next session's ids start again at 1, so a
+   * remembered block would take the new shell's first command and append its output under
+   * the old shell's heading — a transcript of a session that never happened. */
+  it('forgets its blocks, so the next command opens a new one', () => {
+    const region = makeRegion();
+    const buffer = new BufferDom(region);
+    buffer.openBlock(1, 'git status');
+
+    buffer.clear();
+    buffer.openBlock(1, 'ls');
+
+    const headings = region.querySelectorAll('h2');
+    expect(headings).toHaveLength(1);
+    expect(headings[0]?.textContent).toBe('ls');
+  });
+});

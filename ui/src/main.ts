@@ -11,7 +11,7 @@ import { bindKeys } from './adapters/keyboard';
 import { installMenuBar } from './adapters/menu_bar';
 import { WindowChrome } from './adapters/window_chrome';
 import { AppController } from './controllers/app';
-import { TauriBackend, TauriShell } from './routers/tauri';
+import { TauriBackend, TauriConnect, TauriShell } from './routers/tauri';
 
 function byId<T extends HTMLElement>(id: string): T {
   const element = document.getElementById(id);
@@ -38,6 +38,7 @@ const windowChrome = new WindowChrome(
 );
 const controller = new AppController(
   installDebugRecorder(new TauriBackend()),
+  new TauriConnect(),
   editField,
   buffer,
   announcer,
@@ -75,16 +76,14 @@ void shell.platform().then((os) => {
   );
 });
 
-// What this window is connected to, asked once at startup. Until B7 makes the far end
-// something that can change while the app runs, this is a fact about the launch — so it is
-// read once rather than watched, and `ConnectionChanged` keeps the *state* current.
-void shell.connection().then((name) => windowChrome.connectedTo(name));
-
 // The edit field is passed because the session hears a keystroke only while that field
 // has focus (DESIGN, layer 2), and the adapter enforces that by listening on the element
 // rather than on the document.
 bindKeys(controller, byId<HTMLFormElement>('command-form'), commandInput);
-// The fake is the default backend, connected automatically on load with no user
-// action (decision 9): attach the session so scenario events start flowing.
-void controller.attach();
+// What this window opens onto: the session the launch brought, or nothing at all — which
+// since B7 is the ordinary case, and which the controller announces rather than leaving a
+// listener in front of a window that says nothing (spec B7, decision 3). Naming the far end
+// is part of the same call now: a session can be replaced while the window is open, so the
+// title comes from the connection rather than from what the process was started with.
+void controller.start();
 editField.focus();
