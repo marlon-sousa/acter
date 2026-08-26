@@ -80,8 +80,13 @@ describe('protocol bindings', () => {
     expect(describeEvent(announce)).toBe('announce 1: too big 120');
   });
 
-  it('types SubmitAck as the correlation id return payload', () => {
-    const ack: SubmitAck = { command_id: 42 };
-    expect(ack.command_id).toBe(42);
+  it('types SubmitAck as the correlation id return payload, or a refusal', () => {
+    const ack: SubmitAck = { status: 'Accepted', command_id: 42 };
+    expect(ack.status === 'Accepted' && ack.command_id).toBe(42);
+
+    // The other answer, which is what a window with no session behind it gives (B7). It
+    // carries no id at all, so a frontend cannot read a refusal as "command zero".
+    const refused: SubmitAck = { status: 'NotConnected' };
+    expect(refused).not.toHaveProperty('command_id');
   });
 });

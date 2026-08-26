@@ -22,9 +22,9 @@ export interface AppShell {
   /// user's NVDA disproved on 2026-08-25: assigning the document's title updates the page,
   /// and the native window keeps the title its configuration gave it.
   setTitle(title: string): Promise<void>;
-  /// What this window is connected to, or `null` for the scripted session — which nobody
-  /// chose and which has no name worth putting in a title bar (spec A9).
-  connection(): Promise<string | null>;
+  // What this window is connected to used to be asked here, and since B7 it is not: a
+  // launch is no longer the only way to have a session, so the only answer that stays true
+  // while the window is open is `ConnectApi.connected`'s.
   /// Which operating system this build runs on, so the frontend can decide where the
   /// menu bar belongs: in the document on Windows, in the system bar on macOS.
   platform(): Promise<string>;

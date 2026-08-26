@@ -17,7 +17,7 @@ mod unspoken_text;
 pub use connection_kind::ConnectionKind;
 pub use osc133::Osc133Marker;
 pub use pacing_state::{PacingConfig, PacingState};
-pub use protocol_commands::{Key, KeyAck, KeyPress, SubmitAck};
+pub use protocol_commands::{Connectable, Connected, Key, KeyAck, KeyPress, ProfileId, SubmitAck};
 pub use protocol_common::{CommandId, ConnectionState, ExitCode, Mode, SessionId};
 pub use protocol_events::{Announcement, SessionEvent};
 pub(crate) use read_mode::ReadMode;

@@ -26,7 +26,7 @@ use std::time::{Duration, Instant};
 use acter_core::{
     Announcement, Clock, CommandId, ConnectionState, EventSink, ExitCode, InstalledShells, Key,
     KeyAck, KeyPress, PacingConfig, SessionApi, SessionEvent, SessionId, SessionService,
-    ShellAdapter, ShellFacts, ShellLaunch, ShellMarkers, Timer,
+    ShellAdapter, ShellFacts, ShellLaunch, ShellMarkers, SubmitAck, Timer,
 };
 use acter_shells::ThisMachine;
 use acter_term::AlacrittyEngine;
@@ -203,7 +203,12 @@ impl RealSession {
     }
 
     fn submit(&self, line: &str) -> CommandId {
-        self.session.submit_command(SESSION, line).command_id
+        // The one place in these suites that reads an ack apart: a running session always
+        // accepts, and the other answer belongs to a window with no session at all.
+        match self.session.submit_command(SESSION, line) {
+            SubmitAck::Accepted { command_id } => command_id,
+            SubmitAck::NotConnected => panic!("a running session accepts a line"),
+        }
     }
 
     /// Everything one block received, concatenated in order.
@@ -1332,4 +1337,153 @@ async fn ctrl_d_in_a_shell_with_no_measured_answer_does_nothing() {
         output.contains("acter-still-here"),
         "and the session is untouched: {output:?}"
     );
+}
+
+/// **Replacing a session really ends the shell it replaced** (spec B7, decision 4).
+///
+/// This is the acceptance criterion with teeth, and the reason it is a test rather than an
+/// intention: dropping the outgoing `Arc<dyn SessionApi>` has to reach `LocalPty::drop`,
+/// which is what kills the process. If any task, controller or router held a clone that
+/// outlived it, the shell would survive invisibly, and a user who connected five times
+/// would have five shells.
+///
+/// **The oracle is a file the shell holds open exclusively.** Counting processes by name is
+/// no good on a developer's machine, and `LocalPty` exposes no process id — but a shell that
+/// is alive is holding a `FileShare::None` handle, and a shell that is gone is not. So the
+/// question "is that far end still running" is asked of the operating system directly, and
+/// answers without ambiguity.
+///
+/// Everything above the factory is the shipped code: the real `ConnectService` doing the
+/// real replace. What is a double here is only the factory, which starts a shell that locks
+/// the file the profile names — because a profile that means "hold this file" is what makes
+/// the far end observable at all.
+mod replacing_a_session {
+    use std::fs::OpenOptions;
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    use acter_core::{ConnectApi, ConnectService, ProfileId, SessionFactory};
+
+    use super::*;
+
+    /// Long enough for PowerShell to start twice on a cold machine.
+    const LOCK_PATIENCE: Duration = Duration::from_secs(30);
+
+    static NONCE: AtomicU32 = AtomicU32::new(0);
+
+    /// A path nothing else in this run will use.
+    fn marker() -> PathBuf {
+        let unique = NONCE.fetch_add(1, Ordering::SeqCst);
+        std::env::temp_dir().join(format!("acter-b7-{}-{unique}.lock", std::process::id()))
+    }
+
+    /// Whether some process is holding this file open exclusively — which for these
+    /// markers means the shell that created it is alive.
+    fn held(path: &Path) -> bool {
+        path.exists() && OpenOptions::new().write(true).open(path).is_err()
+    }
+
+    async fn until(patience: Duration, what: &str, ready: impl Fn() -> bool) {
+        let deadline = Instant::now() + patience;
+        while Instant::now() < deadline {
+            if ready() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        panic!("timed out waiting for {what}");
+    }
+
+    /// The one double: a factory whose sessions are real PowerShell processes, each holding
+    /// open the file its profile named.
+    struct LockingShells;
+
+    impl SessionFactory for LockingShells {
+        fn open(&self, profile: &ProfileId) -> Result<Arc<dyn SessionApi>, String> {
+            let ProfileId::Program { program: path } = profile else {
+                return Err("this factory only starts marker shells.".to_owned());
+            };
+            // `None` sharing is what makes the handle observable from outside: while this
+            // process lives, nothing else can open the file for writing.
+            let snippet = format!(
+                "$global:acter = [System.IO.File]::Open('{path}', 'Create', 'Write', 'None')"
+            );
+            let launch = ShellLaunch {
+                program: POWERSHELL.to_owned(),
+                args: vec![
+                    "-NoProfile".to_owned(),
+                    "-NoExit".to_owned(),
+                    "-Command".to_owned(),
+                    snippet,
+                ],
+                environment: Vec::new(),
+            };
+            let args: Vec<&str> = launch.args.iter().map(String::as_str).collect();
+            let pty = LocalPty::spawn(&launch.program, &args, &[], COLUMNS, SCREEN_LINES)?;
+            Ok(Arc::new(SessionService::start(
+                Box::new(pty),
+                Box::new(AlacrittyEngine::new(COLUMNS, SCREEN_LINES)),
+                Arc::new(RealClock::new()) as Arc<dyn Clock>,
+                PacingConfig::default(),
+                ShellFacts {
+                    markers: ShellMarkers::Full,
+                    eof: None,
+                },
+            )))
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "spawns two real shells"]
+    async fn connecting_twice_leaves_exactly_one_shell_running() {
+        let first = marker();
+        let second = marker();
+        let service = ConnectService::new(
+            Arc::new(LockingShells),
+            Arc::new(ThisMachine::new()),
+            Vec::new(),
+        );
+
+        service
+            .use_profile(&ProfileId::Program {
+                program: first.display().to_string(),
+            })
+            .expect("the first shell starts");
+        until(LOCK_PATIENCE, "the first shell to take its lock", || {
+            held(&first)
+        })
+        .await;
+
+        service
+            .use_profile(&ProfileId::Program {
+                program: second.display().to_string(),
+            })
+            .expect("the second shell starts");
+        until(LOCK_PATIENCE, "the second shell to take its lock", || {
+            held(&second)
+        })
+        .await;
+
+        // The replaced shell is gone: nothing is holding its file any more. This is the
+        // assertion that fails if a clone of the outgoing session outlives the replace.
+        until(LOCK_PATIENCE, "the replaced shell to exit", || {
+            !held(&first)
+        })
+        .await;
+        assert!(
+            held(&second),
+            "and the one the user is now on is still running"
+        );
+
+        drop(service);
+        until(
+            LOCK_PATIENCE,
+            "the last shell to exit with the window",
+            || !held(&second),
+        )
+        .await;
+
+        let _ = std::fs::remove_file(&first);
+        let _ = std::fs::remove_file(&second);
+    }
 }

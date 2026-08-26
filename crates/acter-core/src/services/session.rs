@@ -218,7 +218,10 @@ impl SessionApi for SessionService {
             // command is running now.
             self.running.store(true, Ordering::SeqCst);
         }
-        SubmitAck { command_id }
+        // Always `Accepted`: a session that exists accepts. The other answer belongs to
+        // the window that has no session at all, and is `ConnectService`'s to give
+        // (spec B7, decision 3) — nothing here can be in that state.
+        SubmitAck::Accepted { command_id }
     }
 
     /// The keybinding table, then what the session is doing, then the pump.
@@ -1568,7 +1571,10 @@ mod tests {
         async fn submit(&self, line: &str) -> CommandId {
             let ack = self.api.submit_command(SessionId(1), line);
             self.settle().await;
-            ack.command_id
+            match ack {
+                SubmitAck::Accepted { command_id } => command_id,
+                SubmitAck::NotConnected => panic!("a running session accepts a line"),
+            }
         }
 
         async fn press(&self, key: KeyPress) -> KeyAck {

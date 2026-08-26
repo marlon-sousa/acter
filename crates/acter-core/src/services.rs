@@ -5,6 +5,8 @@
 //! guard). It names no adapter: everything below it is a trait, and which implementation
 //! fills each slot is the composition root's to decide.
 
+mod connect;
 mod session;
 
+pub use connect::ConnectService;
 pub use session::SessionService;

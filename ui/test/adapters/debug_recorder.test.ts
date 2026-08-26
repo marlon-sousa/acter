@@ -7,18 +7,30 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { installDebugRecorder } from '../../src/adapters/debug_recorder';
 import type { DebugEntry } from '../../src/adapters/debug_recorder';
 import type { BackendApi } from '../../src/ports/backend_api';
-import type { KeyAck, KeyPress, SessionEvent, SubmitAck } from '../../src/protocol';
+import type {
+  KeyAck,
+  KeyPress,
+  SessionEvent,
+  SessionId,
+  SubmitAck,
+} from '../../src/protocol';
+
+/** The session every call in this file names; which one it is does not matter here. */
+const SESSION: SessionId = 1;
 
 class FakeBackend implements BackendApi {
   private onEvent: ((event: SessionEvent) => void) | undefined;
   keyAck: KeyAck = 'Applied';
 
-  attachSession(onEvent: (event: SessionEvent) => void): Promise<void> {
+  attachSession(
+    _session: SessionId,
+    onEvent: (event: SessionEvent) => void,
+  ): Promise<void> {
     this.onEvent = onEvent;
     return Promise.resolve();
   }
   submitCommand(): Promise<SubmitAck> {
-    return Promise.resolve({ command_id: 7 });
+    return Promise.resolve({ status: 'Accepted', command_id: 7 });
   }
   sendKey(): Promise<KeyAck> {
     return Promise.resolve(this.keyAck);
@@ -63,7 +75,7 @@ describe('installDebugRecorder in a debug build', () => {
   it('records events in arrival order, which is the thing it exists for', async () => {
     const backend = new FakeBackend();
     const wrapped = installDebugRecorder(backend);
-    await wrapped.attachSession(() => {});
+    await wrapped.attachSession(SESSION, () => {});
 
     backend.emit({ type: 'Output', command_id: 1, text: 'hello' });
     backend.emit({
@@ -87,7 +99,7 @@ describe('installDebugRecorder in a debug build', () => {
     const backend = new FakeBackend();
     const wrapped = installDebugRecorder(backend);
     let seenWhileHandling: string[] = [];
-    await wrapped.attachSession(() => {
+    await wrapped.attachSession(SESSION, () => {
       seenWhileHandling = debugWindow()
         .__acterDebug!.entries()
         .filter((entry) => entry.kind === 'event')
@@ -103,8 +115,8 @@ describe('installDebugRecorder in a debug build', () => {
     const wrapped = installDebugRecorder(new FakeBackend());
     const key: KeyPress = { key: { Char: 'c' }, ctrl: true, shift: false, alt: false };
 
-    await wrapped.submitCommand('small');
-    await wrapped.sendKey(key);
+    await wrapped.submitCommand(SESSION, 'small');
+    await wrapped.sendKey(SESSION, key);
 
     const traffic = debugWindow()
       .__acterDebug!.entries()
@@ -121,7 +133,7 @@ describe('installDebugRecorder in a debug build', () => {
   it('numbers entries monotonically so a dropped prefix stays obvious', async () => {
     const backend = new FakeBackend();
     const wrapped = installDebugRecorder(backend);
-    await wrapped.attachSession(() => {});
+    await wrapped.attachSession(SESSION, () => {});
     backend.emit({ type: 'CommandStarted', command_id: 1, command_line: null });
     backend.emit({ type: 'CommandFinished', command_id: 1 });
 
@@ -135,7 +147,7 @@ describe('installDebugRecorder in a debug build', () => {
   it('hands out a copy, so a reader cannot mutate the record', async () => {
     const backend = new FakeBackend();
     const wrapped = installDebugRecorder(backend);
-    await wrapped.attachSession(() => {});
+    await wrapped.attachSession(SESSION, () => {});
     backend.emit({ type: 'CommandStarted', command_id: 1, command_line: null });
 
     debugWindow().__acterDebug!.entries().length = 0;
@@ -145,7 +157,7 @@ describe('installDebugRecorder in a debug build', () => {
 
   it('clears on request', async () => {
     const wrapped = installDebugRecorder(new FakeBackend());
-    await wrapped.attachSession(() => {});
+    await wrapped.attachSession(SESSION, () => {});
 
     debugWindow().__acterDebug!.clear();
 

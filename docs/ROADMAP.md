@@ -302,7 +302,7 @@ the answer to "what should we do now?".
     concluded connecting "needs no more than a choice". SSH needs a form. And the
     testability half of the trade reversed too — a dialog inside the webview is drivable by
     WebDriver end to end, which the native submenu never was.
-13.1. A9, the window says what it is connected to. Spec:
+13.1. **Done** — A9, the window says what it is connected to. Spec:
     [a9-the-window-says-where-you-are.md](specs/a9-the-window-says-where-you-are.md) —
     agreed in conversation 2026-08-25, raised by the user straight after 23.6: having made
     the prompt audible again, the window itself still says nothing about what it is.
@@ -322,6 +322,31 @@ the answer to "what should we do now?".
     rather than leaving a listener with a panel and silence. Connected is reported when the
     far end first speaks rather than when a process was spawned, because a shell that has
     not drawn a prompt is not one anybody can use.
+
+13.2. An empty results buffer reads as a bare letter. Spec: none yet → specify first, and
+    the specifying is small. **Found 2026-08-25** in B7's NVDA pass and filed rather than
+    fixed there, because the markup is A1's and A5's rather than B7's and nobody has
+    established the cause.
+
+    **What a listener meets.** In a window connected to nothing, arrowing down through the
+    document reads the results region as `Results região R` — the region's name, its role,
+    and then a bare letter `R` with no meaning. NVDA's report-current-line on that line says
+    only `R`, so the letter is what NVDA's virtual buffer holds for the line, not a
+    decoration on the announcement. The same line in a connected window reads
+    `Results região PS C:\Users\marlo>`, which is the region and its content — so the letter
+    is what an *empty* region renders as. Measured with NVDA 2026.1.1, silent capture,
+    `user` persona.
+
+    The `div` is genuinely empty in both the source and the built page
+    (`<div id="results" role="region" aria-label="Results" tabindex="-1"></div>`), and no
+    stylesheet puts generated content in it, so where the letter comes from is not yet
+    known — Chromium's exposure of an empty named region, or NVDA's rendering of one.
+    Answering that is an `expert` question about the reader rather than a `user` one about
+    Acter, which is why this entry starts by finding out rather than by changing markup.
+
+    **Why it is worth an entry now.** It has been reachable since A1, and B7 is what makes
+    it ordinary: an empty results buffer used to last as long as it took a session to draw
+    its first prompt, and it is now the state every launch opens in until the user connects.
 
 14. A4, completion path. Spec: none yet → specify first. Scope sketch: fake
     completion provider, Tab handling in the edit field, completion announcement.
@@ -2198,7 +2223,7 @@ thing to pick up once the adapters land, not merely the next number.
     pinned string, decided in the open with a listener present rather than as a side
     effect.
 
-25. B7, sessions that start at runtime. Spec:
+25. **Done** — B7, sessions that start at runtime. Spec:
     [b7-sessions-that-start-at-runtime.md](specs/b7-sessions-that-start-at-runtime.md) —
     agreed in conversation 2026-08-23. **What Connect needs and what does not exist**: the
     composition root builds exactly one session at startup from an environment variable and
@@ -2224,6 +2249,33 @@ thing to pick up once the adapters land, not merely the next number.
 
     **A failed use must not be a panic.** There is a user standing in front of it, possibly
     a working session behind it, and a speakable sentence is the only acceptable answer.
+
+    **Built as specified, with eight amendments recorded in the spec** — three entries landed
+    between the agreement and the implementation, and two of them changed what this one had
+    to build. The two worth knowing here: a connect row carries B5.4's availability and
+    instructions rather than only an id and a label, because that catalogue is what this
+    renders; and A9's `connection` command, which read `ACTER_SHELL`, is replaced by a third
+    action, `connected`, because a command that reads the launch stops being true the first
+    time a user connects to something else.
+
+    **Two consequences downstream.** `SubmitAck` is two answers now — a correlation id, or
+    "there is nothing behind this window" — which is what makes a line typed into an empty
+    window answerable rather than swallowed. And `SessionId` finally identifies something:
+    it is minted per connection and checked, so a line submitted a moment before the user
+    replaced their shell is refused rather than run in the new one, in a working directory
+    and on a machine they never chose for it.
+
+    **The teeth are a real-shell test.** Two PowerShell processes, each holding a file open
+    with no sharing, driven through the real `ConnectService`: connecting to the second
+    releases the first one's lock, which is the operating system saying the replaced shell is
+    gone. Counting processes by name would not have done — a developer's machine has other
+    shells on it — and `LocalPty` exposes no process id.
+
+    **One thing this entry does not ship, and 13 (A8) does**: a way to reach the actions from
+    the window. Until the Connect dialog lands, an ordinary launch opens a window that
+    correctly says it is not connected and correctly tells the user to press F10 for a menu
+    item that is not there yet. `ACTER_SHELL` and `ACTER_TRANSCRIPT` still connect at launch,
+    which is what the suites and the manual passes use.
 
 26. B8, the profile store and `--profile`. **Resequenced 2026-08-24: this comes after
     23.3 (WSL) rather than before it**, and it changes shape with the Connect dialog

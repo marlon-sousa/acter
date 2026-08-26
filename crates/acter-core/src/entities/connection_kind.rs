@@ -12,11 +12,14 @@
 //! to be heard: what is missing first, then what to do, then where. A listener hears the
 //! first clause before deciding whether the rest is worth their attention (CLAUDE.md).
 
+use serde::{Deserialize, Serialize};
+use specta::Type;
+
 /// One thing a user can choose to connect to.
 ///
 /// Deliberately not carrying the adapter that starts it: this is what the connect list is
 /// made of, and the list exists on machines where the thing cannot be started at all.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Type)]
 pub enum ConnectionKind {
     /// `cmd.exe`, which is on every Windows machine and cannot be removed.
     Cmd,
@@ -40,6 +43,32 @@ impl ConnectionKind {
             Self::WindowsPowerShell => "Windows PowerShell",
             Self::PowerShellSeven => "PowerShell 7",
             Self::Wsl => "WSL",
+        }
+    }
+
+    /// The executable this kind is, which is both what the machine is asked about and what
+    /// the factory starts.
+    ///
+    /// **A name rather than a path**, resolved by the same `PATH` rules Windows itself
+    /// applies, so a machine that has moved its PowerShell is still answered correctly
+    /// ([`InstalledShells::is_available`](crate::InstalledShells::is_available)).
+    ///
+    /// **This is the one shell fact the domain does hold, and it is deliberate.** B5.1 moved
+    /// *how* a shell is started behind `ShellAdapter` and B7's factory keeps it there; what
+    /// remains here is which program a user means when they say "PowerShell 7", which is the
+    /// same category as the label beside it and the instructions under it — knowledge about
+    /// a product, not about how to run one. The alternative was a port whose only job was to
+    /// map four constants, and the connect list would have been the only caller.
+    ///
+    /// WSL answers with the client rather than with a distribution: which distributions
+    /// exist is discovery, and lives behind
+    /// [`InstalledShells`](crate::InstalledShells).
+    pub fn program(self) -> &'static str {
+        match self {
+            Self::Cmd => "cmd.exe",
+            Self::WindowsPowerShell => "powershell.exe",
+            Self::PowerShellSeven => "pwsh.exe",
+            Self::Wsl => "wsl.exe",
         }
     }
 
@@ -144,6 +173,26 @@ mod tests {
                 kind.instructions().contains(command),
                 "{kind:?} tells the user to run {command}"
             );
+        }
+    }
+
+    /// The two editions are two different executables, which is the whole reason they are
+    /// two kinds: a machine has one, the other, or both, and asking about the wrong file
+    /// would report an installed PowerShell 7 as missing.
+    #[test]
+    fn every_kind_names_a_different_program() {
+        let mut seen = Vec::new();
+        for kind in EVERY_KIND {
+            let program = kind.program();
+            assert!(
+                program.ends_with(".exe"),
+                "{kind:?} names an executable: {program}"
+            );
+            assert!(
+                !seen.contains(&program),
+                "{kind:?} names the same program as something else"
+            );
+            seen.push(program);
         }
     }
 

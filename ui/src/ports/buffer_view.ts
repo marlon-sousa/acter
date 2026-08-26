@@ -34,6 +34,16 @@ export interface BufferView {
    * a listener reviewing the session needs (spec B5.6, decision 5).
    */
   appendPrompt(text: string): void;
+  /**
+   * Empty the buffer.
+   *
+   * **Called between one session ending and the next one being attached to** (spec B7,
+   * decision 1), which is the moment the frontend gets to choose precisely because the
+   * attach is a separate call. A buffer still holding one shell's output while another
+   * one's arrives under it is a transcript of a session that never happened, and a
+   * listener reviewing it by heading has no way to see the seam.
+   */
+  clear(): void;
   focus(): void;
   containsFocus(): boolean;
 }
