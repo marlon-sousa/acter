@@ -418,6 +418,31 @@ the answer to "what should we do now?".
     protocol for the submission that races a session ending, which is what it was always
     really for.
 
+13.5. The first Enter after a window opens does not always press the focused control.
+    Spec: none yet → specify first. **Found 2026-08-26** in A10's NVDA pass, chased through
+    two fixes, and filed rather than chased further, because the next step is a guess at a
+    constant and that is not a fix.
+
+    **What a listener meets.** An unconnected window opens with the Connect button focused
+    and announced as such, and Enter opens the *Acter menu* instead of pressing it — because
+    NVDA reads a freshly opened document in browse mode, where Enter acts on its own cursor
+    rather than on the focus, and the cursor is wherever NVDA's initial read of the document
+    finished. Any focus change afterwards fixes it, so Escape out of the menu and Enter again
+    works every time.
+
+    **Two things were tried, and both helped without settling it.** A startup hold before the
+    first focus placement moved focus onto the button reliably; Enter then did nothing at
+    all, the cursor having stopped on the status bar. `role="application"` around the button
+    made Enter reach the focus, and the first Enter worked — in one run out of two. It was
+    measured working at 10:15 and opening the menu at 10:14 on the same build, NVDA 2026.1.1,
+    silent capture, `user` persona.
+
+    **What it is probably about.** Both fixes race the same thing: how far NVDA has got with
+    building its view of a document that is still loading. A longer hold might win more
+    often, and "more often" is not a property worth shipping. What would settle it is knowing
+    what NVDA is actually doing at that moment, which is an `expert` question about the
+    reader rather than a `user` one about Acter.
+
 14. A4, completion path. Spec: none yet → specify first. Scope sketch: fake
     completion provider, Tab handling in the edit field, completion announcement.
 15. A5.3 and onward — iteration entries appear here as NVDA findings arrive.

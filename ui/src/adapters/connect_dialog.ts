@@ -170,7 +170,11 @@ export class ConnectDialog {
     if (!row.available) {
       // The instructions are prose to be *read*: what is missing, what to type, and where
       // (spec B5.4, decision 4). They are the backend's words, not this module's.
+      // **Focusable, because the dialog is an application region** and prose inside one
+      // cannot be arrowed. Tab reaches it and the reader says it; without the `tabindex`
+      // the one thing a user of an unavailable kind actually needs would be unreachable.
       const said = document.createElement('p');
+      said.tabIndex = 0;
       said.textContent = row.instructions ?? '';
       this.panelBody.append(said);
       return;

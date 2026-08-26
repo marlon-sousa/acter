@@ -22,17 +22,35 @@ to it.
 
 ## Decisions
 
-### 1. Two faces, and the connected one is the terminal window
+### 1. Two windows, swapped as units
 
-The user's own name for it, and it is the right one: the **terminal window** is a results
-buffer and an edit field, and it belongs to a session.
+The user's own framing, on 2026-08-26: *"the not connected, and the connected (with
+disconnection) are two different windows"*. Not one window whose controls wink in and out —
+which is what the first build was, three independent toggles on a buffer, a form and a
+block, and which is much harder to learn by ear than being moved between two places.
 
-- **With a session**: the terminal window, and no Connect button.
-- **With none**: a line saying it is not connected and a **Connect button**, and no edit
-  field.
+- **The window with no session**: a line saying so and a **Connect button**, which is where
+  focus lands. Nothing else.
+- **The terminal window**: a results buffer and an edit field. It appears with the first
+  connection and stays for the life of the window, because what it holds afterwards is the
+  record of what happened.
 
-The heading, the menu bar and the status bar belong to the window rather than to either
-face, and do not move.
+**Exactly one of the two is in the document at any moment**, and once a session has run the
+empty one never comes back: it holds nothing, and swapping to it would take the transcript
+off the screen. What answers a session ending is the terminal window's own ended state,
+which keeps the buffer and replaces the edit field with a line and a Connect button of its
+own.
+
+That second button is a second element rather than the first one moved about. The two
+windows are exclusive so no listener ever meets both, one handler is bound to each, and
+moving a focused control between containers is how focus gets dropped.
+
+The heading, the menu bar and the status bar belong to the application rather than to either
+window, and do not move.
+
+**To a screen reader `hidden` and "absent from the DOM" are indistinguishable**, so the
+mechanism here is a structure question rather than an accessibility one. What was worth
+fixing was the model, not the attribute.
 
 ### 2. The Connect button takes focus when the window opens
 

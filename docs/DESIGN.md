@@ -340,12 +340,19 @@ session immediately.
 about it. A window that opens onto silence is the failure shape this product can least
 afford.
 
-### The window has two faces, and the connected one is the terminal window — **Decided 2026-08-26**
+### The window has two windows, and the connected one is the terminal window — **Decided 2026-08-26**
 
 **A window with no session shows no terminal window**: no results buffer, and no edit field.
-It holds the heading, a line saying it is not connected, and a **Connect button**, which is
-where focus lands when the window opens. With a session it holds the terminal window — the
-results buffer and the edit field — and no Connect button.
+It holds a line saying it is not connected and a **Connect button**, which is where focus
+lands when the window opens. With a session it holds the terminal window — the results buffer
+and the edit field.
+
+**They are two windows swapped as units, not one window whose controls appear and vanish.**
+Exactly one is in the document at any moment, and once a session has run the empty one never
+comes back: what answers a session ending is the terminal window's own ended state, which
+keeps the buffer and replaces the edit field with a Connect button of its own. To a screen
+reader `hidden` and "absent" are the same thing, so what matters here is the model rather
+than the mechanism.
 
 This supersedes the rule above about a line submitted before connecting being answered: with
 no edit field there is nowhere to type one. The answer survives in the protocol as the
@@ -362,11 +369,24 @@ listener arrows onto and hears nothing useful from, and a field that can submit 
 control they have to pass to reach the only thing that would help them. Two obstacles in
 front of the one action available is the shape of an interface designed by looking at it.
 
+**A new connection clears the buffer; a disconnection does not.** History is kept across the
+end of a session, because it is the record of what happened — and never joined across two,
+because a transcript stitched from two shells is a transcript of something that never
+happened.
+
 **When the far end goes away, the buffer stays and the edit field goes.** The buffer is by
 then the record of what happened, and a user who typed `exit` by accident must not lose it;
 the field has nothing left to submit to. Focus is rescued rather than stolen: it moves into
 whatever is now showing only if it was in what just went away, so somebody reading the buffer
 when their shell exits keeps their place.
+
+**A dialog's contents sit in an application region.** NVDA reads a document in browse mode,
+where the arrows move its own cursor and Enter acts on that cursor rather than on the focus,
+and it switches to focus mode by itself only if the user left that setting on — a setting
+rather than a guarantee. A dialog whose arrows depend on somebody's configuration is not a
+dialog. The role goes on a container inside the `<dialog>`, which must keep announcing as one.
+The cost is that prose inside cannot be arrowed, so read-only text in a dialog is focusable;
+About keeps no such region, being four paragraphs and a button with no widget keys to protect.
 
 **The terminal window is a unit, because tabs will make it many.** Phase 1 has one session
 and therefore one terminal window; the buffer and the edit field are grouped as one thing in

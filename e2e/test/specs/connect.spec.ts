@@ -256,11 +256,26 @@ function isShown(id: string): Promise<boolean> {
 // a scripted session, so it starts on the terminal face; what it can prove here is that the
 // faces are wired to the session rather than to anything the user pressed.
 describe('what the window shows', () => {
-  it('shows the terminal window and no Connect button while connected', async () => {
+  it('shows the terminal window and not the empty one while connected', async () => {
     await browser.execute(() => document.getElementById('command-input')?.focus());
 
+    expect(await isShown('terminal-window')).toBe(true);
+    expect(await isShown('not-connected-window')).toBe(false);
     expect(await isShown('command-form')).toBe(true);
-    expect(await isShown('not-connected')).toBe(false);
+    expect(await isShown('terminal-ended')).toBe(false);
+  });
+
+  /** **The two windows are exclusive**, which is the whole model: a window with no session
+   * and a window with one are different things rather than one window whose controls wink
+   * in and out. */
+  it('never shows both windows at once', async () => {
+    const both = await browser.execute(
+      () =>
+        document.getElementById('not-connected-window')?.hidden === false &&
+        document.getElementById('terminal-window')?.hidden === false,
+    );
+
+    expect(both).toBe(false);
   });
 
   /** The buffer is in the document only once it has something in it. This suite has
@@ -280,9 +295,9 @@ describe('what the window shows', () => {
 
   /** The seam tabs will use: the buffer and the edit field are one thing, grouped, rather
    * than two that happen to sit together in `<main>`. */
-  it('keeps the buffer and the edit field together in one terminal view', async () => {
+  it('keeps the buffer and the edit field together in one terminal window', async () => {
     const grouped = await browser.execute(() => {
-      const terminal = document.getElementById('terminal');
+      const terminal = document.getElementById('terminal-window');
       return (
         terminal?.contains(document.getElementById('results')) === true &&
         terminal?.contains(document.getElementById('command-form')) === true
@@ -290,5 +305,20 @@ describe('what the window shows', () => {
     });
 
     expect(grouped).toBe(true);
+  });
+
+  /** The dialog's keys belong to its widgets rather than to the reader's browse cursor, so
+   * its contents sit in an application region (spec A10). Asserted on the structure because
+   * what it changes is the reader's mode, which only the NVDA pass can hear. */
+  it('holds the Connect dialog in an application region', async () => {
+    const wrapped = await browser.execute(() => {
+      const region = document.querySelector('#connect-dialog [role="application"]');
+      return (
+        region?.contains(document.getElementById('connect-kinds')) === true &&
+        region?.contains(document.getElementById('connect-start')) === true
+      );
+    });
+
+    expect(wrapped).toBe(true);
   });
 });

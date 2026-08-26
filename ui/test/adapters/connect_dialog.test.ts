@@ -16,15 +16,15 @@ import type { Connectable, Connected, ProfileId } from '../../src/protocol';
 const SKELETON = `
 <dialog id="connect-dialog" aria-labelledby="connect-title">
   <h1 id="connect-title">Connect</h1>
-  <div role="application" aria-label="Connection kind">
+  <div role="application" aria-label="Connect">
     <ul id="connect-kinds" role="listbox" aria-label="Connection kind" tabindex="0"></ul>
+    <div id="connect-panel" role="group" aria-labelledby="connect-panel-title" tabindex="-1">
+      <h2 id="connect-panel-title">Options</h2>
+      <div id="connect-panel-body"></div>
+    </div>
+    <button id="connect-start" type="button">Connect</button>
+    <button id="connect-cancel" type="button">Cancel</button>
   </div>
-  <div id="connect-panel" role="group" aria-labelledby="connect-panel-title" tabindex="-1">
-    <h2 id="connect-panel-title">Options</h2>
-    <div id="connect-panel-body"></div>
-  </div>
-  <button id="connect-start" type="button">Connect</button>
-  <button id="connect-cancel" type="button">Cancel</button>
 </dialog>
 <input id="command-input" />
 `;

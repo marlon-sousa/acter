@@ -34,10 +34,13 @@ const beep = new BeepAudio();
 const windowChrome = new WindowChrome({
   heading: byId('window-title'),
   statusRegion: byId('connection-status'),
-  form: byId('command-form'),
-  notConnected: byId('not-connected'),
-  editField,
+  notConnectedWindow: byId('not-connected-window'),
   connectButton: byId('connect-button'),
+  terminalWindow: byId('terminal-window'),
+  form: byId('command-form'),
+  editField,
+  ended: byId('terminal-ended'),
+  reconnectButton: byId('reconnect-button'),
   document,
   setNativeTitle: (title: string) => void shell.setTitle(title),
 });
@@ -69,7 +72,11 @@ const connectDialog = new ConnectDialog(
   announcer,
   windowChrome,
 );
-byId('connect-button').addEventListener('click', () => void connectDialog.open());
+// One handler, both buttons: the two windows are exclusive, so a listener never meets both,
+// and the action they run is the same one the menu item runs (spec A10).
+for (const id of ['connect-button', 'reconnect-button']) {
+  byId(id).addEventListener('click', () => void connectDialog.open());
+}
 const aboutDialog = new AboutDialog(
   byId<HTMLDialogElement>('about-dialog'),
   shell,

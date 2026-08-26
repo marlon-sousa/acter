@@ -8,10 +8,17 @@
 // through the shell port, and the document's is set here, and the two are set together in
 // one method so they cannot drift.
 //
-// **The two faces are A10's.** With a session there is a terminal window: a results buffer
-// and an edit field. With none there is a Connect button and nothing to type into — because
-// a buffer holding nothing and a field that can submit nothing are two controls a listener
-// has to arrow past to reach the only thing that would help them.
+// **The two windows are A10's**, and they are swapped as units rather than assembled from
+// controls that wink in and out. A window with no session and a window with one are
+// different things: the first holds a Connect button and nothing else, because a buffer
+// holding nothing and a field that can submit nothing are two controls a listener has to
+// arrow past to reach the only thing that would help them. The second holds the terminal —
+// and once its session ends it keeps the buffer, which is by then the record of what
+// happened, and replaces the edit field with a Connect button of its own.
+//
+// Exactly one of the two is in the document at any moment. That exclusivity is the point:
+// three independent toggles is one window changing shape, which is much harder to learn by
+// ear than two windows you are moved between.
 
 import type { WindowView } from '../ports/window_view';
 
@@ -40,13 +47,20 @@ export interface WindowElements {
   heading: HTMLElement;
   /** The `role="status"` line in the footer. */
   statusRegion: HTMLElement;
+  /** The whole window shown before anything has been connected to. */
+  notConnectedWindow: HTMLElement;
+  /** Its Connect button, which is where focus lands when that window opens. */
+  connectButton: HTMLElement;
+  /** The whole window shown from the first connection onward. */
+  terminalWindow: HTMLElement;
   /** The edit field's form: the terminal window's half that takes input. */
   form: HTMLElement;
-  /** What the window shows instead: the state, and the button that answers it. */
-  notConnected: HTMLElement;
-  /** Where focus belongs in each of the two faces. */
+  /** Where focus belongs while a session is live. */
   editField: { focus(): void };
-  connectButton: HTMLElement;
+  /** What the terminal window shows in place of the form once its session has ended. */
+  ended: HTMLElement;
+  /** And that block's own Connect button. */
+  reconnectButton: HTMLElement;
   document: Document;
   /** Sets the operating system's own window title. */
   setNativeTitle: (title: string) => void;
@@ -55,6 +69,8 @@ export interface WindowElements {
 export class WindowChrome implements WindowView {
   /** Whether focus has yet been placed once. See STARTUP_HOLD_MS. */
   private opened = false;
+  /** Whether a session has ever run in this window; see `showTerminal`. */
+  private hasConnected = false;
 
   /**
    * `startupHold` is a parameter rather than a constant read directly, for the reason the
@@ -77,11 +93,17 @@ export class WindowChrome implements WindowView {
    * item they had just closed.
    */
   focus(): void {
-    if (this.elements.form.hidden) {
-      this.elements.connectButton.focus();
-    } else {
-      this.elements.editField.focus();
+    this.landing().focus();
+  }
+
+  /** Whichever control the window that is showing keeps focus on. */
+  private landing(): { focus(): void } {
+    if (this.elements.terminalWindow.hidden) {
+      return this.elements.connectButton;
     }
+    return this.elements.ended.hidden
+      ? this.elements.editField
+      : this.elements.reconnectButton;
   }
 
   connectedTo(name: string | null): void {
@@ -108,7 +130,10 @@ export class WindowChrome implements WindowView {
    * rule: it appears with its first content and stays afterwards, because once a session
    * has ended the buffer is the record of what happened and a user who typed `exit` by
    * accident must not lose it. Only the edit field goes, since there is nothing left to
-   * submit to.
+   * submit to — replaced in place by the line and button that say so.
+   *
+   * The empty window never comes back once a session has run, for the same reason: it holds
+   * nothing, and swapping to it would take the transcript off the screen.
    *
    * **Focus is rescued, never stolen.** Hiding the element focus is inside strands it on
    * the document body, where a listener has nothing under them and no obvious way back —
@@ -117,16 +142,26 @@ export class WindowChrome implements WindowView {
    * place.
    */
   showTerminal(live: boolean): void {
-    const { form, notConnected, document } = this.elements;
+    const { notConnectedWindow, terminalWindow, form, ended, document } = this.elements;
     const active = document.activeElement;
     const stranded =
       active === null ||
       active === document.body ||
+      notConnectedWindow.contains(active) ||
       form.contains(active) ||
-      notConnected.contains(active);
+      ended.contains(active);
 
+    // Once a session has existed this window is a terminal window for good: what it holds
+    // afterwards is the record of what happened, and going back to the empty window would
+    // throw it away.
+    this.hasConnected = this.hasConnected || live;
+
+    notConnectedWindow.hidden = this.hasConnected;
+    terminalWindow.hidden = !this.hasConnected;
+    // Inside the terminal window, the session's own state: the edit field while it is live,
+    // and the line and button that answer it once it is not.
     form.hidden = !live;
-    notConnected.hidden = live;
+    ended.hidden = live;
 
     if (!stranded) {
       return;

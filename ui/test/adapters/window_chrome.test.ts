@@ -14,8 +14,11 @@ let heading: HTMLElement;
 let status: HTMLElement;
 let form: HTMLElement;
 let notConnected: HTMLElement;
+let terminal: HTMLElement;
+let ended: HTMLElement;
 let input: HTMLElement;
 let connectButton: HTMLElement;
+let reconnectButton: HTMLElement;
 let chrome: WindowChrome;
 /** What the operating system's title bar was told, in order. */
 let native: string[];
@@ -27,19 +30,28 @@ function byId(id: string): HTMLElement {
 beforeEach(() => {
   document.body.innerHTML = `
     <h1 id="window-title">Acter</h1>
-    <div id="terminal">
-      <div id="results" hidden></div>
-      <form id="command-form" hidden><input id="command-input" /></form>
+    <div id="not-connected-window">
+      <p>Not connected.</p>
+      <button id="connect-button">Connect</button>
     </div>
-    <div id="not-connected"><button id="connect-button">Connect</button></div>
+    <div id="terminal-window" hidden>
+      <div id="results" hidden></div>
+      <form id="command-form"><input id="command-input" /></form>
+      <div id="terminal-ended" hidden>
+        <button id="reconnect-button">Connect</button>
+      </div>
+    </div>
     <p id="connection-status" role="status">connecting</p>
   `;
   heading = byId('window-title');
   status = byId('connection-status');
   form = byId('command-form');
-  notConnected = byId('not-connected');
+  notConnected = byId('not-connected-window');
+  terminal = byId('terminal-window');
+  ended = byId('terminal-ended');
   input = byId('command-input');
   connectButton = byId('connect-button');
+  reconnectButton = byId('reconnect-button');
   native = [];
   // No startup hold: the hold is a reader-timing measurement of its own, asserted in its
   // own test, and every other rule here is about *where* focus goes rather than when.
@@ -47,10 +59,13 @@ beforeEach(() => {
     {
       heading,
       statusRegion: status,
-      form,
-      notConnected,
-      editField: { focus: () => input.focus() },
+      notConnectedWindow: notConnected,
       connectButton,
+      terminalWindow: terminal,
+      form,
+      editField: { focus: () => input.focus() },
+      ended,
+      reconnectButton,
       document,
       setNativeTitle: (title: string) => native.push(title),
     },
@@ -122,20 +137,34 @@ describe('the status region', () => {
 // into, because a field that can submit nothing is a control a listener has to arrow past to
 // reach the only thing that would help them.
 describe('which face the window shows', () => {
-  it('shows the edit field and hides the Connect button for a live session', () => {
-    chrome.showTerminal(true);
+  it('opens on the empty window, with no terminal at all', () => {
+    chrome.showTerminal(false);
 
-    expect(form.hidden).toBe(false);
-    expect(notConnected.hidden).toBe(true);
+    expect(notConnected.hidden).toBe(false);
+    expect(terminal.hidden).toBe(true);
   });
 
-  it('shows the Connect button and hides the edit field with no session', () => {
+  it('swaps to the terminal window when a session starts', () => {
+    chrome.showTerminal(true);
+
+    expect(notConnected.hidden).toBe(true);
+    expect(terminal.hidden).toBe(false);
+    expect(form.hidden).toBe(false);
+    expect(ended.hidden).toBe(true);
+  });
+
+  /** **The two windows are exclusive**, and once a session has run the empty one never
+   * comes back: it holds nothing, and swapping to it would take the transcript off the
+   * screen. What answers a session ending is the terminal window's own ended state. */
+  it('stays on the terminal window when the session ends, and swaps the edit field out', () => {
     chrome.showTerminal(true);
 
     chrome.showTerminal(false);
 
+    expect(notConnected.hidden).toBe(true);
+    expect(terminal.hidden).toBe(false);
     expect(form.hidden).toBe(true);
-    expect(notConnected.hidden).toBe(false);
+    expect(ended.hidden).toBe(false);
   });
 
   /** The disconnect rule, and the reason it is not in this method: the buffer is the record
@@ -157,7 +186,8 @@ describe('which face the window shows', () => {
 
     chrome.showTerminal(false);
 
-    expect(document.activeElement).toBe(connectButton);
+    // The terminal window's own Connect button, because that is the window still showing.
+    expect(document.activeElement).toBe(reconnectButton);
   });
 
   it('moves focus into the edit field when the terminal window comes back', () => {
@@ -213,6 +243,19 @@ describe('coming back to the window', () => {
 
     expect(document.activeElement).toBe(connectButton);
   });
+
+  /** And to the terminal window's own button once a session has run there, because that is
+   * the window the listener is in. */
+  it('returns to the ended terminal window button after a session has run', () => {
+    chrome.showTerminal(true);
+    chrome.showTerminal(false);
+    heading.tabIndex = -1;
+    heading.focus();
+
+    chrome.focus();
+
+    expect(document.activeElement).toBe(reconnectButton);
+  });
 });
 
 // **Focus moved while the page is still loading does not take the reader's browse cursor
@@ -225,10 +268,13 @@ describe('the startup hold', () => {
       {
         heading,
         statusRegion: status,
-        form,
-        notConnected,
-        editField: { focus: () => input.focus() },
+        notConnectedWindow: notConnected,
         connectButton,
+        terminalWindow: terminal,
+        form,
+        editField: { focus: () => input.focus() },
+        ended,
+        reconnectButton,
         document,
         setNativeTitle: () => {},
       },
