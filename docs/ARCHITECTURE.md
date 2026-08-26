@@ -327,6 +327,15 @@ asserts the exact event sequence the frontend would receive.
   **correlation id** (`command_id`); all subsequent events about that command carry
   the same id. Completions, mode toggles, profile CRUD, snapshots: invokes. Output,
   boundaries, alt-screen, connection state: events.
+- **A question the backend has to ask is a stream out and an invoke back — never a
+  waiting invoke** (spec B9). Tauri has no request/response from Rust to the frontend:
+  events and Channels are one-way and `eval` returns nothing. And a synchronous
+  `#[tauri::command]` **runs on the main thread**, so a command that blocked waiting for a
+  dialog would hold the very thread the answering command needs in order to be dispatched —
+  a deadlock at the moment the dialog appears, not a slow call. So connecting answers
+  immediately with an attempt id, reports what it is doing on a `Channel<ConnectStep>` the
+  caller passed, and is answered by `answer_connect` carrying that id. The waiting happens
+  on a task, in `acter_core::Conversation`.
 - **One event channel, one envelope.** A single `session-event` whose payload is the
   protocol enum (serde-tagged). specta generates a TS discriminated union, so the
   frontend compiler forces exhaustive handling of every variant.

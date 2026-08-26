@@ -6,6 +6,7 @@ mod osc133;
 mod pacing_state;
 mod protocol_commands;
 mod protocol_common;
+mod protocol_connect;
 mod protocol_events;
 mod read_mode;
 mod session_intent;
@@ -21,6 +22,7 @@ pub use protocol_commands::{
     Connectable, Connected, Key, KeyAck, KeyPress, ProfileId, SubmitAck, Variant,
 };
 pub use protocol_common::{CommandId, ConnectionState, ExitCode, Mode, SessionId};
+pub use protocol_connect::{AttemptId, ConnectAnswer, ConnectQuestion, ConnectStep};
 pub use protocol_events::{Announcement, SessionEvent};
 pub(crate) use read_mode::ReadMode;
 pub use session_intent::SessionIntent;

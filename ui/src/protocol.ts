@@ -22,11 +22,107 @@ export type Announcement =
 { kind: "Failed"; exit_code: ExitCode };
 
 /**
+ *  Which attempt to connect a step or an answer belongs to.
+ * 
+ *  **Minted per attempt, for the reason [`SessionId`](crate::SessionId) is minted per
+ *  connection** (spec B7, decision 4): a user who gives up on one dialog and starts again
+ *  has two conversations in flight for a moment, and an answer typed into the first must
+ *  never resolve the second. A password is the worst possible value to deliver to the wrong
+ *  question.
+ */
+export type AttemptId = number;
+
+/**
  *  Correlation id tying a submitted command to every event about it. `submit_command`
  *  returns one; every later event about that command carries it. `u32` for the same
  *  reason as [`SessionId`].
  */
 export type CommandId = number;
+
+/**
+ *  What the person decided.
+ * 
+ *  **Deserialize only.** An answer arrives from a dialog and never travels the other way,
+ *  and deriving `Serialize` here would not compile: [`Secret`](crate::Secret) has none. The
+ *  guarantee is the type system's rather than a reviewer's.
+ */
+export type ConnectAnswer = 
+/**  Trust this server, and remember it so the same host does not ask again. */
+{ answer: "Trust" } | 
+/**
+ *  Here is the password.
+ * 
+ *  Carries a [`Secret`](crate::Secret), which deserializes from the wire and can never
+ *  be serialized back onto it, printed, or logged.
+ */
+{ answer: "Password"; secret: Secret } | 
+/**
+ *  Stop: the key was refused, the dialog was cancelled, or the user changed their mind.
+ * 
+ *  **One variant for all three**, because the connection does the same thing for each
+ *  and the sentence a listener hears is about what did *not* happen rather than about
+ *  which control they used to say so.
+ */
+{ answer: "GiveUp" };
+
+/**  What a person is asked, mid-connection. */
+export type ConnectQuestion = 
+/**
+ *  This server's identity is not one Acter has a record of.
+ * 
+ *  **An unknown key and a changed one are the same variant carrying different facts,
+ *  deliberately**: they are one decision — trust this server or do not — and the
+ *  dialog's words differ rather than its shape. What makes them different sentences is
+ *  [`recorded`](Self::HostKey::recorded) being present.
+ */
+{ question: "HostKey"; host: string; port: number; 
+/**
+ *  What this server offered, as `ssh-keygen -l` prints it, so it can be compared
+ *  against what a provider or a colleague gave the user.
+ */
+fingerprint: string; 
+/**
+ *  The fingerprint that was on file, when one was — which is what makes this the
+ *  serious question rather than the routine one. `None` for a host nobody has a
+ *  record of.
+ */
+recorded: string | null; 
+/**
+ *  Something true that is not the answer: a `known_hosts` file that could not be
+ *  read, so the user knows this may be being asked about a host they already trust.
+ */
+aside: string | null } | 
+/**  The server will take a password, and there is not one yet. */
+{ question: "Password"; host: string; user: string; 
+/**
+ *  Whether one was already tried and refused.
+ * 
+ *  **Said rather than left to be inferred from the dialog opening twice**, which is
+ *  indistinguishable from the first one not having been submitted.
+ */
+again: boolean };
+
+/**
+ *  One thing that happens while a connection is being made.
+ * 
+ *  The frontend reads these in order until one of the last two arrives, which is what ends
+ *  the conversation.
+ */
+export type ConnectStep = 
+/**
+ *  Something is happening and it is worth saying out loud.
+ * 
+ *  **A listener with no feedback cannot tell a slow network from a dead one** (spec B9,
+ *  decision 6), and an SSH connection can take seconds before anything at all is
+ *  certain. The sentence is complete and is read exactly as it arrives.
+ */
+{ step: "Progress"; said: string } | 
+/**  The connection cannot go on until somebody answers this. */
+{ step: "Asked"; attempt: AttemptId; question: ConnectQuestion } | 
+/**  There is a session, and this is what to attach to. */
+{ step: "Arrived"; connected: Connected } | 
+/**  There is no session, and this is why — one sentence a listener can act on. */
+{ step: "Failed"; why: string };
 
 /**
  *  One thing a user can connect to, as [`ConnectApi::connectable`](crate::ConnectApi)
@@ -247,6 +343,31 @@ export type ProfileId =
  *  and never constructs them (spec B7, decision 7).
  */
 { profile: "Scripted"; name: string };
+
+/**
+ *  A password on its way to the far end, and nowhere else.
+ * 
+ *  **The type is the guarantee, not a comment asking people to be careful.** It has no
+ *  `Display`, so it cannot be interpolated into a message; its `Debug` prints a fixed
+ *  placeholder, so it cannot ride into a log, a panic message or a `dbg!`; and it derives
+ *  no `Serialize`, so it cannot be put on the wire or into the debug event tape that spec
+ *  A3.2 records event ordering with — a password in a debug tape is a password on disk.
+ * 
+ *  **It deserializes and does not serialize, which is the asymmetry the product needs.** A
+ *  password is typed into a dialog and has to reach the backend, so it arrives from the
+ *  wire; nothing ever sends one the other way, so `Serialize` is absent and the compiler
+ *  enforces that — including for the debug event recorder, which records what crosses the
+ *  invoke boundary and therefore has nothing it could record.
+ * 
+ *  Reading it back is deliberately a call named [`Secret::expose`], so every place that
+ *  takes the value out is a place a reader can find by searching for that word.
+ * 
+ *  **What this does not claim**: it does not scrub memory. Rust's `String` can reallocate,
+ *  and a type that promised erasure it cannot deliver would be worse than one that is clear
+ *  about its scope. The requirement in spec B9, decision 4 is that the value never reaches
+ *  the buffer, the announcer, a log or the tape, and that is what these three absences buy.
+ */
+export type Secret = string;
 
 /**  Everything the backend streams to the frontend about one session. */
 export type SessionEvent = 

@@ -13,8 +13,9 @@ use std::fs;
 use std::path::PathBuf;
 
 use acter_core::{
-    CommandId, Connectable, Connected, ConnectionKind, ConnectionState, ExitCode, Key, KeyAck,
-    KeyPress, Mode, ProfileId, SessionEvent, SessionId, SubmitAck, Variant,
+    AttemptId, CommandId, ConnectAnswer, ConnectQuestion, ConnectStep, Connectable, Connected,
+    ConnectionKind, ConnectionState, ExitCode, Key, KeyAck, KeyPress, Mode, ProfileId,
+    SessionEvent, SessionId, SubmitAck, Variant,
 };
 use specta::Types;
 use specta_typescript::Typescript;
@@ -53,7 +54,15 @@ fn render() -> String {
         .register::<Variant>()
         .register::<Connected>()
         .register::<ProfileId>()
-        .register::<ConnectionKind>();
+        .register::<ConnectionKind>()
+        // B9's conversation. Connecting stopped being one call and one answer: it reports
+        // steps while it happens, asks questions partway, and is answered by invokes of its
+        // own. `Secret` comes along through `ConnectAnswer` and is deliberately never
+        // exported as something that can be *sent* — it has no `Serialize` at all.
+        .register::<ConnectStep>()
+        .register::<ConnectQuestion>()
+        .register::<ConnectAnswer>()
+        .register::<AttemptId>();
 
     Typescript::default()
         .header(HEADER)

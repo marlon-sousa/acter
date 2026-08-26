@@ -20,7 +20,7 @@ use std::sync::Arc;
 
 use acter_core::{
     Clock, ConnectApi, ConnectService, PacingConfig, ProfileId, SessionApi, SessionFactory,
-    SessionService, ShellAdapter, ShellFacts, Transport,
+    SessionService, ShellAdapter, ShellFacts, SshQuestions, Transport, Unasked,
 };
 use acter_shells::{Plain, ThisMachine, Wsl, adapter_for};
 use acter_term::AlacrittyEngine;
@@ -30,6 +30,7 @@ use acter_transports::{
 use tauri::{Builder, generate_context, generate_handler};
 
 use crate::adapters::SystemClock;
+use crate::controllers::Connecting;
 
 /// The environment variable choosing which simulated session to run: a built-in name, or
 /// a path to a transcript JSON.
@@ -86,6 +87,10 @@ const WSL_CLIENT: &str = "wsl.exe";
 pub(crate) struct AppState {
     pub(crate) session: Arc<dyn SessionApi>,
     pub(crate) connect: Arc<dyn ConnectApi>,
+    /// Attempts to connect, which are neither of the above: an attempt is not a session
+    /// yet, and it is not a question about what this machine offers. It is a conversation
+    /// in flight (spec B9).
+    pub(crate) connecting: Arc<Connecting>,
 }
 
 pub fn run() {
@@ -110,6 +115,8 @@ pub fn run() {
             crate::routers::platform,
             crate::routers::connectable,
             crate::routers::use_profile,
+            crate::routers::answer_connect,
+            crate::routers::attempt_ended,
             crate::routers::connected
         ]);
 
@@ -155,11 +162,15 @@ pub(crate) fn connected_state() -> AppState {
         // Nothing reads the error here on purpose: `connected()` answers `None`, which is
         // the unconnected window, and the frontend says so. Reporting the reason as well is
         // B8's, where a `--profile` that resolves to nothing has to name what was asked for.
-        let _ = service.use_profile(&profile);
+        // Nobody to ask at launch: there is no window yet, so a far end that needs a
+        // decision is refused rather than trusted (`Unasked`).
+        let _ = service.use_profile(&profile, &(Arc::new(Unasked) as Arc<dyn SshQuestions>));
     }
+    let connect = Arc::clone(&service) as Arc<dyn ConnectApi>;
     AppState {
         session: Arc::clone(&service) as Arc<dyn SessionApi>,
-        connect: service as Arc<dyn ConnectApi>,
+        connecting: Arc::new(Connecting::new(Arc::clone(&connect))),
+        connect,
     }
 }
 
@@ -277,7 +288,11 @@ impl SessionFactory for Shells {
     /// on — which is not inside that runtime. Doing it here rather than at each call site is
     /// the same reasoning that puts the rest of this file in the composition root: knowing a
     /// runtime exists at all is its privilege.
-    fn open(&self, profile: &ProfileId) -> Result<Arc<dyn SessionApi>, String> {
+    fn open(
+        &self,
+        profile: &ProfileId,
+        _questions: &Arc<dyn SshQuestions>,
+    ) -> Result<Arc<dyn SessionApi>, String> {
         let runtime = tauri::async_runtime::handle();
         let _entered = runtime.inner().enter();
         self.start(profile).map_err(ended)

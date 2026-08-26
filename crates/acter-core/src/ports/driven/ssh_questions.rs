@@ -65,6 +65,32 @@ pub trait SshQuestions: Send + Sync {
     fn tell(&self, sentence: &str);
 }
 
+/// Nobody to ask, so nothing is trusted and nothing is given.
+///
+/// **The null implementation, written as a type rather than as an absence** — the reasoning
+/// [`Plain`](../../../acter_shells/struct.Plain.html) is built on, applied to this port. It
+/// is what a launch that names a profile from the environment gets, and what every test
+/// whose subject is not the asking gets: there is no window, so a host key that needs a
+/// decision is refused and a password that needs typing is not supplied.
+///
+/// **Refusing is the honest answer rather than a limitation to work around.** A connection
+/// that cannot ask cannot be authorised, and the alternative — trusting because nobody was
+/// there to object — is exactly the "accept everything" mode decision 3 says Acter does not
+/// have.
+pub struct Unasked;
+
+impl SshQuestions for Unasked {
+    fn host_key(&self, _question: HostKeyQuestion) -> HostKeyAnswer {
+        HostKeyAnswer::Refuse
+    }
+
+    fn password(&self, _question: PasswordQuestion) -> Option<Secret> {
+        None
+    }
+
+    fn tell(&self, _sentence: &str) {}
+}
+
 /// What a person is asked about a server's identity, in the order it has to be said.
 ///
 /// **Every field here becomes speech**, which is why the fingerprint is a string rendered
@@ -144,6 +170,12 @@ pub struct PasswordQuestion {
 /// no `Serialize`, so it cannot be put on the wire or into the debug event tape that spec
 /// A3.2 records event ordering with — a password in a debug tape is a password on disk.
 ///
+/// **It deserializes and does not serialize, which is the asymmetry the product needs.** A
+/// password is typed into a dialog and has to reach the backend, so it arrives from the
+/// wire; nothing ever sends one the other way, so `Serialize` is absent and the compiler
+/// enforces that — including for the debug event recorder, which records what crosses the
+/// invoke boundary and therefore has nothing it could record.
+///
 /// Reading it back is deliberately a call named [`Secret::expose`], so every place that
 /// takes the value out is a place a reader can find by searching for that word.
 ///
@@ -151,7 +183,8 @@ pub struct PasswordQuestion {
 /// and a type that promised erasure it cannot deliver would be worse than one that is clear
 /// about its scope. The requirement in spec B9, decision 4 is that the value never reaches
 /// the buffer, the announcer, a log or the tape, and that is what these three absences buy.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, serde::Deserialize, specta::Type)]
+#[serde(transparent)]
 pub struct Secret(String);
 
 impl Secret {

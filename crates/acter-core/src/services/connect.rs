@@ -34,8 +34,8 @@ use std::sync::{Arc, Mutex};
 
 use crate::{
     ConnectApi, Connectable, Connected, Connection, ConnectionKind, EventSink, InstalledShells,
-    KeyAck, KeyPress, ProfileId, SessionApi, SessionFactory, SessionId, SubmitAck, Variant,
-    catalogue,
+    KeyAck, KeyPress, ProfileId, SessionApi, SessionFactory, SessionId, SshQuestions, SubmitAck,
+    Variant, catalogue,
 };
 
 /// The one session, and everything needed to replace it.
@@ -297,9 +297,13 @@ impl ConnectApi for ConnectService {
     /// transport it owns is dropped with it — which for a local one kills the process. It
     /// happens *outside* the lock, so a shell taking its time to die does not hold up a
     /// window that is already on the next session.
-    fn use_profile(&self, id: &ProfileId) -> Result<Connected, String> {
+    fn use_profile(
+        &self,
+        id: &ProfileId,
+        questions: &Arc<dyn SshQuestions>,
+    ) -> Result<Connected, String> {
         self.startable(id)?;
-        let session = self.factory.open(id)?;
+        let session = self.factory.open(id, questions)?;
 
         let label = id.label();
         let next = SessionId(self.next.fetch_add(1, Ordering::SeqCst));
@@ -367,11 +371,18 @@ impl SessionApi for ConnectService {
 
 #[cfg(test)]
 mod tests {
+    use crate::Unasked;
+
     use std::sync::atomic::AtomicUsize;
 
     use crate::{CommandId, NoDistributions, SessionEvent};
 
     use super::*;
+
+    /// Nobody to ask, for every test here whose subject is not the asking.
+    fn unasked() -> Arc<dyn SshQuestions> {
+        Arc::new(Unasked)
+    }
 
     /// A session that runs nothing and records that it existed.
     ///
@@ -441,7 +452,11 @@ mod tests {
     }
 
     impl SessionFactory for FakeFactory {
-        fn open(&self, profile: &ProfileId) -> Result<Arc<dyn SessionApi>, String> {
+        fn open(
+            &self,
+            profile: &ProfileId,
+            _questions: &Arc<dyn SshQuestions>,
+        ) -> Result<Arc<dyn SessionApi>, String> {
             if let Some((refused, why)) = self.refuses.lock().unwrap().as_ref()
                 && refused == profile
             {
@@ -742,7 +757,7 @@ mod tests {
             kind: ConnectionKind::Cmd,
         };
 
-        let connected = service.use_profile(&id).expect("cmd starts");
+        let connected = service.use_profile(&id, &unasked()).expect("cmd starts");
 
         assert_eq!(connected.label, "Command Prompt");
         assert_eq!(service.connected(), Some(connected.clone()));
@@ -764,16 +779,22 @@ mod tests {
         let (service, factory) = service(FakeMachine::complete(), &[]);
 
         service
-            .use_profile(&ProfileId::Shell {
-                kind: ConnectionKind::Cmd,
-            })
+            .use_profile(
+                &ProfileId::Shell {
+                    kind: ConnectionKind::Cmd,
+                },
+                &unasked(),
+            )
             .expect("cmd starts");
         assert_eq!(factory.alive.load(Ordering::SeqCst), 1);
 
         service
-            .use_profile(&ProfileId::Distribution {
-                name: "Ubuntu".to_owned(),
-            })
+            .use_profile(
+                &ProfileId::Distribution {
+                    name: "Ubuntu".to_owned(),
+                },
+                &unasked(),
+            )
             .expect("Ubuntu starts");
 
         assert_eq!(
@@ -795,14 +816,20 @@ mod tests {
         let (service, _) = service(FakeMachine::complete(), &[]);
 
         let first = service
-            .use_profile(&ProfileId::Shell {
-                kind: ConnectionKind::Cmd,
-            })
+            .use_profile(
+                &ProfileId::Shell {
+                    kind: ConnectionKind::Cmd,
+                },
+                &unasked(),
+            )
             .expect("cmd starts");
         let second = service
-            .use_profile(&ProfileId::Shell {
-                kind: ConnectionKind::WindowsPowerShell,
-            })
+            .use_profile(
+                &ProfileId::Shell {
+                    kind: ConnectionKind::WindowsPowerShell,
+                },
+                &unasked(),
+            )
             .expect("PowerShell starts");
 
         assert_ne!(first.session, second.session);
@@ -833,13 +860,16 @@ mod tests {
             Vec::new(),
         );
         let working = service
-            .use_profile(&ProfileId::Shell {
-                kind: ConnectionKind::Cmd,
-            })
+            .use_profile(
+                &ProfileId::Shell {
+                    kind: ConnectionKind::Cmd,
+                },
+                &unasked(),
+            )
             .expect("cmd starts");
 
         let why = service
-            .use_profile(&refused)
+            .use_profile(&refused, &unasked())
             .expect_err("this one does not");
 
         assert_eq!(
@@ -866,9 +896,12 @@ mod tests {
         let (service, factory) = service(FakeMachine::without("pwsh.exe"), &[]);
 
         let why = service
-            .use_profile(&ProfileId::Shell {
-                kind: ConnectionKind::PowerShellSeven,
-            })
+            .use_profile(
+                &ProfileId::Shell {
+                    kind: ConnectionKind::PowerShellSeven,
+                },
+                &unasked(),
+            )
             .expect_err("PowerShell 7 is not installed");
 
         assert_eq!(why, ConnectionKind::PowerShellSeven.instructions());
@@ -885,9 +918,12 @@ mod tests {
         let (service, _) = service(FakeMachine::without_wsl(NoDistributions::NotInstalled), &[]);
 
         let why = service
-            .use_profile(&ProfileId::Distribution {
-                name: "Ubuntu".to_owned(),
-            })
+            .use_profile(
+                &ProfileId::Distribution {
+                    name: "Ubuntu".to_owned(),
+                },
+                &unasked(),
+            )
             .expect_err("there is no WSL to start it in");
 
         assert_eq!(why, NoDistributions::NotInstalled.to_string());
@@ -906,9 +942,12 @@ mod tests {
         service.attach_session(SessionId(1), Arc::new(Nowhere));
 
         let connected = service
-            .use_profile(&ProfileId::Shell {
-                kind: ConnectionKind::Cmd,
-            })
+            .use_profile(
+                &ProfileId::Shell {
+                    kind: ConnectionKind::Cmd,
+                },
+                &unasked(),
+            )
             .expect("cmd starts");
         service.attach_session(connected.session, Arc::new(Nowhere));
 
@@ -936,14 +975,20 @@ mod tests {
         let (service, factory) = service(FakeMachine::complete(), &[]);
 
         let first = service
-            .use_profile(&ProfileId::Shell {
-                kind: ConnectionKind::Cmd,
-            })
+            .use_profile(
+                &ProfileId::Shell {
+                    kind: ConnectionKind::Cmd,
+                },
+                &unasked(),
+            )
             .expect("cmd starts");
         service
-            .use_profile(&ProfileId::Shell {
-                kind: ConnectionKind::WindowsPowerShell,
-            })
+            .use_profile(
+                &ProfileId::Shell {
+                    kind: ConnectionKind::WindowsPowerShell,
+                },
+                &unasked(),
+            )
             .expect("PowerShell starts");
 
         service.attach_session(first.session, Arc::new(Nowhere));

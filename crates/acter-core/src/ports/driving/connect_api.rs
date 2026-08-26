@@ -18,7 +18,9 @@
 //! calls `use_profile` waits only as long as spawning a process takes, never on the shell
 //! saying anything, which is what `ConnectionState::Connecting` exists to cover.
 
-use crate::{Connectable, Connected, ProfileId};
+use std::sync::Arc;
+
+use crate::{Connectable, Connected, ProfileId, SshQuestions};
 
 /// Connecting, as two actions and a question.
 pub trait ConnectApi: Send + Sync {
@@ -45,7 +47,17 @@ pub trait ConnectApi: Send + Sync {
     /// explicit rather than a second effect of this call, so the frontend can clear its
     /// buffer at a moment it chooses and nothing lands in a buffer still showing another
     /// shell's output (spec B7, decision 1).
-    fn use_profile(&self, id: &ProfileId) -> Result<Connected, String>;
+    /// **Not called from an invoke, since B9.** Starting an SSH far end blocks until a
+    /// person has answered a host-key question and typed a password, and a synchronous
+    /// Tauri command runs on the main thread — so an invoke that called this directly would
+    /// be holding the thread the answering invoke needs, and would deadlock rather than
+    /// merely wait. The composition root runs it on a task and reports each step through
+    /// the conversation that `questions` belongs to.
+    fn use_profile(
+        &self,
+        id: &ProfileId,
+        questions: &Arc<dyn SshQuestions>,
+    ) -> Result<Connected, String>;
 
     /// Which far end is behind the window now, or `None` for a window connected to
     /// nothing.
