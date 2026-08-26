@@ -2281,9 +2281,13 @@ thing to pick up once the adapters land, not merely the next number.
     intact. VS Code, WezTerm and iTerm2 all ship exactly this; only kitty automates it, and
     it does so by shipping a tarball over the TTY.
 
-    **What it does still learn is what the far end is** (decision 7): a second channel, an
-    `exec` request, and `$SHELL` — never a line typed into the session, where a command
-    nobody typed would be read aloud. That does not make the session integrated, since
+    **What it does still learn is what the far end is** (decision 7): a channel of its own,
+    an `exec` request, and `$SHELL` — never a line typed into the session, where a command
+    nobody typed would be read aloud. It runs in the window between authentication and the
+    session channel, because SSH authenticates at the protocol level before any shell
+    exists — so the answer is in hand before `SessionService::start` needs its `ShellFacts`,
+    and before there is anything to announce, which makes the connection one whole sentence
+    instead of a second utterance interrupting the first. That does not make the session integrated, since
     knowing it is bash does not make bash emit markers. It buys a sentence with a subject
     ("bash, with no shell integration set up on this host" rather than a bare "unavailable")
     and a correct end-of-input, which is the one shell fact that survives without markers

@@ -157,11 +157,26 @@ and the two should share one mechanism rather than inventing a second.
 
 ### 7. What the far end is, asked once, on a channel of its own — Decided 2026-08-26
 
-Soon after the session channel opens, Acter opens a **second** channel and asks the far end
-what it is: `$SHELL`, then `$0`, then the version variables `$BASH_VERSION`,
+Before the session channel is opened at all, Acter asks the far end what it is on a channel
+of its own: `$SHELL`, then `$0`, then the version variables `$BASH_VERSION`,
 `$ZSH_VERSION`, `$FISH_VERSION`. The first is the account's configured shell, the second is
 what is actually running and carries a login shell's leading `-`, and the third is what a
 shell says about itself and is the most certain.
+
+**Between authentication and the session channel**, which is a window that exists because
+authentication in SSH finishes at the *protocol* level, before any channel is opened. Only
+`pty-req` plus a `shell` request makes sshd fork and exec the login shell. So there is a
+moment when Acter is authenticated and no shell exists yet, and that is where the probe
+goes: open a channel, `exec`, read, close, and only then open the session.
+
+**That placement is what the code needs, not merely what is tidy.**
+[`SessionService::start`](../../crates/acter-core/src/services/session.rs) takes
+[`ShellFacts`](../../crates/acter-core/src/ports/driven/shell_adapter.rs) by value and reads
+its markers at construction — the port says so deliberately: the service reads both facts
+once and holds them for the life of the session. A probe answering *after* the session
+exists would leave two options, constructing with facts known to be wrong or making the
+facts mutable, and the second undoes the reason they travel together at all. Asking first
+makes them right from the first byte.
 
 **A second channel, not a line typed into the session.** SSH allows many channels over one
 connection, and an `exec` request on a fresh one produces output that never reaches the
@@ -201,15 +216,26 @@ the same rule to WSL, which had the same unexamined assumption.
 
 **Advisory, and never a gate.** `exec` can be refused: a server with `ForceCommand`, a
 restricted shell, or `internal-sftp` alone will not run it, and under `ForceCommand` it can
-return an answer about something else entirely. So a probe that fails, hangs or lies must
-cost nothing — the session is already open and stays open, and Acter falls back to the
-unnamed sentence. The probe is never on the path between the user and their shell.
+return an answer about something else entirely. An answer that is not a path is itself a
+useful signal — Windows OpenSSH defaulting to cmd echoes `$SHELL` back literally — and it
+falls into the unrecognised state above rather than being parsed hopefully.
 
-**Two announcements must not race**, which is the accessibility half of this. The probe's
-answer arrives after the connection is established, so the naive shape speaks twice and the
-second interrupts the first. Whether the connection sentence waits briefly for the probe or
-the detail follows as its own sentence is settled with 23.7's progress mechanism, because it
-is the same problem: an asynchronous fact arriving after the thing it describes.
+Because the probe now runs *before* the session, "not a gate" has to be spelled out as a
+deadline rather than assumed: it gets a short, fixed one, and a probe that has not answered
+by then is abandoned, the session channel is opened immediately with `Plain` facts, and the
+answer is ignored if it arrives afterwards. **The user's shell is never waiting on our
+curiosity.** 23.7's rule applies with full force here, since this is the one place the
+probe could add time to the seconds before a prompt, and those seconds are already the
+worst in the product.
+
+**One announcement, not two**, which is the accessibility payoff of the placement and the
+reason it is worth a round trip. Probing after the session starts would mean the connection
+is announced first and the shell's name arrives afterwards, interrupting it — an
+asynchronous fact speaking over the thing it describes, which is 23.7's problem re-created
+where it did not have to exist. Asking first means the answer is in hand before there is
+anything to announce, so a listener hears one whole sentence: "connected to acter-ssh, bash,
+with no shell integration set up on this host." A probe that hit its deadline simply drops
+the middle clause; it never adds a second utterance.
 
 ## Files touched (sketch)
 
