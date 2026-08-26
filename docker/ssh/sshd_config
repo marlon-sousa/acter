@@ -1,0 +1,40 @@
+# Dropped into /etc/ssh/sshd_config.d/, so Debian's own defaults still apply and this file
+# says only what differs. Read it as the list of decisions, not as a whole configuration.
+
+# Both authentication methods are on, because B9 has to be measured against each: a password
+# typed into a dialog, and a key that never prompts at all.
+PasswordAuthentication yes
+PubkeyAuthentication yes
+
+# Nobody connects as root. Acter connects as a user with a home directory and a `.bashrc`,
+# which is the case that has anything to teach us.
+PermitRootLogin no
+
+# Nothing here needs a display or a tunnel, and a test rig that offers them is a test rig
+# with more attack surface than reason.
+X11Forwarding no
+AllowTcpForwarding no
+AllowAgentForwarding no
+
+# **`AcceptEnv` is deliberately left at the stock default, which accepts almost nothing.**
+#
+# This is the most important line in the file, and it is the one that is not here.
+#
+# B5.3's bash injection reaches the far end as an environment variable — `PROMPT_COMMAND`,
+# carried across the WSL boundary by `WSLENV`. Over SSH there is no such carrier: a client
+# may only send variables the *server* has agreed to accept, and OpenSSH's default agrees to
+# `LANG` and `LC_*` and nothing else. A server belonging to somebody else will not have been
+# configured for us.
+#
+# So a rig that added `AcceptEnv PROMPT_COMMAND` would let B9 ship an injection that works
+# against this container and against nothing a user actually connects to. That is B4.5's
+# lesson exactly — "should" is not evidence — and the honest rig is the restrictive one.
+#
+# Whatever B9 ends up doing instead (a command rather than a login shell, or writing the
+# setup into the channel after connecting) has to work here, unchanged, with this line
+# absent.
+
+# Keep the greeting out of the byte stream: a banner would arrive before the shell says
+# anything and would be indistinguishable from output to everything above the transport.
+PrintMotd no
+Banner none

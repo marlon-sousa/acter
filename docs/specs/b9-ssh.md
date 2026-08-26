@@ -119,6 +119,46 @@ and the two should share one mechanism rather than inventing a second.
 - [ ] A connection that fails says why, in one sentence a listener can act on.
 - [ ] Accessibility checklist: every auth flow driven end to end with a screen reader.
 
+## The rig, and what it has already measured
+
+`docker/ssh/` builds a Debian container running `sshd`, with bash and Debian's own 113-line
+default `.bashrc` at the far end. Its reasoning is in the files; the two things worth having
+in the spec are these.
+
+**A container rather than `sshd` on the developer's machine.** Enabling the Windows OpenSSH
+server opens a listening service on a laptop that joins other networks, which is a security
+decision rather than a convenience. The container binds to loopback only and — the property
+that matters here — is genuinely not in Acter's process tree, which 22.6 established changes
+how a far end behaves.
+
+**The three host-key states are reachable without editing anything**, which is what makes
+decision 3 testable: unknown (fresh `known_hosts`), known (connect twice), and **changed**
+(`-e ACTER_SSH_REKEY=1`, which throws the container's identity away and generates a new one).
+
+### Measured 2026-08-26: the injection has no carrier over SSH
+
+Decision 2 says the bash injection has to be measured across the connection rather than
+assumed. It was, against this rig, and the result changes what B9 has to build:
+
+- **`PROMPT_COMMAND` does not cross.** Sent with `SendEnv`, it arrives empty. A client may
+  only send variables the *server* has agreed to accept, and OpenSSH's stock `AcceptEnv` is
+  `LANG` and `LC_*`. A server belonging to somebody else will not have been configured for
+  us, so this is not a gap in the rig — it is the world.
+- **`LC_*` does cross, intact.** `LC_ACTER='printf X'` arrived as `printf X`. That is the
+  only carrier an unmodified server accepts, and it is the SSH analogue of B5.3's `WSLENV`.
+
+**The rig's `sshd_config` is deliberately left restrictive**, with no `AcceptEnv` line at
+all. A rig more accommodating than a real server would let B9 ship an injection that works
+against our container and against nothing a user connects to — which is B4.5's lesson
+exactly.
+
+**What follows, and it is a real design consequence.** `LC_*` gets a value across but nothing
+on the far end acts on it: bash will not treat `LC_ACTER` as `PROMPT_COMMAND`. Something
+remote still has to assign it, which means B9 cannot open a plain shell channel and set an
+environment variable — it has to *request a command*, and then the question becomes whether
+what that command sets survives the remote `.bashrc` that runs after it. That is the next
+measurement, and the rig is built to take it.
+
 ## Questions for you, before any of this is built
 
 1. **Do we read the user's existing `~/.ssh/config` and `known_hosts`?** Reading config
@@ -138,3 +178,10 @@ and the two should share one mechanism rather than inventing a second.
 5. **How much does this entry take on?** It could be "one host, password auth, a session"
    and grow, or the whole auth surface at once. I would rather ship the first and let the
    accessibility checklist for each auth method arrive with the method itself.
+6. **How does the shell integration reach the far end?** Added 2026-08-26, after the
+   measurement above: there is no environment carrier, so the choice is between requesting a
+   command instead of a shell (`bash` started with the setup already applied), writing the
+   setup into the channel after connecting and swallowing its echo, or accepting that an SSH
+   session is unintegrated and degrades the way DESIGN's reliability case 2 describes. The
+   third is a real option and should not be dismissed: it costs command boundaries, which is
+   most of what non-interactive mode is.
