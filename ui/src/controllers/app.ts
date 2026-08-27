@@ -72,8 +72,29 @@ export const nothingToStopMessage = 'nothing running to stop';
 // seconds to start used to say nothing at all, and a listener cannot tell a slow start from
 // a broken one (roadmap 23.7).
 export const connectingStatus = 'connecting';
-export const connectedStatus = 'connected';
 export const disconnectedStatus = 'not connected';
+
+/**
+ * What this window is connected to, as **one string held in one place**.
+ *
+ * **A9 decision 2's three words are reversed here, 2026-08-27**, and the reason is the
+ * user's: "no two truth places." The status region said "connected" while the connection
+ * was announced as "connected to SSH: acter at 127.0.0.1, port 2222, bash, with no shell
+ * integration set up on this host" — two descriptions of one fact, only one of which
+ * survived being spoken once. Somebody who came back to the window an hour later could
+ * find out *what* they were connected to from the title, and nothing at all about what
+ * kind of session it was.
+ *
+ * So the region carries the whole sentence and the announcement *is* that string. There is
+ * nothing to keep in step, because there is only one of it.
+ *
+ * A9's reasoning for a short label still holds for the two states with nothing to add:
+ * "connecting" and "not connected" say everything there is.
+ */
+export function connectedStatus(label: string, note?: string | null): string {
+  const said = `connected to ${label}`;
+  return note === undefined || note === null ? said : `${said}, ${note}`;
+}
 
 // The two strings the unconnected window needs (spec B7, decision 3).
 //
@@ -95,8 +116,7 @@ export const notConnectedMessage = 'not connected. Choose Connect to start a she
 // name arriving now and the integration state arriving a second or two later, interrupting
 // whatever was being said — an asynchronous fact speaking over the thing it describes.
 export function connectedMessage(label: string, note?: string | null): string {
-  const said = `connected to ${label}`;
-  return note === undefined || note === null ? said : `${said}, ${note}`;
+  return connectedStatus(label, note);
 }
 
 // Unreachable while Ctrl+C is both the only key reported and the only key bound. It is
@@ -159,6 +179,9 @@ export class AppController {
   // to one far end and then another, and a line submitted a moment before that happened
   // must not run in the new one.
   private session: SessionId | null = null;
+  // What this window is connected to, kept so the status region can restate it without a
+  // second, shorter description of the same fact being invented somewhere else.
+  private connection: Connected | null = null;
 
   constructor(
     private readonly backend: BackendApi,
@@ -260,15 +283,19 @@ export class AppController {
     this.window.showTerminal(connected !== null);
 
     if (connected === null) {
+      this.connection = null;
       this.window.connectedTo(null);
       this.window.status(disconnectedStatus);
       this.announcer.announce(notConnectedMessage);
       return;
     }
     this.window.connectedTo(connected.label);
-    // The status is left to `ConnectionChanged`, which the session emits and holds until
-    // this attach collects it — so "connecting" and "connected" have one producer rather
-    // than two that could disagree about which one this window is in.
+    // **The region carries the whole sentence, and the announcement is that same string.**
+    // `ConnectionChanged` still owns the *transitional* states, which are the session's to
+    // report; what it cannot know is the far end's name or what was learned about it while
+    // connecting, so the connection itself is what says this.
+    this.connection = connected;
+    this.window.status(connectedStatus(connected.label, connected.note));
     await this.backend.attachSession(connected.session, (event) => {
       this.handleEvent(event);
     });
@@ -459,7 +486,13 @@ export class AppController {
         this.window.status(connectingStatus);
         break;
       case 'Connected':
-        this.window.status(connectedStatus);
+        // The same sentence the connection produced, not a shorter one that would make the
+        // region disagree with what was said a moment ago.
+        if (this.connection !== null) {
+          this.window.status(
+            connectedStatus(this.connection.label, this.connection.note),
+          );
+        }
         break;
       case 'Reconnecting':
         // No producer yet: a transport that can reconnect is SSH's (spec A9, decision 5).
@@ -468,6 +501,7 @@ export class AppController {
       case 'Disconnected':
         this.window.status(disconnectedStatus);
         // Nothing is behind the window any more, so it stops claiming to be anything.
+        this.connection = null;
         this.window.connectedTo(null);
         // **The buffer stays and the edit field goes** (spec A10). What is left is the
         // record of a session that ended, which a user who typed `exit` by accident must

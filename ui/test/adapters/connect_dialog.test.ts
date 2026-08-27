@@ -696,6 +696,46 @@ describe('the kind that is a form', () => {
     expect(byId<HTMLButtonElement>('connect-start').disabled).toBe(false);
   });
 
+  /**
+   * **Enter obeys the same condition as the button** — reported by the user on 2026-08-26:
+   * "if I press enter on ssh in the list (with all blank) I should hear nothing, but I
+   * listen the error message." Enter reached `chosen` directly and never consulted the
+   * button it was standing in for, so a disabled Connect was a lie told to whoever tabbed
+   * to it.
+   */
+  it('does nothing when Enter is pressed on an incomplete form', async () => {
+    await dialog.open();
+    byId('connect-kinds').dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }),
+    );
+
+    byId('connect-dialog').dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }),
+    );
+    await Promise.resolve();
+
+    expect(attempted).toEqual([]);
+  });
+
+  /** And Enter works once the form names something to connect to. */
+  it('connects on Enter once the form is complete', async () => {
+    await dialog.open();
+    byId('connect-kinds').dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }),
+    );
+    fill('host', 'acter-ssh');
+    fill('user', 'acter');
+
+    byId('connect-dialog').dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }),
+    );
+    await Promise.resolve();
+
+    expect(attempted).toEqual([
+      { profile: 'Ssh', host: 'acter-ssh', port: 22, user: 'acter' },
+    ]);
+  });
+
   /** And moving off the form gives the button back, for a kind that needs no form. */
   it('gives the button back on a kind that is startable as it stands', async () => {
     await dialog.open();

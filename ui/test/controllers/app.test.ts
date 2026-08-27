@@ -312,12 +312,36 @@ describe('what the window says about its connection (spec A9)', () => {
     expect(window.statuses).toContain('connecting');
   });
 
-  it('says it is connected once the far end has spoken', async () => {
+  /**
+   * **The region says the whole thing, and the announcement is that same string** — A9
+   * decision 2 reversed on use, 2026-08-27: "no two truth places". The region used to say
+   * "connected" while the connection was announced with the far end's name and what was
+   * learned about it, so the two descriptions of one fact could not be kept in step and
+   * only one of them survived being spoken once.
+   */
+  it('says what it is connected to, in the region and in the announcement alike', async () => {
+    const ubuntu: ProfileId = { profile: 'Distribution', name: 'Ubuntu' };
+    const { connect, window, announcer, controller } = await makeApp();
+    connect.note = 'bash, with no shell integration set up on this host';
+
+    await controller.connectTo(ubuntu);
+
+    const said =
+      'connected to WSL: Ubuntu, bash, with no shell integration set up on this host';
+    expect(window.statuses).toContain(said);
+    expect(announcer.announcements).toContain(said);
+  });
+
+  /** And the session's own `Connected` restates it rather than shortening it. */
+  it('restates the same sentence when the far end reports it is connected', async () => {
+    const ubuntu: ProfileId = { profile: 'Distribution', name: 'Ubuntu' };
     const { backend, window, controller } = await makeApp();
+    await controller.connectTo(ubuntu);
+    window.statuses.length = 0;
 
     backend.emit({ type: 'ConnectionChanged', state: 'Connected' });
 
-    expect(window.statuses).toContain('connected');
+    expect(window.statuses).toContain('connected to WSL: Ubuntu');
   });
 
   /** A far end that goes away leaves the window saying so, and stops claiming to be

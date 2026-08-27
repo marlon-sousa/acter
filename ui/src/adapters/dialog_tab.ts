@@ -27,15 +27,34 @@ export function keepTabInside(dialog: HTMLElement, event: KeyboardEvent): void {
   if (event.key !== 'Tab') {
     return;
   }
-  const focusable = Array.from(dialog.querySelectorAll<HTMLElement>(FOCUSABLE));
+  // **Disabled controls are filtered out here rather than in the selector**, for two
+  // reasons. A disabled button still matches `button` and cannot take focus, so cycling
+  // onto one leaves focus where it was and swallows the key — measured with NVDA on
+  // 2026-08-26, where Tab out of the last field of the SSH form did nothing at all for as
+  // long as Connect was disabled by the form being incomplete. And `:not(:disabled)` in the
+  // selector list cost document order: the walk came back grouped by selector, buttons
+  // before the combo box that precedes them on screen, which is a different bug in the same
+  // line. Filtering afterwards keeps the order the document has.
+  const focusable = Array.from(
+    dialog.querySelectorAll<HTMLElement>(FOCUSABLE),
+  ).filter((control) => !(control as HTMLButtonElement).disabled);
   if (focusable.length === 0) {
     return;
   }
   const at = focusable.indexOf(dialog.ownerDocument.activeElement as HTMLElement);
   const step = event.shiftKey ? -1 : 1;
   const next = focusable[(at + step + focusable.length) % focusable.length];
-  if (next !== undefined) {
-    event.preventDefault();
+  if (next === undefined) {
+    return;
+  }
+  // **Tab is answered by doing nothing when there is nowhere to go** — reported by the
+  // user on 2026-08-26 against the failure modal, whose only control is OK. Cycling a
+  // single-control dialog moves focus to the control it is already on, which a reader
+  // announces again: Tab appears to do something, and what it does is repeat itself.
+  // Swallowing the key is the honest answer, and it is what keeps the reader from being
+  // dropped into the dialog's document, which is why this function exists at all.
+  event.preventDefault();
+  if (next !== dialog.ownerDocument.activeElement) {
     next.focus();
   }
 }

@@ -10,13 +10,22 @@
 // The sentence is the dialog's description, so a reader says it as the dialog opens rather
 // than leaving somebody to go and find it.
 
+import { keepTabInside } from './dialog_tab';
 import type { MessageView } from '../ports/message_view';
 
 export class MessageDialog implements MessageView {
   constructor(
     private readonly dialog: HTMLDialogElement,
     private readonly body: HTMLElement,
-  ) {}
+  ) {
+    // **Tab is answered here rather than left to the platform** — reported by the user on
+    // 2026-08-26, who found Tab landing on OK again and again. With one control there is
+    // nowhere to go, so the key is swallowed: no drop out of the dialog, and no reader
+    // announcing the same button a second time.
+    this.dialog.addEventListener('keydown', (event) =>
+      keepTabInside(this.dialog, event),
+    );
+  }
 
   /** Say it, and resolve once it has been dismissed. */
   show(sentence: string): Promise<void> {

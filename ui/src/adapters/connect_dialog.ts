@@ -333,11 +333,31 @@ export class ConnectDialog {
     if (start === null) {
       return;
     }
+    start.disabled = !this.startable();
+  }
+
+  /**
+   * Whether there is something to connect to at all.
+   *
+   * **One condition, asked in both places** — reported by the user on 2026-08-26: pressing
+   * Enter on the SSH row with every field blank started an attempt and answered with the
+   * backend's error, because `enterConnects` reaches `chosen` directly and never consulted
+   * the button it was standing in for. A disabled button that Enter walks straight past is
+   * not a disabled button; it is a lie told to whoever tabbed to it.
+   *
+   * Every kind that is not a form is startable as it stands, which is what the `true` at
+   * the end says: only the row that asks for details can be incomplete.
+   */
+  private startable(): boolean {
+    const row = this.row;
+    if (row === undefined || !isSsh(row)) {
+      return true;
+    }
     const filled = (name: string): boolean =>
       (this.panelBody
         .querySelector<HTMLInputElement>(`#connect-ssh-${name}`)
         ?.value.trim() ?? '') !== '';
-    start.disabled = !filled('host') || !filled('user');
+    return filled('host') && filled('user');
   }
 
   /** What the form was filled in with, as the profile that starts it. */
@@ -515,7 +535,7 @@ export class ConnectDialog {
     // It also covers the gap between two questions: the password dialog closes, the next
     // one does not exist yet, and without this there is a moment where focus falls back
     // onto live controls belonging to a conversation still in progress.
-    if (this.connecting) {
+    if (this.connecting || !this.startable()) {
       return;
     }
     this.busy(true);
