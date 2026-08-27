@@ -10,6 +10,7 @@ import { EditFieldDom } from './adapters/edit_field';
 import { bindKeys } from './adapters/keyboard';
 import { ConnectDialog } from './adapters/connect_dialog';
 import { HostKeyDialog } from './adapters/host_key_dialog';
+import { MessageDialog } from './adapters/message_dialog';
 import { PasswordDialog } from './adapters/password_dialog';
 import { installMenuBar } from './adapters/menu_bar';
 import { WindowChrome } from './adapters/window_chrome';
@@ -74,6 +75,11 @@ const questions = {
       ? hostKeyDialog.ask(question)
       : passwordDialog.ask(question),
 };
+// A connection that failed is acknowledged rather than announced (reported 2026-08-26).
+const failureDialog = new MessageDialog(
+  byId<HTMLDialogElement>('failed-dialog'),
+  byId('failed-why'),
+);
 const controller = new AppController(
   installDebugRecorder(new TauriBackend()),
   connectApi,
@@ -83,6 +89,7 @@ const controller = new AppController(
   beep,
   windowChrome,
   questions,
+  failureDialog,
 );
 
 // The menu bar is in the document rather than in the window frame, and F10 is the way

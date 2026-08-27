@@ -2565,6 +2565,36 @@ thing to pick up once the adapters land, not merely the next number.
     opening rather than connecting. Cosmetic, and misleading in exactly the way A8 decision 2
     is about: it describes something that is not happening.
 
+27.4. A session that is ready says nothing about it. Spec: none yet → specify first.
+    **Reported by the user in B9's accessibility pass, 2026-08-26**: "on connection, I heard
+    no prompt."
+
+    An unintegrated far end draws its prompt as ordinary output, and with no command
+    boundaries there is nothing to autoread — which is the decided behaviour (DESIGN's
+    reliability case 2, B4.4) and exactly what the connection announcement warns about. The
+    consequence was still not thought through: a listener connects, hears the connection
+    announced, and then hears **nothing at all**, with no way to tell whether the far end is
+    ready for typing, still starting, or dead.
+
+    It is not SSH's alone — every unintegrated session has it — but SSH is where it bites,
+    because a remote shell over a network is the slowest one to arrive and the one where
+    "did that work?" is a real question. What to say is the decision: the first output after
+    connecting, read once; or a plain "ready"; or the prompt itself when one can be
+    recognised without markers, which is B5.6's subject from the other side.
+
+27.5. The status region says less than the connection announcement did. Spec: none yet →
+    specify first. **Reported by the user, 2026-08-26**: they took "connected to SSH: acter
+    at 127.0.0.1, port 2222, bash, with no shell integration set up on this host" to be the
+    status region being read, and found the region itself says only "connected".
+
+    A9 decided those three words deliberately, and they are right for a region that is read
+    on demand rather than announced. What B9 changed underneath that decision is that there
+    is now something worth saying which is *not* in the window title either — that this
+    session has no shell integration. So a user who comes back to the window an hour later
+    can find out **what** they are connected to (the title says so) but not **what kind of
+    session it is**. Whether the region grows, or whether that belongs somewhere else
+    entirely, is what this entry decides.
+
 27.1. B9.5, offer to integrate the far end. Spec: none yet → specify when 27 is Done.
 
     A button that writes the integration snippet into the remote account's shell startup,

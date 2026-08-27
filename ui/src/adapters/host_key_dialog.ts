@@ -43,6 +43,7 @@ export class HostKeyDialog {
     this.dialog.addEventListener('keydown', (event) =>
       keepTabInside(this.dialog, event),
     );
+    this.dialog.addEventListener('keydown', (event) => this.noDefaultAction(event));
   }
 
   /**
@@ -63,24 +64,36 @@ export class HostKeyDialog {
 
     // **What a reader says as the dialog opens**, because a dialog that announces only its
     // own name and its focused button leaves a listener to go looking for the question.
-    this.summary.textContent = `${question.host}, port ${question.port}. ${
-      changed ? CHANGED_WARNING : UNKNOWN_EXPLANATION
-    }`;
+    this.summary.textContent = [
+      `${question.host}, port ${question.port}.`,
+      changed ? CHANGED_WARNING : UNKNOWN_EXPLANATION,
+      // Something true that is not the answer: a `known_hosts` file that could not be read,
+      // so the user knows this may be being asked about a host they already trust. It is
+      // said with the rest rather than left as one more thing to go and find.
+      question.aside,
+    ]
+      .filter((part) => part !== null && part !== '')
+      .join(' ');
 
     const said = document.createElement('div');
     if (changed) {
       said.append(
-        fingerprint(document, 'Fingerprint Acter recorded before', question.recorded ?? ''),
+        fingerprint(
+          document,
+          'host-key-recorded',
+          'Fingerprint Acter recorded before',
+          question.recorded ?? '',
+        ),
       );
     }
     said.append(
-      fingerprint(document, 'Fingerprint this server is offering now', question.fingerprint),
+      fingerprint(
+        document,
+        'host-key-offered',
+        'Fingerprint this server is offering now',
+        question.fingerprint,
+      ),
     );
-    // Something true that is not the answer: a `known_hosts` file that could not be read, so
-    // the user knows this may be being asked about a host they already trust.
-    if (question.aside !== null) {
-      said.append(paragraph(document, question.aside));
-    }
     this.body.replaceChildren(said);
 
     return new Promise<ConnectAnswer>((resolve) => {
@@ -97,43 +110,86 @@ export class HostKeyDialog {
       this.dialog.addEventListener('close', settle);
       this.dialog.returnValue = '';
       this.dialog.showModal();
-      // Focus starts on the refusing button, so the key a listener presses without thinking
-      // — Enter, on whatever the dialog handed them — does the safe thing.
-      this.refuse()?.focus();
+      // **Focus starts on the fingerprint, which is the thing they are here to read**
+      // (asked for by the user, 2026-08-26). It is safe to land here precisely because
+      // Enter does nothing: the only way out is a button somebody chose to go to.
+      this.offered()?.focus();
     });
   }
 
-  private refuse(): HTMLElement | null {
-    return this.dialog.querySelector<HTMLElement>('#host-key-refuse');
+  private offered(): HTMLElement | null {
+    return this.dialog.querySelector<HTMLElement>('#host-key-offered');
+  }
+
+  /**
+   * **This dialog has no default action, and that is the point of it.**
+   *
+   * Asked for by the user on 2026-08-26: "we need a planned user action." Everywhere else
+   * in this product Enter is the obliging key — it submits the connect form, it activates
+   * the focused control. Here it must not be, because the two outcomes are "trust this
+   * server" and "do not", and neither should be reachable by the key somebody presses
+   * without thinking. A form's implicit submission would otherwise pick a button for them.
+   *
+   * A button that *has* focus still answers Enter, because going to it is itself the
+   * deliberate act — which is the difference between choosing and defaulting.
+   */
+  private noDefaultAction(event: KeyboardEvent): void {
+    if (event.key !== 'Enter') {
+      return;
+    }
+    if ((event.target as HTMLElement).closest('button') !== null) {
+      return;
+    }
+    event.preventDefault();
   }
 }
 
-function paragraph(document: Document, text: string): HTMLElement {
-  const said = document.createElement('p');
-  // Prose inside an application region cannot be arrowed, so without a tab stop the thing
-  // a user most needs to read here would be unreachable (spec A8's instructions panel, same
-  // reasoning).
-  said.tabIndex = 0;
-  said.textContent = text;
-  return said;
-}
-
 /**
- * A fingerprint, labelled and reachable.
+ * A fingerprint, as a **read-only edit field**.
  *
- * **Its own focusable element, because a fingerprint is read character by character.** It is
- * forty-odd characters of mixed-case base64 with no words in it, and a listener compares it
- * against something a provider printed — which means moving through it one character at a
- * time with the reader's own review commands, and that needs somewhere to put the cursor.
+ * **Reported by the user on 2026-08-26, and it was a real defect rather than a preference.**
+ * It used to be a focusable `<code>`, on the reasoning that a fingerprint has to be read
+ * character by character and therefore needs somewhere to put a cursor. That reasoning was
+ * half right and the conclusion was wrong: this dialog is inside `role="application"`, where
+ * the arrows do **not** read prose, so the only way to walk a paragraph is NVDA's review
+ * cursor — which is outside the vocabulary an ordinary user is assumed to have. The thing it
+ * most needed to be comparable was the thing it was not.
+ *
+ * A read-only text box is arrowable with the plain arrow keys in every mode, which is what
+ * comparing forty-three characters of mixed-case base64 against a printed one actually takes.
+ * `readonly` rather than `disabled`, because a disabled control is skipped by focus entirely.
  */
-function fingerprint(document: Document, label: string, value: string): HTMLElement {
+function fingerprint(document: Document, id: string, label: string, value: string): HTMLElement {
   const group = document.createElement('p');
-  const name = document.createElement('span');
-  name.textContent = `${label}: `;
-  const said = document.createElement('code');
-  said.tabIndex = 0;
-  said.setAttribute('aria-label', `${label}, ${value}`);
-  said.textContent = value;
+  const name = document.createElement('label');
+  name.htmlFor = id;
+  name.textContent = label;
+  const said = document.createElement('input');
+  said.id = id;
+  said.type = 'text';
+  said.value = value;
+  // **Editable, with every edit refused** — and that is the fix rather than a compromise.
+  //
+  // Measured with NVDA 2026.1.1 on 2026-08-26, after the user reported twice that the
+  // arrows did nothing here. With `readonly` set, the field has focus and reports its value
+  // through the accessibility API — `get_focus_info` returned role EDITABLETEXT, states
+  // READONLY FOCUSABLE FOCUSED, and the full fingerprint as its value — and yet **every**
+  // caret key answered "blank": Right, Left, Home and End alike. The same dialog's editable
+  // Host field, arrowed in the same session, read "1", "2", "2". So a read-only input in
+  // this webview exposes a value with no caret-navigable text behind it, and a fingerprint
+  // nobody can walk is a fingerprint nobody can compare.
+  //
+  // Refusing the edit at `beforeinput` keeps the caret a real caret while making the value
+  // unchangeable — including by paste, which is one of the input types this cancels.
+  said.addEventListener('beforeinput', (event) => event.preventDefault());
+  // Belt and braces, for any path that reaches the value without a cancellable event.
+  said.addEventListener('input', () => {
+    said.value = value;
+  });
+  // Nothing here is a thing to fill in, and a browser offering to complete a fingerprint
+  // would be offering the one value that must not come from anywhere but the server.
+  said.autocomplete = 'off';
+  said.spellcheck = false;
   group.append(name, said);
   return group;
 }

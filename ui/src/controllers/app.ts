@@ -18,6 +18,7 @@ import type { BackendApi } from '../ports/backend_api';
 import type { BeepView } from '../ports/beep_view';
 import type { BufferView } from '../ports/buffer_view';
 import type { ConnectApi } from '../ports/connect_api';
+import type { MessageView } from '../ports/message_view';
 import type { QuestionView } from '../ports/question_view';
 import type { WindowView } from '../ports/window_view';
 import type { EditFieldView } from '../ports/edit_field_view';
@@ -172,6 +173,10 @@ export class AppController {
     // one because nobody was there to object. Every far end except SSH asks nothing, so
     // this is only supplied where the dialogs are.
     private readonly questions?: QuestionView,
+    // **A failure is acknowledged, not announced** (reported 2026-08-26). Optional for the
+    // same reason `questions` is: a caller without one still gets the sentence, said the
+    // old way, rather than losing it.
+    private readonly failure?: MessageView,
   ) {}
 
   /**
@@ -218,7 +223,12 @@ export class AppController {
       // The sentence is the backend's, because only the backend knows what went wrong.
       // Every other announced string in this file is pinned here; this one is the
       // exception and the reason is that a pinned string could only say "it failed".
-      this.announcer.announce(reason(why));
+      const said = reason(why);
+      if (this.failure === undefined) {
+        this.announcer.announce(said);
+      } else {
+        await this.failure.show(said);
+      }
       return false;
     }
     await this.show(connected);

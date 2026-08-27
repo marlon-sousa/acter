@@ -272,6 +272,12 @@
       aria-label="Unknown server"
       aria-describedby="host-key-summary"
     >
+      <!-- **The role is load-bearing, and taking it off was a regression** — measured by
+           the user on 2026-08-26. It is what holds a dialog in focus mode; without it NVDA
+           falls back to browse mode in every window, so the arrows move a virtual cursor
+           rather than a caret and prose becomes reachable that should not be. It was
+           removed for one afternoon on the theory that it was what stopped the fingerprint
+           field arrowing. It was not, and the cure was worse. -->
       <div role="application" aria-label="Server identity">
         <h1 id="host-key-title">Unknown server</h1>
         <!-- **Read when the dialog opens, without the user going to look for it.**
@@ -281,7 +287,7 @@
              what a reader speaks along with the dialog itself. The fingerprint stays a
              separate tab stop rather than joining this, because comparing it means putting
              a cursor in it and reading character by character. -->
-        <p id="host-key-summary" tabindex="0"></p>
+        <p id="host-key-summary"></p>
         <div id="host-key-body"></div>
         <form method="dialog">
           <button id="host-key-refuse" type="submit" value="refuse">
@@ -303,7 +309,7 @@
     >
       <div role="application" aria-label="Password">
         <h1>Password</h1>
-        <p id="password-prompt" tabindex="0"></p>
+        <p id="password-prompt"></p>
         <form method="dialog">
           <label for="password-field">Password</label>
           <input
@@ -314,6 +320,20 @@
           />
           <button id="password-submit" type="submit" value="submit">Sign in</button>
           <button id="password-cancel" type="submit" value="cancel">Cancel</button>
+        </form>
+      </div>
+    </dialog>
+    <!-- **A connection that failed is a modal you dismiss** — reported by the user on
+         2026-08-26, who met a connection error as a live-region announcement and expected
+         something to press OK on. It is not a passing remark: it is the end of something
+         they deliberately started, seconds after they started it, and an announcement can
+         be spoken over by the next thing or missed entirely. -->
+    <dialog id="failed-dialog" aria-label="Could not connect" aria-describedby="failed-why">
+      <div role="application" aria-label="Could not connect">
+        <h1>Could not connect</h1>
+        <p id="failed-why"></p>
+        <form method="dialog">
+          <button id="failed-ok" type="submit" value="ok">OK</button>
         </form>
       </div>
     </dialog>
