@@ -2596,8 +2596,10 @@ thing to pick up once the adapters land, not merely the next number.
     `SessionService`'s pump and it is delicate — that machinery took two entries to get
     right — which is why this is its own entry rather than a patch at the end of B9.
 
-27.5. The status region says less than the connection announcement did. Spec: none yet →
-    specify first. **Reported by the user, 2026-08-26**: they took "connected to SSH: acter
+27.5. **Done** — the status region says the whole sentence, and the announcement is that
+    same string, from one function. Fixed in B9's PR and measured with NVDA 2026.1.1 on
+    2026-08-27: the region reads back exactly what was announced, once. A9 decision 2 is
+    reversed in its own spec, with the reason. **Reported by the user, 2026-08-26**: they took "connected to SSH: acter
     at 127.0.0.1, port 2222, bash, with no shell integration set up on this host" to be the
     status region being read, and found the region itself says only "connected".
 
