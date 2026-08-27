@@ -6,7 +6,9 @@
 //! fills each slot is the composition root's to decide.
 
 mod connect;
+mod conversation;
 mod session;
 
 pub use connect::ConnectService;
+pub use conversation::Conversation;
 pub use session::SessionService;

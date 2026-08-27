@@ -12,7 +12,18 @@
 mod fake;
 mod local;
 mod scripted;
+mod ssh;
 
 pub use fake::{Chunking, FakeShell, Script, Submission, TranscriptShell, Unmarked};
 pub use local::LocalPty;
 pub use scripted::{ScriptedTransport, SessionTranscript};
+pub use ssh::{FarEnd, KnownHosts, SshTarget, SshTransport};
+
+/// How long a far end has to say what it is before the session opens without it.
+///
+/// Exposed as a function rather than a constant so the composition root and the rig suite
+/// name the same deadline rather than two that agree today (spec B5.1, decision 5, applied
+/// to a duration).
+pub fn probe_patience() -> std::time::Duration {
+    ssh::probe::PATIENCE
+}

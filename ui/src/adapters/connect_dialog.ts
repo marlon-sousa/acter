@@ -25,8 +25,29 @@ import type { Connectable, ProfileId } from '../protocol';
 
 /** What the panel says when the chosen kind needs nothing. */
 const NO_OPTIONS = 'no options';
+
+/**
+ * The fields an SSH connection needs, in the order they are filled in.
+ *
+ * **Three fields and a port, rather than one box holding `user@host:port`.** A spelling has
+ * to be parsed and can be got wrong, and getting it wrong for somebody who cannot see the
+ * box is a silent failure; these are the facts themselves (spec B9). The port is filled in
+ * with 22, because that is what it is unless somebody moved it.
+ */
+const SSH_FIELDS = [
+  { name: 'host', label: 'Host', type: 'text', value: '' },
+  { name: 'port', label: 'Port', type: 'number', value: '22' },
+  { name: 'user', label: 'Account', type: 'text', value: '' },
+] as const;
+
+/** Whether this row is the one that needs a form. */
+function isSsh(row: Connectable): boolean {
+  return row.id.profile === 'Ssh';
+}
 /** What it says for a kind this machine cannot start; the instructions follow it. */
 const NOT_AVAILABLE = 'not available';
+/** The heading over the SSH form — what the panel *is*, rather than how many boxes. */
+const DETAILS = 'Connection details';
 
 /**
  * What a listener is told the panel now holds when they arrow onto a kind.
@@ -40,11 +61,39 @@ export function panelSummary(row: Connectable): string {
   if (!row.available) {
     return NOT_AVAILABLE;
   }
+  // **The one kind that is a form rather than a choice** (spec A8, decision 1), and the
+  // one whose panel is not a count of anything: three empty boxes is how much typing there
+  // is, not what there is to choose between.
+  if (isSsh(row)) {
+    return DETAILS;
+  }
   if (row.variants.length === 0) {
     return NO_OPTIONS;
   }
   const count = row.variants.length;
   return `${count} ${noun(row)}${count === 1 ? '' : 's'}`;
+}
+
+/**
+ * Whether arrowing onto this row is worth saying anything about.
+ *
+ * **Only when the kind cannot be started at all — A8 decision 2 reversed on use,
+ * 2026-08-26**, reported by the user driving the real dialog: "better to remove these
+ * announcements for all list items", with "not available" kept.
+ *
+ * That decision announced what the panel now holds, on the reasoning that a section
+ * changing silently under a listener is a trap. The reasoning was sound and the case it
+ * was built on turns out to be rare: most rows have nothing worth saying, so what the
+ * summary actually adds is a second utterance between every arrow press and the next,
+ * paid on every navigation for a benefit that lands occasionally. "No options" is a
+ * sentence about a container that is empty; "3 fields" counts boxes nobody chooses
+ * between. Both are the panel talking about itself.
+ *
+ * What survives is the one that is a fact rather than a description: a kind this machine
+ * cannot start says so, and the instructions under it are the point of the panel.
+ */
+function worthSaying(row: Connectable): boolean {
+  return !row.available;
 }
 
 /**
@@ -78,6 +127,8 @@ export interface ConnectAction {
 
 export class ConnectDialog {
   private rows: Connectable[] = [];
+  /** Whether an attempt is in flight, so a second one cannot be started into it. */
+  private connecting = false;
   /** Which kind is chosen, as an index into `rows`. */
   private at = 0;
 
@@ -142,7 +193,7 @@ export class ConnectDialog {
 
   private hasPanelContent(): boolean {
     const row = this.row;
-    return row !== undefined && (!row.available || row.variants.length > 0);
+    return row !== undefined && worthSaying(row);
   }
 
   /** The kinds, as options; the panel, for whichever is chosen. */
@@ -185,11 +236,21 @@ export class ConnectDialog {
     this.panelTitle.textContent = panelSummary(row);
     const document = this.panelBody.ownerDocument;
     this.panelBody.replaceChildren();
+    // Every other kind is startable as it stands, so the button comes back on the way out
+    // of the one that is a form.
+    const start = this.dialog.querySelector<HTMLButtonElement>('#connect-start');
+    if (start !== null && !this.connecting) {
+      start.disabled = false;
+    }
 
     if (!row.available) {
       // The instructions are prose to be *read*: what is missing, what to type, and where
       // (spec B5.4, decision 4). They are the backend's words, not this module's.
       this.panelBody.append(this.instructions(row.instructions ?? ''));
+      return;
+    }
+    if (isSsh(row)) {
+      this.showSshForm();
       return;
     }
     if (row.variants.length === 0) {
@@ -222,6 +283,104 @@ export class ConnectDialog {
     });
     this.panelBody.append(label, select);
     this.showVariantInstructions(row);
+  }
+
+  /**
+   * The form for a far end that is not on this machine.
+   *
+   * **Ordinary labelled inputs, and no widget of its own.** A text box inside an
+   * application region is one of the few things that behaves identically in every reading
+   * mode, so this is the part of the dialog that needs the least explaining — which is
+   * exactly what a form asking for a host and an account should be.
+   */
+  private showSshForm(): void {
+    const document = this.panelBody.ownerDocument;
+    for (const field of SSH_FIELDS) {
+      const label = document.createElement('label');
+      label.htmlFor = `connect-ssh-${field.name}`;
+      label.textContent = field.label;
+      const input = document.createElement('input');
+      input.id = `connect-ssh-${field.name}`;
+      input.type = field.type;
+      input.value = field.value;
+      // Nothing here is remembered between openings: a saved connection is B8's, and a
+      // form that half-remembered would be a form a listener has to check before trusting.
+      input.autocomplete = 'off';
+      // **The button follows the form** — reported by the user on 2026-08-26: "why is the
+      // connect button ever enabled when information isn't complete?"
+      input.addEventListener('input', () => this.formFilled());
+      this.panelBody.append(label, input);
+    }
+    this.formFilled();
+  }
+
+  /**
+   * Keep Connect available only while there is something to connect to.
+   *
+   * **A8 decision 4 does not reach this case, and applying it here was the mistake.** That
+   * decision keeps Connect enabled for a kind this machine cannot start, so pressing it
+   * answers with the instructions — useful, because nothing you do in the dialog changes
+   * that. An empty host is not that: it is a form you have not finished, and the answer is
+   * not information you lacked. A disabled button is itself the information — tabbing to it
+   * and hearing "unavailable" says the form is incomplete without committing to anything,
+   * where the old shape only told you after a round trip you had to wait for.
+   *
+   * The backend keeps refusing an empty host with its own sentence, because a profile can
+   * arrive from somewhere that is not this form.
+   */
+  private formFilled(): void {
+    const start = this.dialog.querySelector<HTMLButtonElement>('#connect-start');
+    if (start === null) {
+      return;
+    }
+    start.disabled = !this.startable();
+  }
+
+  /**
+   * Whether there is something to connect to at all.
+   *
+   * **One condition, asked in both places** — reported by the user on 2026-08-26: pressing
+   * Enter on the SSH row with every field blank started an attempt and answered with the
+   * backend's error, because `enterConnects` reaches `chosen` directly and never consulted
+   * the button it was standing in for. A disabled button that Enter walks straight past is
+   * not a disabled button; it is a lie told to whoever tabbed to it.
+   *
+   * Every kind that is not a form is startable as it stands, which is what the `true` at
+   * the end says: only the row that asks for details can be incomplete.
+   */
+  private startable(): boolean {
+    const row = this.row;
+    if (row === undefined || !isSsh(row)) {
+      return true;
+    }
+    const filled = (name: string): boolean =>
+      (this.panelBody
+        .querySelector<HTMLInputElement>(`#connect-ssh-${name}`)
+        ?.value.trim() ?? '') !== '';
+    return filled('host') && filled('user');
+  }
+
+  /** What the form was filled in with, as the profile that starts it. */
+  private sshProfile(fallback: ProfileId): ProfileId {
+    const read = (name: string): string =>
+      this.panelBody
+        .querySelector<HTMLInputElement>(`#connect-ssh-${name}`)
+        ?.value.trim() ?? '';
+    const host = read('host');
+    if (host === '') {
+      // **Left to the backend to refuse**, with the sentence it already has for an unfilled
+      // form — one path, one place the words are decided, and no disabled control that
+      // reads differently from how it looks (the reasoning decision 4 applies to an
+      // unavailable kind).
+      return fallback;
+    }
+    const port = Number(read('port'));
+    return {
+      profile: 'Ssh',
+      host,
+      port: Number.isFinite(port) && port > 0 ? port : 22,
+      user: read('user'),
+    };
   }
 
   /** What to do about the chosen variant, when there is nothing to be done with it. */
@@ -263,7 +422,7 @@ export class ConnectDialog {
    */
   private describe(): void {
     const row = this.row;
-    if (row === undefined) {
+    if (row === undefined || !worthSaying(row)) {
       return;
     }
     this.announcer.announce(panelSummary(row));
@@ -367,14 +526,60 @@ export class ConnectDialog {
     if (row === undefined) {
       return;
     }
-    if (await this.start(this.profile(row))) {
+    // **Nothing in here can be pressed while an attempt is running** — reported by the
+    // user on 2026-08-26, who was left focused on the Connect button for the seconds a
+    // connection took, and could press it again into the attempt already in flight. For
+    // somebody navigating by focus, sitting on a control called Connect *is* being told
+    // that connecting has not started.
+    //
+    // It also covers the gap between two questions: the password dialog closes, the next
+    // one does not exist yet, and without this there is a moment where focus falls back
+    // onto live controls belonging to a conversation still in progress.
+    if (this.connecting || !this.startable()) {
+      return;
+    }
+    this.busy(true);
+    const started = await this.start(this.profile(row));
+    this.busy(false);
+    if (started) {
       // Closing puts focus back in the edit field; the far end the user is now on has
       // already been announced by whoever connected.
       this.dialog.close();
+      return;
+    }
+    // **Back to the list, not left on whatever was pressed** — reported by the user on
+    // 2026-08-26, who was returned to the Cancel button after a connection was refused.
+    // Decision 4 keeps this dialog open on failure precisely so somebody can choose again,
+    // and a listener parked on Cancel has been handed the one control that gives up.
+    this.kinds.focus();
+    this.describe();
+  }
+
+  /**
+   * Make the dialog unusable while a connection is being made, and usable again after.
+   *
+   * The controls are *disabled* rather than merely ignored, so a reader says so rather
+   * than leaving somebody pressing a button that answers nothing. Focus moves to the kind
+   * list, which stays reachable: it is where they will want to be either way — to choose
+   * something else if this fails, and it is not a control that does anything meanwhile.
+   */
+  private busy(connecting: boolean): void {
+    this.connecting = connecting;
+    this.dialog.setAttribute('aria-busy', String(connecting));
+    for (const control of this.dialog.querySelectorAll<HTMLButtonElement>(
+      'button, input, select',
+    )) {
+      control.disabled = connecting;
+    }
+    if (connecting) {
+      this.kinds.focus();
     }
   }
 
   private profile(row: Connectable): ProfileId {
+    if (isSsh(row)) {
+      return this.sshProfile(row.id);
+    }
     if (row.variants.length === 0) {
       return row.id;
     }

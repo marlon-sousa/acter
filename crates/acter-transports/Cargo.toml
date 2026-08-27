@@ -9,6 +9,21 @@ license.workspace = true
 # The port this crate implements, plus the `Clock` port every scripted delay waits on.
 acter-core = { path = "../acter-core" }
 portable-pty = "0.9"
+# SSH, on russh's own default crypto backend (`aws-lc-rs`), which is the better
+# maintained and better travelled of the two it offers. The backends are otherwise
+# interchangeable here: no cipher, key exchange, MAC or host-key algorithm is gated on
+# either, so the choice changes nothing about which servers Acter can reach.
+russh = "0.63.1"
+# **Named here only to turn one feature on in a dependency of a dependency**, and the
+# feature is what makes Acter build on a machine with no NASM installed — which is every
+# stock Windows machine and the GitHub Windows runner.
+#
+# It is not a concession this project had not already made: `ring`, the other backend,
+# *only* uses prebuilt object files on Windows and offers no way to assemble its assembly
+# from source there. This flag is the better-behaved version of the same thing — it
+# assembles from source when NASM is present and falls back to the crate's shipped objects
+# when it is not (measured 2026-08-26: builds clean here with no NASM).
+aws-lc-sys = { version = "0.44", features = ["prebuilt-nasm"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # The scripted transport spawns its own emission loop, as `SystemClock` spawns its own

@@ -20,6 +20,7 @@
 #![warn(unreachable_pub)]
 
 mod cmd;
+mod far_end;
 mod installed;
 mod plain;
 mod powershell;
@@ -27,6 +28,7 @@ mod selection;
 mod wsl;
 
 pub use cmd::Cmd;
+pub use far_end::over_ssh;
 pub use installed::ThisMachine;
 pub use plain::Plain;
 pub use powershell::PowerShell;

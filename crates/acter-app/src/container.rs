@@ -16,20 +16,23 @@
 //! it through the same action a menu would.
 
 use std::env;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use acter_core::{
     Clock, ConnectApi, ConnectService, PacingConfig, ProfileId, SessionApi, SessionFactory,
-    SessionService, ShellAdapter, ShellFacts, Transport,
+    SessionService, ShellAdapter, ShellFacts, SshQuestions, Started, Transport, Unasked,
 };
 use acter_shells::{Plain, ThisMachine, Wsl, adapter_for};
 use acter_term::AlacrittyEngine;
 use acter_transports::{
-    Chunking, FakeShell, LocalPty, ScriptedTransport, SessionTranscript, TranscriptShell, Unmarked,
+    Chunking, FakeShell, KnownHosts, LocalPty, ScriptedTransport, SessionTranscript, SshTarget,
+    SshTransport, TranscriptShell, Unmarked, probe_patience,
 };
 use tauri::{Builder, generate_context, generate_handler};
 
 use crate::adapters::SystemClock;
+use crate::controllers::Connecting;
 
 /// The environment variable choosing which simulated session to run: a built-in name, or
 /// a path to a transcript JSON.
@@ -76,6 +79,15 @@ const SCRIPTED: &str = "scripted";
 /// same string, and `acter_shells::wsl::is_wsl` recognises either spelling.
 const WSL_CLIENT: &str = "wsl.exe";
 
+/// Where B8's profile store will live, read here for the one thing B9 needs from it: a place
+/// to write down a host key that was accepted. B8 inherits the variable rather than this
+/// inventing a second one.
+const PROFILES_DIR: &str = "ACTER_PROFILES_DIR";
+
+/// The file both records of host keys are kept in, in OpenSSH's own format so it stays
+/// inspectable with the tools a user already has.
+const KNOWN_HOSTS: &str = "known_hosts";
+
 /// The two things every router reaches: the session that is live, and the actions that
 /// change which one that is.
 ///
@@ -86,6 +98,10 @@ const WSL_CLIENT: &str = "wsl.exe";
 pub(crate) struct AppState {
     pub(crate) session: Arc<dyn SessionApi>,
     pub(crate) connect: Arc<dyn ConnectApi>,
+    /// Attempts to connect, which are neither of the above: an attempt is not a session
+    /// yet, and it is not a question about what this machine offers. It is a conversation
+    /// in flight (spec B9).
+    pub(crate) connecting: Arc<Connecting>,
 }
 
 pub fn run() {
@@ -110,6 +126,8 @@ pub fn run() {
             crate::routers::platform,
             crate::routers::connectable,
             crate::routers::use_profile,
+            crate::routers::answer_connect,
+            crate::routers::attempt_ended,
             crate::routers::connected
         ]);
 
@@ -155,11 +173,15 @@ pub(crate) fn connected_state() -> AppState {
         // Nothing reads the error here on purpose: `connected()` answers `None`, which is
         // the unconnected window, and the frontend says so. Reporting the reason as well is
         // B8's, where a `--profile` that resolves to nothing has to name what was asked for.
-        let _ = service.use_profile(&profile);
+        // Nobody to ask at launch: there is no window yet, so a far end that needs a
+        // decision is refused rather than trusted (`Unasked`).
+        let _ = service.use_profile(&profile, &(Arc::new(Unasked) as Arc<dyn SshQuestions>));
     }
+    let connect = Arc::clone(&service) as Arc<dyn ConnectApi>;
     AppState {
         session: Arc::clone(&service) as Arc<dyn SessionApi>,
-        connect: service as Arc<dyn ConnectApi>,
+        connecting: Arc::new(Connecting::new(Arc::clone(&connect))),
+        connect,
     }
 }
 
@@ -234,13 +256,76 @@ impl Shells {
         transport: Box<dyn Transport>,
         shell: &dyn ShellAdapter,
     ) -> Arc<dyn SessionApi> {
+        self.session_with(transport, ShellFacts::of(shell))
+    }
+
+    /// The same, for a far end nothing on this machine started.
+    ///
+    /// **An SSH session has shell facts without having a shell adapter**, and that is not a
+    /// gap: an adapter knows how to *launch* a shell and what to inject into it, and neither
+    /// applies to a program `sshd` chose from an account's passwd entry on another machine.
+    /// What is known is what the far end said it was (spec B9, decision 7).
+    fn session_with(
+        &self,
+        transport: Box<dyn Transport>,
+        facts: ShellFacts,
+    ) -> Arc<dyn SessionApi> {
         Arc::new(SessionService::start(
             transport,
             Box::new(AlacrittyEngine::new(COLUMNS, SCREEN_LINES)),
             Arc::clone(&self.clock),
             PacingConfig::default(),
-            ShellFacts::of(shell),
+            facts,
         ))
+    }
+
+    /// A far end that is not on this machine.
+    ///
+    /// **Connecting is async and this is not, so the work is handed to the runtime and
+    /// waited for on a channel.** Blocking here is correct rather than merely tolerable:
+    /// this runs on the blocking task the connect controller spawned precisely so that a
+    /// person can be asked things, and no invoke is waiting on it (spec B9).
+    fn ssh(
+        &self,
+        host: &str,
+        port: u16,
+        user: &str,
+        questions: &Arc<dyn SshQuestions>,
+    ) -> Result<Started, String> {
+        let target = SshTarget {
+            host: host.to_owned(),
+            port,
+            user: user.to_owned(),
+        };
+        let hosts = Arc::new(KnownHosts::new(acter_known_hosts(), users_known_hosts()));
+        let questions = Arc::clone(questions);
+        let (done, waiting) = std::sync::mpsc::channel();
+        tauri::async_runtime::spawn(async move {
+            let _ = done.send(
+                SshTransport::connect(
+                    &target,
+                    hosts,
+                    questions,
+                    COLUMNS,
+                    SCREEN_LINES,
+                    probe_patience(),
+                )
+                .await,
+            );
+        });
+        let transport = waiting
+            .recv()
+            .map_err(|_| "The connection stopped before it could be made.".to_owned())??;
+
+        // **The name is used for what to say and for what ends the session, never for
+        // markers** (spec B9, decision 7): knowing a far end is bash does not make bash emit
+        // any, so an SSH session is unintegrated and says so.
+        let name = transport.far_end().name();
+        let facts = acter_shells::over_ssh(name.as_deref());
+        Ok(Started {
+            session: self.session_with(Box::new(transport), facts),
+            note: Some(far_end_note(name.as_deref())),
+        })
     }
 
     /// A real shell on a pseudoconsole.
@@ -277,33 +362,42 @@ impl SessionFactory for Shells {
     /// on — which is not inside that runtime. Doing it here rather than at each call site is
     /// the same reasoning that puts the rest of this file in the composition root: knowing a
     /// runtime exists at all is its privilege.
-    fn open(&self, profile: &ProfileId) -> Result<Arc<dyn SessionApi>, String> {
+    fn open(
+        &self,
+        profile: &ProfileId,
+        questions: &Arc<dyn SshQuestions>,
+    ) -> Result<Started, String> {
         let runtime = tauri::async_runtime::handle();
         let _entered = runtime.inner().enter();
-        self.start(profile).map_err(ended)
+        self.start(profile, questions).map_err(ended)
     }
 }
 
 impl Shells {
     /// The branch per kind of profile, with the runtime already entered.
-    fn start(&self, profile: &ProfileId) -> Result<Arc<dyn SessionApi>, String> {
+    fn start(
+        &self,
+        profile: &ProfileId,
+        questions: &Arc<dyn SshQuestions>,
+    ) -> Result<Started, String> {
         match profile {
+            ProfileId::Ssh { host, port, user } => self.ssh(host, *port, user, questions),
             // The composition root names no shell since B5.1: which shell this is, what it
             // is started with and what it can mark are one object's answers, and the same
             // object answers them for the suites that measure a real one.
-            ProfileId::Shell { kind } => self.real(adapter_for(kind.program())),
-            ProfileId::Distribution { name } => {
-                self.real(Box::new(Wsl::in_distribution(WSL_CLIENT, name)))
-            }
+            ProfileId::Shell { kind } => self.real(adapter_for(kind.program())).map(only),
+            ProfileId::Distribution { name } => self
+                .real(Box::new(Wsl::in_distribution(WSL_CLIENT, name)))
+                .map(only),
             // Trimmed for the reason A9 found: `set ACTER_SHELL=x && acter` in cmd puts
             // everything up to the `&&` into the value, trailing space included — and a
             // name with a stray space matches no adapter, so the session silently became an
             // unintegrated shell with no injection, no markers and no prompt. A shell nobody
             // recognises is a real state this product supports; being pushed into it by
             // punctuation is not.
-            ProfileId::Program { program } => self.real(adapter_for(program.trim())),
+            ProfileId::Program { program } => self.real(adapter_for(program.trim())).map(only),
             #[cfg(debug_assertions)]
-            ProfileId::Scripted { name } => self.scripted(name),
+            ProfileId::Scripted { name } => self.scripted(name).map(only),
             // **The gate, at the factory.** A release build does not refuse to construct a
             // scripted session at run time by checking a flag — this arm does not exist in
             // it, and neither does the code it would have called.
@@ -314,6 +408,52 @@ impl Shells {
             )),
         }
     }
+}
+
+/// A session with nothing to say about the far end it reached, which is every far end that
+/// is a program on this machine: the row the user chose already described it.
+fn only(session: Arc<dyn SessionApi>) -> Started {
+    Started {
+        session,
+        note: None,
+    }
+}
+
+/// The one clause an SSH connection adds to what a listener hears, said once (spec B9,
+/// decisions 2 and 7).
+///
+/// **It names the far end when it can, and points at the fix either way.** "Shell
+/// integration is unavailable" tells a listener nothing they can act on; "bash, with no
+/// shell integration set up on this host" names what they are talking to and says where the
+/// thing to change lives. A probe that hit its deadline simply drops the middle clause and
+/// never adds a second utterance.
+fn far_end_note(shell: Option<&str>) -> String {
+    match shell {
+        Some(shell) => format!("{shell}, with no shell integration set up on this host"),
+        None => "with no shell integration set up on this host".to_owned(),
+    }
+}
+
+/// Acter's own record of host keys, under the profile directory or wherever
+/// `ACTER_PROFILES_DIR` points.
+///
+/// **Read here because this is where the environment is allowed in** (spec B8, decision 2),
+/// which is also why `KnownHosts` takes both paths rather than resolving them: the whole of
+/// the host-key behaviour is then testable against a directory made for the test.
+fn acter_known_hosts() -> PathBuf {
+    let directory = env::var_os(PROFILES_DIR)
+        .map(PathBuf::from)
+        .or_else(|| env::var_os("APPDATA").map(|appdata| PathBuf::from(appdata).join("acter")))
+        .unwrap_or_else(|| PathBuf::from("."));
+    directory.join(KNOWN_HOSTS)
+}
+
+/// The user's own `known_hosts`, which Acter reads and never writes (spec B9, decision 5) —
+/// and `None` on a machine with no home directory to look in.
+fn users_known_hosts() -> Option<PathBuf> {
+    env::var_os("USERPROFILE")
+        .or_else(|| env::var_os("HOME"))
+        .map(|home| PathBuf::from(home).join(".ssh").join(KNOWN_HOSTS))
 }
 
 /// One reason, ended as a sentence.

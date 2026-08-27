@@ -234,12 +234,12 @@ describe('opening', () => {
 
   /** But a panel that already has something in it is announced, because arriving to find a
    * second control there unmentioned is the same trap as one appearing silently. */
-  it('says what the panel holds when it opens on a kind that has one', async () => {
-    connect.rows = [wsl(), cmd()];
-
+  // **A8 decision 2, reversed on use 2026-08-26.** The panel no longer describes itself
+  // when it holds something ordinary; what survives is a row that cannot be started.
+  it('says nothing when it opens on a kind that can be started', async () => {
     await dialog.open();
 
-    expect(announcer.announcements).toEqual(['2 distributions']);
+    expect(announcer.announcements).toEqual([]);
   });
 
   /** The listbox names the kind itself, with its position, so the option carries the name
@@ -286,16 +286,21 @@ describe('the panel (decision 2)', () => {
 
   /** **The whole of the old submenu objection, answered.** A second control that changes
    * silently behind a listener arrowing a list is the classic non-visual trap. */
-  it('announces what it now holds every time the kind changes', async () => {
+  // **Reversed on use, 2026-08-26**, reported by the user driving the real dialog:
+  // arrowing between kinds that can be started says nothing about the panel. A second
+  // utterance between every arrow press is paid on every navigation for a benefit that
+  // lands occasionally, and "no options" is a sentence about an empty container.
+  //
+  // What survives is the row that cannot be started at all, which is a fact rather than a
+  // description of the panel.
+  it('says nothing about a panel holding an ordinary choice, and speaks for one that cannot be started', async () => {
     await dialog.open();
     announcer.announcements = [];
 
     press('ArrowDown');
     press('ArrowDown');
 
-    // The kind itself is not repeated: the listbox has already announced it with its
-    // position, and saying it again made a listener hear it twice for one arrow press.
-    expect(announcer.announcements).toEqual(['2 distributions', 'not available']);
+    expect(announcer.announcements).toEqual(['not available']);
   });
 
   it('counts one distribution without pluralising it', () => {
@@ -584,5 +589,235 @@ describe('a kind whose variants can be missing', () => {
 
     expect(attempted).toEqual([{ profile: 'Shell', kind: 'PowerShellSeven' }]);
     expect(byId<HTMLDialogElement>('connect-dialog').open).toBe(true);
+  });
+});
+
+/**
+ * SSH as the connect dialog holds it: the one kind that is a **form** rather than a choice.
+ *
+ * A submenu is the right shape for a pure choice and connecting to cmd is one; a host, a
+ * port and an account are not (spec A8, decision 1). These pin the two things that would
+ * otherwise go wrong quietly — that the panel says what it now holds, and that what the
+ * Connect button starts is what was typed rather than the empty row.
+ */
+describe('the kind that is a form', () => {
+  function ssh(): Connectable {
+    return {
+      // The row names no machine: what to connect to comes from the panel.
+      id: { profile: 'Ssh', host: '', port: 22, user: '' },
+      label: 'SSH',
+      available: true,
+      instructions: null,
+      variants: [],
+    };
+  }
+
+  beforeEach(() => {
+    connect.rows = [cmd(), ssh()];
+  });
+
+  /** Type into one of the form's fields, the way a keyboard does. */
+  function fill(name: string, value: string): void {
+    const field = byId<HTMLInputElement>(`connect-ssh-${name}`);
+    field.value = value;
+    field.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+
+  // **Counting the boxes was the thing that made no sense** (reported 2026-08-26): it is
+  // how much typing there is, not what there is to choose between, and it aped the variant
+  // count while meaning something else.
+  it('says nothing about the panel, and does not count the boxes', async () => {
+    await dialog.open();
+    announcer.announcements.length = 0;
+
+    byId('connect-kinds').dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }),
+    );
+
+    expect(announcer.announcements).toEqual([]);
+    expect(byId('connect-panel-title').textContent).toBe('Connection details');
+  });
+
+  it('offers a host, a port and an account, with the usual port filled in', async () => {
+    await dialog.open();
+    byId('connect-kinds').dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }),
+    );
+
+    expect(byId<HTMLInputElement>('connect-ssh-host').value).toBe('');
+    expect(byId<HTMLInputElement>('connect-ssh-port').value).toBe('22');
+    expect(byId<HTMLInputElement>('connect-ssh-user').value).toBe('');
+    // Labelled, because an unlabelled text box announces as "edit" and nothing else.
+    expect(document.querySelector('label[for="connect-ssh-host"]')?.textContent).toBe(
+      'Host',
+    );
+  });
+
+  it('connects to what was typed rather than to the empty row', async () => {
+    await dialog.open();
+    byId('connect-kinds').dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }),
+    );
+    fill('host', 'acter-ssh');
+    fill('port', '2222');
+    fill('user', 'acter');
+
+    expect(byId<HTMLButtonElement>('connect-start').disabled).toBe(false);
+    byId('connect-start').click();
+    await Promise.resolve();
+
+    expect(attempted).toEqual([
+      { profile: 'Ssh', host: 'acter-ssh', port: 2222, user: 'acter' },
+    ]);
+  });
+
+  /**
+   * **The button follows the form** — reported by the user on 2026-08-26: "why is the
+   * connect button ever enabled when information isn't complete?"
+   *
+   * A disabled button is itself the information: tabbing to it and hearing "unavailable"
+   * says the form is not finished, without committing to anything. The old shape told you
+   * only after a round trip you had to wait for. A8 decision 4 keeps the button live for a
+   * kind this machine cannot *start* — which is different, because nothing you do in the
+   * dialog changes that.
+   */
+  it('keeps Connect unavailable until there is something to connect to', async () => {
+    await dialog.open();
+    byId('connect-kinds').dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }),
+    );
+
+    expect(byId<HTMLButtonElement>('connect-start').disabled).toBe(true);
+
+    fill('host', 'acter-ssh');
+    expect(byId<HTMLButtonElement>('connect-start').disabled).toBe(true);
+
+    fill('user', 'acter');
+    expect(byId<HTMLButtonElement>('connect-start').disabled).toBe(false);
+  });
+
+  /**
+   * **Enter obeys the same condition as the button** — reported by the user on 2026-08-26:
+   * "if I press enter on ssh in the list (with all blank) I should hear nothing, but I
+   * listen the error message." Enter reached `chosen` directly and never consulted the
+   * button it was standing in for, so a disabled Connect was a lie told to whoever tabbed
+   * to it.
+   */
+  it('does nothing when Enter is pressed on an incomplete form', async () => {
+    await dialog.open();
+    byId('connect-kinds').dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }),
+    );
+
+    byId('connect-dialog').dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }),
+    );
+    await Promise.resolve();
+
+    expect(attempted).toEqual([]);
+  });
+
+  /** And Enter works once the form names something to connect to. */
+  it('connects on Enter once the form is complete', async () => {
+    await dialog.open();
+    byId('connect-kinds').dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }),
+    );
+    fill('host', 'acter-ssh');
+    fill('user', 'acter');
+
+    byId('connect-dialog').dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }),
+    );
+    await Promise.resolve();
+
+    expect(attempted).toEqual([
+      { profile: 'Ssh', host: 'acter-ssh', port: 22, user: 'acter' },
+    ]);
+  });
+
+  /** And moving off the form gives the button back, for a kind that needs no form. */
+  it('gives the button back on a kind that is startable as it stands', async () => {
+    await dialog.open();
+    byId('connect-kinds').dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }),
+    );
+    expect(byId<HTMLButtonElement>('connect-start').disabled).toBe(true);
+
+    byId('connect-kinds').dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true }),
+    );
+
+    expect(byId<HTMLButtonElement>('connect-start').disabled).toBe(false);
+  });
+});
+
+/**
+ * **Nothing in the dialog can be pressed while a connection is being made.**
+ *
+ * Reported by the user on 2026-08-26: after submitting a password they were left focused
+ * on the Connect button for the seconds the server took, and could press it again into the
+ * attempt already in flight. For somebody navigating by focus, sitting on a control called
+ * Connect *is* being told that connecting has not started.
+ */
+describe('while an attempt is running', () => {
+  /** A connect action that does not finish until the test lets it. */
+  function pending(): { attempts: number; finish: (worked: boolean) => void } {
+    return { attempts: 0, finish: () => {} };
+  }
+
+  it('disables its controls, and refuses a second attempt into the first', async () => {
+    const held = pending();
+    let release: (worked: boolean) => void = () => {};
+    dialog = new ConnectDialog(
+      byId<HTMLDialogElement>('connect-dialog'),
+      byId('connect-kinds'),
+      byId('connect-panel-title'),
+      byId('connect-panel-body'),
+      connect,
+      () => {
+        held.attempts += 1;
+        return new Promise<boolean>((resolve) => {
+          release = resolve;
+        });
+      },
+      announcer,
+      { focus: () => {} },
+    );
+    await dialog.open();
+
+    byId('connect-start').click();
+    await Promise.resolve();
+
+    expect(byId<HTMLButtonElement>('connect-start').disabled).toBe(true);
+    expect(byId<HTMLButtonElement>('connect-cancel').disabled).toBe(true);
+    expect(byId('connect-dialog').getAttribute('aria-busy')).toBe('true');
+
+    // A second press, of the kind a user makes when nothing seems to be happening.
+    byId('connect-start').click();
+    await Promise.resolve();
+    expect(held.attempts).toBe(1);
+
+    release(false);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(byId<HTMLButtonElement>('connect-start').disabled).toBe(false);
+  });
+
+  /**
+   * And a refusal puts focus back where another can be chosen — reported by the same
+   * pass, which was returned to the Cancel button. Decision 4 keeps this dialog open on
+   * failure precisely so somebody can choose again.
+   */
+  it('returns focus to the kind list when an attempt is refused', async () => {
+    succeeds = false;
+    await dialog.open();
+
+    byId('connect-start').click();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(document.activeElement?.id).toBe('connect-kinds');
   });
 });

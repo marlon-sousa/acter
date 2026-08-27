@@ -18,8 +18,11 @@ pub(crate) use session::*;
 mod tests {
     use std::sync::Arc;
 
+    use std::time::{Duration, Instant};
+
     use acter_core::{
-        CommandId, ConnectApi, Connectable, Connected, KeyAck, ProfileId, SessionApi, SubmitAck,
+        AttemptId, CommandId, ConnectApi, ConnectService, Connectable, Connected, KeyAck,
+        ProfileId, SessionApi, SubmitAck,
     };
     use serde_json::{Value, json};
     use tauri::ipc::{CallbackFn, InvokeBody};
@@ -44,21 +47,44 @@ mod tests {
     /// with nothing. Both are built inside the async runtime for the reason the container
     /// does the same: a session starts tasks.
     fn invoke_with(session: bool, cmd: &str, args: Value) -> Result<Value, Value> {
+        let mock = mock_app(session);
+        invoke_on(&mock, cmd, args)
+    }
+
+    /// A built app, its webview, and the connect service behind its state.
+    ///
+    /// **Held together, and the service held twice**, so a test can invoke more than once
+    /// against one window and then ask the service what became of it — which is what
+    /// connecting needs since B9, because the answer arrives behind the invoke rather than
+    /// in it.
+    struct Mock {
+        webview: tauri::WebviewWindow<tauri::test::MockRuntime>,
+        service: Arc<ConnectService>,
+        _app: tauri::App<tauri::test::MockRuntime>,
+    }
+
+    fn mock_app(session: bool) -> Mock {
         let runtime = tauri::async_runtime::handle();
-        let state = {
+        let service = {
             let _entered = runtime.inner().enter();
             let service = Arc::new(state());
             if session {
                 service
-                    .use_profile(&ProfileId::Scripted {
-                        name: BUILTIN.to_owned(),
-                    })
+                    .use_profile(
+                        &ProfileId::Scripted {
+                            name: BUILTIN.to_owned(),
+                        },
+                        &(Arc::new(acter_core::Unasked) as Arc<dyn acter_core::SshQuestions>),
+                    )
                     .expect("the built-in scripted session starts");
             }
-            AppState {
-                session: Arc::clone(&service) as Arc<dyn SessionApi>,
-                connect: service as Arc<dyn ConnectApi>,
-            }
+            service
+        };
+        let connect = Arc::clone(&service) as Arc<dyn ConnectApi>;
+        let state = AppState {
+            session: Arc::clone(&service) as Arc<dyn SessionApi>,
+            connecting: Arc::new(crate::controllers::Connecting::new(Arc::clone(&connect))),
+            connect,
         };
         let app = mock_builder()
             .manage(state)
@@ -68,6 +94,8 @@ mod tests {
                 super::send_key,
                 super::connectable,
                 super::use_profile,
+                super::answer_connect,
+                super::attempt_ended,
                 super::connected
             ])
             .build(mock_context(noop_assets()))
@@ -75,8 +103,16 @@ mod tests {
         let webview = WebviewWindowBuilder::new(&app, "main", Default::default())
             .build()
             .expect("failed to build the mock webview");
+        Mock {
+            webview,
+            service,
+            _app: app,
+        }
+    }
+
+    fn invoke_on(mock: &Mock, cmd: &str, args: Value) -> Result<Value, Value> {
         get_ipc_response(
-            &webview,
+            &mock.webview,
             InvokeRequest {
                 cmd: cmd.into(),
                 callback: CallbackFn(0),
@@ -200,39 +236,60 @@ mod tests {
         );
     }
 
-    /// **Connecting, end to end through the IPC pipeline**: the profile is deserialized from
-    /// the shape the frontend sends, a session is started, and the id it answers with is the
-    /// one a submitted line then has to carry.
+    /// **Connecting, end to end through the IPC pipeline**: the profile and the channel are
+    /// deserialized from the shape the frontend sends, and an attempt id comes back at once.
+    ///
+    /// **It answers with an id rather than a session, and that is the change B9 made.**
+    /// Connecting can stop partway to ask a person something, so the invoke cannot be the
+    /// thing that answers — the session arrives later, as a step. What this asserts is that
+    /// the invoke returns immediately and that the work really did start behind it.
     #[test]
-    fn use_profile_starts_a_session_and_answers_the_id_that_reaches_it() {
-        let out = invoke_unconnected(
-            "use_profile",
-            json!({ "profile": { "profile": "Scripted", "name": BUILTIN } }),
-        )
-        .expect("the built-in scripted session starts");
-        let connected: Connected =
-            serde_json::from_value(out).expect("response should be a Connected");
+    fn use_profile_answers_an_attempt_id_and_starts_the_work_behind_it() {
+        let mock = mock_app(false);
 
+        let out = invoke_on(
+            &mock,
+            "use_profile",
+            json!({
+                "profile": { "profile": "Scripted", "name": BUILTIN },
+                "steps": "__CHANNEL__:1",
+            }),
+        )
+        .expect("the attempt starts");
+
+        let attempt: AttemptId = serde_json::from_value(out).expect("an attempt id comes back");
+        assert_eq!(attempt.0, 1, "the first attempt of this window");
+
+        // The session appears behind the invoke rather than in it, so this waits for it.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let connected = loop {
+            if let Some(connected) = mock.service.connected() {
+                break connected;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the scripted session never started"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        };
         assert_eq!(connected.label, "Scripted: builtin");
         assert_eq!(connected.session.0, 1, "the first session of this window");
     }
 
-    /// A profile that cannot be started comes back as a *rejected promise carrying a
-    /// sentence*, which is what the frontend says out loud. Not a panic, and not an empty
-    /// error a listener would meet as silence.
+    /// An answer for an attempt nobody is running is ignored rather than rejected: it is the
+    /// ordinary consequence of a dialog abandoned or a window reloaded, and the invoke still
+    /// has to return normally.
     #[test]
-    fn a_profile_that_cannot_be_started_rejects_with_a_speakable_sentence() {
-        let err = invoke(
-            "use_profile",
-            json!({ "profile": { "profile": "Scripted", "name": "no-such-transcript.json" } }),
-        )
-        .expect_err("there is no such transcript");
-        let said = err.as_str().expect("the rejection is a sentence");
+    fn an_answer_for_an_attempt_that_is_not_running_is_ignored() {
+        let mock = mock_app(false);
 
-        assert!(said.ends_with('.'), "a spoken message ends: {said}");
-        assert!(
-            said.split_whitespace().count() >= 5,
-            "a spoken message says what happened, not a label: {said}"
-        );
+        invoke_on(
+            &mock,
+            "answer_connect",
+            json!({ "attempt": 99, "answer": { "answer": "Trust" } }),
+        )
+        .expect("answering something stale is not an error");
+        invoke_on(&mock, "attempt_ended", json!({ "attempt": 99 }))
+            .expect("ending something stale is not an error");
     }
 }

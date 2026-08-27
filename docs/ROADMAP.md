@@ -2295,6 +2295,54 @@ thing to pick up once the adapters land, not merely the next number.
     spinner in words**: a listener needs to know that waiting is correct, and to be told when
     waiting stopped being correct.
 
+23.8. WSL assumes the far end is bash, and never checks. Spec: none yet → specify first.
+    **Found in conversation 2026-08-26**, while deciding how SSH would recognise a shell it
+    did not name. WSL has the same shape and it had gone unnoticed.
+
+    **What is assumed.** `wsl.exe` is a client, not a shell: what it starts is whatever login
+    shell that distribution's account is configured with, from the distribution's own passwd.
+    `Wsl` injects bash's `PROMPT_COMMAND` regardless. An account using zsh, fish or anything
+    else gets an injection its shell never reads.
+
+    **What a listener meets when that happens.** Nothing, for a while. The session looks
+    exactly like an integrated one — it simply never emits a marker — so the only thing that
+    ever says otherwise is the pacing policy's grace period expiring into a generic
+    `IntegrationUnavailable`. The user is told late, and told nothing about why.
+
+    **The fix is to ask, and asking is cheap here** — cheaper than over SSH, which is where
+    this was worked out (spec B9, decision 7). No channel and no protocol: another `wsl.exe`
+    invocation with its output captured, which cannot reach the terminal buffer because it is
+    not the session. `InstalledShells` already shells out to `wsl.exe -l -q` and is the port
+    this belongs on: "which shell does this distribution's account use" is the same kind of
+    question about the same machine.
+
+    **Then match, and fall back honestly** — which is the behaviour the code already has, once
+    it is given a name. `adapter_for` returns `Plain` for anything it does not recognise, and
+    `Plain` is exactly "start it as it stands, inject nothing, claim nothing". So the rule is
+    three states, and they are three different sentences:
+
+    - a shell that has been **measured** (bash) is integrated as it is today;
+    - a shell that is **known of but unmeasured** (zsh, fish) is unintegrated and *named*, so
+      a listener hears "zsh, which Acter does not integrate yet" rather than a timeout;
+    - a shell that is **unrecognised, or a probe that failed**, is unintegrated and says so
+      without a name.
+
+    **The identity may be guessed from the name; the injection may never be.** B5.3's bash
+    program cost real measurement — a `DEBUG` trap cannot remove itself from inside a
+    function, and a trap armed inside one fires for the statements after it — and the version
+    built on the wrong assumption emitted four `C` markers per command. So knowing a far end
+    is zsh licenses saying so, and licenses nothing else until a zsh injection has been
+    measured the same way. That is a later entry, not this one.
+
+    **Advisory, and never a gate**, for 23.7's reason: a probe that fails or hangs must cost a
+    listener nothing, because it sits in the seconds before there is a prompt, which is
+    already the worst place in the product to add work.
+
+    This narrows a **Decided** item rather than overturning it. B5.3, decision 3 says a
+    session whose `PROMPT_COMMAND` is clobbered by the user's own `.bashrc` degrades quietly,
+    and that stays true — clobbering is a different question and is not what this probe
+    answers. What changes is the assumption sitting beside it, which was never written down:
+    that the login shell is bash at all.
 
 24. **Done** — B6.1, correlation that cannot drift. Spec:
     [b6.1-correlation-that-cannot-drift.md](specs/b6.1-correlation-that-cannot-drift.md).
@@ -2414,6 +2462,202 @@ thing to pick up once the adapters land, not merely the next number.
     name that resolves to nothing opens the window unconnected and *says* what was wrong
     with it. There is no `create` on the command line: profiles are files, and creating one
     from a shell whose output nobody can see is not a workflow this audience needs.
+
+27. **Done** — B9, SSH: a far end that is not on this machine. Spec:
+    [b9-ssh.md](specs/b9-ssh.md) — agreed 2026-08-26, implemented in four PRs (below). The five
+    questions it was drafted with are decided in the spec: one host and password
+    authentication in scope, `known_hosts` read but never written, a passphrase held in
+    memory for the life of the process, and — decided against the draft's own
+    recommendation, after measuring — **an SSH session is unintegrated**.
+
+    **The first transport that has to conduct a conversation before there is a session.**
+    Every far end so far could report failure as one speakable sentence; SSH asks the *user*
+    questions first — an unknown host key, a password, a key passphrase, an agent that may
+    not be running — and each of them has to be a real, labelled, screen-reader-driveable
+    dialog rather than text scraped out of a byte stream.
+
+    That is why it is a library rather than `ssh.exe`, which DESIGN already decided and this
+    spec gives the accessibility reason for: with `russh` a host-key check is a callback and
+    a password is a method call, so Acter *knows* a question was asked. With `ssh.exe` it
+    would be matching localised, version-dependent English in a terminal stream, and a blind
+    user's ability to answer would rest on that match.
+
+    Two things it inherits rather than invents: bash-over-SSH is the bash adapter 23.3
+    already measured, and `Transport` already models `interrupt` and `resize` as methods
+    rather than bytes — which is evidence the seam was cut in the right place, since over
+    SSH both are protocol messages.
+
+    **What it deliberately does not inherit is shell integration.** Measured against the
+    rig in `docker/ssh/`: `PROMPT_COMMAND` sent with `SendEnv` arrives empty, because
+    OpenSSH's stock `AcceptEnv` accepts `LANG` and `LC_*` and nothing else, and a server
+    belonging to somebody else has not been configured for us. So the session is
+    unintegrated and *says so* — no blocks, no exit codes, no autoread, everything else
+    intact. VS Code, WezTerm and iTerm2 all ship exactly this; only kitty automates it, and
+    it does so by shipping a tarball over the TTY.
+
+    **What it does still learn is what the far end is** (decision 7): a channel of its own,
+    an `exec` request, and `$SHELL` — never a line typed into the session, where a command
+    nobody typed would be read aloud. It runs in the window between authentication and the
+    session channel, because SSH authenticates at the protocol level before any shell
+    exists — so the answer is in hand before `SessionService::start` needs its `ShellFacts`,
+    and before there is anything to announce, which makes the connection one whole sentence
+    instead of a second utterance interrupting the first. That does not make the session integrated, since
+    knowing it is bash does not make bash emit markers. It buys a sentence with a subject
+    ("bash, with no shell integration set up on this host" rather than a bare "unavailable")
+    and a correct end-of-input, which is the one shell fact that survives without markers
+    and the difference between a session that can be ended properly and one that answers
+    "Acter does not know how".
+
+    **Delivered in four PRs, in this order** — agreed 2026-08-26. B9 is one spec and one
+    entry, but it is a transport, a conversation, two dialogs and a connect-list kind, and
+    one PR carrying all of it would put the accessibility checklist and three thousand lines
+    of code in the same body. The entry flips to Done when the last of them lands.
+
+    1. **The transport, and what it knows about host keys.** `SshTransport` behind the
+       existing `Transport` port, `KnownHosts` reading the user's file and writing only
+       Acter's own, and the two questions as a driven port so the transport is measured
+       against the real rig with no window anywhere near it. Rig suite in
+       `crates/acter-transports/tests/ssh_rig.rs`, `#[ignore]`d like the local-shell ones.
+    2. **The far end says what it is** (decision 7): the probe on a channel of its own, with
+       its deadline, and the `ShellFacts` it produces.
+    3. **Connecting is a conversation**: the steps a connection reports, the answers coming
+       back as their own invokes, and the domain state machine behind them. Tauri offers no
+       way for the backend to ask the frontend anything and wait — events and channels are
+       one-way — and a sync `#[tauri::command]` runs on the main thread, so an invoke that
+       blocked on a dialog would deadlock the very answer it was waiting for. The steps go
+       out on a `Channel`, which is what `attach_session` already does.
+    4. **SSH is a kind you can choose**: the kind and the profile, the form in A8's panel,
+       the host-key and password dialogs, the factory wiring, the one-sentence connection
+       announcement — and the accessibility checklist, driven against all three host-key
+       states.
+
+27.2. A connection that waits for a person can be hung up on while it waits. Spec: none yet
+    → specify first. **Found in B9's accessibility pass, 2026-08-26**, driving the real
+    application with NVDA 2026.1.1.
+
+    An unauthenticated SSH connection has a deadline — OpenSSH's `LoginGraceTime`, **two
+    minutes** by default — and it is running while Acter is asking the *user* questions.
+    Reading a forty-character fingerprint character by character, meeting a wrong password
+    and typing another one took 140 seconds in the pass, and the server had already gone.
+    **The population most likely to exceed the deadline is precisely the one this product is
+    for**, because reading a fingerprint by ear is supposed to be slow.
+
+    B9 fixed the *sentence*: what a listener now hears is "The server at 127.0.0.1 closed the
+    connection before signing in finished. Servers usually allow about two minutes to sign
+    in, and that time ran out. Connect again, and have the password ready", where it used to
+    be russh's own words, "Channel send error." That is honest and actionable, and it is not
+    a fix for the problem.
+
+    What this entry has to decide is what Acter should *do*. Three candidates, none free:
+    keep the questions ahead of the clock by asking everything before opening the connection
+    — which trades the deadline for asking a password that may not be needed; retry the
+    whole connection automatically with the answers already in hand, which is invisible and
+    has to be said out loud if it happens; or accept the limit and warn *before* it expires,
+    which is a timer the user did not ask for. It also wants measuring against a server that
+    is not the rig, since `LoginGraceTime` is configuration and 120 seconds is only the
+    default.
+
+27.3. Reopening the Connect dialog re-reads the last thing the previous attempt said. Spec:
+    none yet → specify first. **Found in B9's accessibility pass, 2026-08-26.** The dialog
+    carries its own live region (A8's fix for `showModal` making the document's announcer
+    inert), and the text of the last announcement is still in it when the dialog is opened
+    again — so a reader announces "Connect dialog. Opening a shell." on a dialog that is
+    opening rather than connecting. Cosmetic, and misleading in exactly the way A8 decision 2
+    is about: it describes something that is not happening.
+
+27.4. **The first prompt never reaches the frontend at all.** Spec: none yet → specify
+    first. Reported by the user on 2026-08-26 — "on connection, I heard no prompt" — and
+    **measured on 2026-08-27**, which changed what this entry is about.
+
+    The first answer given was that an unintegrated session is silent by design. The user
+    rejected it and was right: cmd is unintegrated for *output* and its prompt is still
+    heard, so "unintegrated" does not mean silent anywhere else in this product. The
+    measurement is in `ssh_rig.rs`, `what_a_session_says_when_it_has_just_connected`, which
+    builds the whole pipeline the window has — transport, real engine, real pacing policy,
+    the shell facts an SSH far end actually gets — and records every `SessionEvent` the
+    frontend would have received.
+
+    In six seconds after connecting, the frontend received **two events and no output at
+    all**:
+
+    - `ConnectionChanged { state: Connected }`
+    - `IntegrationUnavailable`
+
+    The far end had drawn its prompt by then — the same rig shows `acter@acter-ssh:~$`
+    arriving as soon as any command is submitted. So this is not a policy declining to
+    *announce* the prompt: **the bytes never leave the session**, so they never reach the
+    buffer either, and there is nothing there to review. The user's framing was the correct
+    one and the earlier write-up in this entry had the premise wrong.
+
+    What to look at: output arriving *before anything has been submitted* has no block to
+    belong to and no echo to explain it, and the pending-row machinery B4.9 and B4.10 built
+    holds it. An integrated shell never meets this because its prompt arrives as
+    `PromptDrawn` (B5.6); an unintegrated one has no such event. The fix is in
+    `SessionService`'s pump and it is delicate — that machinery took two entries to get
+    right — which is why this is its own entry rather than a patch at the end of B9.
+
+27.5. **Done** — the status region says the whole sentence, and the announcement is that
+    same string, from one function. Fixed in B9's PR and measured with NVDA 2026.1.1 on
+    2026-08-27: the region reads back exactly what was announced, once. A9 decision 2 is
+    reversed in its own spec, with the reason. **Reported by the user, 2026-08-26**: they took "connected to SSH: acter
+    at 127.0.0.1, port 2222, bash, with no shell integration set up on this host" to be the
+    status region being read, and found the region itself says only "connected".
+
+    A9 decided those three words deliberately, and they are right for a region that is read
+    on demand rather than announced. What B9 changed underneath that decision is that there
+    is now something worth saying which is *not* in the window title either — that this
+    session has no shell integration. So a user who comes back to the window an hour later
+    can find out **what** they are connected to (the title says so) but not **what kind of
+    session it is**. Whether the region grows, or whether that belongs somewhere else
+    entirely, is what this entry decides.
+
+27.1. B9.5, offer to integrate the far end. Spec: none yet → specify when 27 is Done.
+
+    A button that writes the integration snippet into the remote account's shell startup,
+    with consent, so the *next* connection to that host has blocks and exit codes — the
+    bargain iTerm2 and VS Code document, made reachable instead of written down. Three
+    things it has to answer, none of them small: which file it writes and what it does
+    about a shell that is not bash; whether OSC 133 markers actually cross the connection
+    (expected, unmeasured); and how consent to modify somebody's remote account is asked
+    for in a way a listener can hear fully and refuse easily. That last one is why this is
+    its own entry rather than a corner of 27.
+
+    **Recognising the shell is the far end's job, and it happens once, at install.** No
+    terminal identifies a shell it did not name — kitty matches a basename, VS Code injects
+    per configured profile, WezTerm ships `assume_shell` because it cannot tell, and Windows
+    Terminal does not inject at all. Acter has the same limit and it bites hardest here: a
+    `shell` request lets *sshd* choose the program, from the account's passwd entry, so the
+    one thing we never learn from asking for a session is which shell we got.
+
+    Install time dissolves that rather than solving it. A snippet in `~/.zshrc` runs only
+    when zsh starts, so **the file written is the identification** — the shell answers by
+    being itself and nothing guesses. It is also the only point where the answer can be put
+    to the user as a sentence they can refuse: "this account's login shell is zsh; write the
+    snippet to ~/.zshrc?" is a dialog, where a runtime heuristic is invisible and wrong
+    silently.
+
+    **The probe this needs is already in 27.** Spec B9, decision 7 asks the far end what it
+    is on a channel of its own, soon after connecting, so this entry inherits the answer
+    rather than asking again — and inherits the same probe noticing a snippet that is
+    *already* installed, whether Acter put it there or the user's own iTerm2 or VS Code
+    setup did.
+
+    **Login versus non-login is the trap, and it was measured on the rig 2026-08-26.** A
+    `shell` request starts a *login* shell — `$0` comes back as `-bash` — so bash reads
+    `/etc/profile` and then the first that exists of `~/.bash_profile`, `~/.bash_login`,
+    `~/.profile`, and does **not** read `~/.bashrc`. On Debian `~/.bashrc` runs only because
+    `~/.profile` sources it, and Debian's own `~/.profile` warns in a comment that it is
+    skipped entirely when a `~/.bash_profile` exists. Measured both ways: with a
+    `~/.bash_profile` present a marker at the end of `~/.bashrc` never printed; with it
+    removed and nothing else changed, it did.
+
+    **The reason this is the trap and not merely a detail**: the session looked normal
+    either way. A prompt was still drawn while `~/.bashrc` was skipped, because
+    `/etc/profile` sources `/etc/bash.bashrc`, which sets a `PS1` of its own. The only
+    visible difference was that the prompt lost its colour — and colour is not spoken. So a
+    snippet in the wrong file passes every local test, never runs over SSH, and gives a
+    listener no signal whatsoever. This entry writes to the file bash will actually read and
+    then **verifies the marker comes back**, rather than trusting the write.
 
 ## Convergence (requires B4, B5 and B6 all Done)
 

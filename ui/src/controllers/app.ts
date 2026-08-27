@@ -18,6 +18,8 @@ import type { BackendApi } from '../ports/backend_api';
 import type { BeepView } from '../ports/beep_view';
 import type { BufferView } from '../ports/buffer_view';
 import type { ConnectApi } from '../ports/connect_api';
+import type { MessageView } from '../ports/message_view';
+import type { QuestionView } from '../ports/question_view';
 import type { WindowView } from '../ports/window_view';
 import type { EditFieldView } from '../ports/edit_field_view';
 
@@ -70,8 +72,29 @@ export const nothingToStopMessage = 'nothing running to stop';
 // seconds to start used to say nothing at all, and a listener cannot tell a slow start from
 // a broken one (roadmap 23.7).
 export const connectingStatus = 'connecting';
-export const connectedStatus = 'connected';
 export const disconnectedStatus = 'not connected';
+
+/**
+ * What this window is connected to, as **one string held in one place**.
+ *
+ * **A9 decision 2's three words are reversed here, 2026-08-27**, and the reason is the
+ * user's: "no two truth places." The status region said "connected" while the connection
+ * was announced as "connected to SSH: acter at 127.0.0.1, port 2222, bash, with no shell
+ * integration set up on this host" — two descriptions of one fact, only one of which
+ * survived being spoken once. Somebody who came back to the window an hour later could
+ * find out *what* they were connected to from the title, and nothing at all about what
+ * kind of session it was.
+ *
+ * So the region carries the whole sentence and the announcement *is* that string. There is
+ * nothing to keep in step, because there is only one of it.
+ *
+ * A9's reasoning for a short label still holds for the two states with nothing to add:
+ * "connecting" and "not connected" say everything there is.
+ */
+export function connectedStatus(label: string, note?: string | null): string {
+  const said = `connected to ${label}`;
+  return note === undefined || note === null ? said : `${said}, ${note}`;
+}
 
 // The two strings the unconnected window needs (spec B7, decision 3).
 //
@@ -86,8 +109,14 @@ export const disconnectedStatus = 'not connected';
 export const notConnectedMessage = 'not connected. Choose Connect to start a shell';
 // And what a listener hears when one starts, which is the connect list's own label — so
 // what they chose and what the window now calls itself are the same words (spec A9).
-export function connectedMessage(label: string): string {
-  return `connected to ${label}`;
+//
+// **One sentence rather than two, since B9** (decision 7). A far end that has something more
+// to say about itself says it here, in the same utterance: "connected to SSH: acter at
+// acter-ssh, bash, with no shell integration set up on this host". The alternative was the
+// name arriving now and the integration state arriving a second or two later, interrupting
+// whatever was being said — an asynchronous fact speaking over the thing it describes.
+export function connectedMessage(label: string, note?: string | null): string {
+  return connectedStatus(label, note);
 }
 
 // Unreachable while Ctrl+C is both the only key reported and the only key bound. It is
@@ -132,12 +161,27 @@ export class AppController {
   // Commands whose heading came from the shell's own echo, so the optimistic heading
   // from a submit ack never overwrites it (spec B6.1, decision 1).
   private readonly echoed = new Set<CommandId>();
+  // Whether the connection announcement already said this session has no shell
+  // integration, so the session's own announcement of it is not said a second time.
+  //
+  // **The two say the same thing and only one of them can name the far end** (spec B9,
+  // decision 7). `IntegrationUnavailable` arrives when the startup grace period expires with
+  // no markers, which for an SSH session is always — and by then the connection has already
+  // said "bash, with no shell integration set up on this host", which is the same fact with
+  // a subject. Hearing it twice teaches a listener that Acter repeats itself.
+  //
+  // Reset per connection rather than latched, so a later session that is unintegrated for
+  // its own reasons still says so.
+  private noteSaidIntegrationIsMissing = false;
   // Which session every invoke names, or null for a window connected to nothing.
   //
   // Held here rather than as a constant in the router since B7: a window can be connected
   // to one far end and then another, and a line submitted a moment before that happened
   // must not run in the new one.
   private session: SessionId | null = null;
+  // What this window is connected to, kept so the status region can restate it without a
+  // second, shorter description of the same fact being invented somewhere else.
+  private connection: Connected | null = null;
 
   constructor(
     private readonly backend: BackendApi,
@@ -147,6 +191,15 @@ export class AppController {
     private readonly announcer: AnnouncerView,
     private readonly beep: BeepView,
     private readonly window: WindowView,
+    // **Optional, and its absence is an answer rather than a gap** (spec B9, decision 3):
+    // a window with nothing that can ask a person refuses a host key rather than trusting
+    // one because nobody was there to object. Every far end except SSH asks nothing, so
+    // this is only supplied where the dialogs are.
+    private readonly questions?: QuestionView,
+    // **A failure is acknowledged, not announced** (reported 2026-08-26). Optional for the
+    // same reason `questions` is: a caller without one still gets the sentence, said the
+    // old way, rather than losing it.
+    private readonly failure?: MessageView,
   ) {}
 
   /**
@@ -179,16 +232,30 @@ export class AppController {
   async connectTo(id: ProfileId): Promise<boolean> {
     let connected: Connected;
     try {
-      connected = await this.connect.use(id);
+      connected = await this.connect.use(id, {
+        // **Said while it happens, because a listener with no feedback cannot tell a slow
+        // network from a dead one** (spec B9, decision 6). These are the backend's own
+        // sentences: only it knows which stage a connection has reached.
+        onProgress: (said) => this.announcer.announce(said),
+        onQuestion: (question) =>
+          this.questions === undefined
+            ? Promise.resolve({ answer: 'GiveUp' as const })
+            : this.questions.ask(question),
+      });
     } catch (why) {
       // The sentence is the backend's, because only the backend knows what went wrong.
       // Every other announced string in this file is pinned here; this one is the
       // exception and the reason is that a pinned string could only say "it failed".
-      this.announcer.announce(reason(why));
+      const said = reason(why);
+      if (this.failure === undefined) {
+        this.announcer.announce(said);
+      } else {
+        await this.failure.show(said);
+      }
       return false;
     }
     await this.show(connected);
-    this.announcer.announce(connectedMessage(connected.label));
+    this.announcer.announce(connectedMessage(connected.label, connected.note));
     return true;
   }
 
@@ -201,6 +268,10 @@ export class AppController {
    * a session that never happened.
    */
   private async show(connected: Connected | null): Promise<void> {
+    // Set here rather than beside the announcement, because a launch that brought a session
+    // reaches this without going through `connectTo` at all.
+    this.noteSaidIntegrationIsMissing =
+      connected?.note?.includes('shell integration') ?? false;
     this.buffer.clear();
     this.openBlocks.clear();
     this.tooBig.clear();
@@ -212,15 +283,19 @@ export class AppController {
     this.window.showTerminal(connected !== null);
 
     if (connected === null) {
+      this.connection = null;
       this.window.connectedTo(null);
       this.window.status(disconnectedStatus);
       this.announcer.announce(notConnectedMessage);
       return;
     }
     this.window.connectedTo(connected.label);
-    // The status is left to `ConnectionChanged`, which the session emits and holds until
-    // this attach collects it — so "connecting" and "connected" have one producer rather
-    // than two that could disagree about which one this window is in.
+    // **The region carries the whole sentence, and the announcement is that same string.**
+    // `ConnectionChanged` still owns the *transitional* states, which are the session's to
+    // report; what it cannot know is the far end's name or what was learned about it while
+    // connecting, so the connection itself is what says this.
+    this.connection = connected;
+    this.window.status(connectedStatus(connected.label, connected.note));
     await this.backend.attachSession(connected.session, (event) => {
       this.handleEvent(event);
     });
@@ -361,7 +436,14 @@ export class AppController {
       case 'IntegrationUnavailable':
         // Session-scoped, like the alt-screen pair: it carries no command id because it
         // fires before any command exists.
-        this.announcer.announce(integrationUnavailableMessage);
+        //
+        // **Said once per session, and not at all when the connection already said it.**
+        // For an SSH far end this event is certain rather than diagnostic — the session is
+        // unintegrated by construction (spec B9, decision 2) — and the connection announced
+        // it with the far end's name attached, which is strictly more use.
+        if (!this.noteSaidIntegrationIsMissing) {
+          this.announcer.announce(integrationUnavailableMessage);
+        }
         break;
       case 'AltScreenEntered':
         this.announcer.announce(altScreenEnteredMessage);
@@ -404,7 +486,13 @@ export class AppController {
         this.window.status(connectingStatus);
         break;
       case 'Connected':
-        this.window.status(connectedStatus);
+        // The same sentence the connection produced, not a shorter one that would make the
+        // region disagree with what was said a moment ago.
+        if (this.connection !== null) {
+          this.window.status(
+            connectedStatus(this.connection.label, this.connection.note),
+          );
+        }
         break;
       case 'Reconnecting':
         // No producer yet: a transport that can reconnect is SSH's (spec A9, decision 5).
@@ -413,6 +501,7 @@ export class AppController {
       case 'Disconnected':
         this.window.status(disconnectedStatus);
         // Nothing is behind the window any more, so it stops claiming to be anything.
+        this.connection = null;
         this.window.connectedTo(null);
         // **The buffer stays and the edit field goes** (spec A10). What is left is the
         // record of a session that ended, which a user who typed `exit` by accident must

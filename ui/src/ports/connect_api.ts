@@ -11,7 +11,34 @@
 // drive a menu end to end, so the menu became the thinnest possible caller of something
 // that can be driven.
 
-import type { Connectable, Connected, ProfileId } from '../protocol';
+import type {
+  ConnectAnswer,
+  ConnectQuestion,
+  Connectable,
+  Connected,
+  ProfileId,
+} from '../protocol';
+
+/**
+ * What a caller wants to hear about while a connection is being made.
+ *
+ * **Both are optional, and a caller that supplies neither still connects** — to anything
+ * that does not ask questions, which is every far end except SSH. One that does ask and
+ * finds nobody listening is told nobody answered, which the backend reads as a refusal
+ * (spec B9, decision 3): Acter never trusts a host key because there was no one to object.
+ */
+export interface ConnectListener {
+  /**
+   * A question that has to be answered before connecting can go on: a host key to trust or
+   * refuse, a password to give. Resolving with an answer lets the connection continue.
+   */
+  onQuestion?(question: ConnectQuestion): Promise<ConnectAnswer>;
+  /**
+   * Something worth saying while it happens. A listener with no feedback cannot tell a slow
+   * network from a dead one (spec B9, decision 6).
+   */
+  onProgress?(said: string): void;
+}
 
 export interface ConnectApi {
   /**
@@ -27,7 +54,7 @@ export interface ConnectApi {
    * that was running is untouched — still running, still attached. The caller says the
    * sentence and carries on.
    */
-  use(id: ProfileId): Promise<Connected>;
+  use(id: ProfileId, listener?: ConnectListener): Promise<Connected>;
   /** Which far end this window is on, or `null` for a window connected to nothing. */
   connected(): Promise<Connected | null>;
 }

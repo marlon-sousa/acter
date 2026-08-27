@@ -54,6 +54,23 @@ never interrupts output being read.
 **And it is a real element in the document**, so it can be reviewed at any time with ordinary
 reading commands. A listener who missed the announcement can go and read it.
 
+**Reversed on use, 2026-08-27 — the region says the whole sentence.** Reported by the user
+driving B9's SSH connection: "no two truth places." The region said "connected" while the
+connection was announced as "connected to SSH: acter at 127.0.0.1, port 2222, bash, with no
+shell integration set up on this host" — two descriptions of one fact, only one of which
+survived being spoken once. Somebody returning to the window an hour later could learn
+*what* they were connected to from the title and nothing at all about what kind of session
+it was: with B9 there is now something worth saying that the title does not carry.
+
+So the region carries the full sentence and **the announcement is that same string**, taken
+from one function. There is nothing to keep in step because there is only one of it. The two
+states with nothing to add keep their short labels, which is what this decision got right:
+"connecting" and "not connected" say everything there is.
+
+Measured with NVDA 2026.1.1 on 2026-08-27: the region reads back exactly what was announced,
+and it is announced once — `role="status"` does not add a second utterance, because the
+change happens while the modal connect dialog still has the reader's attention.
+
 ### 3. `Connecting` becomes a state the domain can report
 
 `ConnectionState` today is `Connected`, `Reconnecting`, `Disconnected` — written for a

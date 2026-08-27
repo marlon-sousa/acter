@@ -34,9 +34,13 @@ use std::sync::{Arc, Mutex};
 
 use crate::{
     ConnectApi, Connectable, Connected, Connection, ConnectionKind, EventSink, InstalledShells,
-    KeyAck, KeyPress, ProfileId, SessionApi, SessionFactory, SessionId, SubmitAck, Variant,
-    catalogue,
+    KeyAck, KeyPress, ProfileId, SessionApi, SessionFactory, SessionId, SshQuestions, Started,
+    SubmitAck, Variant, catalogue,
 };
+
+/// The port every SSH server listens on unless somebody moved it, which is what the form
+/// starts filled in with.
+const DEFAULT_SSH_PORT: u16 = 22;
 
 /// The one session, and everything needed to replace it.
 pub struct ConnectService {
@@ -60,6 +64,9 @@ pub struct ConnectService {
 struct Live {
     id: SessionId,
     label: String,
+    /// What was said about this far end at connection, kept so a window asking what it is
+    /// connected to gets the same answer it was given when it connected.
+    note: Option<String>,
     session: Arc<dyn SessionApi>,
 }
 
@@ -133,6 +140,19 @@ impl ConnectService {
                     Ok(())
                 } else {
                     Err(kind.instructions().to_owned())
+                }
+            }
+            // **Nothing on this machine to check** — Acter speaks SSH itself — so the only
+            // thing that can be wrong here is the form. An empty host is refused with a
+            // sentence rather than handed to the transport, which would answer with a
+            // network error about a name nobody typed.
+            ProfileId::Ssh { host, user, .. } => {
+                if host.trim().is_empty() {
+                    Err("Acter needs the name or address of the machine to connect to.".to_owned())
+                } else if user.trim().is_empty() {
+                    Err("Acter needs the name of the account to sign in as.".to_owned())
+                } else {
+                    Ok(())
                 }
             }
             // A program named directly is not in the catalogue and has no instructions to
@@ -257,12 +277,33 @@ impl ConnectApi for ConnectService {
                 .editions()
                 .iter()
                 .any(|edition| self.machine.is_available(edition.program())),
+            // **Never asked of the machine, because it is not on the machine.** Acter
+            // speaks SSH itself (spec B9, decision 1), so there is no executable to look
+            // for — and looking for one found nothing and offered every user
+            // "SSH (not available)", which is the opposite of true.
+            ConnectionKind::Ssh => true,
             other => self.machine.is_available(other.program()),
         })
         .iter()
         .map(|row| match row.kind {
             ConnectionKind::Wsl => self.wsl_row(row),
             ConnectionKind::PowerShell => self.powershell_row(row),
+            ConnectionKind::Ssh => Connectable {
+                // **The row itself connects to nothing**, and that is the difference
+                // between a kind you choose and a kind you fill in: what to connect to is
+                // four fields in the panel, and the dialog builds the profile from them
+                // (spec A8, decision 1). An empty one arriving here is refused with a
+                // sentence rather than dialled.
+                id: ProfileId::Ssh {
+                    host: String::new(),
+                    port: DEFAULT_SSH_PORT,
+                    user: String::new(),
+                },
+                label: row.label.clone(),
+                available: true,
+                instructions: None,
+                variants: Vec::new(),
+            },
             kind => Connectable {
                 id: ProfileId::Shell { kind },
                 label: row.label.clone(),
@@ -297,9 +338,13 @@ impl ConnectApi for ConnectService {
     /// transport it owns is dropped with it — which for a local one kills the process. It
     /// happens *outside* the lock, so a shell taking its time to die does not hold up a
     /// window that is already on the next session.
-    fn use_profile(&self, id: &ProfileId) -> Result<Connected, String> {
+    fn use_profile(
+        &self,
+        id: &ProfileId,
+        questions: &Arc<dyn SshQuestions>,
+    ) -> Result<Connected, String> {
         self.startable(id)?;
-        let session = self.factory.open(id)?;
+        let Started { session, note } = self.factory.open(id, questions)?;
 
         let label = id.label();
         let next = SessionId(self.next.fetch_add(1, Ordering::SeqCst));
@@ -308,6 +353,7 @@ impl ConnectApi for ConnectService {
             current.replace(Live {
                 id: next,
                 label: label.clone(),
+                note: note.clone(),
                 session,
             })
         };
@@ -316,6 +362,7 @@ impl ConnectApi for ConnectService {
         Ok(Connected {
             session: next,
             label,
+            note,
         })
     }
 
@@ -324,6 +371,7 @@ impl ConnectApi for ConnectService {
         current.as_ref().map(|live| Connected {
             session: live.id,
             label: live.label.clone(),
+            note: live.note.clone(),
         })
     }
 }
@@ -367,11 +415,18 @@ impl SessionApi for ConnectService {
 
 #[cfg(test)]
 mod tests {
+    use crate::Unasked;
+
     use std::sync::atomic::AtomicUsize;
 
     use crate::{CommandId, NoDistributions, SessionEvent};
 
     use super::*;
+
+    /// Nobody to ask, for every test here whose subject is not the asking.
+    fn unasked() -> Arc<dyn SshQuestions> {
+        Arc::new(Unasked)
+    }
 
     /// A session that runs nothing and records that it existed.
     ///
@@ -441,7 +496,11 @@ mod tests {
     }
 
     impl SessionFactory for FakeFactory {
-        fn open(&self, profile: &ProfileId) -> Result<Arc<dyn SessionApi>, String> {
+        fn open(
+            &self,
+            profile: &ProfileId,
+            _questions: &Arc<dyn SshQuestions>,
+        ) -> Result<Started, String> {
             if let Some((refused, why)) = self.refuses.lock().unwrap().as_ref()
                 && refused == profile
             {
@@ -450,7 +509,10 @@ mod tests {
             self.opened.lock().unwrap().push(profile.clone());
             let session = FakeSession::new(&self.alive);
             *self.last.lock().unwrap() = Some(Arc::clone(&session));
-            Ok(session as Arc<dyn SessionApi>)
+            Ok(Started {
+                session: session as Arc<dyn SessionApi>,
+                note: None,
+            })
         }
     }
 
@@ -509,6 +571,71 @@ mod tests {
     /// The acceptance criterion, spelled out: cmd, both editions, WSL once, and the
     /// scripted sessions last.
     ///
+    /// **SSH is offered on every machine**, because there is nothing to install: Acter
+    /// speaks the protocol itself. The row connects to nothing until the dialog's form has
+    /// been filled in, which is what makes it the one kind that is a form rather than a
+    /// choice (spec A8, decision 1).
+    #[cfg(windows)]
+    #[test]
+    fn ssh_is_always_offered_and_carries_no_machine_of_its_own() {
+        let (service, _) = service(FakeMachine::without_wsl(NoDistributions::NotInstalled), &[]);
+
+        let listed = service.connectable();
+        let row = listed
+            .iter()
+            .find(|row| row.label == "SSH")
+            .expect("SSH is offered even on a machine with nothing installed");
+
+        assert!(row.available, "nothing has to be installed for SSH");
+        assert_eq!(row.instructions, None, "so there is nothing to instruct");
+        assert!(
+            row.variants.is_empty(),
+            "what to connect to is a form, not a list of variants"
+        );
+        assert_eq!(
+            row.id,
+            ProfileId::Ssh {
+                host: String::new(),
+                port: 22,
+                user: String::new()
+            },
+            "the row itself names no machine"
+        );
+    }
+
+    /// **An unfilled form is refused with a sentence rather than dialled.** Handing an empty
+    /// host to the transport would answer with a network error about a name nobody typed,
+    /// which is a worse thing for a listener to be told than what was actually wrong.
+    #[test]
+    fn an_ssh_profile_that_names_no_machine_is_refused_with_a_sentence() {
+        let (service, _) = service(FakeMachine::complete(), &[]);
+
+        for (profile, expected) in [
+            (
+                ProfileId::Ssh {
+                    host: "   ".to_owned(),
+                    port: 22,
+                    user: "acter".to_owned(),
+                },
+                "machine",
+            ),
+            (
+                ProfileId::Ssh {
+                    host: "acter-ssh".to_owned(),
+                    port: 22,
+                    user: String::new(),
+                },
+                "account",
+            ),
+        ] {
+            let Err(why) = service.use_profile(&profile, &unasked()) else {
+                panic!("an unfilled form does not connect");
+            };
+            assert!(why.contains(expected), "it says what is missing: {why}");
+            assert!(why.ends_with('.'), "a spoken message ends: {why}");
+        }
+    }
+
     /// **One row for WSL rather than one per distribution** since A8: the dialog has a
     /// panel to put them in, so a listener arrows the kinds and meets "WSL" once however
     /// many distributions this machine has.
@@ -523,6 +650,9 @@ mod tests {
                 "Command Prompt",
                 "PowerShell",
                 "WSL",
+                // Last of the real kinds, because it is the one that needs a form filled
+                // in rather than a choice made (spec A8, decision 1).
+                "SSH",
                 "Scripted: builtin",
                 "Scripted: unmarked",
             ]
@@ -742,7 +872,7 @@ mod tests {
             kind: ConnectionKind::Cmd,
         };
 
-        let connected = service.use_profile(&id).expect("cmd starts");
+        let connected = service.use_profile(&id, &unasked()).expect("cmd starts");
 
         assert_eq!(connected.label, "Command Prompt");
         assert_eq!(service.connected(), Some(connected.clone()));
@@ -764,16 +894,22 @@ mod tests {
         let (service, factory) = service(FakeMachine::complete(), &[]);
 
         service
-            .use_profile(&ProfileId::Shell {
-                kind: ConnectionKind::Cmd,
-            })
+            .use_profile(
+                &ProfileId::Shell {
+                    kind: ConnectionKind::Cmd,
+                },
+                &unasked(),
+            )
             .expect("cmd starts");
         assert_eq!(factory.alive.load(Ordering::SeqCst), 1);
 
         service
-            .use_profile(&ProfileId::Distribution {
-                name: "Ubuntu".to_owned(),
-            })
+            .use_profile(
+                &ProfileId::Distribution {
+                    name: "Ubuntu".to_owned(),
+                },
+                &unasked(),
+            )
             .expect("Ubuntu starts");
 
         assert_eq!(
@@ -795,14 +931,20 @@ mod tests {
         let (service, _) = service(FakeMachine::complete(), &[]);
 
         let first = service
-            .use_profile(&ProfileId::Shell {
-                kind: ConnectionKind::Cmd,
-            })
+            .use_profile(
+                &ProfileId::Shell {
+                    kind: ConnectionKind::Cmd,
+                },
+                &unasked(),
+            )
             .expect("cmd starts");
         let second = service
-            .use_profile(&ProfileId::Shell {
-                kind: ConnectionKind::WindowsPowerShell,
-            })
+            .use_profile(
+                &ProfileId::Shell {
+                    kind: ConnectionKind::WindowsPowerShell,
+                },
+                &unasked(),
+            )
             .expect("PowerShell starts");
 
         assert_ne!(first.session, second.session);
@@ -833,13 +975,16 @@ mod tests {
             Vec::new(),
         );
         let working = service
-            .use_profile(&ProfileId::Shell {
-                kind: ConnectionKind::Cmd,
-            })
+            .use_profile(
+                &ProfileId::Shell {
+                    kind: ConnectionKind::Cmd,
+                },
+                &unasked(),
+            )
             .expect("cmd starts");
 
         let why = service
-            .use_profile(&refused)
+            .use_profile(&refused, &unasked())
             .expect_err("this one does not");
 
         assert_eq!(
@@ -866,9 +1011,12 @@ mod tests {
         let (service, factory) = service(FakeMachine::without("pwsh.exe"), &[]);
 
         let why = service
-            .use_profile(&ProfileId::Shell {
-                kind: ConnectionKind::PowerShellSeven,
-            })
+            .use_profile(
+                &ProfileId::Shell {
+                    kind: ConnectionKind::PowerShellSeven,
+                },
+                &unasked(),
+            )
             .expect_err("PowerShell 7 is not installed");
 
         assert_eq!(why, ConnectionKind::PowerShellSeven.instructions());
@@ -885,9 +1033,12 @@ mod tests {
         let (service, _) = service(FakeMachine::without_wsl(NoDistributions::NotInstalled), &[]);
 
         let why = service
-            .use_profile(&ProfileId::Distribution {
-                name: "Ubuntu".to_owned(),
-            })
+            .use_profile(
+                &ProfileId::Distribution {
+                    name: "Ubuntu".to_owned(),
+                },
+                &unasked(),
+            )
             .expect_err("there is no WSL to start it in");
 
         assert_eq!(why, NoDistributions::NotInstalled.to_string());
@@ -906,9 +1057,12 @@ mod tests {
         service.attach_session(SessionId(1), Arc::new(Nowhere));
 
         let connected = service
-            .use_profile(&ProfileId::Shell {
-                kind: ConnectionKind::Cmd,
-            })
+            .use_profile(
+                &ProfileId::Shell {
+                    kind: ConnectionKind::Cmd,
+                },
+                &unasked(),
+            )
             .expect("cmd starts");
         service.attach_session(connected.session, Arc::new(Nowhere));
 
@@ -936,14 +1090,20 @@ mod tests {
         let (service, factory) = service(FakeMachine::complete(), &[]);
 
         let first = service
-            .use_profile(&ProfileId::Shell {
-                kind: ConnectionKind::Cmd,
-            })
+            .use_profile(
+                &ProfileId::Shell {
+                    kind: ConnectionKind::Cmd,
+                },
+                &unasked(),
+            )
             .expect("cmd starts");
         service
-            .use_profile(&ProfileId::Shell {
-                kind: ConnectionKind::WindowsPowerShell,
-            })
+            .use_profile(
+                &ProfileId::Shell {
+                    kind: ConnectionKind::WindowsPowerShell,
+                },
+                &unasked(),
+            )
             .expect("PowerShell starts");
 
         service.attach_session(first.session, Arc::new(Nowhere));

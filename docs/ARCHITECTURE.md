@@ -32,8 +32,32 @@ Cargo workspace:
   escape-sequence parser over the byte stream and a second parser could disagree with the
   first about what is a real sequence (spec B2, decision 1); the command-boundary *state
   machine* it feeds stays in core.
-- `crates/acter-transports` — `LocalPty` (ConPTY via `portable-pty`) and `Ssh`
-  (`russh`, behind a feature flag; phase 1 builds don't pay for it).
+- `crates/acter-transports` — `LocalPty` (ConPTY via `portable-pty`) and `SshTransport`
+  (`russh`). **Not behind a feature flag — decided 2026-08-26, with B9**, against this
+  document's earlier plan: SSH is a connection kind a user chooses from the same list as
+  cmd and PowerShell, so a build that omitted it would be a second configuration with
+  different behaviour and no accessibility checklist run against it. `russh` is taken on its own
+  default crypto backend, `aws-lc-rs`, with one feature turned on in `aws-lc-sys`:
+  `prebuilt-nasm`.
+
+  **The backends are interchangeable as far as Acter is concerned** — no cipher, key
+  exchange, MAC or host-key algorithm is gated on either, so the same servers are reachable
+  whichever is chosen — which makes this a build-toolchain decision rather than a product
+  one. The default backend assembles its AES-GCM and ChaCha20-Poly1305 with NASM, which is
+  on neither a stock Windows machine nor the GitHub Windows runner (cmake, the tool usually
+  blamed, is on both and is not used by this build path). `prebuilt-nasm` falls back to the
+  object files the crate ships when NASM is absent, and still assembles from source when it
+  is present.
+
+  **This is not a new concession**: the alternative backend, `ring`, uses its own prebuilt
+  objects on Windows unconditionally and offers no way to assemble from source there at all.
+  Both were measured on 2026-08-26 — the default backend without the feature stops with
+  "NASM command not found! Build cannot continue", and with it builds clean on a machine
+  that has no NASM.
+
+  Nothing beyond Rust itself has to be installed to build Acter. The MSVC toolchain is
+  needed, as it is for any `windows-msvc` Rust build, and both backends compile C with `cc`
+  regardless of which is chosen.
 - `crates/acter-shells` — PowerShell / cmd / bash adapters: shell-integration
   injection snippets, quoting rules, completion strategy.
 - `crates/acter-app` — Tauri 2 app and composition root: wires concrete adapters into
@@ -303,6 +327,15 @@ asserts the exact event sequence the frontend would receive.
   **correlation id** (`command_id`); all subsequent events about that command carry
   the same id. Completions, mode toggles, profile CRUD, snapshots: invokes. Output,
   boundaries, alt-screen, connection state: events.
+- **A question the backend has to ask is a stream out and an invoke back — never a
+  waiting invoke** (spec B9). Tauri has no request/response from Rust to the frontend:
+  events and Channels are one-way and `eval` returns nothing. And a synchronous
+  `#[tauri::command]` **runs on the main thread**, so a command that blocked waiting for a
+  dialog would hold the very thread the answering command needs in order to be dispatched —
+  a deadlock at the moment the dialog appears, not a slow call. So connecting answers
+  immediately with an attempt id, reports what it is doing on a `Channel<ConnectStep>` the
+  caller passed, and is answered by `answer_connect` carrying that id. The waiting happens
+  on a task, in `acter_core::Conversation`.
 - **One event channel, one envelope.** A single `session-event` whose payload is the
   protocol enum (serde-tagged). specta generates a TS discriminated union, so the
   frontend compiler forces exhaustive handling of every variant.
@@ -379,6 +412,100 @@ own files, so this does not apply to them):
   colocating each test with the role folder of the code it exercises. `tsconfig.json`
   includes both `src` and `test`; vitest discovers `test/**/*.test.ts` by its
   default glob.
+
+### Dialogs — **Decided 2026-08-27**
+
+Written after B9's accessibility pass, where the same handful of mistakes were found one
+at a time by the user, in a dialog each. Every rule below is a fix for something that
+actually shipped: none of it is precautionary. A dialog that breaks one of these is wrong
+even if it "works", because what it costs is not correctness — it is the listener's
+confidence that the window is telling them the truth.
+
+**1. A control that cannot do its job is disabled, and that state is the information.**
+If the action needs information the user has not given, the control is `disabled`. Not
+enabled-and-refusing: an enabled button that answers with an error tells the user what is
+missing only after a round trip they had to wait through, where a disabled one says it
+before they commit to anything.
+
+**Verified reachable, 2026-08-27**: the user confirmed a disabled Connect is findable and
+announced as greyed. Note *how*, because it bounds the rule — through object navigation,
+which `screenreader://guidance` places outside the vocabulary an ordinary user is assumed
+to have. So a disabled control is acceptable where its absence from the tab order is
+itself unambiguous, as it is for a button beside the form that would enable it. Where that
+is not obvious, prefer `aria-disabled="true"`, which keeps the control in the tab order and
+announces it as unavailable; the handlers must then refuse, because `aria-disabled` is a
+statement to the accessibility tree and not an enforcement.
+
+**2. One condition, asked in every place that can start the action.** The disabled state,
+the Enter key, the default action and any click handler read the **same predicate**, by
+calling the same function, and the state is recomputed from it rather than set by hand at
+each site. B9 shipped a Connect button correctly disabled and an Enter key that started
+the action anyway, because the key handler reached the action directly — and separately, a
+busy state that re-enabled every control when it ended without asking whether they should
+be. A control whose state is assigned in three places has three chances to be stale.
+
+**3. The backend validates anyway, and its sentence stays.** Marking a control unavailable
+is a courtesy to the person at the keyboard, not a correctness boundary: input can arrive
+from `--profile`, from a saved connection, or from a caller that never saw a dialog. The
+service keeps refusing bad input with its own speakable sentence. What changes is that a
+user meets the unavailable control, and only a program meets the sentence.
+
+**4. Nothing that cannot take focus may sit in the tab cycle.** This follows from rule 1
+rather than competing with it: if no control is ever `disabled`, none is ever unreachable.
+Where a genuinely unfocusable element does end up in a cycle, Tab must skip it — cycling
+onto one leaves focus where it was and swallows the key, so Tab appears to do nothing,
+which is how B9 broke Tab out of a form's last field. Where a dialog has a single
+focusable control, Tab is *swallowed* rather than cycled onto it, because re-focusing the
+control a reader is already on makes it announce itself again.
+
+**5. A dialog says why it is there as it opens.** Its question goes in
+`aria-describedby`, so a reader speaks it along with the dialog's own name. Prose a
+listener has to go and find is prose most listeners will not find: B9 shipped a host-key
+dialog that announced its name and its focused button and nothing else, and a password
+retry that never said it was a retry.
+
+**6. Prose is never a tab stop.** If it needs reading, it belongs in the description
+(rule 5). A paragraph in the tab order is a stop that answers nothing.
+
+**7. Text a user must read character by character is a text box.** Not a paragraph, and
+not a read-only one either. Inside `role="application"` the arrows do not read prose, and
+a `readonly` input in this webview reports its value with **no caret-navigable text behind
+it** — measured with NVDA: every caret key answered "blank". An editable input whose edits
+are refused at `beforeinput` has a real caret and an unchangeable value. A fingerprint
+nobody can walk is a fingerprint nobody can compare.
+
+**8. Focus opens on what the dialog is *for*.** The thing to read, or the field to fill —
+not a button, unless pressing a button is the whole content. And where the choice is
+consequential, **the dialog has no default action at all**: Enter anywhere that is not a
+focused button does nothing, so neither outcome is reachable by the key people press
+without thinking. Going to a button is itself the deliberate act.
+
+**9. An action that takes time makes the dialog busy.** Its controls are marked
+unavailable (rule 1) and `aria-busy` is set for the whole attempt. Otherwise focus sits on
+a control called "Connect" while a connection is already in flight — which, for somebody
+navigating by focus, states the opposite of what is true — and a second press starts a
+second attempt into the first. It also covers the gap between two questions, where one
+dialog has closed and the next does not exist yet.
+
+**10. A failure is acknowledged, not announced.** The end of something the user
+deliberately started is a modal with an OK button, not a live-region remark the next
+utterance can speak over and that leaves nothing to go back to. Announcements are for
+things that happen *to* the session; results of what the user asked for are dialogs.
+
+**11. When an action fails, focus goes where another can be chosen.** Not to Cancel, and
+not wherever the pressed button left it. The dialog stays open on failure precisely so the
+user can try something else, so it puts them where trying something else begins.
+
+**12. A dialog is `role="application"`.** Its arrows, Enter and single letters belong to
+its widgets rather than to a browse-mode cursor whose behaviour depends on a setting the
+user may or may not have changed. Removing the role to solve something else is a
+regression: it drops every window back to browse mode, so arrows move a virtual cursor
+instead of a caret and prose becomes reachable that should not be.
+
+**Where these are enforced.** Rules 1, 2 and 9 are behaviour and belong in the dialog
+adapter, tested in `ui/test/adapters/`; rule 3 is the service's, tested in `acter-core`;
+the rest are properties of the markup and its adapter together. A new dialog is reviewed
+against this list, and the list is the checklist item — not "is it accessible".
 
 ### Frontend DI — **Decided: no framework**
 
@@ -465,3 +592,10 @@ Six tiers, cheapest first:
 
 - `clippy` with warnings denied, `rustfmt` enforced.
 - CI on a Windows runner from day one.
+- **Rust, and the MSVC build tools Rust itself requires — nothing else.** Written down
+  because it stopped being implicit with B9: crates in this tree compile C (both of
+  `russh`'s crypto backends do, and so does `ring`), and the C compiler `cc` uses on
+  Windows is `cl.exe`, which ships in the same MSVC toolset component as the `link.exe`
+  that `x86_64-pc-windows-msvc` already cannot build without. So a machine set up for Rust
+  on Windows is already set up for this; there is no separate C toolchain to install, and
+  no assembler either (see `acter-transports` above for why NASM is not needed).

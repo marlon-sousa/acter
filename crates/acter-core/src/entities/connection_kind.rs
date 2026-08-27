@@ -36,6 +36,12 @@ pub enum ConnectionKind {
     PowerShellSeven,
     /// Bash inside a WSL distribution.
     Wsl,
+    /// A far end that is not on this machine, reached over SSH.
+    ///
+    /// **The one kind that is not a program on this computer**, and the only one whose row
+    /// needs a form rather than a choice: a host, a port and an account are four fields, not
+    /// a variant to pick (spec A8, decision 1).
+    Ssh,
 }
 
 impl ConnectionKind {
@@ -51,6 +57,7 @@ impl ConnectionKind {
             Self::WindowsPowerShell => "Windows PowerShell",
             Self::PowerShellSeven => "PowerShell 7",
             Self::Wsl => "WSL",
+            Self::Ssh => "SSH",
         }
     }
 
@@ -79,7 +86,12 @@ impl ConnectionKind {
             Self::PowerShell => "powershell.exe",
             Self::WindowsPowerShell => "powershell.exe",
             Self::PowerShellSeven => "pwsh.exe",
+            // **Nothing on this machine**, which is what makes SSH different from every
+            // other kind: there is no executable to look for, because Acter speaks the
+            // protocol itself (spec B9, decision 1). It is answered with the empty string
+            // rather than with a lie about a program, and `catalogue` never asks.
             Self::Wsl => "wsl.exe",
+            Self::Ssh => "",
         }
     }
 
@@ -135,6 +147,15 @@ impl ConnectionKind {
                  running wsl --install from an administrator Command Prompt, then restart \
                  the computer when it asks."
             }
+            // It cannot go missing: Acter speaks SSH itself rather than running a program
+            // that might not be installed (spec B9, decision 1). The sentence exists because
+            // every kind answers, and a kind with nothing to say is a hole somebody fills
+            // badly later.
+            Self::Ssh => {
+                "SSH is built into Acter, so it cannot be missing. If a connection will not \
+                 start, the reason is with the server or the network rather than with this \
+                 computer."
+            }
         }
     }
 }
@@ -143,12 +164,13 @@ impl ConnectionKind {
 mod tests {
     use super::*;
 
-    const EVERY_KIND: [ConnectionKind; 5] = [
+    const EVERY_KIND: [ConnectionKind; 6] = [
         ConnectionKind::Cmd,
         ConnectionKind::PowerShell,
         ConnectionKind::WindowsPowerShell,
         ConnectionKind::PowerShellSeven,
         ConnectionKind::Wsl,
+        ConnectionKind::Ssh,
     ];
 
     #[test]
@@ -206,10 +228,21 @@ mod tests {
         }
     }
 
+    /// Every kind that *is* a program on this machine names one — and the one that is not
+    /// says so by naming nothing.
+    ///
+    /// **SSH is the exception and it is the point of it**: Acter speaks the protocol itself
+    /// rather than running somebody else's client (spec B9, decision 1), so there is no
+    /// executable to look for and nothing ever asks the machine about it. An empty answer
+    /// here is what keeps `catalogue` from offering "SSH (not available)" to everybody.
     #[test]
-    fn every_kind_names_an_executable() {
+    fn every_kind_names_an_executable_except_the_one_that_is_not_a_program() {
         for kind in EVERY_KIND {
             let program = kind.program();
+            if kind == ConnectionKind::Ssh {
+                assert!(program.is_empty(), "SSH is not a program on this machine");
+                continue;
+            }
             assert!(
                 program.ends_with(".exe"),
                 "{kind:?} names an executable: {program}"

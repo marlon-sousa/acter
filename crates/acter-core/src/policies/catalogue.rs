@@ -58,6 +58,9 @@ const ON_THIS_PLATFORM: &[ConnectionKind] = &[
     ConnectionKind::Cmd,
     ConnectionKind::PowerShell,
     ConnectionKind::Wsl,
+    // Last, because it is the one that needs a form filled in rather than a choice made,
+    // and because a listener arrowing the list meets their own machine's shells first.
+    ConnectionKind::Ssh,
 ];
 
 /// No kind is built for any other platform yet. A Linux terminal and a macOS terminal become
@@ -153,26 +156,44 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn installing_something_moves_one_row_rather_than_reordering_the_list() {
-        let order = [
-            ConnectionKind::Cmd,
-            ConnectionKind::PowerShell,
-            ConnectionKind::Wsl,
-        ];
+        // **SSH is in both lists and never moves relative to what is available**, because
+        // it cannot be missing: it is not a program on this machine (spec B9, decision 1).
+        // What moves is PowerShell, from the missing group to the available one — which is
+        // the whole subject of this test.
         let before =
             catalogue(|kind| !matches!(kind, ConnectionKind::PowerShell | ConnectionKind::Wsl));
         let after = catalogue(|kind| kind != ConnectionKind::Wsl);
 
         assert_eq!(
             before.iter().map(|row| row.kind).collect::<Vec<_>>(),
-            order,
+            [
+                ConnectionKind::Cmd,
+                ConnectionKind::Ssh,
+                ConnectionKind::PowerShell,
+                ConnectionKind::Wsl,
+            ],
             "PowerShell missing sorts it beside WSL, both after what works"
         );
         assert_eq!(
             after.iter().map(|row| row.kind).collect::<Vec<_>>(),
-            order,
+            [
+                ConnectionKind::Cmd,
+                ConnectionKind::PowerShell,
+                ConnectionKind::Ssh,
+                ConnectionKind::Wsl,
+            ],
             "and installing it changes only whether it is available, not where it is"
         );
-        assert!(!before[1].available && after[1].available);
+        // Found by kind rather than by position, which is the point being made: what
+        // changed about PowerShell is whether it is available, and everything else stayed
+        // where the user had learned to find it.
+        let powershell = |rows: &[Connection]| {
+            rows.iter()
+                .find(|row| row.kind == ConnectionKind::PowerShell)
+                .expect("PowerShell is listed either way")
+                .available
+        };
+        assert!(!powershell(&before) && powershell(&after));
     }
 
     /// **The editions and the distributions are not rows** (spec A11). A listener meets
@@ -202,9 +223,10 @@ mod tests {
     fn a_windows_build_offers_the_windows_kinds() {
         let listed = catalogue(|_| true);
 
-        assert_eq!(listed.len(), 3);
+        assert_eq!(listed.len(), 4);
         assert!(listed.iter().any(|row| row.kind == ConnectionKind::Cmd));
         assert!(listed.iter().any(|row| row.kind == ConnectionKind::Wsl));
+        assert!(listed.iter().any(|row| row.kind == ConnectionKind::Ssh));
     }
 
     /// And the other half of decision 5: a platform with no kinds built for it offers

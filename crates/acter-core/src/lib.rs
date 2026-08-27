@@ -12,20 +12,24 @@ mod services;
 
 pub use controllers::{Requests, SessionActor, SessionInput, Wake};
 pub use entities::{
-    Announcement, CommandId, Connectable, Connected, ConnectionKind, ConnectionState, ExitCode,
-    Integration, Key, KeyAck, KeyPress, LineId, LineRevision, Mode, Osc133Marker, PacingConfig,
-    PacingState, ProfileId, Screen, SessionEvent, SessionId, SessionIntent, SessionState,
-    ShellMarkers, SubmitAck, TerminalItem, Variant,
+    Announcement, AttemptId, CommandId, ConnectAnswer, ConnectQuestion, ConnectStep, Connectable,
+    Connected, ConnectionKind, ConnectionState, ExitCode, Integration, Key, KeyAck, KeyPress,
+    LineId, LineRevision, Mode, Osc133Marker, PacingConfig, PacingState, ProfileId, Screen,
+    SessionEvent, SessionId, SessionIntent, SessionState, ShellMarkers, SubmitAck, TerminalItem,
+    Variant,
 };
 // The pacing verdict is domain-internal since A6: `ReadMode` no longer crosses the wire,
 // so the items whose signatures mention it — `PacingAction`, `PacingOutcome`, `verdict`
 // and the three transition functions — are `pub(crate)` in `policies` and reached
 // through that module rather than re-exported here. Nothing outside this crate used them.
 pub use policies::{
-    BoundaryEvent, BoundaryTracker, Connection, Region, TextSize, catalogue, intent_for, measure,
+    BoundaryEvent, BoundaryTracker, Connection, Region, TextSize, catalogue, ended, intent_for,
+    measure,
 };
 pub use ports::{
-    Clock, ConnectApi, EventSink, InstalledShells, NoDistributions, SessionApi, SessionFactory,
-    ShellAdapter, ShellFacts, ShellLaunch, TerminalEngine, Timer, Transport, TransportError,
+    Clock, ConnectApi, ConnectSink, EventSink, HostKeyAnswer, HostKeyQuestion, HostKeyState,
+    InstalledShells, NoDistributions, PasswordQuestion, Secret, SessionApi, SessionFactory,
+    ShellAdapter, ShellFacts, ShellLaunch, SshQuestions, Started, TerminalEngine, Timer, Transport,
+    TransportError, Unasked,
 };
-pub use services::{ConnectService, SessionService};
+pub use services::{ConnectService, Conversation, SessionService};

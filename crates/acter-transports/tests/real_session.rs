@@ -26,7 +26,8 @@ use std::time::{Duration, Instant};
 use acter_core::{
     Announcement, Clock, CommandId, ConnectionState, EventSink, ExitCode, InstalledShells, Key,
     KeyAck, KeyPress, PacingConfig, SessionApi, SessionEvent, SessionId, SessionService,
-    ShellAdapter, ShellFacts, ShellLaunch, ShellMarkers, SubmitAck, Timer,
+    ShellAdapter, ShellFacts, ShellLaunch, ShellMarkers, SshQuestions, Started, SubmitAck, Timer,
+    Unasked,
 };
 use acter_shells::ThisMachine;
 use acter_term::AlacrittyEngine;
@@ -1399,7 +1400,11 @@ mod replacing_a_session {
     struct LockingShells;
 
     impl SessionFactory for LockingShells {
-        fn open(&self, profile: &ProfileId) -> Result<Arc<dyn SessionApi>, String> {
+        fn open(
+            &self,
+            profile: &ProfileId,
+            _questions: &Arc<dyn SshQuestions>,
+        ) -> Result<Started, String> {
             let ProfileId::Program { program: path } = profile else {
                 return Err("this factory only starts marker shells.".to_owned());
             };
@@ -1420,16 +1425,19 @@ mod replacing_a_session {
             };
             let args: Vec<&str> = launch.args.iter().map(String::as_str).collect();
             let pty = LocalPty::spawn(&launch.program, &args, &[], COLUMNS, SCREEN_LINES)?;
-            Ok(Arc::new(SessionService::start(
-                Box::new(pty),
-                Box::new(AlacrittyEngine::new(COLUMNS, SCREEN_LINES)),
-                Arc::new(RealClock::new()) as Arc<dyn Clock>,
-                PacingConfig::default(),
-                ShellFacts {
-                    markers: ShellMarkers::Full,
-                    eof: None,
-                },
-            )))
+            Ok(Started {
+                session: Arc::new(SessionService::start(
+                    Box::new(pty),
+                    Box::new(AlacrittyEngine::new(COLUMNS, SCREEN_LINES)),
+                    Arc::new(RealClock::new()) as Arc<dyn Clock>,
+                    PacingConfig::default(),
+                    ShellFacts {
+                        markers: ShellMarkers::Full,
+                        eof: None,
+                    },
+                )),
+                note: None,
+            })
         }
     }
 
@@ -1445,9 +1453,12 @@ mod replacing_a_session {
         );
 
         service
-            .use_profile(&ProfileId::Program {
-                program: first.display().to_string(),
-            })
+            .use_profile(
+                &ProfileId::Program {
+                    program: first.display().to_string(),
+                },
+                &(Arc::new(Unasked) as Arc<dyn SshQuestions>),
+            )
             .expect("the first shell starts");
         until(LOCK_PATIENCE, "the first shell to take its lock", || {
             held(&first)
@@ -1455,9 +1466,12 @@ mod replacing_a_session {
         .await;
 
         service
-            .use_profile(&ProfileId::Program {
-                program: second.display().to_string(),
-            })
+            .use_profile(
+                &ProfileId::Program {
+                    program: second.display().to_string(),
+                },
+                &(Arc::new(Unasked) as Arc<dyn SshQuestions>),
+            )
             .expect("the second shell starts");
         until(LOCK_PATIENCE, "the second shell to take its lock", || {
             held(&second)

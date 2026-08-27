@@ -8,6 +8,7 @@
 
 mod adapters;
 mod container;
+mod controllers;
 mod routers;
 
 pub use adapters::SystemClock;

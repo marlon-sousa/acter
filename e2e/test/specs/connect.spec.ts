@@ -46,6 +46,15 @@ function dialogIsOpen(): Promise<boolean> {
   );
 }
 
+/** Whether the "could not connect" modal is up. */
+function failureIsOpen(): Promise<boolean> {
+  return browser.execute(
+    () =>
+      (document.getElementById('failed-dialog') as HTMLDialogElement | null)?.open ===
+      true,
+  );
+}
+
 /** The kinds as the dialog rendered them — which is the real command's answer, rendered. */
 function rows(): Promise<Row[]> {
   return browser.execute(() =>
@@ -199,6 +208,25 @@ describe('the Connect dialog', () => {
     const before = await windowTitle();
 
     await browser.execute(() => document.getElementById('connect-start')?.click());
+
+    // **A failure is acknowledged rather than announced** (ARCHITECTURE, dialogs, rule 10):
+    // it opens a modal that has to be dismissed, and the connect dialog is busy behind it
+    // until that happens. Dismissing it here is not tidying up — it is the behaviour under
+    // test, and leaving it open froze every test that followed when the modal first landed.
+    await browser.waitUntil(async () => await failureIsOpen(), {
+      timeout: 15_000,
+      timeoutMsg: 'a connection that could not be started said nothing to acknowledge',
+    });
+    const why = await browser.execute(
+      () => document.getElementById('failed-why')?.textContent ?? '',
+    );
+    expect(why.length).toBeGreaterThan(0);
+
+    await browser.execute(() => document.getElementById('failed-ok')?.click());
+    await browser.waitUntil(async () => !(await failureIsOpen()), {
+      timeout: 15_000,
+      timeoutMsg: 'OK never closed the failure dialog',
+    });
 
     // It stays open, and it stays open for good rather than closing a moment later.
     await browser.pause(1000);

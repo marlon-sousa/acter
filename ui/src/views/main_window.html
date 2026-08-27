@@ -257,6 +257,86 @@
         class="visually-hidden"
       ></div>
     </dialog>
+    <!-- **The security decision in SSH, as a dialog rather than a wall of text** (spec B9,
+         decision 3). It is an application region for the reason the Connect dialog is one:
+         the keys inside it belong to the widget rather than to a browse-mode cursor whose
+         behaviour depends on a setting somebody may have changed.
+
+         The refusing button comes first in the document as well as holding initial focus,
+         so the safe answer is the one a listener meets first and the one Enter gives them.
+         `formmethod="dialog"` makes each button close the dialog with its own value, and
+         anything else that closes it — Escape included — leaves the value empty, which the
+         adapter reads as giving up. -->
+    <dialog
+      id="host-key-dialog"
+      aria-label="Unknown server"
+      aria-describedby="host-key-summary"
+    >
+      <!-- **The role is load-bearing, and taking it off was a regression** — measured by
+           the user on 2026-08-26. It is what holds a dialog in focus mode; without it NVDA
+           falls back to browse mode in every window, so the arrows move a virtual cursor
+           rather than a caret and prose becomes reachable that should not be. It was
+           removed for one afternoon on the theory that it was what stopped the fingerprint
+           field arrowing. It was not, and the cure was worse. -->
+      <div role="application" aria-label="Server identity">
+        <h1 id="host-key-title">Unknown server</h1>
+        <!-- **Read when the dialog opens, without the user going to look for it.**
+             Driving this with NVDA on 2026-08-26 found that the dialog announced its own
+             name and the focused button and nothing else: which host, and why it was
+             asking, were only heard by tabbing backwards to find them. A description is
+             what a reader speaks along with the dialog itself. The fingerprint stays a
+             separate tab stop rather than joining this, because comparing it means putting
+             a cursor in it and reading character by character. -->
+        <p id="host-key-summary"></p>
+        <div id="host-key-body"></div>
+        <form method="dialog">
+          <button id="host-key-refuse" type="submit" value="refuse">
+            Do not connect
+          </button>
+          <button id="host-key-trust" type="submit" value="trust">
+            Connect and remember this server
+          </button>
+        </form>
+      </div>
+    </dialog>
+    <!-- **A masked field of its own, never the session's edit field** (spec B9, decision 4).
+         A password typed into the command line would be rendered into the buffer, read
+         aloud, and carried into the transcript and the debug tape on the way. -->
+    <dialog
+      id="password-dialog"
+      aria-label="Password"
+      aria-describedby="password-prompt"
+    >
+      <div role="application" aria-label="Password">
+        <h1>Password</h1>
+        <p id="password-prompt"></p>
+        <form method="dialog">
+          <label for="password-field">Password</label>
+          <input
+            id="password-field"
+            type="password"
+            autocomplete="off"
+            spellcheck="false"
+          />
+          <button id="password-submit" type="submit" value="submit">Sign in</button>
+          <button id="password-cancel" type="submit" value="cancel">Cancel</button>
+        </form>
+      </div>
+    </dialog>
+    <!-- **A connection that failed is a modal you dismiss** — reported by the user on
+         2026-08-26, who met a connection error as a live-region announcement and expected
+         something to press OK on. It is not a passing remark: it is the end of something
+         they deliberately started, seconds after they started it, and an announcement can
+         be spoken over by the next thing or missed entirely. -->
+    <dialog id="failed-dialog" aria-label="Could not connect" aria-describedby="failed-why">
+      <div role="application" aria-label="Could not connect">
+        <h1>Could not connect</h1>
+        <p id="failed-why"></p>
+        <form method="dialog">
+          <button id="failed-ok" type="submit" value="ok">OK</button>
+        </form>
+      </div>
+    </dialog>
     <!-- The live region lives at the very end of the document, outside <main>, and
          never moves. It must stay in the accessibility tree to be announced, so its
          text is browse-mode reachable while present; placing it last keeps it out of
