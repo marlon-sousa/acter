@@ -2395,11 +2395,23 @@ thing to pick up once the adapters land, not merely the next number.
     immediate rerun passed, and the whole suite passed on the rerun. So the distribution took
     longer than five seconds to reach its first prompt.
 
-    **What a listener meets** is the first WSL connection of the day announcing that the
-    session has no shell integration, and then quietly having it — DESIGN decision 8 recovers
-    on the late marker, silently, which is right for recovery and means the wrong sentence is
-    never withdrawn. B6.2 makes this louder rather than quieter, since the prompt now arrives
-    too and the two are heard together.
+    **What a listener meets, heard rather than inferred.** In B6.2's accessibility pass the
+    same day — NVDA 2026.1.1 through the screen-readers bridge, silent capture, `user`
+    persona, the real application — connecting to WSL Ubuntu produced, in this order:
+
+    - 13:34:17.7 — the connection is made and the window says so.
+    - 13:34:22.6 — *"shell integration unavailable, output will not be read automatically;
+      review it in the buffer"*, which is the grace period expiring.
+    - 13:34:24.2 — the prompt finally arrives: `marlon@splyt:/mnt/c/Users/marlo$`.
+    - and then `(exit 3)`, submitted in that same session, was announced as **"command
+      failed, exit code 3"**.
+
+    So the session was fully integrated all along, the distribution simply took about six and
+    a half seconds to draw its first prompt, and the listener was told the opposite before
+    there was even a prompt on screen. DESIGN decision 8 recovers on the late marker
+    silently, which is right for recovery and means **the wrong sentence is never
+    withdrawn**. B6.2 makes this louder rather than quieter, since the prompt now arrives too
+    and the two are heard together.
 
     B6 decision 9 already names `integration_grace` as the number in `PacingConfig` most
     likely to be retuned by evidence. This is the first evidence. What it does *not* settle
@@ -2668,6 +2680,39 @@ thing to pick up once the adapters land, not merely the next number.
     downstream — a shell's startup banner is no longer discarded, and the block minted for
     the prompt spends the session's first `CommandId`, so a user's first command is
     `CommandId(2)`.
+
+    **The accessibility pass was agent-driven** — NVDA 2026.1.1 through the screen-readers
+    bridge, silent capture, `user` persona, against the real application — and it found two
+    things the code alone did not. One is 27.6 below. The other is that this entry's own
+    checklist had a wrong clause in it: it asked for "no shell integration set up on this
+    host" to be said *after* the prompt, and the frontend deliberately says it before, in the
+    connection sentence, and then suppresses `IntegrationUnavailable`'s own string so a
+    listener does not hear the same fact twice. That is B9 decision 2 working, and the
+    checklist was written from the backend's event order without checking it.
+
+27.6. Windows PowerShell's screen-reader warning is spoken after the prompt the buffer puts
+    it before. Spec: none yet → specify first. **Found 2026-08-27 in B6.2's accessibility
+    pass**, driving the real application with NVDA 2026.1.1.
+
+    B6.2 stopped discarding what a far end says before its first marker, and the shell that
+    turned out to be printing something is Windows PowerShell 5.1: `Warning: PowerShell
+    detected that you might be using a screen reader and has disabled PSReadLine for
+    compatibility purposes. If you want to re-enable it, run 'Import-Module PSReadLine'.`
+    B5.2 measured that warning and wrote it down; until now the product dropped it, and a
+    listener is plainly better off hearing it, so the warning arriving is not the defect.
+
+    **The order is.** In the buffer the warning is above the prompt, which is where the shell
+    printed it. In speech the prompt came first — `PS C:\Users\marlo>` at 13:36:06.511, the
+    warning at 13:36:06.757 — because the two travel on different paths: an integrated
+    prompt is announced the moment its region closes (B5.6), while output waits for the
+    pacing policy's quiescence. So a listener hears an answer before the thing it is
+    answering, and reading the buffer afterwards tells them the opposite order.
+
+    What this has to decide is which path yields. Announcing the prompt late would undo
+    B5.6; releasing unstructured output immediately would undo the pacing policy for every
+    session. A third candidate, and probably the cheapest, is that text arriving before a
+    session's first prompt is not ordinary output and can be flushed when `PromptDrawn`
+    fires rather than on its own clock.
 
 27.5. **Done** — the status region says the whole sentence, and the announcement is that
     same string, from one function. Fixed in B9's PR and measured with NVDA 2026.1.1 on
