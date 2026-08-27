@@ -26,7 +26,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use acter_core::{
-    HostKeyAnswer, HostKeyQuestion, HostKeyState, PasswordQuestion, Secret, SshQuestions, Transport,
+    Announcement, HostKeyAnswer, HostKeyQuestion, HostKeyState, PasswordQuestion, Secret,
+    SshQuestions, Transport,
 };
 use acter_transports::{KnownHosts, SshTarget, SshTransport};
 use tokio::sync::mpsc::{Receiver, channel};
@@ -783,6 +784,12 @@ async fn the_byte_that_ends_a_bash_session_over_ssh() {
 /// the real pacing policy and the shell facts an SSH far end actually gets — and records
 /// every `SessionEvent` the frontend would have received in the seconds after connecting.
 /// The output is the point, so run with `--nocapture`.
+///
+/// **What it measured, and what it measures now** (spec B6.2). Filed as roadmap 27.4, this
+/// recorded two events and no output at all: `Connected`, then `IntegrationUnavailable`,
+/// with the far end's prompt discarded inside the pump for having fallen in no region. It
+/// now records the login banner and the prompt, in a block nobody submitted, read aloud,
+/// and *then* the flag — so the assertion below is the fix rather than a smoke test.
 #[tokio::test(flavor = "multi_thread")]
 #[ignore]
 async fn what_a_session_says_when_it_has_just_connected() {
@@ -864,8 +871,29 @@ async fn what_a_session_says_when_it_has_just_connected() {
     }
     println!("--- {} events in total ---", seen.len());
 
+    let spoken: String = seen
+        .iter()
+        .filter_map(|event| match event {
+            SessionEvent::Output { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
     assert!(
-        !seen.is_empty(),
-        "a session that connected said nothing at all to the frontend"
+        spoken.contains('$'),
+        "the prompt the far end had already drawn never reached the frontend: {seen:?}"
+    );
+    assert!(
+        seen.contains(&SessionEvent::IntegrationUnavailable),
+        "and the session still says it has no shell integration: {seen:?}"
+    );
+    assert!(
+        seen.iter().any(|event| matches!(
+            event,
+            SessionEvent::Announce {
+                announcement: Announcement::ReadAloud { text },
+                ..
+            } if text.contains('$')
+        )),
+        "and a listener hears it rather than having to go looking: {seen:?}"
     );
 }

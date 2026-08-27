@@ -1145,22 +1145,44 @@ impl Pump {
     /// integration there are no regions at all, so the filter is the other one available
     /// — every line, echo included, because excluding the echo there would mean
     /// excluding everything (decision 10).
+    ///
+    /// **A session that has not been told yet is the third case, and leaving it out is
+    /// the whole of 27.4** (spec B6.2). Before the first marker there is no structure to
+    /// filter by: the tracker labels every line `Unstructured`, which the marked arm
+    /// below wants nothing to do with — so a far end that had already drawn its prompt
+    /// had it discarded. Not held, not rendered, gone, with no block and no buffer entry
+    /// to find it in afterwards. Every unintegrated session in this product starts here
+    /// and stays here for the whole grace period, which is why the symptom was a session
+    /// that connected and then said nothing at all.
     fn wants(&self, region: Region) -> bool {
         match self.integration {
             Integration::Unintegrated => region == Region::Unstructured,
-            Integration::Pending | Integration::Integrated => match self.markers {
-                ShellMarkers::Full => region == Region::Output,
-                // **The prompt is content in a shell that emits no `D`** (spec B4.5,
-                // decision 4). There is no exit code to announce, so nothing at all is
-                // said when a command ends, and the prompt coming back is the only ending
-                // such a session has to offer a listener — which is why 22.12 records it
-                // as a requirement rather than a nicety. An unintegrated session already
-                // speaks it, as output of the block that is still open; marking the
-                // session without this arm would take it away.
-                ShellMarkers::PromptAndCommandLine => {
-                    matches!(region, Region::Output | Region::Prompt)
-                }
-            },
+            // Unstructured text is wanted, **and** so is anything the marked filter
+            // wants. The second half cannot fire today, because the first marker of a
+            // session resolves `Pending` in the same batch it is seen in, so a region
+            // that is not `Unstructured` is one reached while `Integrated`. It is spelled
+            // out anyway: the alternative is a filter whose correctness rests on the
+            // order of two arms in `Pump::feed`, and this one rests on nothing.
+            Integration::Pending => region == Region::Unstructured || self.marked(region),
+            Integration::Integrated => self.marked(region),
+        }
+    }
+
+    /// What a session whose far end marks its boundaries wants, by what those markers are
+    /// able to say.
+    fn marked(&self, region: Region) -> bool {
+        match self.markers {
+            ShellMarkers::Full => region == Region::Output,
+            // **The prompt is content in a shell that emits no `D`** (spec B4.5,
+            // decision 4). There is no exit code to announce, so nothing at all is
+            // said when a command ends, and the prompt coming back is the only ending
+            // such a session has to offer a listener — which is why 22.12 records it
+            // as a requirement rather than a nicety. An unintegrated session already
+            // speaks it, as output of the block that is still open; marking the
+            // session without this arm would take it away.
+            ShellMarkers::PromptAndCommandLine => {
+                matches!(region, Region::Output | Region::Prompt)
+            }
         }
     }
 
@@ -2218,6 +2240,79 @@ mod tests {
 
         session.advance_to(300).await;
         assert_eq!(session.events(), vec![SessionEvent::IntegrationUnavailable]);
+    }
+
+    /// **27.4, and the reason it was worth its own entry** (spec B6.2). What a far end
+    /// says before it has marked anything is unstructured, not absent, and until this
+    /// test it was thrown away: an SSH session drew its prompt, the frontend received two
+    /// events and no output at all, and there was nothing in the buffer to go back and
+    /// read. The prompt reaches the listener as the content of a block nobody submitted,
+    /// which is what `Pump::unclaimed` is already for.
+    #[tokio::test]
+    async fn what_the_far_end_said_before_its_first_marker_reaches_the_frontend() {
+        let session = Session::with_config(quick_grace()).await;
+
+        session.emit(vec![line(1, "acter@acter-ssh:~$ ")]).await;
+        // One rendering tick, and well inside the grace period: the listener meets the
+        // prompt while the session is still deciding what it is, which is the point.
+        session.advance_to(100).await;
+
+        assert_eq!(
+            session.rendered(),
+            "acter@acter-ssh:~$ ",
+            "the prompt the far end had already drawn: {:?}",
+            session.events()
+        );
+        assert_eq!(
+            session.started().len(),
+            1,
+            "in a block of its own, since no submission accounts for it: {:?}",
+            session.events()
+        );
+        assert!(
+            !session
+                .events()
+                .contains(&SessionEvent::IntegrationUnavailable),
+            "and none of this is a verdict on the session yet: {:?}",
+            session.events()
+        );
+    }
+
+    /// The same text, and then the markers arrive after all — a shell that printed a
+    /// banner before its integration ran. The banner is still the listener's, and the
+    /// session is still integrated: forwarding what arrived before the first marker
+    /// cannot be allowed to cost the filtering that starts at it.
+    #[tokio::test]
+    async fn a_banner_printed_before_the_markers_is_kept_and_the_session_still_integrates() {
+        let session = Session::with_config(quick_grace()).await;
+
+        session
+            .emit(vec![line(1, "Microsoft Windows [Version 10.0.26200.1]")])
+            .await;
+        let command_id = session.submit("echo hi").await;
+        session.emit(command(2, "echo hi", "hi", Some(0))).await;
+        session.advance_to(300).await;
+
+        assert_eq!(
+            session.rendered(),
+            "Microsoft Windows [Version 10.0.26200.1]hi",
+            "the banner, and then the command's output and nothing else: {:?}",
+            session.events()
+        );
+        assert!(
+            session
+                .events()
+                .contains(&SessionEvent::CommandFinished { command_id }),
+            "the markers still did their job: {:?}",
+            session.events()
+        );
+        assert!(
+            !session
+                .events()
+                .contains(&SessionEvent::IntegrationUnavailable),
+            "and the session is integrated: {:?}",
+            session.events()
+        );
     }
 
     #[tokio::test]

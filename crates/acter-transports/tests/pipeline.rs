@@ -783,28 +783,62 @@ async fn a_session_with_no_markers_degrades_honestly_instead_of_going_silent() {
     );
 
     pipeline.run_until(500).await;
+    // **This assertion used to be the whole sequence, and that is what 27.4 was** (spec
+    // B6.2). The far end had drawn `acter>` before any of this, and the pump discarded it
+    // for having fallen in no region — so the listener met a connected session with an
+    // empty buffer, and a flag explaining an emptiness that had nothing to do with
+    // integration. The prompt now arrives first, in a block nobody submitted, and is read
+    // aloud; the flag follows when the grace period expires, which is what it has always
+    // meant.
     assert_eq!(
         pipeline.events(),
-        // Connected first, because the far end spoke: an unmarked session is still a
-        // session, and A9's state is about the transport rather than about integration.
-        // Then the flag, which is what this test is here for.
-        vec![connected(), SessionEvent::IntegrationUnavailable],
-        "the session says what happened to it before anything else happens"
+        vec![
+            // Connected first, because the far end spoke: an unmarked session is still a
+            // session, and A9's state is about the transport rather than about
+            // integration.
+            connected(),
+            SessionEvent::CommandStarted {
+                command_id: CommandId(1),
+                command_line: None,
+            },
+            SessionEvent::Output {
+                command_id: CommandId(1),
+                text: "acter>".to_owned(),
+            },
+            // Then the flag, which is what this test is here for.
+            SessionEvent::IntegrationUnavailable,
+            SessionEvent::Announce {
+                command_id: CommandId(1),
+                announcement: Announcement::ReadAloud {
+                    text: "acter>".to_owned(),
+                },
+            },
+        ],
+        "the session says what the far end said, and then what happened to it"
     );
 
     pipeline.submit("forever");
     pipeline.run_until(14_000).await;
 
     // The flag is still the first thing said *about the session's integration*; what comes
-    // before it is the transport reporting that the far end spoke at all (A9).
+    // before it is the transport reporting that the far end spoke at all (A9), and the
+    // prompt that far end had already drawn.
     assert_eq!(pipeline.events().first(), Some(&connected()));
     assert_eq!(
-        pipeline.events().get(1),
-        Some(&SessionEvent::IntegrationUnavailable)
+        pipeline
+            .events()
+            .iter()
+            .position(|event| *event == SessionEvent::IntegrationUnavailable),
+        Some(3),
+        "after the connection and the prompt, and before anything the user did"
     );
     assert!(
         pipeline.events().contains(&SessionEvent::CommandStarted {
-            command_id: CommandId(1),
+            // The *second* id, because the prompt this shell drew before anybody typed
+            // anything spent the first one (spec B6.2). A block nobody submitted is a
+            // real block with a real id, which is what `Pump::unclaimed` has always
+            // meant; what changed is that an unintegrated session now has one at all.
+            command_id: CommandId(2),
             // **The far end's echo is the boundary now** (spec B4.4), and it is also the
             // heading: there is no `B..C` region without markers, but the echo is still
             // on the wire, and the row it was written onto is what opens this block.
