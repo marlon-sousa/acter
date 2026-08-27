@@ -57,6 +57,7 @@ const connectApi = new TauriConnect();
 const hostKeyDialog = new HostKeyDialog(
   byId<HTMLDialogElement>('host-key-dialog'),
   byId('host-key-title'),
+  byId('host-key-summary'),
   byId('host-key-body'),
 );
 const passwordDialog = new PasswordDialog(

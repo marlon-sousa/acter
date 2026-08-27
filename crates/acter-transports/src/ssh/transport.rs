@@ -354,11 +354,7 @@ async fn authenticate(
         let result = connection
             .authenticate_password(user, secret.expose())
             .await
-            .map_err(|why| {
-                ended(format!(
-                    "Acter could not sign in to {host} as {user}. {why}"
-                ))
-            })?;
+            .map_err(|why| lost_while_asking(host, &why))?;
         if result.success() {
             return Ok(());
         }
@@ -373,6 +369,30 @@ async fn authenticate(
         }
         again = true;
     }
+}
+
+/// What to say when the connection went away while the user was still answering.
+///
+/// **Found by driving the real thing with a screen reader, 2026-08-26.** An unauthenticated
+/// SSH connection has a deadline — OpenSSH's `LoginGraceTime`, two minutes by default — and
+/// it is running while Acter is asking the *user* questions. Reading a forty-character
+/// fingerprint character by character, meeting a wrong password, and typing another one is
+/// slower than that, and the person most likely to exceed it is the person this product is
+/// for. What they heard was russh's own words: "Channel send error."
+///
+/// So the send failure that means "the far end hung up" is given the sentence it deserves,
+/// and it names the deadline, because that is the one thing that makes the next attempt
+/// succeed. Everything else keeps the library's reason, which is still the best available
+/// account of a genuine network fault.
+fn lost_while_asking(host: &str, why: &russh::Error) -> String {
+    if matches!(why, russh::Error::SendError) {
+        return format!(
+            "The server at {host} closed the connection before signing in finished. Servers \
+             usually allow about two minutes to sign in, and that time ran out. Connect \
+             again, and have the password ready."
+        );
+    }
+    ended(format!("Acter could not sign in to {host}. {why}"))
 }
 
 /// Whether the server is still willing to be given a password.
@@ -491,5 +511,52 @@ impl client::Handler for Verifier {
         Ok(tokio::task::spawn_blocking(move || verifier.decide(&key))
             .await
             .unwrap_or(false))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// **Found by driving the real thing with NVDA on 2026-08-26**, and pinned here so it
+    /// cannot quietly go back to what it was.
+    ///
+    /// An unauthenticated SSH connection has a deadline — OpenSSH's `LoginGraceTime`, two
+    /// minutes by default — and it runs while Acter is asking the *user* questions. Reading
+    /// a forty-character fingerprint character by character, meeting a wrong password and
+    /// typing another one exceeds it easily, and the person most likely to exceed it is the
+    /// person this product exists for. What they heard was "Channel send error."
+    #[test]
+    fn a_connection_that_went_away_while_asking_says_what_to_do_about_it() {
+        let said = lost_while_asking("acter-ssh", &russh::Error::SendError);
+
+        assert!(
+            said.contains("two minutes"),
+            "it names the deadline, which is the one thing that makes the next attempt \
+             work: {said}"
+        );
+        assert!(
+            said.contains("Connect again"),
+            "and says what to do: {said}"
+        );
+        assert!(said.ends_with('.'), "a spoken message ends: {said}");
+        assert!(
+            !said.contains("Channel send error"),
+            "and never repeats the library's own words: {said}"
+        );
+    }
+
+    /// Every other failure keeps the library's reason, which is still the best available
+    /// account of a genuine network fault — ended as a sentence, because the world does not
+    /// punctuate.
+    #[test]
+    fn any_other_failure_keeps_the_reason_the_world_gave() {
+        let said = lost_while_asking("acter-ssh", &russh::Error::Disconnect);
+
+        assert!(
+            said.starts_with("Acter could not sign in to acter-ssh."),
+            "{said}"
+        );
+        assert!(said.ends_with('.'), "a spoken message ends: {said}");
     }
 }

@@ -267,9 +267,21 @@
          `formmethod="dialog"` makes each button close the dialog with its own value, and
          anything else that closes it — Escape included — leaves the value empty, which the
          adapter reads as giving up. -->
-    <dialog id="host-key-dialog" aria-label="Unknown server">
+    <dialog
+      id="host-key-dialog"
+      aria-label="Unknown server"
+      aria-describedby="host-key-summary"
+    >
       <div role="application" aria-label="Server identity">
         <h1 id="host-key-title">Unknown server</h1>
+        <!-- **Read when the dialog opens, without the user going to look for it.**
+             Driving this with NVDA on 2026-08-26 found that the dialog announced its own
+             name and the focused button and nothing else: which host, and why it was
+             asking, were only heard by tabbing backwards to find them. A description is
+             what a reader speaks along with the dialog itself. The fingerprint stays a
+             separate tab stop rather than joining this, because comparing it means putting
+             a cursor in it and reading character by character. -->
+        <p id="host-key-summary" tabindex="0"></p>
         <div id="host-key-body"></div>
         <form method="dialog">
           <button id="host-key-refuse" type="submit" value="refuse">
@@ -284,7 +296,11 @@
     <!-- **A masked field of its own, never the session's edit field** (spec B9, decision 4).
          A password typed into the command line would be rendered into the buffer, read
          aloud, and carried into the transcript and the debug tape on the way. -->
-    <dialog id="password-dialog" aria-label="Password">
+    <dialog
+      id="password-dialog"
+      aria-label="Password"
+      aria-describedby="password-prompt"
+    >
       <div role="application" aria-label="Password">
         <h1>Password</h1>
         <p id="password-prompt" tabindex="0"></p>

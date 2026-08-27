@@ -37,6 +37,7 @@ export class HostKeyDialog {
   constructor(
     private readonly dialog: HTMLDialogElement,
     private readonly title: HTMLElement,
+    private readonly summary: HTMLElement,
     private readonly body: HTMLElement,
   ) {
     this.dialog.addEventListener('keydown', (event) =>
@@ -60,11 +61,13 @@ export class HostKeyDialog {
       changed ? CHANGED_TITLE : UNKNOWN_TITLE,
     );
 
+    // **What a reader says as the dialog opens**, because a dialog that announces only its
+    // own name and its focused button leaves a listener to go looking for the question.
+    this.summary.textContent = `${question.host}, port ${question.port}. ${
+      changed ? CHANGED_WARNING : UNKNOWN_EXPLANATION
+    }`;
+
     const said = document.createElement('div');
-    said.append(
-      paragraph(document, `${question.host}, port ${question.port}.`),
-      paragraph(document, changed ? CHANGED_WARNING : UNKNOWN_EXPLANATION),
-    );
     if (changed) {
       said.append(
         fingerprint(document, 'Fingerprint Acter recorded before', question.recorded ?? ''),

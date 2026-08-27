@@ -2531,6 +2531,40 @@ thing to pick up once the adapters land, not merely the next number.
        announcement — and the accessibility checklist, driven against all three host-key
        states.
 
+27.2. A connection that waits for a person can be hung up on while it waits. Spec: none yet
+    → specify first. **Found in B9's accessibility pass, 2026-08-26**, driving the real
+    application with NVDA 2026.1.1.
+
+    An unauthenticated SSH connection has a deadline — OpenSSH's `LoginGraceTime`, **two
+    minutes** by default — and it is running while Acter is asking the *user* questions.
+    Reading a forty-character fingerprint character by character, meeting a wrong password
+    and typing another one took 140 seconds in the pass, and the server had already gone.
+    **The population most likely to exceed the deadline is precisely the one this product is
+    for**, because reading a fingerprint by ear is supposed to be slow.
+
+    B9 fixed the *sentence*: what a listener now hears is "The server at 127.0.0.1 closed the
+    connection before signing in finished. Servers usually allow about two minutes to sign
+    in, and that time ran out. Connect again, and have the password ready", where it used to
+    be russh's own words, "Channel send error." That is honest and actionable, and it is not
+    a fix for the problem.
+
+    What this entry has to decide is what Acter should *do*. Three candidates, none free:
+    keep the questions ahead of the clock by asking everything before opening the connection
+    — which trades the deadline for asking a password that may not be needed; retry the
+    whole connection automatically with the answers already in hand, which is invisible and
+    has to be said out loud if it happens; or accept the limit and warn *before* it expires,
+    which is a timer the user did not ask for. It also wants measuring against a server that
+    is not the rig, since `LoginGraceTime` is configuration and 120 seconds is only the
+    default.
+
+27.3. Reopening the Connect dialog re-reads the last thing the previous attempt said. Spec:
+    none yet → specify first. **Found in B9's accessibility pass, 2026-08-26.** The dialog
+    carries its own live region (A8's fix for `showModal` making the document's announcer
+    inert), and the text of the last announcement is still in it when the dialog is opened
+    again — so a reader announces "Connect dialog. Opening a shell." on a dialog that is
+    opening rather than connecting. Cosmetic, and misleading in exactly the way A8 decision 2
+    is about: it describes something that is not happening.
+
 27.1. B9.5, offer to integrate the far end. Spec: none yet → specify when 27 is Done.
 
     A button that writes the integration snippet into the remote account's shell startup,

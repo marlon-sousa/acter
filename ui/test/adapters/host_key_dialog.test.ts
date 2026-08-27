@@ -26,6 +26,7 @@ function build(): { dialog: HTMLDialogElement; ask: HostKeyDialog } {
   document.body.innerHTML = `
     <dialog id="host-key-dialog">
       <h1 id="host-key-title"></h1>
+      <p id="host-key-summary"></p>
       <div id="host-key-body"></div>
       <form method="dialog">
         <button id="host-key-refuse" type="submit" value="refuse">Do not connect</button>
@@ -52,6 +53,7 @@ function build(): { dialog: HTMLDialogElement; ask: HostKeyDialog } {
     ask: new HostKeyDialog(
       dialog,
       document.getElementById('host-key-title') as HTMLElement,
+      document.getElementById('host-key-summary') as HTMLElement,
       document.getElementById('host-key-body') as HTMLElement,
     ),
   };
@@ -66,10 +68,15 @@ describe('HostKeyDialog', () => {
     const { dialog, ask } = build();
 
     const answered = ask.ask(UNKNOWN);
+    const summary = document.getElementById('host-key-summary')?.textContent ?? '';
     const said = document.getElementById('host-key-body')?.textContent ?? '';
 
-    expect(said).toContain('acter-ssh');
-    expect(said).toContain('2222');
+    // **Spoken as the dialog opens**, via aria-describedby: which host, and why it is
+    // asking. Found by driving NVDA on 2026-08-26, where a dialog that carried this only
+    // in its body announced its own name and nothing else.
+    expect(summary).toContain('acter-ssh');
+    expect(summary).toContain('2222');
+    expect(summary).toContain('never connected to this server before');
     expect(said).toContain(UNKNOWN.fingerprint);
 
     dialog.close('refuse');
@@ -98,10 +105,11 @@ describe('HostKeyDialog', () => {
 
     const answered = ask.ask(CHANGED);
     const title = document.getElementById('host-key-title')?.textContent ?? '';
+    const summary = document.getElementById('host-key-summary')?.textContent ?? '';
     const said = document.getElementById('host-key-body')?.textContent ?? '';
 
     expect(title.toLowerCase()).toContain('changed');
-    expect(said).toContain('pretending to be it');
+    expect(summary).toContain('pretending to be it');
     expect(said).toContain(CHANGED.recorded ?? '');
     expect(said).toContain(CHANGED.fingerprint);
 
