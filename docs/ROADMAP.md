@@ -2628,9 +2628,11 @@ thing to pick up once the adapters land, not merely the next number.
     opening rather than connecting. Cosmetic, and misleading in exactly the way A8 decision 2
     is about: it describes something that is not happening.
 
-27.4. **The first prompt never reaches the frontend at all.** Spec: none yet → specify
-    first. Reported by the user on 2026-08-26 — "on connection, I heard no prompt" — and
-    **measured on 2026-08-27**, which changed what this entry is about.
+27.4. **Done** — B6.2, what the far end said before its first marker. Spec:
+    [b6.2-what-the-far-end-said-before-its-first-marker.md](specs/b6.2-what-the-far-end-said-before-its-first-marker.md),
+    agreed and implemented 2026-08-27. **The first prompt never reached the frontend at
+    all.** Reported by the user on 2026-08-26 — "on connection, I heard no prompt" — and
+    **measured on 2026-08-27**, which changed what this entry was about.
 
     The first answer given was that an unintegrated session is silent by design. The user
     rejected it and was right: cmd is unintegrated for *output* and its prompt is still
@@ -2652,12 +2654,20 @@ thing to pick up once the adapters land, not merely the next number.
     buffer either, and there is nothing there to review. The user's framing was the correct
     one and the earlier write-up in this entry had the premise wrong.
 
-    What to look at: output arriving *before anything has been submitted* has no block to
-    belong to and no echo to explain it, and the pending-row machinery B4.9 and B4.10 built
-    holds it. An integrated shell never meets this because its prompt arrives as
-    `PromptDrawn` (B5.6); an unintegrated one has no such event. The fix is in
-    `SessionService`'s pump and it is delicate — that machinery took two entries to get
-    right — which is why this is its own entry rather than a patch at the end of B9.
+    **Where it was, and the pending-row machinery had nothing to do with it.** `Pump::wants`
+    had two arms where the domain has three states: `Unintegrated` wanted `Unstructured`, and
+    `Pending` shared an arm with `Integrated` that wanted only `Output`. `Pending` is the
+    state every session starts in and the state an unintegrated session stays in for the
+    whole five-second grace period, and before the first marker the tracker labels every
+    line `Unstructured` — so the gate dropped the text outright. One missing arm, invisible
+    until B9 gave the product a far end that never marks anything.
+
+    The prompt now reaches the frontend as the content of a block nobody submitted, which is
+    what `Pump::unclaimed` was already for, and is read aloud. Re-measured against the rig:
+    the login banner and `acter@acter-ssh:~$`, then the flag. Two consequences worth knowing
+    downstream — a shell's startup banner is no longer discarded, and the block minted for
+    the prompt spends the session's first `CommandId`, so a user's first command is
+    `CommandId(2)`.
 
 27.5. **Done** — the status region says the whole sentence, and the announcement is that
     same string, from one function. Fixed in B9's PR and measured with NVDA 2026.1.1 on
