@@ -7,6 +7,7 @@ import { BufferDom } from './adapters/buffer';
 import { installDebugRecorder } from './adapters/debug_recorder';
 import { AboutDialog } from './adapters/about_dialog';
 import { EditFieldDom } from './adapters/edit_field';
+import { HelpDialog } from './adapters/help_dialog';
 import { bindKeys } from './adapters/keyboard';
 import { ConnectDialog } from './adapters/connect_dialog';
 import { HostKeyDialog } from './adapters/host_key_dialog';
@@ -114,6 +115,14 @@ const connectDialog = new ConnectDialog(
 for (const id of ['connect-button', 'reconnect-button']) {
   byId(id).addEventListener('click', () => void connectDialog.open());
 }
+// What a session can and cannot tell you, explained where a listener can read it at
+// their own pace rather than in an announcement that is heard once (spec A12, decision 2).
+// It is built outside the Windows-only block below, because F1 opens it on every platform
+// while the menu bar exists only where a native one would freeze the reader.
+const helpDialog = new HelpDialog(
+  byId<HTMLDialogElement>('help-dialog'),
+  windowChrome,
+);
 const aboutDialog = new AboutDialog(
   byId<HTMLDialogElement>('about-dialog'),
   shell,
@@ -135,6 +144,7 @@ void shell.platform().then((os) => {
     {
       connect: () => void connectDialog.open(),
       exit: () => void shell.exit(),
+      help: () => helpDialog.open(),
       about: () => void aboutDialog.open(),
     },
     // Where the menu returns to is "whatever this window is showing" rather than the edit
@@ -148,7 +158,9 @@ void shell.platform().then((os) => {
 // The edit field is passed because the session hears a keystroke only while that field
 // has focus (DESIGN, layer 2), and the adapter enforces that by listening on the element
 // rather than on the document.
-bindKeys(controller, byId<HTMLFormElement>('command-form'), commandInput);
+bindKeys(controller, byId<HTMLFormElement>('command-form'), commandInput, () =>
+  helpDialog.open(),
+);
 // What this window opens onto: the session the launch brought, or nothing at all — which
 // since B7 is the ordinary case, and which the controller announces rather than leaving a
 // listener in front of a window that says nothing (spec B7, decision 3). Naming the far end

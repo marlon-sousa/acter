@@ -23,6 +23,12 @@ const SKELETON = `
       </ul>
     </li>
     <li role="none">
+      <span role="menuitem" id="menu-help" aria-haspopup="true" aria-expanded="false" tabindex="-1">Help</span>
+      <ul role="menu" aria-label="Help" hidden>
+        <li role="none"><span role="menuitem" id="menu-acter-help" tabindex="-1">Acter help</span></li>
+      </ul>
+    </li>
+    <li role="none">
       <span role="menuitem" id="menu-about" aria-haspopup="true" aria-expanded="false" tabindex="-1">About</span>
       <ul role="menu" aria-label="About" hidden>
         <li role="none"><span role="menuitem" id="menu-about-acter" tabindex="-1">About Acter</span></li>
@@ -32,7 +38,7 @@ const SKELETON = `
   <input id="command-input" />
 `;
 
-let actions: { connects: number; exited: number; abouts: number };
+let actions: { connects: number; exited: number; helps: number; abouts: number };
 let returned: number;
 
 function byId(id: string): HTMLElement {
@@ -72,7 +78,7 @@ function expanded(id: string): string | null {
 
 beforeEach(() => {
   document.body.innerHTML = SKELETON;
-  actions = { connects: 0, exited: 0, abouts: 0 };
+  actions = { connects: 0, exited: 0, helps: 0, abouts: 0 };
   returned = 0;
   const editField = byId('command-input');
   installMenuBar(
@@ -83,6 +89,9 @@ beforeEach(() => {
       },
       exit: () => {
         actions.exited += 1;
+      },
+      help: () => {
+        actions.helps += 1;
       },
       about: () => {
         actions.abouts += 1;
@@ -148,6 +157,9 @@ describe('walking it', () => {
   it('right and left move between the top level items and wrap', () => {
     press('F10');
     press('ArrowRight');
+    expect(focused()).toBe('menu-help');
+
+    press('ArrowRight');
     expect(focused()).toBe('menu-about');
 
     press('ArrowRight');
@@ -173,7 +185,7 @@ describe('walking it', () => {
     press('ArrowRight');
 
     expect(expanded('menu-acter')).toBe('false');
-    expect(expanded('menu-about')).toBe('true');
+    expect(expanded('menu-help')).toBe('true');
   });
 
   /** One step back rather than out, which is what a menu user expects. */
@@ -190,6 +202,7 @@ describe('walking it', () => {
   it('up from the bar opens the menu at its last item', () => {
     press('F10');
     press('ArrowRight');
+    press('ArrowRight');
     press('ArrowUp');
 
     expect(focused()).toBe('menu-about-acter');
@@ -203,7 +216,7 @@ describe('choosing something', () => {
     press('Enter');
 
     expect(actions.connects).toBe(1);
-    expect(actions.exited + actions.abouts).toBe(0);
+    expect(actions.exited + actions.helps + actions.abouts).toBe(0);
     expect(expanded('menu-acter')).toBe('false');
   });
 
@@ -250,14 +263,28 @@ describe('choosing something', () => {
     expect(returned).toBe(0);
   });
 
-  it('the other leaf runs the other action', () => {
+  it('the second menu runs help', () => {
     press('F10');
     press('ArrowRight');
     press('ArrowDown');
     press('Enter');
 
+    expect(actions.helps).toBe(1);
+    expect(actions.connects + actions.exited + actions.abouts).toBe(0);
+  });
+
+  // One activation per test, deliberately: activating leaves focus on the item until the
+  // adapter's own tick moves it, so a second `F10` in the same test means *leave the bar*
+  // rather than enter it — which is the bar behaving correctly and a test walking into it.
+  it('the third menu runs about', () => {
+    press('F10');
+    press('ArrowRight');
+    press('ArrowRight');
+    press('ArrowDown');
+    press('Enter');
+
     expect(actions.abouts).toBe(1);
-    expect(actions.exited).toBe(0);
+    expect(actions.connects + actions.exited + actions.helps).toBe(0);
   });
 
   /** Space activates what Enter activates: both are the platform's own, and a menu that
@@ -278,15 +305,15 @@ describe('choosing something', () => {
     );
 
     for (const leaf of leaves) {
-      actions = { connects: 0, exited: 0, abouts: 0 };
+      actions = { connects: 0, exited: 0, helps: 0, abouts: 0 };
       leaf.dispatchEvent(new MouseEvent('click', { bubbles: true }));
 
       expect(
-        actions.connects + actions.exited + actions.abouts,
+        actions.connects + actions.exited + actions.helps + actions.abouts,
         `${leaf.id} is a menu item nothing happens for`,
       ).toBe(1);
     }
 
-    expect(leaves.length).toBe(3);
+    expect(leaves.length).toBe(4);
   });
 });

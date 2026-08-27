@@ -31,14 +31,25 @@ export const patienceMessage =
 export const altScreenEnteredMessage =
   'this program needs interactive mode, which is not available yet. Press Ctrl+C to return to the prompt';
 export const altScreenLeftMessage = 'interactive program ended';
-// This session's shell never announced itself, so there are no command boundaries in it:
-// nothing is read aloud, output still accumulates in the buffer for review, and long
-// commands are still announced as running. The wording says what the user has to do
-// differently rather than naming the mechanism, because "OSC 133" is not a thing to say
-// to somebody trying to run a command (DESIGN's reliability case 2, backend event added
-// in B6).
+// This session's shell never announced itself, so Acter is not told how a command ended:
+// no exit code and no verdict. Everything else a listener meets is unchanged — output is
+// read aloud, it accumulates in the buffer, and a long command is still announced as
+// running.
+//
+// **This sentence said the opposite for five entries** (spec A12). It claimed output would
+// not be read automatically, which B4.4 stopped being true — "only the silence goes" — and
+// which `policies/autoread.rs` has never consulted `Integration` about. B6.2 made the lie
+// audible rather than causing it, by reading the prompt too, so a listener heard the claim
+// and then immediately heard output.
+//
+// **And the wording is a user's, not this project's.** Offered three accurate corrections
+// that all said "shell integration", "verdict" or "exit code", the user answered that not
+// even they could understand them. So the sentence names what still works, names the one
+// thing that does not in the words a person uses about a command, and sends anybody who
+// wants the reason to a place they can read at their own pace — which is what F1 now opens
+// (DESIGN's reliability case 2, backend event added in B6).
 export const integrationUnavailableMessage =
-  'shell integration unavailable, output will not be read automatically; review it in the buffer';
+  'You will hear what commands print here, but not whether they worked. Press F1 for help.';
 // The babble guard tripped: output keeps arriving and keeps reaching the buffer, it is
 // simply no longer read aloud. The wording says both halves, because "quiet" here never
 // means the output stopped or was withheld (DESIGN, buffer and speech are separate).

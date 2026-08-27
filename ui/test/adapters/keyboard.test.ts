@@ -72,14 +72,38 @@ document.body.innerHTML =
 const controller = new StubController();
 const editField = document.getElementById('command-input') as HTMLInputElement;
 const results = document.getElementById('results') as HTMLElement;
+let helpOpened = 0;
 bindKeys(
   controller as unknown as AppController,
   document.getElementById('command-form') as HTMLFormElement,
   editField,
+  () => {
+    helpOpened += 1;
+  },
 );
 
 beforeEach(() => {
   controller.reset();
+  helpOpened = 0;
+});
+
+// **F1 belongs to the window, not to a control** (spec A12, decision 3). The sentence
+// that sends a user here is announced while the window may be showing anything, so the
+// key has to work from the buffer and from a window with no edit field at all — which is
+// what listening on the document buys, and what these two assert.
+describe('F1 opens Help (A12)', () => {
+  it('opens it from the edit field, and answers the key', () => {
+    const prevented = keydown(editField, 'F1');
+
+    expect(helpOpened).toBe(1);
+    expect(prevented).toBe(true);
+  });
+
+  it('opens it from the results buffer too', () => {
+    keydown(results, 'F1');
+
+    expect(helpOpened).toBe(1);
+  });
 });
 
 describe('Ctrl+C from the edit field (A3.2)', () => {
