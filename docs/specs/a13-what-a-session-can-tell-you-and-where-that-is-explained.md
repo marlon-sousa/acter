@@ -111,6 +111,7 @@ reasons. Filed as roadmap 13.8 rather than done quietly here.
 - `ui/src/main.ts` — the wiring.
 - `ui/test/adapters/help_dialog.test.ts`, `ui/test/adapters/keyboard.test.ts`,
   `ui/test/adapters/menu_bar.test.ts`, `ui/test/controllers/app.test.ts`.
+- `e2e/test/specs/menu.spec.ts` — the bar's order, About's walk, and a Help suite.
 
 ## Definition of done
 
@@ -123,7 +124,25 @@ reasons. Filed as roadmap 13.8 rather than done quietly here.
 - [x] Tab cycles inside Help rather than dropping into the document.
 - [x] Opening Help announces one short line rather than reading the whole topic, asserted by
       a test that checks what the description points at rather than that it exists.
-- [x] `npm test` in `ui/`, `npm run typecheck`, workspace tests, `cargo fmt` and clippy clean.
+- [x] The e2e suite walks the bar's new order, opens Help by F1 and by the menu, and asserts
+      the topic's shape against the shipped markup.
+- [x] `npm test` in `ui/`, `npm run typecheck`, `npm run test:e2e`, workspace tests,
+      `cargo fmt` and clippy clean.
+
+## What the first push got wrong, and why it is recorded here
+
+**The e2e suite was not in this spec's definition of done, and it went red on CI.**
+`menu.spec.ts` walks the bar by counting ArrowRights, so a third top-level menu moved About
+out from under `openAbout`, and nothing in that suite touched Help at all. The unit suites
+caught the same class of change immediately — `menu_bar.test.ts` asserts the leaf count — and
+the gap was that the slower suite was never run.
+
+Two things follow, and the second is the one worth keeping. `openAbout` now says in its own
+comment that counting keypresses to reach a menu breaks when a menu is added, and the bar's
+order is pinned by one test rather than implied by five. And **a change to the menu bar or to
+a dialog runs `npm run test:e2e` before it is pushed**, which this definition of done now
+says out loud — a spec that lists the fast suites and omits the slow one is a spec that
+invites exactly this.
 
 ## Accessibility checklist for the PR body
 
