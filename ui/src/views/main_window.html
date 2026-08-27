@@ -63,7 +63,7 @@
         <!-- Help sits between the commands and About, where a Windows user's hand expects
              it. It carries one item rather than being a top-level leaf: the bar's keyboard
              contract opens a submenu on Enter, so a top-level item with nothing under it
-             would answer that key with nothing at all (spec A12). -->
+             would answer that key with nothing at all (spec A13). -->
         <li role="none">
           <span
             role="menuitem"
@@ -214,7 +214,7 @@
     </dialog>
     <!-- Help. A modal <dialog> for About's reasons, and **deliberately not an application
          region**, which is the one thing this dialog does differently from every other one
-         added since B9 (spec A12, decision 4).
+         added since B9 (spec A13, decision 4).
 
          Those dialogs wrap themselves in `role="application"` so the arrows and Enter reach
          the widget rather than a browse-mode cursor. What is in here is prose to be *read*,
@@ -231,7 +231,7 @@
       aria-describedby="help-summary"
     >
       <h1 id="help-title">Acter help</h1>
-      <!-- **What opening it says, and the reason it is one line** (spec A12, decision 7).
+      <!-- **What opening it says, and the reason it is one line** (spec A13, decision 7).
            Driven with NVDA on 2026-08-27 without this, the dialog announced its title and
            then read the whole topic — six paragraphs in one utterance, with the headings
            left out of it, because a reader with no description to speak falls back to the

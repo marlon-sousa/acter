@@ -5,7 +5,7 @@
 // The platform's three behaviours (announced as a dialog, focus trapped while open,
 // Escape closes) are not restated here, for the About suite's reason: asserting that a
 // `<dialog>` is a dialog tests jsdom. What is Acter's is below — and one of these is not
-// about behaviour at all but about the markup, because A12's whole argument is that this
+// about behaviour at all but about the markup, because A13's whole argument is that this
 // dialog must stay readable when every other dialog added since B9 is not.
 
 import { beforeEach, describe, expect, it } from 'vitest';
@@ -117,7 +117,7 @@ describe('leaving it', () => {
 });
 
 describe('the topic is shaped to be read', () => {
-  /** **The assertion A12 exists for.** Every dialog added since B9 wraps itself in
+  /** **The assertion A13 exists for.** Every dialog added since B9 wraps itself in
    * `role="application"` so the arrows reach the widget; inside one, prose cannot be
    * arrowed, which the Connect dialog's own note records. A help topic a listener cannot
    * arrow through line by line is not help, so this dialog must never gain that wrapper —

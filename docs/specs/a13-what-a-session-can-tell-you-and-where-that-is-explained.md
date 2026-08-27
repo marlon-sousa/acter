@@ -1,4 +1,4 @@
-# A12 — What a session can tell you, and where that is explained
+# A13 — What a session can tell you, and where that is explained
 
 Roadmap entry 13.7. Agreed in conversation 2026-08-27, from the user's question during B6.2's
 accessibility pass: *"'shell integration unavailable, output will not be read' — is this still

@@ -36,7 +36,7 @@ export const altScreenLeftMessage = 'interactive program ended';
 // read aloud, it accumulates in the buffer, and a long command is still announced as
 // running.
 //
-// **This sentence said the opposite for five entries** (spec A12). It claimed output would
+// **This sentence said the opposite for five entries** (spec A13). It claimed output would
 // not be read automatically, which B4.4 stopped being true — "only the silence goes" — and
 // which `policies/autoread.rs` has never consulted `Integration` about. B6.2 made the lie
 // audible rather than causing it, by reading the prompt too, so a listener heard the claim

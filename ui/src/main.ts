@@ -116,7 +116,7 @@ for (const id of ['connect-button', 'reconnect-button']) {
   byId(id).addEventListener('click', () => void connectDialog.open());
 }
 // What a session can and cannot tell you, explained where a listener can read it at
-// their own pace rather than in an announcement that is heard once (spec A12, decision 2).
+// their own pace rather than in an announcement that is heard once (spec A13, decision 2).
 // It is built outside the Windows-only block below, because F1 opens it on every platform
 // while the menu bar exists only where a native one would freeze the reader.
 const helpDialog = new HelpDialog(

@@ -17,7 +17,7 @@ export function bindKeys(
   // the document. What the *session* hears does not: see below.
   //
   // **F1 is the platform's "explain this"** and is unclaimed here — one keystroke with
-  // nothing to disambiguate, which is the argument A7 made for F10 (spec A12, decision 3).
+  // nothing to disambiguate, which is the argument A7 made for F10 (spec A13, decision 3).
   // It is on the document rather than on the edit field because the sentence that sends a
   // user here is announced while the window may be showing anything: the buffer, the
   // Connect button of a window with no session, or nothing focused at all.

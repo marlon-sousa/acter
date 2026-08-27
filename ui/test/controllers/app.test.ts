@@ -741,7 +741,7 @@ describe('event rendering (decision 2)', () => {
     expect(announcer.announcements).toEqual([integrationUnavailableMessage]);
     // **Spelled out rather than compared to the constant alone**, because the constant
     // was wrong for five entries and every test that only compared it to itself passed
-    // the whole time (spec A12). What is pinned here is the sentence a person hears.
+    // the whole time (spec A13). What is pinned here is the sentence a person hears.
     expect(announcer.announcements[0]).toBe(
       'You will hear what commands print here, but not whether they worked. Press F1 for help.',
     );

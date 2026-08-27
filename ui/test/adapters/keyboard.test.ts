@@ -87,11 +87,11 @@ beforeEach(() => {
   helpOpened = 0;
 });
 
-// **F1 belongs to the window, not to a control** (spec A12, decision 3). The sentence
+// **F1 belongs to the window, not to a control** (spec A13, decision 3). The sentence
 // that sends a user here is announced while the window may be showing anything, so the
 // key has to work from the buffer and from a window with no edit field at all — which is
 // what listening on the document buys, and what these two assert.
-describe('F1 opens Help (A12)', () => {
+describe('F1 opens Help (A13)', () => {
   it('opens it from the edit field, and answers the key', () => {
     const prevented = keydown(editField, 'F1');
 
