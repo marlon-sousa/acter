@@ -74,13 +74,27 @@ So it follows the About dialog, which has no such wrapper: a plain modal `<dialo
 headings and paragraphs, `keepTabInside` for the Tab the platform does not cycle, and focus
 returned to whatever the window is showing when it closes.
 
-### 5. The topic explains the difference by what a listener hears, not by what a shell emits
+### 5. Opening it says one line, not the whole topic
+
+**Added after the pass, which found the opposite shipping.** With no description of its own,
+NVDA announced the dialog's name and then read the entire body in a single utterance — six
+paragraphs, about two hundred words, **with the headings left out of it**, because a reader
+with nothing else to speak falls back to the content. So the one read a listener gets for free
+was the wall of prose, and the part it dropped was the structure decision 4 exists to provide.
+
+An explicit `aria-describedby` pointing at one short line fixes it, and it is not a new idea
+here: B9's host-key dialog already does exactly this, and this same pass watched it announce
+one paragraph and leave the fingerprint to be found on its own tab stop. The line names what is
+here and how to move through it — *"Three short sections about what you hear when you run a
+command. Use your reader's heading key to move between them."*
+
+### 6. The topic explains the difference by what a listener hears, not by what a shell emits
 
 No "OSC 133", no "markers", no "integration" as a thing to understand. The topic answers three
 questions in a listener's own terms: what you always get, what you sometimes do not get, and
 which sessions are which. Headings so it can be skimmed with `h`.
 
-### 6. What this does not touch
+### 7. What this does not touch
 
 The connection sentence still says "…bash, with no shell integration set up on this host". It is
 the same vocabulary and the same objection applies to it, but it was decided and measured in B9
@@ -100,21 +114,45 @@ reasons. Filed as roadmap 13.8 rather than done quietly here.
 
 ## Definition of done
 
-- [ ] The announcement is the sentence in decision 1, and the test that pins it says so.
-- [ ] F1 opens Help from the edit field, from the results buffer, and from the window with no
+- [x] The announcement is the sentence in decision 1, and the test that pins it says so.
+- [x] F1 opens Help from the edit field, from the results buffer, and from the window with no
       session.
-- [ ] The Help menu opens the same dialog as F1.
-- [ ] Opening Help twice does not throw, the way About already does not.
-- [ ] Closing Help returns focus to whatever the window is showing.
-- [ ] Tab cycles inside Help rather than dropping into the document.
-- [ ] `npm test` in `ui/`, `npm run typecheck`, workspace tests, `cargo fmt` and clippy clean.
+- [x] The Help menu opens the same dialog as F1.
+- [x] Opening Help twice does not throw, the way About already does not.
+- [x] Closing Help returns focus to whatever the window is showing.
+- [x] Tab cycles inside Help rather than dropping into the document.
+- [x] Opening Help announces one short line rather than reading the whole topic, asserted by
+      a test that checks what the description points at rather than that it exists.
+- [x] `npm test` in `ui/`, `npm run typecheck`, workspace tests, `cargo fmt` and clippy clean.
 
 ## Accessibility checklist for the PR body
 
-- [ ] Connecting over SSH announces the new sentence, in full, and it is understandable without
-      knowing how Acter works.
-- [ ] F1 opens Help and the dialog announces itself.
-- [ ] The topic can be read with the arrow keys, line by line, and skimmed with `h`.
-- [ ] Tab inside Help cycles and never lands outside it.
-- [ ] Escape closes Help and focus lands somewhere a listener can carry on from.
-- [ ] Help is reachable from the menu bar and announces the same dialog.
+**Agent-observed**, all six, driving NVDA 2026.1.1 through the screen-readers bridge on
+2026-08-27: silent capture, `user` persona, the real application. Nothing here needed a sense
+the bridge cannot capture, so no item is left for a human — but the finding in decision 5 was
+found here and nowhere else, and is worth a listener's own ear.
+
+- [x] The new sentence is announced, in full, and is understandable without knowing how Acter
+      works. Heard on the unmarked scripted session: `You will hear what commands print here,
+      but not whether they worked. Press F1 for help.`, 4.5 s after the prompt.
+      **The item named the wrong session and is corrected.** It asked for this over SSH, where
+      it is deliberately never said: the connection sentence has already named the far end and
+      said the same thing, so `app.ts` suppresses this one (B9, decision 2). Confirmed by
+      waiting the grace period out over SSH and hearing nothing. This is the second checklist
+      item written from the backend's event order without checking that suppression — the
+      first was B6.2's, the day before.
+- [x] F1 opens Help and the dialog announces itself. Heard from the window with no session,
+      from the connected session's edit field, and from the results buffer.
+- [x] The topic can be read with the arrow keys, line by line, and skimmed with `h`: three
+      level 2 headings under the level 1 title, each announced with its level, and the
+      paragraphs arrow one line at a time. Decision 4 is doing what it was written for.
+      **Opening it read the whole topic aloud at first**, headings omitted — fixed in this PR
+      as decision 5, and re-driven: it now says one line and the three sections are still where
+      the heading key finds them.
+- [x] Tab inside Help does not land outside it. With one control it stays rather than cycling,
+      which is `dialog_tab.ts`'s deliberate answer to a single-control dialog and what About
+      already does.
+- [x] Escape closes Help and focus lands somewhere a listener can carry on from: the Connect
+      button in a window with no session, the command line in a connected one.
+- [x] Help is reachable from the menu bar — `Help submenu 2 of 3`, then `Acter help` — and
+      announces the same dialog, word for word.

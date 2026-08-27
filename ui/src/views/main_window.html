@@ -225,8 +225,26 @@
 
          The content is static rather than filled from the backend: it explains what a
          listener hears, and nothing about it depends on the build or the machine. -->
-    <dialog id="help-dialog" aria-labelledby="help-title">
+    <dialog
+      id="help-dialog"
+      aria-labelledby="help-title"
+      aria-describedby="help-summary"
+    >
       <h1 id="help-title">Acter help</h1>
+      <!-- **What opening it says, and the reason it is one line** (spec A12, decision 7).
+           Driven with NVDA on 2026-08-27 without this, the dialog announced its title and
+           then read the whole topic — six paragraphs in one utterance, with the headings
+           left out of it, because a reader with no description to speak falls back to the
+           content. So the one read a listener gets for free was the wall of prose, and the
+           structure built for skimming was the part it dropped.
+
+           An explicit description is what the host-key dialog already does for the same
+           reason (spec B9): it names what is here and how to move through it, and the
+           sections stay where a heading key can find them. -->
+      <p id="help-summary">
+        Three short sections about what you hear when you run a command. Use your reader's
+        heading key to move between them.
+      </p>
 
       <h2>What you always hear</h2>
       <p>

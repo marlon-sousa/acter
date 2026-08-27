@@ -15,8 +15,9 @@ import { HelpDialog } from '../../src/adapters/help_dialog';
 /** The static skeleton from views/main_window.html, restated so this suite tests the
  * structure the product ships rather than one invented for the test. */
 const SKELETON = `
-  <dialog id="help-dialog" aria-labelledby="help-title">
+  <dialog id="help-dialog" aria-labelledby="help-title" aria-describedby="help-summary">
     <h1 id="help-title">Acter help</h1>
+    <p id="help-summary">Three short sections about what you hear when you run a command. Use your reader's heading key to move between them.</p>
     <h2>What you always hear</h2>
     <p>When you run a command, Acter reads out what the command prints.</p>
     <h2>What you sometimes do not hear</h2>
@@ -124,6 +125,25 @@ describe('the topic is shaped to be read', () => {
   it('has no application region anywhere in it', () => {
     expect(dialog.querySelector('[role="application"]')).toBeNull();
     expect(dialog.getAttribute('role')).toBeNull();
+  });
+
+  /** **Measured with NVDA on 2026-08-27, before this existed.** Without a description of
+   * its own the dialog announced its title and then read the whole topic in one utterance
+   * — six paragraphs, headings left out, because a reader with nothing else to speak falls
+   * back to the content. So the one read a listener gets for free was the wall of prose,
+   * and the part it dropped was the structure built for skimming.
+   *
+   * The description is what the host-key dialog already uses for the same reason (spec B9),
+   * and it must point at something short. A test that only asserted the attribute exists
+   * would pass if it pointed at the whole body, which is the bug. */
+  it('says one short line when it opens rather than reading itself out', () => {
+    const describedBy = dialog.getAttribute('aria-describedby');
+    expect(describedBy).not.toBeNull();
+
+    const summary = dialog.querySelector(`#${describedBy}`);
+    expect(summary).not.toBeNull();
+    expect(summary?.tagName).toBe('P');
+    expect((summary?.textContent ?? '').length).toBeLessThan(200);
   });
 
   /** Skimmable with a reader's heading key, which is how somebody who came here for one
