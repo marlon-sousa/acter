@@ -2565,22 +2565,36 @@ thing to pick up once the adapters land, not merely the next number.
     opening rather than connecting. Cosmetic, and misleading in exactly the way A8 decision 2
     is about: it describes something that is not happening.
 
-27.4. A session that is ready says nothing about it. Spec: none yet → specify first.
-    **Reported by the user in B9's accessibility pass, 2026-08-26**: "on connection, I heard
-    no prompt."
+27.4. **The first prompt never reaches the frontend at all.** Spec: none yet → specify
+    first. Reported by the user on 2026-08-26 — "on connection, I heard no prompt" — and
+    **measured on 2026-08-27**, which changed what this entry is about.
 
-    An unintegrated far end draws its prompt as ordinary output, and with no command
-    boundaries there is nothing to autoread — which is the decided behaviour (DESIGN's
-    reliability case 2, B4.4) and exactly what the connection announcement warns about. The
-    consequence was still not thought through: a listener connects, hears the connection
-    announced, and then hears **nothing at all**, with no way to tell whether the far end is
-    ready for typing, still starting, or dead.
+    The first answer given was that an unintegrated session is silent by design. The user
+    rejected it and was right: cmd is unintegrated for *output* and its prompt is still
+    heard, so "unintegrated" does not mean silent anywhere else in this product. The
+    measurement is in `ssh_rig.rs`, `what_a_session_says_when_it_has_just_connected`, which
+    builds the whole pipeline the window has — transport, real engine, real pacing policy,
+    the shell facts an SSH far end actually gets — and records every `SessionEvent` the
+    frontend would have received.
 
-    It is not SSH's alone — every unintegrated session has it — but SSH is where it bites,
-    because a remote shell over a network is the slowest one to arrive and the one where
-    "did that work?" is a real question. What to say is the decision: the first output after
-    connecting, read once; or a plain "ready"; or the prompt itself when one can be
-    recognised without markers, which is B5.6's subject from the other side.
+    In six seconds after connecting, the frontend received **two events and no output at
+    all**:
+
+    - `ConnectionChanged { state: Connected }`
+    - `IntegrationUnavailable`
+
+    The far end had drawn its prompt by then — the same rig shows `acter@acter-ssh:~$`
+    arriving as soon as any command is submitted. So this is not a policy declining to
+    *announce* the prompt: **the bytes never leave the session**, so they never reach the
+    buffer either, and there is nothing there to review. The user's framing was the correct
+    one and the earlier write-up in this entry had the premise wrong.
+
+    What to look at: output arriving *before anything has been submitted* has no block to
+    belong to and no echo to explain it, and the pending-row machinery B4.9 and B4.10 built
+    holds it. An integrated shell never meets this because its prompt arrives as
+    `PromptDrawn` (B5.6); an unintegrated one has no such event. The fix is in
+    `SessionService`'s pump and it is delicate — that machinery took two entries to get
+    right — which is why this is its own entry rather than a patch at the end of B9.
 
 27.5. The status region says less than the connection announcement did. Spec: none yet →
     specify first. **Reported by the user, 2026-08-26**: they took "connected to SSH: acter

@@ -769,3 +769,103 @@ async fn the_byte_that_ends_a_bash_session_over_ssh() {
         session.seen
     );
 }
+
+// --- What a freshly connected session says, measured ------------------------------------
+
+/// **Where the far end's first prompt goes**, measured rather than reasoned about.
+///
+/// Reported by the user on 2026-08-26: "on connection, I heard no prompt." The answer that
+/// an unintegrated session is silent by design was rejected, correctly — cmd is unintegrated
+/// for *output* and its prompt is still heard, so "unintegrated" plainly does not mean
+/// silent across this product.
+///
+/// This builds the whole pipeline the window has — the transport, a real terminal engine,
+/// the real pacing policy and the shell facts an SSH far end actually gets — and records
+/// every `SessionEvent` the frontend would have received in the seconds after connecting.
+/// The output is the point, so run with `--nocapture`.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore]
+async fn what_a_session_says_when_it_has_just_connected() {
+    use std::time::Instant;
+
+    use acter_core::{
+        Clock, EventSink, PacingConfig, SessionApi, SessionEvent, SessionService, Timer,
+    };
+    use acter_term::AlacrittyEngine;
+    use tokio::sync::oneshot;
+
+    struct RealClock(Instant);
+    impl Clock for RealClock {
+        fn now(&self) -> Duration {
+            self.0.elapsed()
+        }
+        fn timer(&self, after: Duration) -> Timer {
+            let (fire, fired) = oneshot::channel();
+            tokio::spawn(async move {
+                tokio::time::sleep(after).await;
+                let _ = fire.send(());
+            });
+            Timer::new(fired)
+        }
+    }
+
+    /// Everything the frontend would have received.
+    #[derive(Default)]
+    struct Recorder(Mutex<Vec<SessionEvent>>);
+    impl EventSink for Recorder {
+        fn send(&self, event: SessionEvent) {
+            self.0.lock().unwrap().push(event);
+        }
+    }
+
+    let scratch = Scratch::new();
+    let answers = Answers::accepting();
+    let target = SshTarget {
+        host: HOST.to_owned(),
+        port: PORT,
+        user: USER.to_owned(),
+    };
+    let transport = SshTransport::connect(
+        &target,
+        scratch.empty(),
+        answers as Arc<dyn SshQuestions>,
+        COLUMNS,
+        SCREEN_LINES,
+        acter_transports::probe_patience(),
+    )
+    .await
+    .expect("the rig connects");
+
+    // Exactly what the composition root builds for an SSH far end.
+    let name = transport.far_end().name();
+    let facts = acter_shells::over_ssh(name.as_deref());
+    let session = SessionService::start(
+        Box::new(transport),
+        Box::new(AlacrittyEngine::new(COLUMNS, SCREEN_LINES)),
+        Arc::new(RealClock(Instant::now())) as Arc<dyn Clock>,
+        PacingConfig::default(),
+        facts,
+    );
+
+    let recorder = Arc::new(Recorder::default());
+    session.attach_session(
+        acter_core::SessionId(1),
+        Arc::clone(&recorder) as Arc<dyn EventSink>,
+    );
+
+    // Long enough for the prompt to arrive, be rendered, fall quiet, and for the startup
+    // grace period to expire — which is when an unintegrated session reports itself.
+    tokio::time::sleep(Duration::from_secs(6)).await;
+
+    let seen = recorder.0.lock().unwrap().clone();
+    println!("--- what a freshly connected SSH session said, in order ---");
+    for event in &seen {
+        println!("  {event:?}");
+    }
+    println!("--- {} events in total ---", seen.len());
+
+    assert!(
+        !seen.is_empty(),
+        "a session that connected said nothing at all to the frontend"
+    );
+}
