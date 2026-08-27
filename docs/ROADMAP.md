@@ -2295,9 +2295,19 @@ thing to pick up once the adapters land, not merely the next number.
     spinner in words**: a listener needs to know that waiting is correct, and to be told when
     waiting stopped being correct.
 
-23.8. WSL assumes the far end is bash, and never checks. Spec: none yet → specify first.
+23.8. WSL assumes the far end is bash, and never checks. Spec: **B5.5, agreed in
+    conversation 2026-08-27**, travelling with its implementation as
+    `docs/specs/b5.5-the-distribution-says-what-shell-it-runs.md`.
     **Found in conversation 2026-08-26**, while deciding how SSH would recognise a shell it
     did not name. WSL has the same shape and it had gone unnoticed.
+
+    **One thing the spec had to correct about this entry, agreed 2026-08-27**: the safety
+    property is already in place. `ShellMarkers::Full` is not a claim that a shell is
+    integrated — `Plain` and `far_end::over_ssh` make the same optimistic claim, and the
+    grace period is what contradicts it — so a zsh distribution already degrades honestly
+    rather than forging markers. What is missing is the *sentence* and the *knowing*, which
+    is what the probe buys, and it is also why this entry is not urgent enough to jump ahead
+    of anything.
 
     **What is assumed.** `wsl.exe` is a client, not a shell: what it starts is whatever login
     shell that distribution's account is configured with, from the distribution's own passwd.
@@ -2343,6 +2353,59 @@ thing to pick up once the adapters land, not merely the next number.
     and that stays true — clobbering is a different question and is not what this probe
     answers. What changes is the assumption sitting beside it, which was never written down:
     that the login shell is bash at all.
+
+23.9. A shell is chosen by filename, and started without anyone asking who signed it. Spec:
+    **B5.7, agreed in conversation 2026-08-27**, travelling with its implementation as
+    `docs/specs/b5.7-what-this-machine-actually-has.md`. **Raised by the user 2026-08-27**:
+    *"I won't want to execute a pwsh.exe to discover we had run a malware."*
+
+    `InstalledShells::is_available` walks `PATH` and `PATHEXT` and asks whether a candidate
+    `is_file()`. `LocalPty` then spawns the program **by name**, so Windows resolves the name
+    a second time and nothing guarantees the two resolutions land on the same file. That
+    makes `PATH`-order hijacking cheap and makes any signature check meaningless until the
+    resolution happens once — which is why the two halves are one entry: resolve once,
+    verify that file, start that file.
+
+    **Three measurements taken 2026-08-27 on the developer's machine, each of which killed an
+    obvious answer.** `cmd.exe`, `powershell.exe` and `wsl.exe` are **catalog**-signed, not
+    embedded-signed, so the textbook `WinVerifyTrust` over a file would report every shell
+    Windows ships as unsigned. `HKLM\SOFTWARE\Microsoft\PowerShellCore\InstalledVersions`
+    **does not exist here**, because this machine's PowerShell 7 is the Store package rather
+    than the MSI — so "read the registry, it is authoritative" finds no PowerShell 7 on a
+    machine that has it, and the registry is rejected as a general rule. And the execution
+    alias at `%LOCALAPPDATA%\Microsoft\WindowsApps\pwsh.exe` is a zero-byte reparse point
+    that Rust's `is_file()` reports as a file and that **cannot be opened at all**
+    (`ERROR_CANT_ACCESS_FILE`) — so it can be started and not read, and resolve-then-verify
+    does not compose with it.
+
+    **The verdict is a sentence and never a gate**, following A11 decision 3 and B9's
+    host-key question. A self-built pwsh, a corporate re-signed build, a damaged catalog
+    database and an offline revocation check are all legitimate and all common, and hiding a
+    user's shell for any of them teaches the lesson B5.4 refused to teach. What the check
+    buys is narrower than it sounds and still worth it: it defeats `PATH`-order hijacking,
+    and it tells the user before the program runs rather than after.
+
+23.10. A cold WSL start outruns the five-second grace period. Spec: none yet → specify
+    first, and specifying it means measuring the number rather than picking one. **Found
+    2026-08-27** while running the real-shell suite for B6.2.
+
+    `a_real_bash_under_wsl_marks_the_boundaries_of_the_command_it_ran` failed on the first
+    run after the WSL virtual machine had been idle, reporting `IntegrationUnavailable` on a
+    session that was fully integrated and whose blocks and exit codes all arrived; an
+    immediate rerun passed, and the whole suite passed on the rerun. So the distribution took
+    longer than five seconds to reach its first prompt.
+
+    **What a listener meets** is the first WSL connection of the day announcing that the
+    session has no shell integration, and then quietly having it — DESIGN decision 8 recovers
+    on the late marker, silently, which is right for recovery and means the wrong sentence is
+    never withdrawn. B6.2 makes this louder rather than quieter, since the prompt now arrives
+    too and the two are heard together.
+
+    B6 decision 9 already names `integration_grace` as the number in `PacingConfig` most
+    likely to be retuned by evidence. This is the first evidence. What it does *not* settle
+    is whether the answer is a larger number, a number that differs by transport, or a
+    sentence that is withheld until the session has been quiet for a while — the last of
+    which is the only one that costs nothing on a fast machine.
 
 24. **Done** — B6.1, correlation that cannot drift. Spec:
     [b6.1-correlation-that-cannot-drift.md](specs/b6.1-correlation-that-cannot-drift.md).
