@@ -82,6 +82,29 @@ pub enum ConnectQuestion {
         /// read, so the user knows this may be being asked about a host they already trust.
         aside: Option<String>,
     },
+    /// The file this machine is about to start did not verify.
+    ///
+    /// **Never a gate, and it arrives here rather than removing a row from the list** (spec
+    /// B5.7, decision 6). A self-built pwsh, a corporate re-signed build, a damaged catalog
+    /// database and an offline revocation check are all legitimate and all common; hiding
+    /// any of them would teach a user that Acter cannot see the shell they are looking
+    /// straight at. So everything discovered is listed, and starting an unverified one asks
+    /// first — the shape B9 established for an unknown host key.
+    Unverified {
+        /// What the user chose, as they heard it in the list.
+        label: String,
+        /// The file that would be started, in full — **the path rather than the name**,
+        /// because `PATH`-order hijacking is what this defeats, and which directory the file
+        /// is in is the whole of what makes it recognisably wrong.
+        program: String,
+        /// What was found and what it means, as whole sentences ending in what to do next.
+        /// Composed once, in the domain, so the words are decided in one place.
+        said: String,
+        /// Who signed it, when anything could be read about that — carried separately from
+        /// the sentence so a dialog can put it somewhere it can be read character by
+        /// character.
+        signer: Option<String>,
+    },
     /// The server will take a password, and there is not one yet.
     Password {
         host: String,
@@ -109,6 +132,13 @@ pub enum ConnectAnswer {
     /// Carries a [`Secret`](crate::Secret), which deserializes from the wire and can never
     /// be serialized back onto it, printed, or logged.
     Password { secret: crate::Secret },
+    /// Start this file even though it did not verify.
+    ///
+    /// **The one way to reach [`ProgramAnswer::Start`](crate::ProgramAnswer)**, so nothing
+    /// but a person deliberately saying so can start an unverified program — the shape
+    /// [`Self::Trust`] has for a host key, and for the same reason (spec B5.7, decision 6).
+    /// What was agreed to is then said out loud at connection, so nobody is left unsure.
+    StartAnyway,
     /// Stop: the key was refused, the dialog was cancelled, or the user changed their mind.
     ///
     /// **One variant for all three**, because the connection does the same thing for each
@@ -135,6 +165,15 @@ mod tests {
                     host: "acter-ssh".to_owned(),
                     user: "acter".to_owned(),
                     again: true,
+                },
+            },
+            ConnectStep::Asked {
+                attempt: AttemptId(2),
+                question: ConnectQuestion::Unverified {
+                    label: "PowerShell 7".to_owned(),
+                    program: r"C:\tools\pwsh\pwsh.exe".to_owned(),
+                    said: "Nothing has signed this file.".to_owned(),
+                    signer: None,
                 },
             },
             ConnectStep::Arrived {
@@ -189,6 +228,11 @@ mod tests {
             serde_json::from_value::<ConnectAnswer>(json!({ "answer": "Trust" }))
                 .expect("a decision arrives"),
             ConnectAnswer::Trust
+        );
+        assert_eq!(
+            serde_json::from_value::<ConnectAnswer>(json!({ "answer": "StartAnyway" }))
+                .expect("so does a decision about a file"),
+            ConnectAnswer::StartAnyway
         );
 
         let answered = serde_json::from_value::<ConnectAnswer>(

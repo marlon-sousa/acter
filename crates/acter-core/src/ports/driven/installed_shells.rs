@@ -1,5 +1,5 @@
 //! Port (driven): what this particular computer actually has — which WSL distributions
-//! exist, and whether a program can be started at all.
+//! exist, and which files a named program actually resolves to.
 //!
 //! **The first port about the machine rather than about a session.** Every other driven
 //! port is a seam in something already running; this one is asked before anything is
@@ -17,6 +17,8 @@
 
 use thiserror::Error;
 
+use crate::ShellInstall;
+
 /// What this computer can run.
 ///
 /// `Send + Sync` for [`ShellAdapter`](crate::ShellAdapter)'s reason: the composition root
@@ -33,9 +35,29 @@ pub trait InstalledShells: Send + Sync {
     /// B5.3, decision 5).
     fn wsl_distributions(&self) -> Result<Vec<String>, NoDistributions>;
 
-    /// Whether this program can be started at all — how PowerShell 7 is offered only where
-    /// it exists, while Windows PowerShell is on every machine.
-    fn is_available(&self, program: &str) -> bool;
+    /// Every install of this program this machine has, most preferred first.
+    ///
+    /// **It answers with the files it found rather than with a boolean, since B5.7**
+    /// (decision 1). The old shape asked whether a *name* could be started and the transport
+    /// later started that same name, so Windows resolved it a second time and nothing
+    /// guaranteed the two resolutions landed on the same file. Verifying a signature under
+    /// that regime would be theatre. Resolve once, verify that file, start that file.
+    ///
+    /// **An empty list is what "not installed" means now** — how PowerShell 7 is offered
+    /// only where it exists, while Windows PowerShell is on every machine.
+    ///
+    /// **`PATH` is one source and not the whole of it** (decision 2). An MSI install with
+    /// "add to PATH" unchecked is invisible to `PATH`; scoop and chocolatey put shims on it
+    /// that are not the program; and on the developer's own machine `PATH` yields two hits
+    /// for one install. What `PATH` alone knows, and no other source does, is what the name
+    /// means to *this* user — so the entry it resolves first is marked
+    /// [`PathStanding::First`](crate::PathStanding) rather than merely included.
+    ///
+    /// **Looked up rather than run**, which B5.3 decided and this keeps: the question is
+    /// asked while building a list of things the user *may* connect to, and starting each
+    /// candidate to find out whether it starts would open sessions nobody asked for. That is
+    /// also why no version is read off any file (decision 3).
+    fn installs(&self, program: &str) -> Vec<ShellInstall>;
 }
 
 /// Why there is no WSL entry to offer.

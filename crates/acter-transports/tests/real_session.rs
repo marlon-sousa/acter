@@ -1363,7 +1363,9 @@ mod replacing_a_session {
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU32, Ordering};
 
-    use acter_core::{ConnectApi, ConnectService, ProfileId, SessionFactory};
+    use acter_core::{
+        Chosen, ConnectApi, ConnectQuestions, ConnectService, ProfileId, SessionFactory, Unchecked,
+    };
 
     use super::*;
 
@@ -1402,10 +1404,10 @@ mod replacing_a_session {
     impl SessionFactory for LockingShells {
         fn open(
             &self,
-            profile: &ProfileId,
+            chosen: &Chosen,
             _questions: &Arc<dyn SshQuestions>,
         ) -> Result<Started, String> {
-            let ProfileId::Program { program: path } = profile else {
+            let ProfileId::Program { program: path } = &chosen.profile else {
                 return Err("this factory only starts marker shells.".to_owned());
             };
             // `None` sharing is what makes the handle observable from outside: while this
@@ -1449,6 +1451,9 @@ mod replacing_a_session {
         let service = ConnectService::new(
             Arc::new(LockingShells),
             Arc::new(ThisMachine::new()),
+            // Nothing to check: the profiles below name files that do not exist yet, so
+            // they resolve to nothing and no verification is asked for (spec B5.7).
+            Arc::new(Unchecked),
             Vec::new(),
         );
 
@@ -1457,7 +1462,7 @@ mod replacing_a_session {
                 &ProfileId::Program {
                     program: first.display().to_string(),
                 },
-                &(Arc::new(Unasked) as Arc<dyn SshQuestions>),
+                &(Arc::new(Unasked) as Arc<dyn ConnectQuestions>),
             )
             .expect("the first shell starts");
         until(LOCK_PATIENCE, "the first shell to take its lock", || {
@@ -1470,7 +1475,7 @@ mod replacing_a_session {
                 &ProfileId::Program {
                     program: second.display().to_string(),
                 },
-                &(Arc::new(Unasked) as Arc<dyn SshQuestions>),
+                &(Arc::new(Unasked) as Arc<dyn ConnectQuestions>),
             )
             .expect("the second shell starts");
         until(LOCK_PATIENCE, "the second shell to take its lock", || {
@@ -1499,5 +1504,131 @@ mod replacing_a_session {
 
         let _ = std::fs::remove_file(&first);
         let _ = std::fs::remove_file(&second);
+    }
+}
+
+/// **The whole of B5.7 against the real machine**: the real discovery, the real Windows
+/// signature check, the real spawn, and nothing faked between them.
+///
+/// It is the one test that can say the file this product verified is the file it started,
+/// because everything else in this suite either hands the factory a path of its own or
+/// answers about signatures from a fake. `#[ignore]`d because it starts a shell, which is
+/// this file's rule.
+mod what_this_machine_actually_has {
+    use std::path::Path;
+
+    use acter_core::{
+        Chosen, ConnectApi, ConnectQuestions, ConnectService, ConnectionKind, ProfileId,
+        SessionFactory,
+    };
+    use acter_shells::{WindowsTrust, adapter_for};
+
+    use super::*;
+
+    /// A factory that starts **the file it was handed** and nothing else.
+    ///
+    /// That is decision 1 stated as a double: the production factory does the same thing,
+    /// and one that resolved the name again would be starting something other than what was
+    /// checked. Handing it a `Chosen` with no file is a programming error rather than a user
+    /// one, so it says so plainly.
+    struct WhateverWasChosen;
+
+    impl SessionFactory for WhateverWasChosen {
+        fn open(
+            &self,
+            chosen: &Chosen,
+            _questions: &Arc<dyn SshQuestions>,
+        ) -> Result<Started, String> {
+            let program = chosen
+                .program
+                .as_ref()
+                .ok_or("this factory only starts a file that was resolved.")?;
+            let named = program.to_string_lossy().into_owned();
+            let shell = adapter_for(&named);
+            let launch = shell.launch();
+            let args: Vec<&str> = launch.args.iter().map(String::as_str).collect();
+            let environment: Vec<(&str, &str)> = launch
+                .environment
+                .iter()
+                .map(|(name, value)| (name.as_str(), value.as_str()))
+                .collect();
+            let pty = LocalPty::spawn(&launch.program, &args, &environment, COLUMNS, SCREEN_LINES)?;
+            Ok(Started {
+                session: Arc::new(SessionService::start(
+                    Box::new(pty),
+                    Box::new(AlacrittyEngine::new(COLUMNS, SCREEN_LINES)),
+                    Arc::new(RealClock::new()) as Arc<dyn Clock>,
+                    PacingConfig::default(),
+                    ShellFacts::of(shell.as_ref()),
+                )),
+                note: None,
+            })
+        }
+    }
+
+    /// **The acceptance criterion nothing else can assert** (spec B5.7, definition of done):
+    /// the shell Windows ships is found, verified through its catalog, and started — and
+    /// `Unasked` is what makes it an assertion rather than a hope. Nobody is there to say
+    /// "start it anyway", so anything but a trusted verdict ends this attempt with a
+    /// sentence instead of a session.
+    ///
+    /// It also pins the accessibility rule the same connection has to keep: **a verdict
+    /// nobody needs to act on is not an announcement**, so connecting to a normally
+    /// installed shell says exactly what it said before this entry existed.
+    #[tokio::test]
+    #[ignore = "spawns a real shell and asks Windows about its signature"]
+    async fn connecting_to_the_shell_windows_ships_verifies_it_and_says_nothing_new() {
+        let service = ConnectService::new(
+            Arc::new(WhateverWasChosen),
+            Arc::new(ThisMachine::new()),
+            Arc::new(WindowsTrust::new()),
+            Vec::new(),
+        );
+
+        let connected = service
+            .use_profile(
+                &ProfileId::Shell {
+                    kind: ConnectionKind::Cmd,
+                },
+                &(Arc::new(Unasked) as Arc<dyn ConnectQuestions>),
+            )
+            .expect("cmd.exe is signed by Microsoft, so nobody has to be asked about it");
+
+        assert_eq!(connected.label, "Command Prompt");
+        assert_eq!(
+            connected.note, None,
+            "a verdict nobody needs to act on is not an announcement"
+        );
+    }
+
+    /// **The other half of decision 1**, and the one a fake cannot show: what the list offers
+    /// is a *file*, and connecting to it starts that file rather than resolving the name a
+    /// second time.
+    #[tokio::test]
+    #[ignore = "spawns a real shell and asks Windows about its signature"]
+    async fn the_row_the_list_offers_names_the_file_that_gets_started() {
+        let service = ConnectService::new(
+            Arc::new(WhateverWasChosen),
+            Arc::new(ThisMachine::new()),
+            Arc::new(WindowsTrust::new()),
+            Vec::new(),
+        );
+
+        let listed = service.connectable();
+        let cmd = listed
+            .iter()
+            .find(|row| row.label == "Command Prompt")
+            .expect("every Windows machine has it");
+        let ProfileId::Install { program, .. } = &cmd.id else {
+            panic!("the row names the file the list resolved: {:?}", cmd.id);
+        };
+        assert!(
+            Path::new(program).is_file(),
+            "and it is a file that is really there: {program}"
+        );
+
+        service
+            .use_profile(&cmd.id, &(Arc::new(Unasked) as Arc<dyn ConnectQuestions>))
+            .expect("choosing the row starts it");
     }
 }

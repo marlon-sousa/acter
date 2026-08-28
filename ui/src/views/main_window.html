@@ -426,6 +426,39 @@
         </form>
       </div>
     </dialog>
+    <!-- **The program Acter is about to start did not verify** (spec B5.7, decision 6).
+         It is a question and never a gate: everything this machine has stays in the connect
+         list, and what changes is that the user is told before the program runs rather than
+         after. The shape is the host-key dialog's, and for the same reasons — a real modal
+         with a real name, the question in the description so a reader speaks it as the
+         dialog opens, and the value that has to be checked by hand in a box the plain arrow
+         keys can walk.
+
+         **No default action.** Enter anywhere that is not a focused button does nothing, so
+         neither outcome is reachable by the key people press without thinking; going to a
+         button is itself the deliberate act. Escape, and every other way of closing this,
+         answers "do not start it". -->
+    <dialog
+      id="unverified-dialog"
+      aria-label="Acter could not confirm who made this program"
+      aria-describedby="unverified-summary"
+    >
+      <div role="application" aria-label="Program identity">
+        <h1>Acter could not confirm who made this program</h1>
+        <p id="unverified-summary"></p>
+        <div id="unverified-body"></div>
+        <form method="dialog">
+          <!-- The refusing button comes first, so Tab from the last box reaches it before
+               the one that runs the program. -->
+          <button id="unverified-refuse" type="submit" value="refuse">
+            Do not start it
+          </button>
+          <button id="unverified-start" type="submit" value="start">
+            Start it anyway
+          </button>
+        </form>
+      </div>
+    </dialog>
     <!-- The live region lives at the very end of the document, outside <main>, and
          never moves. It must stay in the accessibility tree to be announced, so its
          text is browse-mode reachable while present; placing it last keeps it out of

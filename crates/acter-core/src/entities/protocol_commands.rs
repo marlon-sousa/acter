@@ -168,6 +168,25 @@ pub enum ProfileId {
     /// never offers it, because that list can name the distributions and a user choosing
     /// by ear is better served by a name than by "the default".
     Shell { kind: ConnectionKind },
+    /// One *particular* install of a kind: which edition it is, and the file that is it.
+    ///
+    /// **What the connect list offers for a kind this machine actually has, since B5.7.**
+    /// [`Self::Shell`] names a kind and leaves the file to whatever `PATH` resolves at spawn
+    /// time, which is the second resolution decision 1 exists to remove — and it cannot tell
+    /// two PowerShell 7 installs apart at all. This carries the file the list already
+    /// resolved, so what is verified and what is started are the same bytes.
+    Install {
+        /// Which edition this is, so a session started from it says what it says today.
+        kind: ConnectionKind,
+        /// The file, resolved once at discovery.
+        program: String,
+        /// What tells this install from another of the same edition, when anything does:
+        /// `preview`, `Microsoft Store`, or the directory it lives in (decision 9).
+        ///
+        /// `None` on the ordinary machine with one install, which is why A11's row count
+        /// survives this entry.
+        provenance: Option<String>,
+    },
     /// Bash inside one named WSL distribution, spelled as `wsl.exe -l -q` spelled it.
     Distribution { name: String },
     /// A program named directly rather than chosen from a list: what `ACTER_SHELL` carries
@@ -203,6 +222,20 @@ impl ProfileId {
     pub fn label(&self) -> String {
         match self {
             Self::Shell { kind } => kind.label().to_owned(),
+            // **The provenance is in the name rather than a version number**, because no
+            // version can be read off the file reliably (spec B5.7, decisions 3 and 9) — and
+            // it is absent on the machine with one install, so that machine hears exactly
+            // what it hears today.
+            Self::Install {
+                kind,
+                provenance: None,
+                ..
+            } => kind.label().to_owned(),
+            Self::Install {
+                kind,
+                provenance: Some(which),
+                ..
+            } => format!("{} ({which})", kind.label()),
             // What it is before which one it is: "Ubuntu" on its own names no machine, and
             // a listener arrowing a list needs the category first.
             Self::Distribution { name } => format!("WSL: {name}"),

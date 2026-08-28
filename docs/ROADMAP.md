@@ -384,6 +384,17 @@ the answer to "what should we do now?".
     is not established — and the two want different fixes. It is worth an entry because the
     sentence is the one that tells a listener what they are now typing into.
 
+    **Seen twice more in B5.7's pass, 2026-08-27** — NVDA 2026.1.1, silent capture, `user`
+    persona, the real application — and this time it was **both** connections of the session
+    rather than only the first: Windows PowerShell and, minutes later, an unsigned Command
+    Prompt started deliberately. Neither spoke its sentence; both read the prompt.
+
+    That run also narrows it usefully. The status region was read back afterwards and held
+    the whole sentence, B5.7's new clause included: *"connected to Command Prompt, started
+    although nothing has signed it"*. So the words are composed, they reach the region, and
+    they stay there to be found — what is lost is the utterance at the moment of connection,
+    which points at the second suspicion above rather than the first.
+
 13.4. **Done** — A10, the window has two faces, and the connected one is the terminal
     window. Spec:
     [a10-the-window-has-two-faces.md](specs/a10-the-window-has-two-faces.md) — agreed in
@@ -2398,9 +2409,9 @@ thing to pick up once the adapters land, not merely the next number.
     answers. What changes is the assumption sitting beside it, which was never written down:
     that the login shell is bash at all.
 
-23.9. A shell is chosen by filename, and started without anyone asking who signed it. Spec:
-    [b5.7-what-this-machine-actually-has.md](specs/b5.7-what-this-machine-actually-has.md) —
-    **agreed in conversation 2026-08-27**, and the next step is implementing it.
+23.9. **Done** — B5.7, what this machine actually has, and who signed it. Spec:
+    [b5.7-what-this-machine-actually-has.md](specs/b5.7-what-this-machine-actually-has.md),
+    agreed and implemented 2026-08-27.
     **Raised by the user 2026-08-27**:
     *"I won't want to execute a pwsh.exe to discover we had run a malware."*
 
@@ -2441,6 +2452,29 @@ thing to pick up once the adapters land, not merely the next number.
     user's shell for any of them teaches the lesson B5.4 refused to teach. What the check
     buys is narrower than it sounds and still worth it: it defeats `PATH`-order hijacking,
     and it tells the user before the program runs rather than after.
+
+    **What implementing it measured, beyond the four the spec carries.** Every one of these
+    was found by writing the code rather than by reading about it:
+
+    - **`where pwsh` answers with the package directory first and the alias second.** The
+      Store package's own directory is on `PATH` here in its own right, so the two hits
+      deduplicate onto one file the moment the alias is resolved — and the file that survives
+      is a real one with a real signature. The worry that the Store install would be
+      unverifiable did not materialise on this machine, and the alias resolution is what makes
+      that true rather than luck.
+    - **The packaged `pwsh.exe` starts when it is launched directly**, by full path, outside
+      its alias — measured by running it, which is what decision 1 requires of every install:
+      the file that was verified has to be the file that is started.
+    - **`CryptQueryObject` with `CERT_QUERY_CONTENT_FLAG_ALL` crashes the process on a
+      catalog.** A `.cat` is a certificate trust list as well as a signed message, and asking
+      for "all" made it answer `CERT_QUERY_CONTENT_CTL` and set **no message handle** — so
+      reading the signer through it was a null dereference, `STATUS_ACCESS_VIOLATION`, every
+      time. Naming the two content types this product actually asks about is the fix.
+    - **Every System32 binary sampled is catalog-signed**, not only the three the spec names:
+      `curl.exe`, `tar.exe`, `notepad.exe`, `mshta.exe`, `msinfo32.exe` and `ftp.exe` too.
+      That is why the definition of done's untrusted fixtures are the `WinVerifyTrust` status
+      codes rather than files — there is no embedded-signed binary on a stock Windows machine
+      to tamper with, and signing one needs a certificate no test here has.
 
 23.10. A cold WSL start outruns the five-second grace period. Spec: none yet → specify
     first, and specifying it means measuring the number rather than picking one. **Found

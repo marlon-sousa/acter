@@ -1,27 +1,45 @@
 //! Adapter: what this computer actually has, behind acter-core's `InstalledShells` port —
-//! the WSL distributions `wsl.exe` reports, and whether a named program exists to be
-//! started.
+//! the WSL distributions `wsl.exe` reports, and every file a named program really resolves
+//! to.
 //!
-//! **The only module in this crate that touches the world.** Everything else here is
+//! **The only module in this crate that starts a process.** Everything else here is
 //! knowledge: what `cmd.exe` is started with is the same answer on every Windows machine,
-//! and which distributions are installed is the same answer on no two machines at all.
-//! That difference is ARCHITECTURE's classifying question, and it is why this is the one
-//! file with a `Command` in it.
+//! and which distributions are installed is the same answer on no two machines at all. That
+//! difference is ARCHITECTURE's classifying question, and it is why this is the one file with
+//! a `Command` in it.
 //!
-//! **A workspace test run must never reach this module.** `cargo test --workspace` spawns
+//! **A workspace test run must never reach the WSL half.** `cargo test --workspace` spawns
 //! no process, which is why the decode it depends on lives in
-//! [`distributions`](crate::wsl::distributions) as a pure function over captured bytes and
-//! is tested there, while the only tests here are the ones that need no process at all.
-//! The live path is exercised by an `#[ignore]`d suite in `acter-transports`.
+//! [`distributions`](crate::wsl::distributions) as a pure function over captured bytes and is
+//! tested there. Discovery is different: looking a program up starts nothing, so the tests
+//! here ask the real machine about the shell every Windows machine has — as they did before
+//! B5.7, and for the same reason.
+//!
+//! # Since B5.7: the answer is the files, not a boolean
+//!
+//! `is_available` walked `PATH` and answered whether *a* file existed; `LocalPty` then
+//! spawned the program by name and Windows resolved it a second time. Nothing guaranteed the
+//! two resolutions landed on the same file, which makes `PATH`-order hijacking cheap and
+//! would make any signature check theatre. So this resolves once and hands back the paths
+//! (spec B5.7, decision 1).
+//!
+//! **`PATH` is one source and not the whole of it** (decision 2). An MSI install with "add to
+//! PATH" unchecked is invisible to it; scoop and chocolatey put shims on it that are not the
+//! program; and on the developer's machine, measured 2026-08-27, `where pwsh` gives *two*
+//! hits for one install — the Store package directory and the execution alias beside it. What
+//! `PATH` alone knows is what the name means to this user, which is why it is kept and why
+//! the entry it resolves first is marked as the default.
 
-use std::env::{split_paths, var_os};
-use std::ffi::OsStr;
+use std::env::{var_os, vars_os};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use acter_core::{InstalledShells, NoDistributions};
+use acter_core::{InstalledShells, NoDistributions, PathStanding, Provenance, ShellInstall};
+use which::which_all;
 
 use crate::wsl::distributions::{decode_utf16le, distributions};
+
+mod roots;
 
 /// The client asked what is installed, and the flags that make it answer with names and
 /// nothing else.
@@ -31,10 +49,18 @@ use crate::wsl::distributions::{decode_utf16le, distributions};
 /// bare name per line.
 const LIST: (&str, [&str; 2]) = ("wsl.exe", ["-l", "-q"]);
 
-/// The extensions Windows will append to a program name that has none, when `PATHEXT`
-/// itself cannot be read. Windows' own documented default, restated here so a machine with
-/// an unusual environment still finds `wsl.exe` when the user typed `wsl`.
-const PATHEXT_FALLBACK: &str = ".COM;.EXE;.BAT;.CMD";
+/// The directory a Store package's files live in, which is what says an install came from the
+/// Store rather than from an installer.
+const WINDOWS_APPS: &str = "WindowsApps";
+
+/// The separator between a package full name and its publisher id:
+/// `Microsoft.PowerShell_7.6.5.0_x64__8wekyb3d8bbwe`.
+const PUBLISHER: &str = "__";
+
+/// The directory every versioned PowerShell 7 install sits under, in `%ProgramFiles%` and its
+/// twins — and the one Windows Terminal reads the version from, because the file cannot be
+/// trusted to say (decision 3).
+const POWERSHELL: &str = "PowerShell";
 
 /// This machine, asked directly.
 ///
@@ -82,16 +108,198 @@ impl InstalledShells for ThisMachine {
         Ok(names)
     }
 
-    /// Whether a program of this name exists somewhere Windows would start it from.
+    /// Every file this machine would start for this name, most preferred first.
     ///
-    /// **Looked up rather than run**, which is the whole point: the question is asked
-    /// while building a list of things the user *may* connect to, and starting each
-    /// candidate to find out whether it starts would open sessions nobody asked for.
-    fn is_available(&self, program: &str) -> bool {
-        candidates(program, path(), pathext())
-            .iter()
-            .any(|candidate| candidate.is_file())
+    /// **Looked up rather than run**, which is the whole point and which B5.3 decided: the
+    /// question is asked while building a list of things the user *may* connect to, and
+    /// starting each candidate to find out whether it starts would open sessions nobody
+    /// asked for. Nothing here reads a version out of a file either (decision 3).
+    fn installs(&self, program: &str) -> Vec<ShellInstall> {
+        let mut found: Vec<ShellInstall> = Vec::new();
+        // **`PATH` first, and every match rather than the first**, because the order is the
+        // answer: the entry `PATH` resolves first is what typing the name in any other
+        // terminal starts, and that is the one fact no other source here knows.
+        for (index, candidate) in on_path(program).into_iter().enumerate() {
+            let standing = if index == 0 {
+                PathStanding::First
+            } else {
+                PathStanding::Named
+            };
+            keep(&mut found, resolve(&candidate, standing));
+        }
+        for candidate in roots::known(program) {
+            keep(&mut found, resolve(&candidate, PathStanding::Absent));
+        }
+        for (candidate, version) in roots::registered(program) {
+            keep(
+                &mut found,
+                resolve(&candidate, PathStanding::Absent).map(|install| ShellInstall {
+                    // The registry is the only source that says a version out loud, and for
+                    // Windows PowerShell it is the right one — so it wins over what the path
+                    // would have guessed, and only where the path guessed nothing.
+                    provenance: match install.provenance {
+                        Provenance::Indeterminable => Provenance::Registry { version },
+                        known => known,
+                    },
+                    ..install
+                }),
+            );
+        }
+        found
     }
+}
+
+/// Every file `PATH` resolves this name to, in the order Windows would consider them.
+///
+/// A name with no extension is looked for under every `PATHEXT` suffix, and a name that is a
+/// location is not looked for on `PATH` at all — both of which are the platform's own rules,
+/// and both of which `which_all` applies. It replaced a hand-written walk in B5.7: the
+/// hand-written one answered only the *first* match, which is the half of this question that
+/// cannot see a second install.
+fn on_path(program: &str) -> Vec<PathBuf> {
+    which_all(program)
+        .map(|found| found.collect())
+        .unwrap_or_default()
+}
+
+/// One candidate, resolved through whatever stands between the name and the file.
+///
+/// **The alias is resolved here rather than left for verification** (decision 4). An app
+/// execution alias can be started and cannot be read, so an install that stayed pointed at
+/// one would have nothing to check; resolving it to the package file it stands for gives
+/// something with a real signature. A resolution that fails leaves the alias in place, which
+/// verification then reports as unverifiable with its reason — never quietly trusted.
+fn resolve(candidate: &Path, standing: PathStanding) -> Option<ShellInstall> {
+    if !candidate.is_file() {
+        return None;
+    }
+    let program = package(candidate).unwrap_or_else(|| candidate.to_path_buf());
+    Some(ShellInstall {
+        provenance: provenance(&program),
+        program,
+        standing,
+    })
+}
+
+/// The file an execution alias stands for, or `None` for anything that is not one — and for
+/// an alias whose package file is not there after all.
+#[cfg(windows)]
+fn package(candidate: &Path) -> Option<PathBuf> {
+    crate::signature_target(candidate)
+        .map(|link| link.program)
+        .filter(|program| program.is_file())
+}
+
+/// No aliases anywhere else, so nothing to resolve.
+#[cfg(not(windows))]
+fn package(_candidate: &Path) -> Option<PathBuf> {
+    None
+}
+
+/// Adds an install unless the same file is already there.
+///
+/// **Deduplicated by the file, not by how it was found** (decision 2), and the first one
+/// wins — which is `PATH`'s, so the default survives being found again by a known root. On
+/// the developer's machine this is what turns the Store package and the execution alias
+/// beside it into the one install they are.
+fn keep(found: &mut Vec<ShellInstall>, install: Option<ShellInstall>) {
+    let Some(install) = install else {
+        return;
+    };
+    if found
+        .iter()
+        .any(|have| same_file(&have.program, &install.program))
+    {
+        return;
+    }
+    found.push(install);
+}
+
+/// Whether two paths name the same file.
+///
+/// Compared case-insensitively because Windows filenames are, and after canonicalising when
+/// that is possible — a canonicalise that fails is not a reason to list one file twice, so
+/// the raw paths are compared instead.
+fn same_file(one: &Path, other: &Path) -> bool {
+    let settle = |path: &Path| {
+        std::fs::canonicalize(path)
+            .unwrap_or_else(|_| path.to_path_buf())
+            .as_os_str()
+            .to_string_lossy()
+            .to_lowercase()
+    };
+    settle(one) == settle(other)
+}
+
+/// Where a file came from, read off the path and nothing else.
+///
+/// **Decision 3, made mechanical.** The provenance is the versioned directory name, the Store
+/// package identity, or nothing at all — never the file's own version resource, which
+/// measured 2026-08-27 reports the *Windows build* for `powershell.exe` rather than 5.1.
+fn provenance(program: &Path) -> Provenance {
+    let parts: Vec<String> = program
+        .components()
+        .map(|part| part.as_os_str().to_string_lossy().into_owned())
+        .collect();
+
+    if let Some(at) = parts.iter().position(|part| part == WINDOWS_APPS)
+        && let Some(full_name) = parts.get(at + 1)
+        && let Some(family) = family(full_name)
+    {
+        return Provenance::Store {
+            preview: family.to_lowercase().contains("preview"),
+            family,
+        };
+    }
+    if in_windows(&parts) {
+        return Provenance::Windows;
+    }
+    if let Some(at) = parts.iter().position(|part| part == POWERSHELL)
+        && let Some(version) = parts.get(at + 1)
+        && program.parent().map(Path::to_path_buf) == Some(root_of(program, at + 1))
+    {
+        return Provenance::Directory {
+            preview: version.to_lowercase().contains("preview"),
+            version: version.clone(),
+        };
+    }
+    Provenance::Indeterminable
+}
+
+/// The package family a package full name belongs to:
+/// `Microsoft.PowerShell_7.6.5.0_x64__8wekyb3d8bbwe` is the `Microsoft.PowerShell_8wekyb3d8bbwe`
+/// family, which is the identity `CreateProcess` resolves an alias through and the identity
+/// two versions of one package share.
+fn family(full_name: &str) -> Option<String> {
+    let (before, publisher) = full_name.split_once(PUBLISHER)?;
+    let name = before.split('_').next()?;
+    if name.is_empty() || publisher.is_empty() {
+        return None;
+    }
+    Some(format!("{name}_{publisher}"))
+}
+
+/// Whether this file is one Windows ships, which is the directory it is in and nothing else.
+///
+/// `WindowsPowerShell\v1.0` is under `System32`, so both editions Windows ships answer yes —
+/// which is right: neither can be uninstalled and neither is told from another install of
+/// itself.
+fn in_windows(parts: &[String]) -> bool {
+    let system = var_os("SystemRoot")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(r"C:\Windows"));
+    let system: Vec<String> = system
+        .components()
+        .map(|part| part.as_os_str().to_string_lossy().to_lowercase())
+        .collect();
+    let under: Vec<String> = parts.iter().map(|part| part.to_lowercase()).collect();
+    under.len() > system.len() && under.starts_with(&system)
+}
+
+/// The directory `at` components into this path, for asking whether the file sits directly in
+/// a versioned install directory rather than somewhere below one.
+fn root_of(program: &Path, at: usize) -> PathBuf {
+    program.components().take(at + 1).collect()
 }
 
 /// What `wsl.exe` said when it refused, as one speakable sentence.
@@ -114,135 +322,204 @@ fn refusal(stdout: &[u8], stderr: &[u8]) -> String {
     }
 }
 
-/// Every file Windows would consider when asked to start `program`, in the order it would
-/// consider them.
-///
-/// Separated from the filesystem check so the rule can be tested without creating files:
-/// what is worth pinning here is *which* paths are looked at, and whether one of them
-/// happens to exist is the machine's answer rather than this function's.
-fn candidates(program: &str, path: Vec<PathBuf>, pathext: String) -> Vec<PathBuf> {
-    let named = Path::new(program);
-    // A program with a separator in it is a location, not a name, so `PATH` is not
-    // consulted for it at all — the same rule Windows applies.
-    let directories = if named.components().count() > 1 {
-        vec![PathBuf::new()]
-    } else {
-        path
-    };
-    let mut candidates = Vec::new();
-    for directory in directories {
-        candidates.push(directory.join(named));
-        if named.extension().is_none() {
-            for extension in pathext.split(';').filter(|piece| !piece.is_empty()) {
-                let with_extension = format!("{program}{extension}");
-                candidates.push(directory.join(with_extension));
-            }
-        }
-    }
-    candidates
-}
-
-fn path() -> Vec<PathBuf> {
-    var_os("PATH")
-        .map(|value| split_paths(&value).collect())
-        .unwrap_or_default()
-}
-
-fn pathext() -> String {
-    var_os("PATHEXT")
-        .as_deref()
-        .and_then(OsStr::to_str)
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| PATHEXT_FALLBACK.to_owned())
+/// Every environment variable, for the roots that only exist on some machines — read here so
+/// [`roots`] takes them rather than reaching for them.
+fn environment() -> Vec<(String, PathBuf)> {
+    vars_os()
+        .filter_map(|(name, value)| Some((name.to_str()?.to_uppercase(), PathBuf::from(value))))
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn search_path() -> Vec<PathBuf> {
-        vec![
-            PathBuf::from(r"C:\Windows\system32"),
-            PathBuf::from(r"C:\bin"),
-        ]
+    /// **The measured shape of a Store install** (2026-08-27): `pwsh` resolves to a package
+    /// directory under `WindowsApps`, and what tells it from another install is the package
+    /// family rather than anything in the file.
+    #[test]
+    fn a_file_under_a_store_package_is_named_by_its_package_family() {
+        let provenance = provenance(Path::new(
+            r"C:\Program Files\WindowsApps\Microsoft.PowerShell_7.6.5.0_x64__8wekyb3d8bbwe\pwsh.exe",
+        ));
+
+        assert_eq!(
+            provenance,
+            Provenance::Store {
+                family: "Microsoft.PowerShell_8wekyb3d8bbwe".to_owned(),
+                preview: false,
+            }
+        );
     }
 
-    /// A name with no extension is the way a person says a program, and Windows is the
-    /// only platform where that name is not the filename. Without this, a profile saying
-    /// `wsl` would be reported as not installed on a machine that has it.
-    ///
-    /// The suffixes keep `PATHEXT`'s own casing — the real variable is upper case — which
-    /// costs nothing, since the filesystem this is checked against is case-insensitive.
+    /// The preview package is the same family shape with preview in the name, and it has to
+    /// read differently or two entries would sound identical.
     #[test]
-    fn a_name_with_no_extension_is_looked_for_under_every_pathext_suffix() {
-        let looked_at = candidates("wsl", search_path(), ".COM;.EXE".to_owned());
+    fn a_preview_package_says_so() {
+        let provenance = provenance(Path::new(
+            r"C:\Program Files\WindowsApps\Microsoft.PowerShellPreview_7.7.0.0_x64__8wekyb3d8bbwe\pwsh.exe",
+        ));
 
-        assert!(looked_at.contains(&PathBuf::from(r"C:\Windows\system32\wsl.EXE")));
-        assert!(looked_at.contains(&PathBuf::from(r"C:\Windows\system32\wsl.COM")));
-        assert!(looked_at.contains(&PathBuf::from(r"C:\bin\wsl.EXE")));
+        assert_eq!(
+            provenance,
+            Provenance::Store {
+                family: "Microsoft.PowerShellPreview_8wekyb3d8bbwe".to_owned(),
+                preview: true,
+            }
+        );
     }
 
-    /// The lookup and the spawn have to agree about what "available" means, so this asks
-    /// the machine about a program every Windows install has and about one no install has.
-    /// No process is started either way — that is the point of looking a name up rather
-    /// than running it.
+    /// **The version comes from the directory** (decision 3), which is where Windows Terminal
+    /// reads it from too — and never from the file, which measured 2026-08-27 reports the
+    /// Windows build rather than its own version.
     #[test]
-    fn a_program_every_windows_machine_has_is_available_and_an_invented_one_is_not() {
+    fn an_msi_install_is_named_by_the_directory_it_was_installed_into() {
+        assert_eq!(
+            provenance(Path::new(r"C:\Program Files\PowerShell\7\pwsh.exe")),
+            Provenance::Directory {
+                version: "7".to_owned(),
+                preview: false,
+            }
+        );
+        assert_eq!(
+            provenance(Path::new(r"C:\Program Files\PowerShell\7-preview\pwsh.exe")),
+            Provenance::Directory {
+                version: "7-preview".to_owned(),
+                preview: true,
+            }
+        );
+    }
+
+    /// **A file somewhere that says nothing is indeterminable, not guessed at** (decision 3).
+    /// A dotnet tool, a scoop shim and a directory somebody put on `PATH` are all this.
+    #[test]
+    fn a_file_somewhere_that_says_nothing_is_reported_as_saying_nothing() {
+        for anywhere in [
+            r"C:\Users\someone\.dotnet\tools\pwsh.exe",
+            r"C:\Users\someone\scoop\shims\pwsh.exe",
+            r"C:\tools\pwsh\pwsh.exe",
+            // Under the PowerShell directory but not *in* a versioned one, so the name beside
+            // it is not a version and must not be read as one.
+            r"C:\Program Files\PowerShell\7\Modules\Something\pwsh.exe",
+        ] {
+            assert_eq!(
+                provenance(Path::new(anywhere)),
+                Provenance::Indeterminable,
+                "{anywhere} says nothing about itself"
+            );
+        }
+    }
+
+    /// The shells Windows ships are Windows', both of them — `WindowsPowerShell\v1.0` is
+    /// under `System32`, and neither can be told from another install of itself because
+    /// neither can be uninstalled.
+    #[cfg(windows)]
+    #[test]
+    fn the_shells_windows_ships_come_from_windows() {
+        let system = var_os("SystemRoot").expect("Windows always sets this");
+        let system = PathBuf::from(system);
+
+        assert_eq!(
+            provenance(&system.join("system32").join("cmd.exe")),
+            Provenance::Windows
+        );
+        assert_eq!(
+            provenance(
+                &system
+                    .join("System32")
+                    .join("WindowsPowerShell")
+                    .join("v1.0")
+                    .join("powershell.exe")
+            ),
+            Provenance::Windows,
+            "case is not what tells a directory apart on this platform"
+        );
+    }
+
+    /// A package full name that is not one resolves to no family, rather than to a family
+    /// made out of whatever was there — which would name an install after a directory
+    /// somebody happened to call `WindowsApps`.
+    #[test]
+    fn something_that_is_not_a_package_full_name_names_no_family() {
+        assert_eq!(family("Microsoft.PowerShell"), None);
+        assert_eq!(family("__8wekyb3d8bbwe"), None);
+        assert_eq!(family("Microsoft.PowerShell_7.6.5.0_x64__"), None);
+        assert_eq!(
+            family("Microsoft.PowerShell_7.6.5.0_x64__8wekyb3d8bbwe").as_deref(),
+            Some("Microsoft.PowerShell_8wekyb3d8bbwe")
+        );
+    }
+
+    /// **The lookup and the spawn have to agree about what "installed" means**, which is now
+    /// literal: this asks the machine about the shell every Windows install has, and what
+    /// comes back is the file that will be started. No process is started either way.
+    #[cfg(windows)]
+    #[test]
+    fn the_shell_every_windows_machine_has_resolves_to_a_file_that_is_there() {
         let machine = ThisMachine::new();
 
+        for named in ["cmd.exe", "cmd"] {
+            let installs = machine.installs(named);
+            let first = installs
+                .first()
+                .unwrap_or_else(|| panic!("{named} is on every machine"));
+
+            assert!(first.program.is_file(), "and it is a file: {first:?}");
+            assert_eq!(
+                first.standing,
+                PathStanding::First,
+                "PATH names it, so it is what typing the name starts"
+            );
+            assert_eq!(first.provenance, Provenance::Windows);
+        }
         assert!(
-            machine.is_available("cmd.exe"),
-            "cmd.exe is on every machine"
+            machine
+                .installs("acter-no-such-program-exists.exe")
+                .is_empty(),
+            "and a name nothing resolves has no installs at all"
         );
+    }
+
+    /// One file is one install however many sources found it — which on the developer's
+    /// machine is what turns the Store package directory and the execution alias beside it
+    /// into the single install they are.
+    #[cfg(windows)]
+    #[test]
+    fn one_file_found_twice_is_listed_once() {
+        let installs = ThisMachine::new().installs("cmd.exe");
+
+        let mut seen: Vec<String> = installs
+            .iter()
+            .map(|install| install.program.to_string_lossy().to_lowercase())
+            .collect();
+        seen.sort();
+        let listed = seen.len();
+        seen.dedup();
+
+        assert_eq!(seen.len(), listed, "no file appears twice: {installs:?}");
+    }
+
+    /// A path is a location and not a name, so `PATH` is not searched for it — the same rule
+    /// Windows applies, and the difference between checking one file and checking one per
+    /// directory in the environment.
+    #[cfg(windows)]
+    #[test]
+    fn a_program_named_by_its_full_path_is_the_only_install_of_itself() {
+        let cmd = PathBuf::from(var_os("SystemRoot").expect("Windows sets this"))
+            .join("system32")
+            .join("cmd.exe");
+
+        let installs = ThisMachine::new().installs(&cmd.to_string_lossy());
+
+        assert_eq!(installs.len(), 1);
         assert!(
-            machine.is_available("cmd"),
-            "and is found without its extension"
+            installs[0]
+                .program
+                .to_string_lossy()
+                .to_lowercase()
+                .ends_with("cmd.exe"),
+            "{installs:?}"
         );
-        assert!(!machine.is_available("acter-no-such-program-exists.exe"));
-    }
-
-    /// A name that already has one is not decorated with another: looking for
-    /// `wsl.exe.EXE` is how a present program gets reported as missing.
-    #[test]
-    fn a_name_that_already_has_an_extension_is_looked_for_exactly_as_it_stands() {
-        let looked_at = candidates("wsl.exe", search_path(), ".COM;.EXE".to_owned());
-
-        assert_eq!(
-            looked_at,
-            [
-                PathBuf::from(r"C:\Windows\system32\wsl.exe"),
-                PathBuf::from(r"C:\bin\wsl.exe"),
-            ]
-        );
-    }
-
-    /// A path is a location and not a name, so `PATH` is not searched for it — the same
-    /// rule Windows applies, and the difference between checking one file and checking one
-    /// per directory in the environment.
-    #[test]
-    fn a_program_named_by_its_full_path_is_not_looked_for_anywhere_else() {
-        let looked_at = candidates(r"C:\tools\pwsh.exe", search_path(), ".EXE".to_owned());
-
-        assert_eq!(looked_at, [PathBuf::from(r"C:\tools\pwsh.exe")]);
-    }
-
-    /// The order is the order Windows would use, because "available" has to mean the same
-    /// thing here as it does when the transport actually spawns the program.
-    #[test]
-    fn the_directories_are_looked_at_in_the_order_the_environment_lists_them() {
-        let looked_at = candidates("wsl.exe", search_path(), String::new());
-
-        assert_eq!(
-            looked_at.first(),
-            Some(&PathBuf::from(r"C:\Windows\system32\wsl.exe"))
-        );
-    }
-
-    /// An empty `PATH` is not a crash and not a panic: it is a machine where nothing is
-    /// available, which is a thing the connect list can say.
-    #[test]
-    fn a_machine_with_no_search_path_offers_nothing_rather_than_failing() {
-        assert!(candidates("wsl", Vec::new(), ".EXE".to_owned()).is_empty());
     }
 
     /// The sentence a listener actually hears when WSL refuses. It is WSL's own words,

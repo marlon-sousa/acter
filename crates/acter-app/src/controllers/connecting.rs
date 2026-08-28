@@ -20,7 +20,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 use acter_core::{
-    AttemptId, ConnectAnswer, ConnectApi, ConnectSink, Conversation, ProfileId, SshQuestions,
+    AttemptId, ConnectAnswer, ConnectApi, ConnectQuestions, ConnectSink, Conversation, ProfileId,
 };
 
 /// The attempts in flight, and the means to start another.
@@ -59,7 +59,9 @@ impl Connecting {
             .insert(attempt, Arc::clone(&conversation));
 
         let connect = Arc::clone(&self.connect);
-        let questions = Arc::clone(&conversation) as Arc<dyn SshQuestions>;
+        // Every question this attempt may have to ask, which since B5.7 is three: the two
+        // a server raises and the one this machine raises about a file that did not verify.
+        let questions = Arc::clone(&conversation) as Arc<dyn ConnectQuestions>;
         // **`spawn_blocking`, not `spawn`.** What runs here parks on a `std` channel
         // waiting for a person, and parking a runtime worker on a human is how a runtime
         // starves. This is the pool that exists for exactly that.
@@ -148,7 +150,7 @@ mod tests {
         fn use_profile(
             &self,
             _id: &ProfileId,
-            questions: &Arc<dyn SshQuestions>,
+            questions: &Arc<dyn ConnectQuestions>,
         ) -> Result<Connected, String> {
             if self.asks {
                 // Blocks until somebody answers, exactly as a real SSH connection does.

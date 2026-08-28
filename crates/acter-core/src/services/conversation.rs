@@ -29,8 +29,9 @@ use std::sync::Mutex;
 use std::sync::mpsc::{Sender, channel};
 
 use crate::{
-    AttemptId, ConnectAnswer, ConnectQuestion, ConnectSink, ConnectStep, HostKeyAnswer,
-    HostKeyQuestion, HostKeyState, PasswordQuestion, Secret, SshQuestions,
+    AttemptId, ConnectAnswer, ConnectQuestion, ConnectQuestions, ConnectSink, ConnectStep,
+    HostKeyAnswer, HostKeyQuestion, HostKeyState, PasswordQuestion, ProgramAnswer, ProgramQuestion,
+    Secret, SshQuestions,
 };
 
 /// One attempt to connect, and the one question it may be waiting on.
@@ -130,7 +131,9 @@ impl SshQuestions for Conversation {
 
         match self.ask(asked) {
             ConnectAnswer::Trust => HostKeyAnswer::Accept,
-            ConnectAnswer::GiveUp | ConnectAnswer::Password { .. } => HostKeyAnswer::Refuse,
+            ConnectAnswer::GiveUp | ConnectAnswer::Password { .. } | ConnectAnswer::StartAnyway => {
+                HostKeyAnswer::Refuse
+            }
         }
     }
 
@@ -142,7 +145,7 @@ impl SshQuestions for Conversation {
             // Trusting is not a password. It can only arrive here as a stale answer to a
             // host-key question that is no longer being asked, and treating it as consent
             // to continue with no password would be inventing an answer nobody gave.
-            ConnectAnswer::GiveUp | ConnectAnswer::Trust => None,
+            ConnectAnswer::GiveUp | ConnectAnswer::Trust | ConnectAnswer::StartAnyway => None,
         }
     }
 
@@ -153,6 +156,36 @@ impl SshQuestions for Conversation {
     }
 }
 
+impl ConnectQuestions for Conversation {
+    /// **Anything but an explicit "start it anyway" leaves it unstarted** (spec B5.7,
+    /// decision 6), which is [`SshQuestions::host_key`]'s rule applied to a file on this
+    /// machine. The default is not a property of whichever dialog happens to be in front of
+    /// the user; it is here, where the answer is read.
+    ///
+    /// The verdict is turned into its sentence *here*, so the words a listener hears are
+    /// decided in the domain and a dialog renders them rather than composing them.
+    fn unverified(&self, question: ProgramQuestion) -> ProgramAnswer {
+        let ProgramQuestion {
+            label,
+            program,
+            verdict,
+        } = question;
+        let asked = ConnectQuestion::Unverified {
+            label,
+            program,
+            said: verdict.said(),
+            signer: verdict.signer(),
+        };
+
+        match self.ask(asked) {
+            ConnectAnswer::StartAnyway => ProgramAnswer::Start,
+            ConnectAnswer::GiveUp | ConnectAnswer::Trust | ConnectAnswer::Password { .. } => {
+                ProgramAnswer::DoNotStart
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::mpsc::Receiver;
@@ -160,7 +193,7 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
-    use crate::{Connected, SessionId};
+    use crate::{Connected, Fault, SessionId, Verdict};
 
     /// Long enough that a loaded machine is not what fails a test, short enough that a
     /// genuine deadlock is reported as one rather than hanging the suite.
@@ -242,6 +275,85 @@ mod tests {
         conversation.answer(ConnectAnswer::GiveUp);
 
         assert_eq!(asked.join().unwrap(), HostKeyAnswer::Refuse);
+    }
+
+    /// The third question, and the one that is about this machine rather than the far end.
+    ///
+    /// **The words a listener hears are composed here**, from the verdict, so a dialog
+    /// renders sentences rather than inventing them — and the signer travels on its own so
+    /// it can be put somewhere it can be read character by character.
+    #[test]
+    fn a_file_that_did_not_verify_is_asked_about_in_the_domains_own_words() {
+        let (watcher, steps) = Watcher::new();
+        let conversation = Arc::new(Conversation::new(AttemptId(3), watcher));
+
+        let asked = asking(Arc::clone(&conversation), |it| {
+            it.unverified(ProgramQuestion {
+                label: "PowerShell 7".to_owned(),
+                program: r"C:\tools\pwsh\pwsh.exe".to_owned(),
+                verdict: Verdict::Untrusted {
+                    fault: Fault::UntrustedRoot {
+                        signer: Some("Contoso Corporation".to_owned()),
+                    },
+                },
+            })
+        });
+        let step = steps.recv_timeout(PATIENCE).expect("the question goes out");
+
+        let ConnectStep::Asked {
+            attempt,
+            question:
+                ConnectQuestion::Unverified {
+                    label,
+                    program,
+                    said,
+                    signer,
+                },
+        } = step
+        else {
+            panic!("a file is asked about: {step:?}");
+        };
+        assert_eq!(attempt, AttemptId(3));
+        assert_eq!(label, "PowerShell 7");
+        assert_eq!(program, r"C:\tools\pwsh\pwsh.exe");
+        assert_eq!(signer.as_deref(), Some("Contoso Corporation"));
+        assert!(
+            said.contains("does not trust"),
+            "the verdict's own sentence travels: {said}"
+        );
+
+        conversation.answer(ConnectAnswer::StartAnyway);
+        assert_eq!(asked.join().unwrap(), ProgramAnswer::Start);
+    }
+
+    /// **Anything but saying so leaves it unstarted**, which is the host key's rule applied
+    /// to a file — including an answer that belongs to a question nobody is asking.
+    #[test]
+    fn nothing_but_saying_so_starts_a_file_that_did_not_verify() {
+        for answer in [
+            ConnectAnswer::GiveUp,
+            ConnectAnswer::Trust,
+            ConnectAnswer::Password {
+                secret: Secret::new("hunter2"),
+            },
+        ] {
+            let (watcher, steps) = Watcher::new();
+            let conversation = Arc::new(Conversation::new(AttemptId(1), watcher));
+
+            let asked = asking(Arc::clone(&conversation), |it| {
+                it.unverified(ProgramQuestion {
+                    label: "PowerShell 7".to_owned(),
+                    program: r"C:\tools\pwsh\pwsh.exe".to_owned(),
+                    verdict: Verdict::Untrusted {
+                        fault: Fault::NotSigned,
+                    },
+                })
+            });
+            steps.recv_timeout(PATIENCE).expect("the question goes out");
+            conversation.answer(answer);
+
+            assert_eq!(asked.join().unwrap(), ProgramAnswer::DoNotStart);
+        }
     }
 
     /// A changed key travels as the same question carrying what was on file, which is what

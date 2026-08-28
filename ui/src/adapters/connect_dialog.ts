@@ -108,7 +108,13 @@ function noun(row: Connectable): string {
   switch (row.variants[0]?.id.profile) {
     case 'Distribution':
       return 'distribution';
+    // **Two shapes, one noun, since B5.7.** A variant that names a kind is an edition this
+    // machine does not have; one that names an *install* is an edition it does, carrying the
+    // file the list already resolved (spec B5.7, decision 1). Both are editions to a
+    // listener, and the panel would otherwise call them "options" on every machine that has
+    // PowerShell at all.
     case 'Shell':
+    case 'Install':
       return 'edition';
     default:
       return 'option';

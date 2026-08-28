@@ -29,12 +29,14 @@
 //! absent `Option`, and the two things a user can do to an empty window are answered
 //! directly: a submitted line is refused, and a keystroke has nothing to act on.
 
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crate::{
-    ConnectApi, Connectable, Connected, Connection, ConnectionKind, EventSink, InstalledShells,
-    KeyAck, KeyPress, ProfileId, SessionApi, SessionFactory, SessionId, SshQuestions, Started,
+    Chosen, ConnectApi, ConnectQuestions, Connectable, Connected, Connection, ConnectionKind,
+    EventSink, InstalledShells, KeyAck, KeyPress, ProfileId, ProgramAnswer, ProgramQuestion,
+    SessionApi, SessionFactory, SessionId, ShellInstall, Signatures, SshQuestions, Started,
     SubmitAck, Variant, catalogue,
 };
 
@@ -46,6 +48,14 @@ const DEFAULT_SSH_PORT: u16 = 22;
 pub struct ConnectService {
     factory: Arc<dyn SessionFactory>,
     machine: Arc<dyn InstalledShells>,
+    /// Who signed the files this machine would start.
+    ///
+    /// **Asked on the connection and not when the list is drawn** (spec B5.7, decision 7).
+    /// `WinVerifyTrust` is not free and revocation can reach the network, and the list is
+    /// built on open in front of a listener who is waiting. What the list does ask for is
+    /// [`Signatures::known`], which answers from what has already been paid for and never
+    /// verifies anything.
+    signatures: Arc<dyn Signatures>,
     /// The scripted far ends this build offers, in the order they are listed.
     ///
     /// **Supplied rather than known** (spec B7, decision 7). What a scripted session *is* —
@@ -75,11 +85,13 @@ impl ConnectService {
     pub fn new(
         factory: Arc<dyn SessionFactory>,
         machine: Arc<dyn InstalledShells>,
+        signatures: Arc<dyn Signatures>,
         scripted: Vec<String>,
     ) -> Self {
         Self {
             factory,
             machine,
+            signatures,
             scripted,
             current: Mutex::new(None),
             next: AtomicU32::new(1),
@@ -101,64 +113,139 @@ impl ConnectService {
             .map(|live| Arc::clone(&live.session))
     }
 
-    /// Whether this machine can start this profile at all, as the sentence to say if not.
+    /// The install this machine would start for a program named by a kind, or `None` when it
+    /// has none.
+    ///
+    /// **The first one, because the adapter answers most preferred first** — and what makes
+    /// one preferred is `PATH`, which knows the one thing no other source does: what the
+    /// name means to this user (spec B5.7, decision 2).
+    fn install(&self, program: &str) -> Option<ShellInstall> {
+        self.machine.installs(program).into_iter().next()
+    }
+
+    /// What this machine would start for this profile, resolved once — or the sentence to
+    /// say instead.
+    ///
+    /// **This is decision 1.** Until B5.7 the machine was asked whether a *name* could be
+    /// started and the transport later started that same name, so Windows resolved it a
+    /// second time and nothing guaranteed the two resolutions landed on the same file. Now
+    /// the file is found here, it is what gets verified, and it is what
+    /// [`SessionFactory::open`] is handed.
     ///
     /// Asked *before* the factory, so a kind the catalogue already reported as missing is
     /// refused with the instructions the catalogue would have shown rather than with
     /// whatever a failed spawn happened to say.
-    fn startable(&self, id: &ProfileId) -> Result<(), String> {
-        match id {
+    fn chosen(&self, id: &ProfileId) -> Result<Chosen, String> {
+        let program = match id {
             // WSL is available when it can name a distribution, and its three ways of not
             // being available are three different sentences (spec B5.3, decision 6) — all
             // of them better than the catalogue's generic one, which has to serve a machine
-            // nobody has asked yet.
+            // nobody has asked yet. What is *started* either way is the client, so that is
+            // the file resolved and verified.
             ProfileId::Shell {
                 kind: ConnectionKind::Wsl,
             }
-            | ProfileId::Distribution { .. } => self
-                .machine
-                .wsl_distributions()
-                .map(|_| ())
-                .map_err(|why| why.to_string()),
+            | ProfileId::Distribution { .. } => {
+                self.machine
+                    .wsl_distributions()
+                    .map_err(|why| why.to_string())?;
+                Some(self.found(ConnectionKind::Wsl)?)
+            }
             // A kind that comes in editions is startable when any of them is, and what
             // starts is the first that can — the same answer the row's own id carries.
             ProfileId::Shell {
                 kind: kind @ ConnectionKind::PowerShell,
-            } => {
-                if kind
-                    .editions()
+            } => Some(
+                kind.editions()
                     .iter()
-                    .any(|edition| self.machine.is_available(edition.program()))
-                {
-                    Ok(())
-                } else {
-                    Err(kind.instructions().to_owned())
-                }
-            }
-            ProfileId::Shell { kind } => {
-                if self.machine.is_available(kind.program()) {
-                    Ok(())
-                } else {
-                    Err(kind.instructions().to_owned())
-                }
-            }
+                    .find_map(|edition| self.install(edition.program()))
+                    .map(|install| install.program)
+                    .ok_or_else(|| kind.instructions().to_owned())?,
+            ),
+            ProfileId::Shell { kind } => Some(self.found(*kind)?),
+            // **Already resolved, by the list that offered it.** Resolving it again here
+            // would be the second resolution this entry exists to remove.
+            ProfileId::Install { program, .. } => Some(PathBuf::from(program)),
             // **Nothing on this machine to check** — Acter speaks SSH itself — so the only
             // thing that can be wrong here is the form. An empty host is refused with a
             // sentence rather than handed to the transport, which would answer with a
             // network error about a name nobody typed.
             ProfileId::Ssh { host, user, .. } => {
                 if host.trim().is_empty() {
-                    Err("Acter needs the name or address of the machine to connect to.".to_owned())
-                } else if user.trim().is_empty() {
-                    Err("Acter needs the name of the account to sign in as.".to_owned())
-                } else {
-                    Ok(())
+                    return Err(
+                        "Acter needs the name or address of the machine to connect to.".to_owned(),
+                    );
                 }
+                if user.trim().is_empty() {
+                    return Err("Acter needs the name of the account to sign in as.".to_owned());
+                }
+                None
             }
             // A program named directly is not in the catalogue and has no instructions to
             // offer, so the answer to a name that does not start is the factory's — which
             // is the transport's own sentence about the spawn that failed.
-            ProfileId::Program { .. } | ProfileId::Scripted { .. } => Ok(()),
+            //
+            // **Resolved when it resolves, and left alone when it does not.** A name this
+            // machine really has is a file, so it is checked and started like any other; a
+            // name nothing resolves has no file to check, and answering "Acter could not
+            // check who signed this" about something that was never there would replace the
+            // transport's plain sentence with a security one about nothing.
+            ProfileId::Program { program } => {
+                self.install(program.trim()).map(|install| install.program)
+            }
+            // A composition rather than a file, so there is nothing to resolve and nothing
+            // to verify.
+            ProfileId::Scripted { .. } => None,
+        };
+        Ok(Chosen {
+            profile: id.clone(),
+            program,
+        })
+    }
+
+    /// The file for a kind that is one program, or that kind's own instructions.
+    fn found(&self, kind: ConnectionKind) -> Result<PathBuf, String> {
+        self.install(kind.program())
+            .map(|install| install.program)
+            .ok_or_else(|| kind.instructions().to_owned())
+    }
+
+    /// Verify the file that is about to be started, and ask about it when Windows would not
+    /// vouch for it.
+    ///
+    /// Returns the clause to say once at connection: `None` for a file Microsoft signed,
+    /// because **a verdict nobody needs to act on is not an announcement**; something to say
+    /// for every other outcome the user agreed to, so nobody is left unsure what they just
+    /// agreed to (spec B5.7, accessibility checklist).
+    ///
+    /// **Never a gate** (decision 6). The only thing that can stop a connection here is the
+    /// person in front of the window saying so.
+    fn verified(
+        &self,
+        chosen: &Chosen,
+        label: &str,
+        questions: &Arc<dyn ConnectQuestions>,
+    ) -> Result<Option<String>, String> {
+        let Some(program) = chosen.program.as_deref() else {
+            return Ok(None);
+        };
+        let verdict = self.signatures.verdict(program);
+        if verdict.settled() {
+            return Ok(verdict.note());
+        }
+        let asked = ProgramQuestion {
+            label: label.to_owned(),
+            program: program.display().to_string(),
+            verdict: verdict.clone(),
+        };
+        match questions.unverified(asked) {
+            ProgramAnswer::Start => Ok(verdict.note()),
+            // The verdict's own sentence, which already ends in what to do next — so a
+            // listener who declined and wants to reconsider is told the same thing twice
+            // rather than told a second, differently worded thing.
+            ProgramAnswer::DoNotStart => {
+                Err(format!("Acter did not start {label}. {}", verdict.said()))
+            }
         }
     }
 
@@ -174,6 +261,11 @@ impl ConnectService {
     /// enumerate inside something that is not there — and the reason it gives is WSL's own,
     /// which tells a user who has never installed it apart from one whose install is broken
     /// (spec B5.3, decision 6).
+    ///
+    /// **Its id names the kind rather than a file**, unlike every other shell row since
+    /// B5.7: what a WSL row starts is a distribution, and `wsl.exe` is the client that gets
+    /// it there. That client is resolved and verified on the connection like any other
+    /// program this machine runs.
     fn wsl_row(&self, row: &Connection) -> Connectable {
         let id = ProfileId::Shell {
             kind: ConnectionKind::Wsl,
@@ -207,7 +299,7 @@ impl ConnectService {
     }
 
     /// The connect list's PowerShell row: one row for the kind, carrying its editions as
-    /// variants (spec A11).
+    /// variants (spec A11) — and since B5.7, one variant per *install* of an edition.
     ///
     /// **A missing edition stays in the panel and says what to do about it**, which is the
     /// difference from WSL and the reason [`Variant`] carries availability at all. A machine
@@ -215,27 +307,34 @@ impl ConnectService {
     /// installed would teach that listener that Acter does not support the edition they
     /// have read about — which is precisely B5.4's argument, one level down.
     ///
+    /// **A machine with one PowerShell 7 sees exactly what it saw before** (decision 9):
+    /// nothing is added to an entry until there is another one to tell it from.
+    ///
     /// The row is available when *any* edition is, and the id it carries is the first
-    /// edition that can actually be started, so choosing the row without opening the panel
+    /// install that can actually be started, so choosing the row without opening the panel
     /// starts something rather than failing.
     fn powershell_row(&self, row: &Connection) -> Connectable {
-        let variants: Vec<Variant> = ConnectionKind::PowerShell
-            .editions()
-            .iter()
-            .map(|edition| {
-                let available = self.machine.is_available(edition.program());
-                Variant {
+        let mut variants: Vec<Variant> = Vec::new();
+        for edition in ConnectionKind::PowerShell.editions() {
+            let installs = self.machine.installs(edition.program());
+            if installs.is_empty() {
+                variants.push(Variant {
                     id: ProfileId::Shell { kind: *edition },
-                    label: if available {
-                        edition.label().to_owned()
-                    } else {
-                        format!("{}{NOT_AVAILABLE}", edition.label())
-                    },
-                    available,
-                    instructions: (!available).then(|| edition.instructions().to_owned()),
-                }
-            })
-            .collect();
+                    label: format!("{}{NOT_AVAILABLE}", edition.label()),
+                    available: false,
+                    instructions: Some(edition.instructions().to_owned()),
+                });
+                continue;
+            }
+            for (id, install) in tell_apart(*edition, &installs).into_iter().zip(&installs) {
+                variants.push(Variant {
+                    label: self.named(&id, install),
+                    id,
+                    available: true,
+                    instructions: None,
+                });
+            }
+        }
 
         let first = variants.iter().find(|variant| variant.available);
         Connectable {
@@ -251,12 +350,72 @@ impl ConnectService {
             variants,
         }
     }
+
+    /// What an entry is called, with a verdict already paid for carried in its **name**.
+    ///
+    /// **This is how decisions 6 and 7 fit together.** Nothing is verified to draw the list,
+    /// so an entry nobody has tried to start says exactly what it said before. An entry that
+    /// failed to verify the last time somebody tried carries that, the way A11's missing
+    /// edition carries its own absence — because a greyed-out entry that looks different and
+    /// reads the same is the failure this product exists to avoid.
+    fn named(&self, id: &ProfileId, install: &ShellInstall) -> String {
+        let label = id.label();
+        match self.signatures.known(&install.program) {
+            Some(verdict) if !verdict.settled() => format!("{label}{NOT_VERIFIED}"),
+            _ => label,
+        }
+    }
+}
+
+/// What tells the installs of one edition apart, in the order they were found.
+///
+/// **Nothing at all when there is only one**, which is decision 9's other half: the machine
+/// with a single PowerShell 7 hears "PowerShell 7", as it does today. Where there is more
+/// than one, each is named by where it came from — and where two provenances would say the
+/// same thing, by the directory each lives in, which is always different because two files
+/// cannot be the same file in two places.
+fn tell_apart(edition: ConnectionKind, installs: &[ShellInstall]) -> Vec<ProfileId> {
+    let single = installs.len() == 1;
+    let said: Vec<Option<String>> = installs
+        .iter()
+        .map(|install| if single { None } else { install.qualifier() })
+        .collect();
+    let unique: Vec<Option<String>> = said
+        .iter()
+        .enumerate()
+        .map(|(index, provenance)| {
+            let shared = said
+                .iter()
+                .enumerate()
+                .any(|(other, another)| other != index && another == provenance);
+            if shared {
+                Some(installs[index].directory())
+            } else {
+                provenance.clone()
+            }
+        })
+        .collect();
+
+    installs
+        .iter()
+        .zip(unique)
+        .map(|(install, provenance)| ProfileId::Install {
+            kind: edition,
+            program: install.program.display().to_string(),
+            provenance,
+        })
+        .collect()
 }
 
 /// The suffix an unavailable variant carries, in its **name** rather than in a visual state,
 /// for the reason [`catalogue`](crate::catalogue) gives for a row: a greyed-out entry that
 /// looks different and reads the same is the failure this product exists to avoid.
 const NOT_AVAILABLE: &str = " (not available)";
+
+/// The same, for an entry that is installed and did not verify when somebody last tried to
+/// start it (spec B5.7, decision 6). **It is not a filter**: the entry keeps its place in
+/// the list, and choosing it asks a question rather than refusing.
+const NOT_VERIFIED: &str = " (not verified)";
 
 impl ConnectApi for ConnectService {
     /// The catalogue, asked of this machine, with WSL carrying its distributions and the
@@ -265,6 +424,10 @@ impl ConnectApi for ConnectService {
     /// **The machine is asked here rather than remembered**, twice over: `wsl.exe` is run
     /// and every program is looked up on every call. That is the cost of a list that is
     /// true when a user opens it (decision 6).
+    ///
+    /// **Nothing is verified here and nothing reaches the network** (spec B5.7, decision 7).
+    /// The list is built on open, in front of a listener who is waiting, and a revocation
+    /// check that hits a network timeout there would be 23.7's objection one entry later.
     ///
     /// The scripted sessions go last, after everything real, because they are a developer's
     /// tools and a user arrowing this list should meet their own shells first.
@@ -276,13 +439,13 @@ impl ConnectApi for ConnectService {
             ConnectionKind::PowerShell => ConnectionKind::PowerShell
                 .editions()
                 .iter()
-                .any(|edition| self.machine.is_available(edition.program())),
+                .any(|edition| !self.machine.installs(edition.program()).is_empty()),
             // **Never asked of the machine, because it is not on the machine.** Acter
             // speaks SSH itself (spec B9, decision 1), so there is no executable to look
             // for — and looking for one found nothing and offered every user
             // "SSH (not available)", which is the opposite of true.
             ConnectionKind::Ssh => true,
-            other => self.machine.is_available(other.program()),
+            other => !self.machine.installs(other.program()).is_empty(),
         })
         .iter()
         .map(|row| match row.kind {
@@ -304,13 +467,7 @@ impl ConnectApi for ConnectService {
                 instructions: None,
                 variants: Vec::new(),
             },
-            kind => Connectable {
-                id: ProfileId::Shell { kind },
-                label: row.label.clone(),
-                available: row.available,
-                instructions: row.instructions().map(ToOwned::to_owned),
-                variants: Vec::new(),
-            },
+            kind => self.shell_row(row, kind),
         })
         .collect();
         listed.extend(self.scripted.iter().map(|name| {
@@ -328,10 +485,11 @@ impl ConnectApi for ConnectService {
         listed
     }
 
-    /// **The order of operations is the decision** (spec B7, decision 5): the machine is
-    /// asked, the new session is built, and only then is the old one let go. A failure at
-    /// either of the first two steps returns before anything has been replaced, so the
-    /// session the user was in is still running and still attached.
+    /// **The order of operations is the decision** (spec B7, decision 5, and B5.7 decision
+    /// 1): the machine is asked, the file it named is verified, the new session is built,
+    /// and only then is the old one let go. A failure at any of the first three steps
+    /// returns before anything has been replaced, so the session the user was in is still
+    /// running and still attached.
     ///
     /// Letting go is what ends the outgoing shell. Dropping the last `Arc` drops the
     /// request channel the pump is selecting on, the pump breaks out of its loop, and the
@@ -341,12 +499,21 @@ impl ConnectApi for ConnectService {
     fn use_profile(
         &self,
         id: &ProfileId,
-        questions: &Arc<dyn SshQuestions>,
+        questions: &Arc<dyn ConnectQuestions>,
     ) -> Result<Connected, String> {
-        self.startable(id)?;
-        let Started { session, note } = self.factory.open(id, questions)?;
-
+        let chosen = self.chosen(id)?;
         let label = id.label();
+        let agreed = self.verified(&chosen, &label, questions)?;
+        // The SSH half of the same asker, because a far end that has to ask a person
+        // something reaches them through the conversation this attempt already has.
+        let far_end = Arc::clone(questions) as Arc<dyn SshQuestions>;
+        let Started { session, note } = self.factory.open(&chosen, &far_end)?;
+
+        // **At most one of the two is ever present**: a note from the far end belongs to
+        // SSH, which is not a file on this machine, and a note about a signature belongs to
+        // a file, which SSH does not have. The far end's comes first all the same, because
+        // it is about what the user is now talking to rather than about how it was started.
+        let note = note.or(agreed);
         let next = SessionId(self.next.fetch_add(1, Ordering::SeqCst));
         let previous = {
             let mut current = self.current.lock().expect("session lock poisoned");
@@ -373,6 +540,37 @@ impl ConnectApi for ConnectService {
             label: live.label.clone(),
             note: live.note.clone(),
         })
+    }
+}
+
+impl ConnectService {
+    /// A kind that is one program: the row names the file the list resolved, so what is
+    /// verified on the connection is what this row already found (decision 1).
+    fn shell_row(&self, row: &Connection, kind: ConnectionKind) -> Connectable {
+        match self.install(kind.program()) {
+            Some(install) => {
+                let id = ProfileId::Install {
+                    kind,
+                    program: install.program.display().to_string(),
+                    // One kind, one program, so there is never another to tell it from.
+                    provenance: None,
+                };
+                Connectable {
+                    label: self.named(&id, &install),
+                    id,
+                    available: true,
+                    instructions: None,
+                    variants: Vec::new(),
+                }
+            }
+            None => Connectable {
+                id: ProfileId::Shell { kind },
+                label: row.label.clone(),
+                available: row.available,
+                instructions: row.instructions().map(ToOwned::to_owned),
+                variants: Vec::new(),
+            },
+        }
     }
 }
 
@@ -417,14 +615,19 @@ impl SessionApi for ConnectService {
 mod tests {
     use crate::Unasked;
 
+    use std::collections::HashMap;
+    use std::path::Path;
     use std::sync::atomic::AtomicUsize;
 
-    use crate::{CommandId, NoDistributions, SessionEvent};
+    use crate::{
+        CommandId, Fault, HostKeyAnswer, HostKeyQuestion, NoDistributions, PasswordQuestion,
+        PathStanding, Provenance, Secret, SessionEvent, Signer, Verdict,
+    };
 
     use super::*;
 
     /// Nobody to ask, for every test here whose subject is not the asking.
-    fn unasked() -> Arc<dyn SshQuestions> {
+    fn unasked() -> Arc<dyn ConnectQuestions> {
         Arc::new(Unasked)
     }
 
@@ -480,7 +683,9 @@ mod tests {
     #[derive(Default)]
     struct FakeFactory {
         alive: Arc<AtomicUsize>,
-        opened: Mutex<Vec<ProfileId>>,
+        /// Everything it was asked to start — the profile **and the file**, which is how
+        /// "the path verified is the path started" is asserted through the port.
+        opened: Mutex<Vec<Chosen>>,
         /// The last session handed out, so a test can ask it what reached it.
         last: Mutex<Option<Arc<FakeSession>>>,
         /// A profile the factory refuses, with the sentence it refuses it in.
@@ -498,15 +703,15 @@ mod tests {
     impl SessionFactory for FakeFactory {
         fn open(
             &self,
-            profile: &ProfileId,
+            chosen: &Chosen,
             _questions: &Arc<dyn SshQuestions>,
         ) -> Result<Started, String> {
             if let Some((refused, why)) = self.refuses.lock().unwrap().as_ref()
-                && refused == profile
+                && *refused == chosen.profile
             {
                 return Err(why.clone());
             }
-            self.opened.lock().unwrap().push(profile.clone());
+            self.opened.lock().unwrap().push(chosen.clone());
             let session = FakeSession::new(&self.alive);
             *self.last.lock().unwrap() = Some(Arc::clone(&session));
             Ok(Started {
@@ -520,6 +725,9 @@ mod tests {
     struct FakeMachine {
         programs: Vec<&'static str>,
         distributions: Result<Vec<String>, NoDistributions>,
+        /// Installs spelled out by a test, for the machine that has more than one of
+        /// something — which is the case the ordinary one cannot express.
+        extra: HashMap<&'static str, Vec<ShellInstall>>,
     }
 
     impl FakeMachine {
@@ -528,6 +736,7 @@ mod tests {
             Self {
                 programs: vec!["cmd.exe", "powershell.exe", "pwsh.exe", "wsl.exe"],
                 distributions: Ok(vec!["Ubuntu".to_owned(), "Debian".to_owned()]),
+                extra: HashMap::new(),
             }
         }
 
@@ -543,25 +752,158 @@ mod tests {
                 ..Self::complete()
             }
         }
+
+        /// A machine where one program resolves to more than one file.
+        fn with(mut self, program: &'static str, installs: Vec<ShellInstall>) -> Self {
+            self.extra.insert(program, installs);
+            self
+        }
     }
 
     impl InstalledShells for FakeMachine {
         fn wsl_distributions(&self) -> Result<Vec<String>, NoDistributions> {
             self.distributions.clone()
         }
-        fn is_available(&self, program: &str) -> bool {
-            self.programs.contains(&program)
+
+        /// One install per program this machine has, in the place Windows keeps it — plus
+        /// whatever a test added by hand for the machine with two of something.
+        fn installs(&self, program: &str) -> Vec<ShellInstall> {
+            if let Some(extra) = self.extra.get(program) {
+                return extra.clone();
+            }
+            if !self.programs.contains(&program) {
+                return Vec::new();
+            }
+            vec![ShellInstall {
+                program: PathBuf::from(format!(r"C:\Windows\system32\{program}")),
+                provenance: Provenance::Windows,
+                standing: PathStanding::First,
+            }]
+        }
+    }
+
+    /// Signatures a test decides, keyed by the file — and a record of every file anything
+    /// asked about, which is how "the list verifies nothing" is asserted.
+    #[derive(Default)]
+    struct FakeSignatures {
+        verdicts: Mutex<Vec<(PathBuf, Verdict)>>,
+        verified: Mutex<Vec<PathBuf>>,
+        /// What is already known without verifying, for the list that names a verdict it
+        /// did not pay for.
+        cached: Mutex<Vec<(PathBuf, Verdict)>>,
+    }
+
+    impl FakeSignatures {
+        fn saying(program: &str, verdict: Verdict) -> Self {
+            let signatures = Self::default();
+            signatures
+                .verdicts
+                .lock()
+                .unwrap()
+                .push((PathBuf::from(program), verdict));
+            signatures
+        }
+    }
+
+    impl Signatures for FakeSignatures {
+        fn verdict(&self, program: &Path) -> Verdict {
+            self.verified.lock().unwrap().push(program.to_path_buf());
+            self.verdicts
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|(at, _)| at == program)
+                .map_or(
+                    Verdict::Trusted {
+                        signer: Signer::Microsoft,
+                    },
+                    |(_, verdict)| verdict.clone(),
+                )
+        }
+
+        fn known(&self, program: &Path) -> Option<Verdict> {
+            self.cached
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|(at, _)| at == program)
+                .map(|(_, verdict)| verdict.clone())
+        }
+    }
+
+    /// Somebody who says yes to everything they are asked about a file, and refuses every
+    /// question that is not about one — so a test of starting anyway cannot pass by
+    /// accident.
+    struct Agreeing;
+
+    impl SshQuestions for Agreeing {
+        fn host_key(&self, _question: HostKeyQuestion) -> HostKeyAnswer {
+            HostKeyAnswer::Refuse
+        }
+        fn password(&self, _question: PasswordQuestion) -> Option<Secret> {
+            None
+        }
+        fn tell(&self, _sentence: &str) {}
+    }
+
+    impl ConnectQuestions for Agreeing {
+        fn unverified(&self, _question: ProgramQuestion) -> ProgramAnswer {
+            ProgramAnswer::Start
+        }
+    }
+
+    /// The one question this entry asks, remembered so a test can read it back.
+    #[derive(Default)]
+    struct Asking {
+        asked: Mutex<Vec<ProgramQuestion>>,
+    }
+
+    impl SshQuestions for Asking {
+        fn host_key(&self, _question: HostKeyQuestion) -> HostKeyAnswer {
+            HostKeyAnswer::Refuse
+        }
+        fn password(&self, _question: PasswordQuestion) -> Option<Secret> {
+            None
+        }
+        fn tell(&self, _sentence: &str) {}
+    }
+
+    impl ConnectQuestions for Asking {
+        fn unverified(&self, question: ProgramQuestion) -> ProgramAnswer {
+            self.asked.lock().unwrap().push(question);
+            ProgramAnswer::DoNotStart
         }
     }
 
     fn service(machine: FakeMachine, scripted: &[&str]) -> (Arc<ConnectService>, Arc<FakeFactory>) {
+        let (service, factory, _) = signed(machine, Arc::new(FakeSignatures::default()), scripted);
+        (service, factory)
+    }
+
+    /// The same, with the signatures a test decides — and the fake handed back, so a test
+    /// can ask it what it was made to check.
+    fn signed(
+        machine: FakeMachine,
+        signatures: Arc<FakeSignatures>,
+        scripted: &[&str],
+    ) -> (Arc<ConnectService>, Arc<FakeFactory>, Arc<FakeSignatures>) {
         let factory = Arc::new(FakeFactory::default());
         let service = ConnectService::new(
             Arc::clone(&factory) as Arc<dyn SessionFactory>,
             Arc::new(machine),
+            Arc::clone(&signatures) as Arc<dyn Signatures>,
             scripted.iter().map(|name| (*name).to_owned()).collect(),
         );
-        (Arc::new(service), factory)
+        (Arc::new(service), factory, signatures)
+    }
+
+    /// One install, spelled out by a test.
+    fn install(program: &str, provenance: Provenance, standing: PathStanding) -> ShellInstall {
+        ShellInstall {
+            program: PathBuf::from(program),
+            provenance,
+            standing,
+        }
     }
 
     fn labels(listed: &[Connectable]) -> Vec<&str> {
@@ -730,10 +1072,12 @@ mod tests {
         );
         assert_eq!(
             powershell.id,
-            ProfileId::Shell {
-                kind: ConnectionKind::WindowsPowerShell
+            ProfileId::Install {
+                kind: ConnectionKind::WindowsPowerShell,
+                program: r"C:\Windows\system32\powershell.exe".to_owned(),
+                provenance: None,
             },
-            "and choosing the row without opening the panel starts the edition that works"
+            "and choosing the row without opening the panel starts the edition that works,              as the file the list already resolved"
         );
     }
 
@@ -817,14 +1161,19 @@ mod tests {
                 self.0.fetch_add(1, Ordering::SeqCst);
                 Err(NoDistributions::NotInstalled)
             }
-            fn is_available(&self, _program: &str) -> bool {
-                true
+            fn installs(&self, program: &str) -> Vec<ShellInstall> {
+                vec![install(
+                    &format!(r"C:\Windows\system32\{program}"),
+                    Provenance::Windows,
+                    PathStanding::First,
+                )]
             }
         }
         let machine = Arc::new(Counting(AtomicUsize::new(0)));
         let service = ConnectService::new(
             Arc::new(FakeFactory::default()),
             Arc::clone(&machine) as Arc<dyn InstalledShells>,
+            Arc::new(FakeSignatures::default()),
             Vec::new(),
         );
 
@@ -882,7 +1231,14 @@ mod tests {
                 command_id: CommandId(1)
             }
         );
-        assert_eq!(*factory.opened.lock().unwrap(), [id]);
+        assert_eq!(
+            *factory.opened.lock().unwrap(),
+            [Chosen {
+                profile: id,
+                program: Some(PathBuf::from(r"C:\Windows\system32\cmd.exe")),
+            }],
+            "and the factory was handed the file rather than the name"
+        );
     }
 
     /// **Decision 4's teeth.** Connecting twice leaves exactly one session alive, because
@@ -972,6 +1328,7 @@ mod tests {
         let service = ConnectService::new(
             Arc::clone(&factory) as Arc<dyn SessionFactory>,
             Arc::new(FakeMachine::complete()),
+            Arc::new(FakeSignatures::default()),
             Vec::new(),
         );
         let working = service
@@ -1115,5 +1472,396 @@ mod tests {
             .clone()
             .expect("a session was made");
         assert!(!live.was_attached());
+    }
+
+    /// **The whole of decision 1, asserted through the port.** The machine names a file, the
+    /// signature port is asked about that file, and the factory is handed that file — so
+    /// nothing between the check and the spawn resolves a name a second time.
+    #[test]
+    fn the_path_that_was_verified_is_the_path_that_is_started() {
+        let (service, factory, signatures) = signed(
+            FakeMachine::complete(),
+            Arc::new(FakeSignatures::default()),
+            &[],
+        );
+
+        service
+            .use_profile(
+                &ProfileId::Shell {
+                    kind: ConnectionKind::Cmd,
+                },
+                &unasked(),
+            )
+            .expect("cmd starts");
+
+        let verified = signatures.verified.lock().unwrap().clone();
+        let started: Vec<PathBuf> = factory
+            .opened
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|chosen| chosen.program.clone())
+            .collect();
+
+        assert_eq!(verified, [PathBuf::from(r"C:\Windows\system32\cmd.exe")]);
+        assert_eq!(
+            started, verified,
+            "one resolution, checked and then started"
+        );
+    }
+
+    /// **Decision 7, and the reason the verdict is not on the row.** `WinVerifyTrust` is not
+    /// free and revocation can reach the network; this list is built on open, in front of a
+    /// listener who is waiting, and 23.7 already refused to put work there.
+    #[test]
+    fn building_the_list_verifies_nothing() {
+        let (service, _, signatures) = signed(
+            FakeMachine::complete(),
+            Arc::new(FakeSignatures::default()),
+            &["builtin"],
+        );
+
+        let listed = service.connectable();
+
+        assert!(!listed.is_empty(), "there is a list to have built");
+        assert!(
+            signatures.verified.lock().unwrap().is_empty(),
+            "nothing was checked to draw it"
+        );
+    }
+
+    /// **Decisions 6 and 7 fitting together.** Nothing is verified to draw the list, and an
+    /// entry that failed the last time somebody tried to start it says so in its **name** —
+    /// the way A11's missing edition does, because a greyed-out entry that looks different
+    /// and reads the same is the failure this product exists to avoid.
+    #[cfg(windows)]
+    #[test]
+    fn an_entry_that_already_failed_to_verify_says_so_in_its_name() {
+        let signatures = Arc::new(FakeSignatures::default());
+        signatures.cached.lock().unwrap().push((
+            PathBuf::from(r"C:\Windows\system32\cmd.exe"),
+            Verdict::Untrusted {
+                fault: Fault::NotSigned,
+            },
+        ));
+        let (service, _, signatures) = signed(FakeMachine::complete(), signatures, &[]);
+
+        let listed = service.connectable();
+
+        assert!(
+            listed
+                .iter()
+                .any(|row| row.label == "Command Prompt (not verified)"),
+            "it is named, not removed: {:?}",
+            labels(&listed)
+        );
+        assert!(
+            listed
+                .iter()
+                .find(|row| row.label.starts_with("Command Prompt"))
+                .expect("it kept its place in the list")
+                .available,
+            "a verdict is not a filter (decision 6)"
+        );
+        assert!(signatures.verified.lock().unwrap().is_empty());
+    }
+
+    /// **Never a gate** (decision 6), the whole shape in one test: an untrusted file is
+    /// offered, choosing it asks a question naming the file and who signed it, and the
+    /// default answer starts nothing and leaves the session the user was in alone.
+    #[test]
+    fn starting_a_file_that_did_not_verify_asks_first_and_the_default_starts_nothing() {
+        let signatures = Arc::new(FakeSignatures::saying(
+            r"C:\Windows\system32\cmd.exe",
+            Verdict::Untrusted {
+                fault: Fault::UntrustedRoot {
+                    signer: Some("Contoso Corporation".to_owned()),
+                },
+            },
+        ));
+        let (service, factory, _) = signed(FakeMachine::complete(), signatures, &[]);
+        let asking = Arc::new(Asking::default());
+        let questions = Arc::clone(&asking) as Arc<dyn ConnectQuestions>;
+
+        let why = service
+            .use_profile(
+                &ProfileId::Shell {
+                    kind: ConnectionKind::Cmd,
+                },
+                &questions,
+            )
+            .expect_err("saying nothing starts nothing");
+
+        let asked = asking.asked.lock().unwrap();
+        let question = asked.first().expect("the user was asked");
+        assert_eq!(question.label, "Command Prompt");
+        assert_eq!(question.program, r"C:\Windows\system32\cmd.exe");
+        assert_eq!(
+            question.verdict.signer().as_deref(),
+            Some("Contoso Corporation")
+        );
+        assert!(
+            factory.opened.lock().unwrap().is_empty(),
+            "and nothing was spawned"
+        );
+        assert!(why.starts_with("Acter did not start Command Prompt."));
+        assert!(
+            why.contains("does not trust"),
+            "the sentence a listener hears is the verdict's own: {why}"
+        );
+        assert_eq!(service.connected(), None, "and the window is where it was");
+    }
+
+    /// **And agreeing starts it and says what was agreed to** (accessibility checklist):
+    /// nobody should be unsure what they just consented to.
+    #[test]
+    fn starting_it_anyway_starts_it_and_says_so_once() {
+        let signatures = Arc::new(FakeSignatures::saying(
+            r"C:\Windows\system32\cmd.exe",
+            Verdict::Untrusted {
+                fault: Fault::NotSigned,
+            },
+        ));
+        let (service, factory, _) = signed(FakeMachine::complete(), signatures, &[]);
+        let questions = Arc::new(Agreeing) as Arc<dyn ConnectQuestions>;
+
+        let connected = service
+            .use_profile(
+                &ProfileId::Shell {
+                    kind: ConnectionKind::Cmd,
+                },
+                &questions,
+            )
+            .expect("saying so starts it");
+
+        assert_eq!(connected.label, "Command Prompt");
+        assert_eq!(
+            connected.note.as_deref(),
+            Some("started although nothing has signed it")
+        );
+        assert_eq!(factory.opened.lock().unwrap().len(), 1);
+    }
+
+    /// **A verdict nobody needs to act on is not an announcement** (accessibility checklist).
+    /// Connecting to a shell Windows ships says exactly what it said before this entry.
+    #[test]
+    fn connecting_to_a_normally_installed_shell_says_nothing_new() {
+        let (service, _, _) = signed(
+            FakeMachine::complete(),
+            Arc::new(FakeSignatures::default()),
+            &[],
+        );
+
+        let connected = service
+            .use_profile(
+                &ProfileId::Shell {
+                    kind: ConnectionKind::Cmd,
+                },
+                &unasked(),
+            )
+            .expect("cmd starts");
+
+        assert_eq!(connected.note, None);
+    }
+
+    /// **Trusted and signed by somebody else is a different sentence** (decision 5) — not a
+    /// question, because this machine's own trust store accepts it, and one clause so nobody
+    /// is left thinking Microsoft built their shell.
+    #[test]
+    fn a_shell_signed_by_somebody_else_starts_and_says_who() {
+        let signatures = Arc::new(FakeSignatures::saying(
+            r"C:\Windows\system32\cmd.exe",
+            Verdict::Trusted {
+                signer: Signer::Other {
+                    name: "Contoso Corporation".to_owned(),
+                },
+            },
+        ));
+        let (service, _, _) = signed(FakeMachine::complete(), signatures, &[]);
+        let asking = Arc::new(Asking::default());
+
+        let connected = service
+            .use_profile(
+                &ProfileId::Shell {
+                    kind: ConnectionKind::Cmd,
+                },
+                &(Arc::clone(&asking) as Arc<dyn ConnectQuestions>),
+            )
+            .expect("a file this machine trusts starts");
+
+        assert_eq!(
+            connected.note.as_deref(),
+            Some("signed by Contoso Corporation rather than by Microsoft")
+        );
+        assert!(
+            asking.asked.lock().unwrap().is_empty(),
+            "there is nothing for the user to decide"
+        );
+    }
+
+    /// **Decision 9.** Two PowerShell 7 installs are two entries a listener can tell apart
+    /// without opening either, and each carries the file that is it.
+    #[cfg(windows)]
+    #[test]
+    fn two_installs_of_one_edition_are_told_apart_by_where_they_came_from() {
+        let machine = FakeMachine::complete().with(
+            "pwsh.exe",
+            vec![
+                install(
+                    r"C:\Program Files\PowerShell\7\pwsh.exe",
+                    Provenance::Directory {
+                        version: "7".to_owned(),
+                        preview: false,
+                    },
+                    PathStanding::First,
+                ),
+                install(
+                    r"C:\Program Files\WindowsApps\Microsoft.PowerShell_7.6.5.0_x64__8wekyb3d8bbwe\pwsh.exe",
+                    Provenance::Store {
+                        family: "Microsoft.PowerShell_8wekyb3d8bbwe".to_owned(),
+                        preview: false,
+                    },
+                    PathStanding::Named,
+                ),
+            ],
+        );
+        let (service, _) = service(machine, &[]);
+
+        let listed = service.connectable();
+        let powershell = listed
+            .iter()
+            .find(|row| row.label == "PowerShell")
+            .expect("the kind is one row however many installs there are");
+
+        assert_eq!(
+            powershell
+                .variants
+                .iter()
+                .map(|variant| variant.label.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "Windows PowerShell",
+                "PowerShell 7",
+                "PowerShell 7 (Microsoft Store)",
+            ],
+            "and the one PATH resolves first keeps the plain name"
+        );
+        assert_eq!(
+            powershell.variants[2].id,
+            ProfileId::Install {
+                kind: ConnectionKind::PowerShellSeven,
+                program:
+                    r"C:\Program Files\WindowsApps\Microsoft.PowerShell_7.6.5.0_x64__8wekyb3d8bbwe\pwsh.exe"
+                        .to_owned(),
+                provenance: Some("Microsoft Store".to_owned()),
+            }
+        );
+    }
+
+    /// **The other half of decision 9, and the one most machines are.** One install of an
+    /// edition is named exactly as it was before this entry existed: A11's panel, unchanged.
+    #[cfg(windows)]
+    #[test]
+    fn a_machine_with_one_powershell_seven_reads_as_it_did_before() {
+        let (service, _) = service(FakeMachine::complete(), &[]);
+
+        let listed = service.connectable();
+        let powershell = listed
+            .iter()
+            .find(|row| row.label == "PowerShell")
+            .expect("PowerShell is offered");
+
+        assert_eq!(
+            powershell
+                .variants
+                .iter()
+                .map(|variant| variant.label.as_str())
+                .collect::<Vec<_>>(),
+            ["Windows PowerShell", "PowerShell 7"]
+        );
+    }
+
+    /// **An install that says nothing about itself is not guessed at** (decision 3). Where it
+    /// came from is unknowable, so what tells it from the other one is the only fact there
+    /// is: the directory it lives in.
+    #[cfg(windows)]
+    #[test]
+    fn an_install_that_says_nothing_is_told_apart_by_where_it_is() {
+        let machine = FakeMachine::complete().with(
+            "pwsh.exe",
+            vec![
+                install(
+                    r"C:\Users\someone\.dotnet\tools\pwsh.exe",
+                    Provenance::Indeterminable,
+                    PathStanding::First,
+                ),
+                install(
+                    r"C:\tools\pwsh\pwsh.exe",
+                    Provenance::Indeterminable,
+                    PathStanding::Named,
+                ),
+            ],
+        );
+        let (service, _) = service(machine, &[]);
+
+        let listed = service.connectable();
+        let powershell = listed
+            .iter()
+            .find(|row| row.label == "PowerShell")
+            .expect("PowerShell is offered");
+
+        assert_eq!(
+            powershell
+                .variants
+                .iter()
+                .map(|variant| variant.label.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "Windows PowerShell",
+                r"PowerShell 7 (C:\Users\someone\.dotnet\tools)",
+                r"PowerShell 7 (C:\tools\pwsh)",
+            ]
+        );
+    }
+
+    /// Choosing an install starts *that* install, rather than whatever the name would have
+    /// resolved to a second time — the same rule as decision 1, seen from the panel.
+    #[cfg(windows)]
+    #[test]
+    fn choosing_one_of_two_installs_starts_that_one() {
+        let machine = FakeMachine::complete().with(
+            "pwsh.exe",
+            vec![
+                install(
+                    r"C:\Program Files\PowerShell\7\pwsh.exe",
+                    Provenance::Directory {
+                        version: "7".to_owned(),
+                        preview: false,
+                    },
+                    PathStanding::First,
+                ),
+                install(
+                    r"C:\tools\pwsh\pwsh.exe",
+                    Provenance::Indeterminable,
+                    PathStanding::Absent,
+                ),
+            ],
+        );
+        let (service, factory) = service(machine, &[]);
+        let chosen = ProfileId::Install {
+            kind: ConnectionKind::PowerShellSeven,
+            program: r"C:\tools\pwsh\pwsh.exe".to_owned(),
+            provenance: Some(r"C:\tools\pwsh".to_owned()),
+        };
+
+        let connected = service
+            .use_profile(&chosen, &unasked())
+            .expect("the chosen install starts");
+
+        assert_eq!(connected.label, r"PowerShell 7 (C:\tools\pwsh)");
+        assert_eq!(
+            factory.opened.lock().unwrap()[0].program,
+            Some(PathBuf::from(r"C:\tools\pwsh\pwsh.exe"))
+        );
     }
 }

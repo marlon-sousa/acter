@@ -57,6 +57,15 @@ export type ConnectAnswer =
  */
 { answer: "Password"; secret: Secret } | 
 /**
+ *  Start this file even though it did not verify.
+ * 
+ *  **The one way to reach [`ProgramAnswer::Start`](crate::ProgramAnswer)**, so nothing
+ *  but a person deliberately saying so can start an unverified program — the shape
+ *  [`Self::Trust`] has for a host key, and for the same reason (spec B5.7, decision 6).
+ *  What was agreed to is then said out loud at connection, so nobody is left unsure.
+ */
+{ answer: "StartAnyway" } | 
+/**
  *  Stop: the key was refused, the dialog was cancelled, or the user changed their mind.
  * 
  *  **One variant for all three**, because the connection does the same thing for each
@@ -92,6 +101,36 @@ recorded: string | null;
  *  read, so the user knows this may be being asked about a host they already trust.
  */
 aside: string | null } | 
+/**
+ *  The file this machine is about to start did not verify.
+ * 
+ *  **Never a gate, and it arrives here rather than removing a row from the list** (spec
+ *  B5.7, decision 6). A self-built pwsh, a corporate re-signed build, a damaged catalog
+ *  database and an offline revocation check are all legitimate and all common; hiding
+ *  any of them would teach a user that Acter cannot see the shell they are looking
+ *  straight at. So everything discovered is listed, and starting an unverified one asks
+ *  first — the shape B9 established for an unknown host key.
+ */
+{ question: "Unverified"; 
+/**  What the user chose, as they heard it in the list. */
+label: string; 
+/**
+ *  The file that would be started, in full — **the path rather than the name**,
+ *  because `PATH`-order hijacking is what this defeats, and which directory the file
+ *  is in is the whole of what makes it recognisably wrong.
+ */
+program: string; 
+/**
+ *  What was found and what it means, as whole sentences ending in what to do next.
+ *  Composed once, in the domain, so the words are decided in one place.
+ */
+said: string; 
+/**
+ *  Who signed it, when anything could be read about that — carried separately from
+ *  the sentence so a dialog can put it somewhere it can be read character by
+ *  character.
+ */
+signer: string | null } | 
 /**  The server will take a password, and there is not one yet. */
 { question: "Password"; host: string; user: string; 
 /**
@@ -350,6 +389,28 @@ export type ProfileId =
  *  by ear is better served by a name than by "the default".
  */
 { profile: "Shell"; kind: ConnectionKind } | 
+/**
+ *  One *particular* install of a kind: which edition it is, and the file that is it.
+ * 
+ *  **What the connect list offers for a kind this machine actually has, since B5.7.**
+ *  [`Self::Shell`] names a kind and leaves the file to whatever `PATH` resolves at spawn
+ *  time, which is the second resolution decision 1 exists to remove — and it cannot tell
+ *  two PowerShell 7 installs apart at all. This carries the file the list already
+ *  resolved, so what is verified and what is started are the same bytes.
+ */
+{ profile: "Install"; 
+/**  Which edition this is, so a session started from it says what it says today. */
+kind: ConnectionKind; 
+/**  The file, resolved once at discovery. */
+program: string; 
+/**
+ *  What tells this install from another of the same edition, when anything does:
+ *  `preview`, `Microsoft Store`, or the directory it lives in (decision 9).
+ * 
+ *  `None` on the ordinary machine with one install, which is why A11's row count
+ *  survives this entry.
+ */
+provenance: string | null } | 
 /**  Bash inside one named WSL distribution, spelled as `wsl.exe -l -q` spelled it. */
 { profile: "Distribution"; name: string } | 
 /**

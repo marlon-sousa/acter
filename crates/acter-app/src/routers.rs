@@ -74,7 +74,7 @@ mod tests {
                         &ProfileId::Scripted {
                             name: BUILTIN.to_owned(),
                         },
-                        &(Arc::new(acter_core::Unasked) as Arc<dyn acter_core::SshQuestions>),
+                        &(Arc::new(acter_core::Unasked) as Arc<dyn acter_core::ConnectQuestions>),
                     )
                     .expect("the built-in scripted session starts");
             }
