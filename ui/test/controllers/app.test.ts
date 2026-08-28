@@ -739,10 +739,30 @@ describe('event rendering (decision 2)', () => {
     backend.emit({ type: 'IntegrationUnavailable' });
 
     expect(announcer.announcements).toEqual([integrationUnavailableMessage]);
+    // **Spelled out rather than compared to the constant alone**, because the constant
+    // was wrong for five entries and every test that only compared it to itself passed
+    // the whole time (spec A13). What is pinned here is the sentence a person hears.
     expect(announcer.announcements[0]).toBe(
-      'shell integration unavailable, output will not be read automatically; review it in the buffer',
+      'You will hear what commands print here, but not whether they worked. Press F1 for help.',
     );
     expect(buffer.opened).toEqual([]);
+  });
+
+  /** **The claim the old sentence made and the product had stopped honouring.** It said
+   * output would not be read automatically; B4.4 reversed that ("only the silence goes")
+   * and nothing updated the words. This asserts the behaviour the new sentence promises,
+   * so the two can never drift apart again without a test saying so. */
+  it('output in an unintegrated session is still read aloud', async () => {
+    const { backend, announcer, controller } = await makeApp();
+
+    backend.emit({ type: 'IntegrationUnavailable' });
+    backend.emit({
+      type: 'Announce',
+      command_id: 1,
+      announcement: { kind: 'ReadAloud', text: 'acter>' },
+    });
+
+    expect(announcer.announcements).toContain('acter>');
   });
 
   it('TitleChanged and ConnectionChanged are silent no-ops', async () => {

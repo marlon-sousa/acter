@@ -60,6 +60,25 @@
             </li>
           </ul>
         </li>
+        <!-- Help sits between the commands and About, where a Windows user's hand expects
+             it. It carries one item rather than being a top-level leaf: the bar's keyboard
+             contract opens a submenu on Enter, so a top-level item with nothing under it
+             would answer that key with nothing at all (spec A13). -->
+        <li role="none">
+          <span
+            role="menuitem"
+            id="menu-help"
+            aria-haspopup="true"
+            aria-expanded="false"
+            tabindex="-1"
+            >Help</span
+          >
+          <ul role="menu" aria-label="Help" hidden>
+            <li role="none">
+              <span role="menuitem" id="menu-acter-help" tabindex="-1">Acter help</span>
+            </li>
+          </ul>
+        </li>
         <li role="none">
           <span
             role="menuitem"
@@ -192,6 +211,76 @@
       <p id="about-copyright"></p>
       <p id="about-licence"></p>
       <button id="about-close" type="button">Close</button>
+    </dialog>
+    <!-- Help. A modal <dialog> for About's reasons, and **deliberately not an application
+         region**, which is the one thing this dialog does differently from every other one
+         added since B9 (spec A13, decision 4).
+
+         Those dialogs wrap themselves in `role="application"` so the arrows and Enter reach
+         the widget rather than a browse-mode cursor. What is in here is prose to be *read*,
+         and the Connect dialog's own note above records what an application region costs:
+         inside one, prose cannot be arrowed. A help topic a listener cannot arrow through
+         line by line is not help. So this is a plain dialog, browse mode, headings and
+         paragraphs — reachable with `h` and read with the arrow keys.
+
+         The content is static rather than filled from the backend: it explains what a
+         listener hears, and nothing about it depends on the build or the machine. -->
+    <dialog
+      id="help-dialog"
+      aria-labelledby="help-title"
+      aria-describedby="help-summary"
+    >
+      <h1 id="help-title">Acter help</h1>
+      <!-- **What opening it says, and the reason it is one line** (spec A13, decision 7).
+           Driven with NVDA on 2026-08-27 without this, the dialog announced its title and
+           then read the whole topic — six paragraphs in one utterance, with the headings
+           left out of it, because a reader with no description to speak falls back to the
+           content. So the one read a listener gets for free was the wall of prose, and the
+           structure built for skimming was the part it dropped.
+
+           An explicit description is what the host-key dialog already does for the same
+           reason (spec B9): it names what is here and how to move through it, and the
+           sections stay where a heading key can find them. -->
+      <p id="help-summary">
+        Three short sections about what you hear when you run a command. Use your reader's
+        heading key to move between them.
+      </p>
+
+      <h2>What you always hear</h2>
+      <p>
+        When you run a command, Acter reads out what the command prints. It also keeps it in
+        the results area above the command line, so you can go back over it with the arrow
+        keys, or jump between commands with your reader's heading key.
+      </p>
+
+      <h2>What you sometimes do not hear</h2>
+      <p>
+        Acter cannot see whether a command worked. It has to be told, by the shell it is
+        talking to. Some shells are set up to tell it and some are not.
+      </p>
+      <p>
+        When the shell tells Acter, you hear a short sentence at the end of a command that
+        failed, such as "command failed, exit code 3", and you hear nothing extra when it
+        worked. That is the only difference. You are not missing any of the output either
+        way.
+      </p>
+      <p>
+        When the shell does not tell Acter, you can still see how a command went from what it
+        printed, which is what you would do at any other terminal.
+      </p>
+
+      <h2>Which sessions are which</h2>
+      <p>
+        Sessions on this computer — Command Prompt, PowerShell and WSL — set themselves up
+        when they start, so they normally tell Acter how commands end.
+      </p>
+      <p>
+        A session on another computer, reached over SSH, normally does not. Setting it up
+        means changing something on that other computer, which Acter will not do without
+        asking you first.
+      </p>
+
+      <button id="help-close" type="button">Close</button>
     </dialog>
     <!-- Connect. A modal <dialog> for About's reasons, and one more of its own: a failed
          connection has to leave the user somewhere they can try again, which a submenu

@@ -10,11 +10,12 @@
 // **F10 is the way in**, which is the platform's own answer to "give me the menu bar"
 // and is not swallowed by the webview the way Alt is claimed by the window frame.
 
-/// What the two leaf items do. Passed in rather than reached for, so this adapter knows
+/// What the leaf items do. Passed in rather than reached for, so this adapter knows
 /// about menus and nothing about sessions, windows or dialogs.
 export interface MenuActions {
   connect(): void;
   exit(): void;
+  help(): void;
   about(): void;
 }
 
@@ -193,6 +194,8 @@ export function installMenuBar(
       actions.connect();
     } else if (item.id === 'menu-exit') {
       actions.exit();
+    } else if (item.id === 'menu-acter-help') {
+      actions.help();
     } else if (item.id === 'menu-about-acter') {
       actions.about();
     }

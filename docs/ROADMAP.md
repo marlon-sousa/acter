@@ -463,6 +463,50 @@ the answer to "what should we do now?".
     what NVDA is actually doing at that moment, which is an `expert` question about the
     reader rather than a `user` one about Acter.
 
+13.7. **Done** — A13, what a session can tell you, and where that is explained. Spec:
+    [a13-what-a-session-can-tell-you-and-where-that-is-explained.md](specs/a13-what-a-session-can-tell-you-and-where-that-is-explained.md),
+    agreed and implemented 2026-08-27. **Raised by the user** during B6.2's accessibility
+    pass: *"'shell integration unavailable, output will not be read' — is this still true?
+    Because prompts are now read."*
+
+    It was not true, and had not been since **B4.4** (22.4), whose spec reversed DESIGN's
+    "no auto-read" in as many words — *"only the silence goes"* — and left the sentence
+    behind. `policies/autoread.rs` has never consulted `Integration` at all, so output in an
+    unintegrated session has been going through the same pacing path as any other output for
+    five entries while the announcement said it would not be read. B6.2 did not cause this;
+    it made it audible, because a listener now hears the claim and then immediately hears
+    output.
+
+    **The larger half of the finding is the vocabulary.** Offered three corrected sentences,
+    all accurate, the user answered: *"Are these sentences what will be presented to the end
+    user? If so not even I myself can understand."* Every one of them used this project's
+    words — "shell integration", "verdict", "exit code". The author of the product could not
+    read its own announcement, which is a sharper test than any checklist and one this board
+    should apply more often.
+
+    What shipped is a sentence in a user's words — *"You will hear what commands print here,
+    but not whether they worked. Press F1 for help."* — and the place it points at: a Help
+    menu, F1 from anywhere in the window, and a modal dialog whose topic explains the
+    difference by what a listener hears rather than by what a shell emits. **It is the one
+    dialog in the product that is deliberately not an application region**, because prose
+    inside one cannot be arrowed, and a help topic that cannot be read line by line is not
+    help.
+
+13.8. The connection sentence uses the same vocabulary 13.7 removed. Spec: none yet →
+    specify first. **Filed 2026-08-27** while A13 was being written, rather than fixed
+    quietly inside it.
+
+    A connection announces *"connected to SSH: acter at 127.0.0.1, port 2222, bash, with no
+    shell integration set up on this host"*, and "shell integration" is exactly the phrase
+    A13 concluded a user does not have. It is the **first** thing a listener hears on
+    connecting, so it meets the objection before the announcement A13 rewrote does.
+
+    It is a separate entry because it is a different sentence with its own reasons: B9
+    decision 7 earned the far end's name, 27.5 made the status region and the announcement
+    one string, and both were measured with a listener on 2026-08-26. Rewording it means
+    re-deciding what the status region says when it is read on demand an hour later, which
+    is 27.5's question and not A13's.
+
 14. A4, completion path. Spec: none yet → specify first. Scope sketch: fake
     completion provider, Tab handling in the edit field, completion announcement.
 15. A5.3 and onward — iteration entries appear here as NVDA findings arrive.
