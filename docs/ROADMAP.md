@@ -2399,8 +2399,9 @@ thing to pick up once the adapters land, not merely the next number.
     that the login shell is bash at all.
 
 23.9. A shell is chosen by filename, and started without anyone asking who signed it. Spec:
-    **B5.7, agreed in conversation 2026-08-27**, travelling with its implementation as
-    `docs/specs/b5.7-what-this-machine-actually-has.md`. **Raised by the user 2026-08-27**:
+    [b5.7-what-this-machine-actually-has.md](specs/b5.7-what-this-machine-actually-has.md) —
+    **agreed in conversation 2026-08-27**, and the next step is implementing it.
+    **Raised by the user 2026-08-27**:
     *"I won't want to execute a pwsh.exe to discover we had run a malware."*
 
     `InstalledShells::is_available` walks `PATH` and `PATHEXT` and asks whether a candidate
@@ -2421,6 +2422,18 @@ thing to pick up once the adapters land, not merely the next number.
     that Rust's `is_file()` reports as a file and that **cannot be opened at all**
     (`ERROR_CANT_ACCESS_FILE`) — so it can be started and not read, and resolve-then-verify
     does not compose with it.
+
+    **What the field says, looked up rather than assumed.** Microsoft's own detection guidance
+    is from 2009, covers PowerShell 1.0, and warns against depending on any other registry key,
+    on the version of `powershell.exe`, or on its location — which is every method in use
+    today, this spec's included. Windows Terminal does not consult `PATH` at all: it enumerates
+    known roots and the Store's package identities, takes the version from the *directory name*
+    rather than the file, and ships "indeterminable" as an honest state for a scoop shim or a
+    dotnet tool. That is independent confirmation of a fourth measurement taken here — that
+    `powershell.exe`'s version resource reports the *Windows build*, `10.0.26100.8875`, and not
+    5.1. So the spec identifies an install by **where it came from**, never by what the file
+    says about itself, and keeps `PATH` for the one thing no other source knows: what `pwsh`
+    means to this user.
 
     **The verdict is a sentence and never a gate**, following A11 decision 3 and B9's
     host-key question. A self-built pwsh, a corporate re-signed build, a damaged catalog
