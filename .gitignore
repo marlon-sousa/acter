@@ -31,3 +31,6 @@ crates/acter-app/gen/
 e2e/screenshots/
 .claude/
 .vscode/
+
+# Scratch: a PR body being drafted, never part of the tree.
+.pr-body.md

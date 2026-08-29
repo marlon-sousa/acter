@@ -377,6 +377,29 @@ the answer to "what should we do now?".
     was read, and the sentence naming the far end was missing. Both runs were NVDA 2026.1.1,
     silent capture, `user` persona, minutes apart in one window.
 
+    **Two more far ends, measured 2026-08-29 in B5.5's pass, and they narrow it hard.** NVDA
+    2026.1.1, silent capture, `user` persona, agent-driven through the screen-readers bridge.
+    Connecting to **WSL: Ubuntu** (cold), to **WSL: docker-desktop** and to **Command Prompt**
+    each produced the terminal window, the edit field and the shell's own prompt — and in
+    every one of the three the sentence naming the far end was **never spoken**, on the first
+    connection of a freshly launched window every time. The words were composed and did reach
+    the page: the status region read back "connected to WSL: Ubuntu, bash", "connected to WSL:
+    docker-desktop, sh, with no shell integration set up in this distribution" and the cmd
+    equivalent, correctly, on demand.
+
+    So it is **not** about the far end's kind, not about the probe, and not about whether the
+    connection carries a note: cmd takes the `note: None` path and is just as silent as the
+    two that carry one. What the three runs have in common with B5.7's is the *window*: each
+    was the first connection made in a window that had just opened. That is the strongest
+    lead this entry has, and it is now four far ends rather than one.
+
+    **And it costs more than it did, since B5.5.** For an unintegrated far end the named
+    sentence is the *only* one said — the generic `IntegrationUnavailable` is deliberately
+    suppressed when the note already said it, which was measured working on docker-desktop.
+    So a listener on a distribution Acter cannot integrate now hears neither, where before
+    this entry they at least heard the generic sentence five seconds later. Fixing 13.3 is
+    what restores it; nothing in B5.5 should be undone for it.
+
     **What is suspected and what is not.** The announcement is queued while the dialog is
     still open and drained after it closes, so it crosses the moment the dialog leaves the
     top layer and focus returns to the edit field. Whether what is lost is the drain landing
@@ -2350,11 +2373,41 @@ thing to pick up once the adapters land, not merely the next number.
     spinner in words**: a listener needs to know that waiting is correct, and to be told when
     waiting stopped being correct.
 
-23.8. WSL assumes the far end is bash, and never checks. Spec: **B5.5, agreed in
-    conversation 2026-08-27**, travelling with its implementation as
-    `docs/specs/b5.5-the-distribution-says-what-shell-it-runs.md`.
+23.8. **Done** — B5.5, the distribution says what shell it runs. Spec:
+    [b5.5-the-distribution-says-what-shell-it-runs.md](specs/b5.5-the-distribution-says-what-shell-it-runs.md)
+    — agreed in conversation 2026-08-27, and landed early in A13's PR rather than travelling
+    with its implementation, so PR #47 (2026-08-29) carried the code, seven amendments and
+    this flip.
     **Found in conversation 2026-08-26**, while deciding how SSH would recognise a shell it
     did not name. WSL has the same shape and it had gone unnoticed.
+
+    **What implementing it measured, and it changed a number.** The probe is 148 to 206
+    milliseconds against a warm distribution and **5.35 to 6.30 seconds** against a cold one,
+    timed four times each with `wsl --shutdown` between the cold runs (Ubuntu 24.04, WSL
+    2.5.7.0, 2026-08-29). The six-second deadline tried first landed inside that spread and
+    failed reproducibly, which would have made a cold bash distribution a coin toss between
+    integrated and unnamed; it is twelve now. `wsl.exe -l -q` warms nothing — 57 to 74
+    milliseconds either way — so it is the first command run *inside* a distribution that
+    boots it, which is a second reason the connect list must not ask per row.
+
+    **And the probe pays the boot the session would have paid**: on a cold machine this call
+    is what starts the distribution, so the session's own start then finds one that is up.
+    That is 23.10's subject rather than this entry's, but the two now share a measurement.
+
+    **The non-bash case was heard, and no machine had to be reconfigured.** The spec expected
+    this to need a distribution whose login shell had been changed by hand. It did not:
+    **`docker-desktop` runs `/bin/sh`**, it is in the connect list because B5.3 decision 5
+    lists everything installed, and connecting to it in the 2026-08-29 pass read "connected to
+    WSL: docker-desktop, sh, with no shell integration set up in this distribution". A service
+    distribution is a real non-bash far end that every machine with Docker Desktop already
+    has — which is worth knowing for every later entry that needs one.
+
+    **The wait is narrated, raised by the user on being shown those numbers** — "we just need
+    to show a nice connecting status, like we do with ssh". A WSL connection now says
+    "Starting Ubuntu 24.04." before it waits, through the same `SshQuestions::tell` that says
+    "Connecting to acter-ssh.", so five seconds of boot are not five seconds of silence. It
+    does **not** close 23.7: that entry is the silence after a session exists and before its
+    shell draws a prompt, which is a different clock measuring a different thing.
 
     **One thing the spec had to correct about this entry, agreed 2026-08-27**: the safety
     property is already in place. `ShellMarkers::Full` is not a claim that a shell is

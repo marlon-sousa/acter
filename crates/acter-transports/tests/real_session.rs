@@ -29,7 +29,7 @@ use acter_core::{
     ShellAdapter, ShellFacts, ShellLaunch, ShellMarkers, SshQuestions, Started, SubmitAck, Timer,
     Unasked,
 };
-use acter_shells::ThisMachine;
+use acter_shells::{ThisMachine, Wsl};
 use acter_term::AlacrittyEngine;
 use acter_transports::LocalPty;
 use tokio::sync::oneshot;
@@ -809,13 +809,18 @@ const WSL: &str = "wsl.exe";
 const WSL_PATIENCE: Duration = Duration::from_secs(60);
 
 impl RealSession {
-    /// Bash inside a WSL distribution, launched and declared exactly as the application
-    /// launches and declares it: the `-d`-less launch, the two-variable injection, and the
-    /// full marker cycle. Everything in this file's WSL group asks the adapter rather than
-    /// spelling anything out, so the suite and the product cannot measure different
-    /// streams (spec B5.1, decision 5).
+    /// Whatever shell a WSL distribution runs, launched and declared exactly as the
+    /// application launches and declares it: the `-d`-less launch, the injection if and only
+    /// if the distribution answered "bash", and the full marker cycle. Everything in this
+    /// file's WSL group asks the adapter rather than spelling anything out, so the suite and
+    /// the product cannot measure different streams (spec B5.1, decision 5).
+    ///
+    /// **It asks first, since B5.5**, which is the whole of that entry: `adapter_for` no
+    /// longer injects into a WSL client, because a name does not say what the distribution
+    /// runs. Going through `login_shell` here is what keeps this suite measuring the stream
+    /// the product produces rather than one the test arranged.
     fn wsl() -> Self {
-        let adapter = acter_shells::adapter_for(WSL);
+        let adapter = Wsl::new(WSL, ThisMachine::new().login_shell(None).as_deref());
         Self::over_within(
             &adapter.launch(),
             adapter.markers(),
@@ -923,6 +928,71 @@ async fn a_real_bash_under_wsl_marks_the_boundaries_of_the_command_it_ran() {
         "a session whose PROMPT_COMMAND survived the user's .bashrc is integrated, and \
          within the grace period the application really ships"
     );
+}
+
+/// **B5.5, against a real distribution**: the client is asked what shell the account runs,
+/// and it answers with a name rather than a path, a guess or nothing.
+///
+/// **What this can and cannot prove on an ordinary machine.** It proves the invocation, the
+/// deadline and the reading against whatever this computer has, which for almost every
+/// developer machine is bash — the case that had to keep behaving exactly as it did. The
+/// non-bash case cannot be measured here without reconfiguring somebody's distribution, so
+/// it is asserted where it is decidable: `wsl.rs` proves that a distribution named as zsh is
+/// started with nothing injected, and `login_shell.rs` proves that a zsh passwd entry reads
+/// as "zsh". What is left for a human is hearing it, which is the checklist's business.
+#[tokio::test]
+#[ignore = "asks a real wsl.exe and needs a WSL distribution installed"]
+async fn a_real_distribution_says_what_shell_it_runs() {
+    if !wsl_is_available() {
+        println!("skipped: this machine has no WSL distribution");
+        return;
+    }
+
+    let said = ThisMachine::new()
+        .login_shell(None)
+        .expect("a distribution that starts answers what its account runs");
+
+    println!("the default distribution runs {said}");
+    assert!(
+        !said.contains('/') && !said.contains(char::is_whitespace),
+        "a name is what a listener hears, not a path: {said:?}"
+    );
+    assert!(
+        !said.contains('$'),
+        "an unexpanded variable is not a shell name: {said:?}"
+    );
+}
+
+/// **The probe's output cannot reach the terminal buffer, asserted rather than assumed**
+/// (spec B5.5, definition of done).
+///
+/// It is a second `wsl.exe` with its own pipes, so nothing connects it to the pseudoconsole
+/// the session reads — but "nothing connects them" is exactly the kind of claim that stops
+/// being true when somebody makes the probe cheaper by typing it into the session instead.
+/// That is B4.9's subject: a command nobody typed, appearing in front of a screen reader.
+#[tokio::test]
+#[ignore = "spawns a real shell and needs a WSL distribution installed"]
+async fn nothing_the_probe_asked_reaches_the_session_a_listener_reads() {
+    if !wsl_is_available() {
+        println!("skipped: this machine has no WSL distribution");
+        return;
+    }
+
+    let session = RealSession::wsl();
+
+    // A command of the user's own, so the buffer has genuinely been filled by the time the
+    // absences below are asserted rather than merely being empty.
+    let command = session.submit("echo acter-probe-check");
+    session.wsl_until(command, "acter-probe-check").await;
+
+    let rendered = session.rendered();
+    for trace in ["getent", "passwd", "id -un", "$SHELL"] {
+        assert!(
+            !rendered.contains(trace),
+            "the probe asked on its own invocation, so {trace:?} is in no buffer a listener \
+             reads: {rendered:?}"
+        );
+    }
 }
 
 /// **The first verdict any shipped session has had.** cmd cannot say how a command went,

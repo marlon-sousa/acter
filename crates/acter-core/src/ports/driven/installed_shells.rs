@@ -1,5 +1,6 @@
 //! Port (driven): what this particular computer actually has — which WSL distributions
-//! exist, and which files a named program actually resolves to.
+//! exist, which files a named program actually resolves to, and which shell a distribution's
+//! own account runs.
 //!
 //! **The first port about the machine rather than about a session.** Every other driven
 //! port is a seam in something already running; this one is asked before anything is
@@ -7,9 +8,15 @@
 //! process, depends on what is installed and can fail, which is ARCHITECTURE's classifying
 //! question answered three times over: it is I/O, so it is an adapter, so it gets a port.
 //!
-//! **Both questions, not one each.** "What can this machine run" is a single question the
-//! connect list asks once, and two ports answering halves of it would be two fakes to keep
-//! in step (spec B5.3, decision 4).
+//! **Every question here, not one port each.** "What can this machine run" is a single
+//! question, and ports answering thirds of it would be three fakes to keep in step (spec
+//! B5.3, decision 4). B5.5 added the third for that reason rather than opening a seam: which
+//! shell a distribution runs is the same kind of question about the same machine, asked of
+//! the same client (spec B5.5, decision 2).
+//!
+//! **One of the three is not asked while the list is built.** `login_shell` runs per
+//! connection, because asking per row would start one `wsl.exe` for every distribution every
+//! time the connect dialog opens.
 //!
 //! Distinct from [`ShellAdapter`](crate::ShellAdapter), which is knowledge: what `cmd.exe`
 //! is started with is the same answer on every machine in the world, and which
@@ -58,6 +65,34 @@ pub trait InstalledShells: Send + Sync {
     /// candidate to find out whether it starts would open sessions nobody asked for. That is
     /// also why no version is read off any file (decision 3).
     fn installs(&self, program: &str) -> Vec<ShellInstall>;
+
+    /// Which shell a WSL distribution's own account is configured to run, by name, or
+    /// `None` when nothing honest can be said about it.
+    ///
+    /// `None` for the distribution names whatever WSL calls the default, which leaves that
+    /// choice to WSL rather than making it here — the same reason `wsl.exe` is started with
+    /// no `-d` when nobody named one.
+    ///
+    /// **`wsl.exe` is a client, not a shell** (spec B5.5). What it starts is whatever login
+    /// shell the distribution's account carries in its own passwd entry, and until B5.5
+    /// this program assumed that was bash — injecting a `PROMPT_COMMAND` program into
+    /// accounts running zsh, fish or dash, where nothing would ever read it.
+    ///
+    /// **Advisory, never a gate** (decision 3). Every way of failing — a distribution that
+    /// will not start, a client that is not there, an answer that is not a shell name, a
+    /// deadline that passed — is the same `None`, and `None` costs the session nothing: it
+    /// starts anyway, unintegrated and unnamed. An implementer runs this with a deadline
+    /// rather than waiting on it, because it sits in the seconds before there is a prompt
+    /// and those are already the worst seconds in this product (roadmap 23.7).
+    ///
+    /// **The name licenses saying so and nothing else.** Knowing a distribution runs zsh
+    /// earns the word "zsh" in the sentence a listener hears; it does not earn a zsh
+    /// injection, which nobody has measured the way B5.3 measured bash's.
+    ///
+    /// **Asked once per connection, not once per row** (decision 3). Asking while the
+    /// connect list is built would mean one `wsl.exe` for every distribution every time the
+    /// dialog opens, which is worse in the very place a listener is already waiting.
+    fn login_shell(&self, distribution: Option<&str>) -> Option<String>;
 }
 
 /// Why there is no WSL entry to offer.

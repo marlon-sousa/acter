@@ -17,21 +17,30 @@
 //! [`InstalledShells`](acter_core::InstalledShells) rather than here. This module knows
 //! only how to start one once its name is in hand.
 //!
+//! **Since B5.5, which shell it starts is discovered too.** `wsl.exe` is a client, and what
+//! it runs is whatever login shell the distribution's account carries in its own passwd
+//! entry — so this adapter is *told* what that shell is rather than assuming bash, and it
+//! injects only when it was told the one shell the injection was measured against. An
+//! account running zsh is named and left alone. The same port answers that question, on the
+//! same client, and [`login_shell`] is what its answer means. What it is *not* is a gate: a
+//! distribution that would not answer starts anyway, with nothing claimed about it.
+//!
 //! Where the marker program came from, and every byte of what it emits, is in
 //! [`injection`]; how a distribution list is read out of `wsl.exe -l -q` is in
 //! [`distributions`].
 
 pub(crate) mod distributions;
 mod injection;
+pub(crate) mod login_shell;
 
 use acter_core::{ShellAdapter, ShellLaunch, ShellMarkers};
 
-use crate::wsl::injection::ENVIRONMENT;
+use crate::wsl::injection::{ENVIRONMENT, MEASURED};
 
 /// The `-d` flag that points `wsl.exe` at one distribution rather than at the default.
 const DISTRIBUTION_FLAG: &str = "-d";
 
-/// A bash session inside one WSL distribution.
+/// A session inside one WSL distribution, with whatever shell that distribution runs.
 pub struct Wsl {
     /// The client program as the user named it, for [`Cmd`](crate::Cmd)'s reason: `wsl`,
     /// `wsl.exe` and a full path to it are the same client and which of them reaches the
@@ -43,6 +52,15 @@ pub struct Wsl {
     /// [`ShellLaunch`](acter_core::ShellLaunch) is owned rather than borrowed: this name
     /// is read off a running `wsl.exe` at the moment a user opens the connect list.
     distribution: Option<String>,
+    /// What that distribution's account actually runs, as
+    /// [`InstalledShells::login_shell`](acter_core::InstalledShells::login_shell) answered,
+    /// and `None` when nothing answered.
+    ///
+    /// **Carried rather than assumed, since B5.5.** Every constructor here takes it, so
+    /// there is no way to build this adapter without having decided what to believe about
+    /// the far end. Before that the field did not exist and bash was the silent answer
+    /// everywhere, including in the accounts that do not run it.
+    shell: Option<String>,
 }
 
 impl Wsl {
@@ -53,19 +71,43 @@ impl Wsl {
     /// this program choosing, and only the first of the two is ever right after the user
     /// changes their default. Measured on 2026-08-24 as starting the same integrated bash
     /// as a named distribution does.
-    pub fn new(program: impl Into<String>) -> Self {
+    pub fn new(program: impl Into<String>, shell: Option<&str>) -> Self {
         Self {
             program: program.into(),
             distribution: None,
+            shell: shell.map(ToOwned::to_owned),
         }
     }
 
     /// A session in the distribution with this name, as `wsl.exe -l -q` spelled it.
-    pub fn in_distribution(program: impl Into<String>, distribution: impl Into<String>) -> Self {
+    pub fn in_distribution(
+        program: impl Into<String>,
+        distribution: impl Into<String>,
+        shell: Option<&str>,
+    ) -> Self {
         Self {
             program: program.into(),
             distribution: Some(distribution.into()),
+            shell: shell.map(ToOwned::to_owned),
         }
+    }
+
+    /// What this session is with, for the sentence a listener hears, and `None` when the
+    /// distribution said nothing this program is willing to say out loud.
+    pub fn login_shell(&self) -> Option<&str> {
+        self.shell.as_deref()
+    }
+
+    /// Whether Acter put its marker program into this session.
+    ///
+    /// **True for exactly one shell** (spec B5.5, decision 4), which is the one the
+    /// injection was measured against. It is *not* the same question as
+    /// [`markers`](ShellAdapter::markers): every WSL session claims the full cycle, and the
+    /// grace period is what contradicts that claim for a session nothing was injected into.
+    /// This is what the composition root asks in order to decide whether the connection
+    /// sentence carries "with no shell integration set up in this distribution".
+    pub fn is_integrated(&self) -> bool {
+        self.shell.as_deref() == Some(MEASURED)
     }
 }
 
@@ -76,13 +118,22 @@ impl ShellAdapter for Wsl {
             args.push(DISTRIBUTION_FLAG.to_owned());
             args.push(distribution.clone());
         }
-        ShellLaunch {
-            program: self.program.clone(),
-            args,
-            environment: ENVIRONMENT
+        // **Nothing is pushed into a shell there is no reason to believe reads it** (spec
+        // B5.5, decision 4). `PROMPT_COMMAND` is bash's, and an account running zsh or fish
+        // would carry it across the kernel boundary in `WSLENV` for nothing to read at the
+        // other end. A distribution that did not answer is in the same position: the session
+        // starts, and nothing is claimed about it.
+        let environment = match self.is_integrated() {
+            true => ENVIRONMENT
                 .iter()
                 .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
                 .collect(),
+            false => Vec::new(),
+        };
+        ShellLaunch {
+            program: self.program.clone(),
+            args,
+            environment,
         }
     }
 
@@ -94,6 +145,14 @@ impl ShellAdapter for Wsl {
     /// Bash has `PROMPT_COMMAND` and a `DEBUG` trap, so all four markers arrive and `D`
     /// carries a real exit code — which makes a WSL session the first shipped one where a
     /// listener is told how a command went rather than only that the prompt came back.
+    ///
+    /// **Still `Full` for a distribution nothing was injected into, and that is deliberate**
+    /// (spec B5.5, decision 4, following B9's decision 2). `Full` is an optimistic claim
+    /// rather than a report, and it is the claim the startup grace period exists to
+    /// contradict: a session that never marks anything reaches `IntegrationUnavailable` and
+    /// says so. Answering `PromptAndCommandLine` here for zsh would forge a measurement
+    /// nobody made, and answering with something narrower would leave a listener waiting for
+    /// boundaries in silence.
     fn markers(&self) -> ShellMarkers {
         ShellMarkers::Full
     }
@@ -122,7 +181,7 @@ impl ShellAdapter for Wsl {
 /// Case-insensitive and extension-insensitive for [`is_cmd`](crate::cmd) reasons: `wsl`,
 /// `wsl.exe` and a full path to it are all the same client and a user typing any of them
 /// means the same thing.
-pub(crate) fn is_wsl(program: &str) -> bool {
+pub fn is_wsl(program: &str) -> bool {
     let program = program.rsplit(['/', '\\']).next().unwrap_or(program);
     program.eq_ignore_ascii_case("wsl") || program.eq_ignore_ascii_case("wsl.exe")
 }
@@ -140,7 +199,7 @@ mod tests {
     #[test]
     fn bash_under_wsl_has_no_measured_end_of_input_yet() {
         assert_eq!(
-            Wsl::new("wsl.exe").eof(),
+            Wsl::new("wsl.exe", Some("bash")).eof(),
             None,
             "no byte is claimed until one is measured against a real distribution"
         );
@@ -165,7 +224,7 @@ mod tests {
     /// it would otherwise become two arguments and start nothing.
     #[test]
     fn a_named_distribution_is_pointed_at_with_its_own_argument() {
-        let launch = Wsl::in_distribution("wsl.exe", "Ubuntu 24.04").launch();
+        let launch = Wsl::in_distribution("wsl.exe", "Ubuntu 24.04", Some("bash")).launch();
 
         assert_eq!(launch.program, "wsl.exe");
         assert_eq!(launch.args, ["-d", "Ubuntu 24.04"]);
@@ -176,7 +235,7 @@ mod tests {
     /// WSL answers the question every time it is asked.
     #[test]
     fn the_default_distribution_is_left_to_wsl_rather_than_named() {
-        let launch = Wsl::new("wsl.exe").launch();
+        let launch = Wsl::new("wsl.exe", Some("bash")).launch();
 
         assert!(
             launch.args.is_empty(),
@@ -188,7 +247,8 @@ mod tests {
     /// full path is a legitimate way to name the same program.
     #[test]
     fn the_launch_carries_the_client_it_was_named_by() {
-        let launch = Wsl::in_distribution(r"C:\Windows\system32\wsl.exe", "Debian").launch();
+        let launch =
+            Wsl::in_distribution(r"C:\Windows\system32\wsl.exe", "Debian", Some("bash")).launch();
 
         assert_eq!(launch.program, r"C:\Windows\system32\wsl.exe");
     }
@@ -197,7 +257,7 @@ mod tests {
     /// not cross the kernel boundary is a launch that looks integrated and marks nothing.
     #[test]
     fn every_session_is_started_with_the_injection_and_with_wslenv_carrying_it() {
-        let launch = Wsl::new("wsl.exe").launch();
+        let launch = Wsl::new("wsl.exe", Some("bash")).launch();
         let names: Vec<&str> = launch
             .environment
             .iter()
@@ -222,8 +282,8 @@ mod tests {
     #[test]
     fn the_injection_does_not_change_with_the_distribution() {
         assert_eq!(
-            Wsl::new("wsl.exe").launch().environment,
-            Wsl::in_distribution("wsl.exe", "Debian")
+            Wsl::new("wsl.exe", Some("bash")).launch().environment,
+            Wsl::in_distribution("wsl.exe", "Debian", Some("bash"))
                 .launch()
                 .environment
         );
@@ -232,6 +292,81 @@ mod tests {
     /// The claim the whole entry turns on, asserted where a reader will look for it.
     #[test]
     fn a_wsl_session_claims_the_full_marker_cycle() {
-        assert_eq!(Wsl::new("wsl.exe").markers(), ShellMarkers::Full);
+        assert_eq!(
+            Wsl::new("wsl.exe", Some("bash")).markers(),
+            ShellMarkers::Full
+        );
+    }
+
+    /// **The case the whole entry exists for.** An account running zsh gets no
+    /// `PROMPT_COMMAND` and no `WSLENV`: pushing bash's program at it would carry a
+    /// variable across the kernel boundary for nothing to read at the other end.
+    #[test]
+    fn a_distribution_that_does_not_run_bash_is_started_with_nothing_injected() {
+        for named in ["zsh", "fish", "dash", "sh", "nu"] {
+            let launch = Wsl::in_distribution("wsl.exe", "Ubuntu 24.04", Some(named)).launch();
+
+            assert!(
+                launch.environment.is_empty(),
+                "{named} is not the shell the injection was measured against"
+            );
+            assert_eq!(
+                launch.args,
+                ["-d", "Ubuntu 24.04"],
+                "{named} still starts, in the distribution that was named"
+            );
+        }
+    }
+
+    /// A distribution that would not answer is in the same position as one running zsh:
+    /// the session starts and nothing is claimed about it. The probe is advisory, so its
+    /// silence costs a session nothing except the injection it could not justify.
+    #[test]
+    fn a_distribution_that_answered_nothing_is_started_with_nothing_injected() {
+        let launch = Wsl::in_distribution("wsl.exe", "Ubuntu 24.04", None).launch();
+
+        assert!(launch.environment.is_empty());
+        assert_eq!(launch.args, ["-d", "Ubuntu 24.04"]);
+    }
+
+    /// What the composition root asks in order to decide whether the connection sentence
+    /// carries the missing-integration clause — and it is true for exactly one shell.
+    #[test]
+    fn only_the_measured_shell_counts_as_integrated() {
+        assert!(Wsl::new("wsl.exe", Some("bash")).is_integrated());
+        for named in ["zsh", "fish", "dash", "sh", "Bash", "bash5"] {
+            assert!(
+                !Wsl::new("wsl.exe", Some(named)).is_integrated(),
+                "{named} has not been measured under WSL"
+            );
+        }
+        assert!(!Wsl::new("wsl.exe", None).is_integrated());
+    }
+
+    /// The name is carried through for the sentence a listener hears, whether or not it is
+    /// a shell Acter integrated.
+    #[test]
+    fn the_shell_the_distribution_named_is_what_the_session_is_called_with() {
+        assert_eq!(
+            Wsl::in_distribution("wsl.exe", "Ubuntu 24.04", Some("zsh")).login_shell(),
+            Some("zsh")
+        );
+        assert_eq!(Wsl::new("wsl.exe", None).login_shell(), None);
+    }
+
+    /// **The transport is part of the measurement, and this is where that is asserted.**
+    /// `far_end::over_ssh` answers `0x04` for bash because B9 sent that byte down a real
+    /// SSH connection and watched the session close. Nobody has done it here, so bash under
+    /// WSL still ends on nothing — a different cell of the matrix and a different
+    /// measurement, not an inconsistency to tidy away.
+    #[test]
+    fn no_shell_under_wsl_has_a_measured_end_of_input_whatever_it_is_called() {
+        for named in [Some("bash"), Some("zsh"), Some("dash"), None] {
+            assert_eq!(
+                Wsl::new("wsl.exe", named).eof(),
+                None,
+                "{named:?} under WSL has no byte measured against it"
+            );
+        }
     }
 }

@@ -1,6 +1,6 @@
 //! Adapter: what this computer actually has, behind acter-core's `InstalledShells` port —
-//! the WSL distributions `wsl.exe` reports, and every file a named program really resolves
-//! to.
+//! the WSL distributions `wsl.exe` reports, every file a named program really resolves to,
+//! and which shell a distribution's own account runs.
 //!
 //! **The only module in this crate that starts a process.** Everything else here is
 //! knowledge: what `cmd.exe` is started with is the same answer on every Windows machine,
@@ -11,9 +11,18 @@
 //! **A workspace test run must never reach the WSL half.** `cargo test --workspace` spawns
 //! no process, which is why the decode it depends on lives in
 //! [`distributions`](crate::wsl::distributions) as a pure function over captured bytes and is
-//! tested there. Discovery is different: looking a program up starts nothing, so the tests
-//! here ask the real machine about the shell every Windows machine has — as they did before
-//! B5.7, and for the same reason.
+//! tested there, and why B5.5's reading of a passwd entry lives beside it in
+//! [`login_shell`](crate::wsl::login_shell). Discovery is different: looking a program up
+//! starts nothing, so the tests here ask the real machine about the shell every Windows
+//! machine has — as they did before B5.7, and for the same reason.
+//!
+//! # Since B5.5: the one call here that is given up on
+//!
+//! Both WSL questions start `wsl.exe`, and only one of them can afford to wait. Listing
+//! distributions happens while a user reads a dialog; asking a distribution what shell it
+//! runs happens in the seconds before there is a prompt, which are already the worst seconds
+//! in this product (roadmap 23.7). So that one runs under a deadline and every way of
+//! failing is the same `None` — advisory, never a gate (spec B5.5, decision 3).
 //!
 //! # Since B5.7: the answer is the files, not a boolean
 //!
@@ -31,13 +40,17 @@
 //! the entry it resolves first is marked as the default.
 
 use std::env::{var_os, vars_os};
+use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use acter_core::{InstalledShells, NoDistributions, PathStanding, Provenance, ShellInstall};
 use which::which_all;
 
 use crate::wsl::distributions::{decode_utf16le, distributions};
+use crate::wsl::login_shell;
 
 mod roots;
 
@@ -48,6 +61,53 @@ mod roots;
 /// measured; `-q` is what strips the header line and the `(Default)` suffix, leaving one
 /// bare name per line.
 const LIST: (&str, [&str; 2]) = ("wsl.exe", ["-l", "-q"]);
+
+/// The client, the flag that points it at one distribution, and the separator after which
+/// everything is the command to run inside it rather than an option to `wsl.exe`.
+const RUN: (&str, &str, &str) = ("wsl.exe", "-d", "--");
+
+/// The shell the question is handed to inside the distribution.
+///
+/// `sh` rather than the account's own shell, deliberately: the question is *about* that
+/// shell, so running it in that shell would need to know the answer first. Every
+/// distribution has an `sh`, and the question is written in the subset all of them share.
+const POSIX_SHELL: &str = "sh";
+
+/// How long a distribution has to say what shell it runs before the session starts without
+/// its answer.
+///
+/// **Four times the SSH probe's three seconds, and the difference is what is being waited
+/// for.** B9 asks over a connection that has already carried a key exchange and an
+/// authentication, so the far end is awake and one line is all that is left. This call can
+/// be the one that *boots* the distribution's virtual machine, and that is not a network
+/// wait at all.
+///
+/// **The number comes from measurement, and the first number tried was wrong.** On the
+/// developer's machine on 2026-08-29, Ubuntu 24.04 under WSL 2.5.7.0, `wsl.exe -- sh -c` was
+/// timed warm and then cold, four times, with `wsl --shutdown` between the cold runs. Warm:
+/// 148, 152, 165, 181, 188, 206 milliseconds. Cold: 5.35, 5.49, 5.74 and 6.30 **seconds** —
+/// a spread a six-second deadline lands in the middle of, which is the worst place for one
+/// to be, because it makes a cold bash distribution a coin toss between being integrated and
+/// being unnamed. Twelve is roughly twice the slowest cold start seen, which leaves the
+/// deadline for what it is meant to catch: a distribution that is not coming up at all.
+///
+/// **`wsl.exe -l -q` does not warm anything**, measured at 57 to 74 milliseconds whether the
+/// machine was cold or warm. It is the first command run *inside* a distribution that boots
+/// it, which is why the connect list can be built cheaply and this cannot.
+///
+/// **It is not twelve seconds added to the time before a prompt, and on a cold machine it is
+/// barely added at all.** Warm — the ordinary case, and every case after the first — a
+/// distribution answers in under a fifth of a second. Cold, this call is *what does the
+/// booting*, so the session's own start then finds a distribution that is already up; the
+/// boot was going to be paid either way, and roadmap 23.10 is the entry about a listener
+/// being told so while it happens.
+const PATIENCE: Duration = Duration::from_secs(12);
+
+/// How often the deadline is checked while the answer is outstanding.
+///
+/// Short enough that a warm distribution is not held back by the polling, long enough that
+/// waiting costs a thread almost nothing.
+const TICK: Duration = Duration::from_millis(25);
 
 /// The directory a Store package's files live in, which is what says an install came from the
 /// Store rather than from an installer.
@@ -146,6 +206,80 @@ impl InstalledShells for ThisMachine {
             );
         }
         found
+    }
+
+    /// Which shell this distribution's account is configured to run.
+    ///
+    /// **A second `wsl.exe`, never a line typed into the session** (spec B5.5, decision 1).
+    /// This is the cheap half of B9's decision 7: WSL needs no channel and no protocol, only
+    /// another invocation whose output the terminal buffer never sees. Typing the question
+    /// into the session instead would put a command nobody typed in front of a screen
+    /// reader, which is B4.9's whole subject.
+    ///
+    /// **Advisory, never a gate** (decision 3). A client that is not there, a distribution
+    /// that will not start, an answer that is not a shell name and a deadline that passed
+    /// are all the same `None`, and `None` costs the session nothing: it starts anyway,
+    /// unintegrated and unnamed.
+    ///
+    /// **Standard error is discarded on purpose**, which is the opposite of what
+    /// [`wsl_distributions`](Self::wsl_distributions) does with it. There, a refusal is read
+    /// back to the user in WSL's own words because they asked to see a list and are owed an
+    /// explanation. Here nobody asked a question: a complaint would be an interruption in
+    /// the seconds before a prompt, describing an internal probe the user never started.
+    fn login_shell(&self, distribution: Option<&str>) -> Option<String> {
+        let (program, flag, separator) = RUN;
+        let mut asking = Command::new(program);
+        if let Some(name) = distribution {
+            asking.args([flag, name]);
+        }
+        asking.args([separator, POSIX_SHELL, "-c", login_shell::ASK]);
+
+        login_shell::read(&answered_within(asking, PATIENCE)?)
+    }
+}
+
+/// What a command wrote to standard output, or `None` if it did not finish in time.
+///
+/// **The child is killed rather than abandoned.** A `wsl.exe` left running after its answer
+/// stopped being wanted would keep a distribution awake and hold a pipe open, and the caller
+/// has already moved on to starting the session.
+///
+/// **Standard output is drained on its own thread**, which is what makes the deadline a
+/// deadline rather than a suggestion: a child that fills the pipe buffer blocks on the write
+/// and never exits, so a parent waiting for exit before reading would wait forever on
+/// exactly the output that was too long. Standard input is closed for the mirror-image
+/// reason — a child that asks a question nobody is there to answer would block on the read.
+fn answered_within(mut command: Command, patience: Duration) -> Option<Vec<u8>> {
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let mut pipe = child.stdout.take()?;
+    let reading = thread::spawn(move || {
+        let mut said = Vec::new();
+        let _ = pipe.read_to_end(&mut said);
+        said
+    });
+
+    let deadline = Instant::now() + patience;
+    loop {
+        match child.try_wait() {
+            // Whether it succeeded is not asked. A distribution that answered and then
+            // exited non-zero — `getent` finding nothing, the fallback printing an empty
+            // `$SHELL` — still wrote whatever it wrote, and the reading is what decides
+            // whether that is a shell name. One judgement, in one place.
+            Ok(Some(_)) => return reading.join().ok(),
+            Ok(None) if Instant::now() < deadline => thread::sleep(TICK),
+            // The deadline passed, or the child could not be waited on at all. The reading
+            // thread ends on its own when the kill closes the pipe.
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
     }
 }
 

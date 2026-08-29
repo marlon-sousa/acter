@@ -20,13 +20,13 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use acter_core::{
-    Chosen, Clock, ConnectApi, ConnectQuestions, ConnectService, PacingConfig, ProfileId,
-    SessionApi, SessionFactory, SessionService, ShellAdapter, ShellFacts, Signatures, SshQuestions,
-    Started, Transport, Unasked,
+    Chosen, Clock, ConnectApi, ConnectQuestions, ConnectService, InstalledShells, PacingConfig,
+    ProfileId, SessionApi, SessionFactory, SessionService, ShellAdapter, ShellFacts, Signatures,
+    SshQuestions, Started, Transport, Unasked,
 };
 #[cfg(windows)]
 use acter_shells::WindowsTrust;
-use acter_shells::{Plain, ThisMachine, Wsl, adapter_for};
+use acter_shells::{Plain, ThisMachine, Wsl, adapter_for, is_wsl};
 use acter_term::AlacrittyEngine;
 use acter_transports::{
     Chunking, FakeShell, KnownHosts, LocalPty, ScriptedTransport, SessionTranscript, SshTarget,
@@ -262,12 +262,21 @@ fn scripted_profiles() -> Vec<String> {
 /// is `ConnectService`'s, and is tested with a fake in place of this.
 struct Shells {
     clock: Arc<dyn Clock>,
+    /// What this computer has, for the one question a *connection* asks it: which shell the
+    /// distribution being connected to actually runs (spec B5.5, decision 2).
+    ///
+    /// The same port the connect list is built from, and the same instance would do — it
+    /// holds nothing and caches nothing. It is here rather than passed in because this is
+    /// the one branch that needs an answer before it can decide what to inject, and that
+    /// decision has to be made before the client is started at all.
+    machine: Arc<dyn InstalledShells>,
 }
 
 impl Shells {
     fn new() -> Self {
         Self {
             clock: Arc::new(SystemClock::new()),
+            machine: Arc::new(ThisMachine::new()),
         }
     }
 
@@ -345,8 +354,63 @@ impl Shells {
         let facts = acter_shells::over_ssh(name.as_deref());
         Ok(Started {
             session: self.session_with(Box::new(transport), facts),
-            note: Some(far_end_note(name.as_deref())),
+            note: far_end_note(name.as_deref(), Some(ON_THIS_HOST)),
         })
+    }
+
+    /// A far end this machine starts itself, named by the program that is it.
+    ///
+    /// **One branch rather than three, because WSL has to be told apart before it is
+    /// started** (spec B5.5). Every other local shell is fully described by its name —
+    /// `adapter_for` recognises it and knows what to inject — where `wsl.exe` is a client
+    /// whose far end has to be asked about first. `ConnectionKind::Wsl` and
+    /// `ACTER_SHELL=wsl` both arrive here and both mean the distribution WSL calls the
+    /// default, which is a real session and the one `wsl.exe` with no arguments opens.
+    fn local(&self, program: &str, questions: &Arc<dyn SshQuestions>) -> Result<Started, String> {
+        match is_wsl(program) {
+            true => self.wsl(program, None, questions),
+            false => self.real(adapter_for(program)).map(only),
+        }
+    }
+
+    /// Whatever shell one WSL distribution's account actually runs.
+    ///
+    /// **The probe happens here, before the client is started, and that ordering is forced**
+    /// (spec B5.5, decision 4). What is injected is part of the launch, so the decision
+    /// whether to inject cannot be made after the launch has happened — unlike B9's probe,
+    /// which only has to beat `SessionService::start`. The cost is bounded by the deadline
+    /// inside the port, and on a cold distribution it is not a cost at all: this call is
+    /// what boots the distribution, so the session's own start then finds one that is up.
+    ///
+    /// **The answer decides two things and no more**: whether the marker program is
+    /// injected, and what the connection sentence says. It never decides whether the session
+    /// starts.
+    fn wsl(
+        &self,
+        client: &str,
+        distribution: Option<&str>,
+        questions: &Arc<dyn SshQuestions>,
+    ) -> Result<Started, String> {
+        // **Said before the wait, not after it** — the one thing SSH does here that the
+        // local branches never needed to. `LocalPty` spawns a process in milliseconds, so
+        // there was nothing to say; a cold distribution takes five to six seconds to boot
+        // and this call is what boots it, which is long enough that silence is
+        // indistinguishable from a program that has stopped. `tell` is B9's own mechanism
+        // and reaches a listener as `ConnectStep::Progress`, exactly as "Connecting to
+        // acter-ssh." does.
+        questions.tell(&starting(distribution));
+
+        let shell = self.machine.login_shell(distribution);
+        let adapter = match distribution {
+            Some(name) => Wsl::in_distribution(client, name, shell.as_deref()),
+            None => Wsl::new(client, shell.as_deref()),
+        };
+        let note = far_end_note(
+            adapter.login_shell(),
+            (!adapter.is_integrated()).then_some(IN_THIS_DISTRIBUTION),
+        );
+        let session = self.real(Box::new(adapter))?;
+        Ok(Started { session, note })
     }
 
     /// A real shell on a pseudoconsole.
@@ -408,18 +472,15 @@ impl Shells {
             // is stays the kind's answer and where it is stays the file's**: an adapter
             // selected by the resolved path is the same adapter, because `adapter_for`
             // recognises a full path as readily as a bare name.
-            ProfileId::Shell { kind } => self
-                .real(adapter_for(program.unwrap_or_else(|| kind.program())))
-                .map(only),
-            ProfileId::Install { kind, .. } => self
-                .real(adapter_for(program.unwrap_or_else(|| kind.program())))
-                .map(only),
-            ProfileId::Distribution { name } => self
-                .real(Box::new(Wsl::in_distribution(
-                    program.unwrap_or(WSL_CLIENT),
-                    name,
-                )))
-                .map(only),
+            ProfileId::Shell { kind } => {
+                self.local(program.unwrap_or_else(|| kind.program()), questions)
+            }
+            ProfileId::Install { kind, .. } => {
+                self.local(program.unwrap_or_else(|| kind.program()), questions)
+            }
+            ProfileId::Distribution { name } => {
+                self.wsl(program.unwrap_or(WSL_CLIENT), Some(name), questions)
+            }
             // Trimmed for the reason A9 found: `set ACTER_SHELL=x && acter` in cmd puts
             // everything up to the `&&` into the value, trailing space included — and a
             // name with a stray space matches no adapter, so the session silently became an
@@ -427,9 +488,9 @@ impl Shells {
             // recognises is a real state this product supports; being pushed into it by
             // punctuation is not. The trimming now happens where the name is resolved, and
             // this falls back to it for a name nothing resolved.
-            ProfileId::Program { program: named } => self
-                .real(adapter_for(program.unwrap_or_else(|| named.trim())))
-                .map(only),
+            ProfileId::Program { program: named } => {
+                self.local(program.unwrap_or_else(|| named.trim()), questions)
+            }
             #[cfg(debug_assertions)]
             ProfileId::Scripted { name } => self.scripted(name).map(only),
             // **The gate, at the factory.** A release build does not refuse to construct a
@@ -453,18 +514,60 @@ fn only(session: Arc<dyn SessionApi>) -> Started {
     }
 }
 
-/// The one clause an SSH connection adds to what a listener hears, said once (spec B9,
-/// decisions 2 and 7).
+/// What a listener hears while a distribution is coming up, which on a cold one is several
+/// seconds of otherwise complete silence.
 ///
-/// **It names the far end when it can, and points at the fix either way.** "Shell
+/// **It names the distribution when there is a name to say.** A user who chose "Ubuntu 24.04"
+/// from the list hears the words they chose, which is A9's rule about the window applied to
+/// the wait before there is one. A launch that named no distribution has nothing truthful to
+/// name — asking WSL for its default is deliberately not the same as this program deciding
+/// which one that is (spec B5.3) — so it says what is happening without inventing a subject.
+///
+/// **A statement, not a stage.** SSH says three things because it has three stages a listener
+/// can be at; this has one thing to wait for, and saying "asking the distribution what shell
+/// it runs" would describe Acter's internals rather than the user's wait.
+fn starting(distribution: Option<&str>) -> String {
+    match distribution {
+        Some(name) => format!("Starting {name}."),
+        None => "Starting Linux.".to_owned(),
+    }
+}
+
+/// Where the thing to change lives, for a far end on somebody else's machine.
+const ON_THIS_HOST: &str = "on this host";
+
+/// And for one on the user's own — a distribution they installed, whose dotfiles are theirs
+/// to edit.
+///
+/// **One word different from [`ON_THIS_HOST`], and the difference is deliberate** (spec
+/// B5.5, decision 5). Over SSH the account frequently belongs to somebody else and the fix
+/// may not be the listener's to make; a WSL distribution is their own and it is.
+const IN_THIS_DISTRIBUTION: &str = "in this distribution";
+
+/// What a connection adds to what a listener hears, said once (spec B9, decisions 2 and 7,
+/// and B5.5's decision 5).
+///
+/// **One function for every far end that has anything to add**, which is what keeps the
+/// status region and the announcement the same string (roadmap 27.5): there is one of it, so
+/// there is nothing to keep in step.
+///
+/// **It names the far end when it can, and points at the fix when there is one.** "Shell
 /// integration is unavailable" tells a listener nothing they can act on; "bash, with no
 /// shell integration set up on this host" names what they are talking to and says where the
-/// thing to change lives. A probe that hit its deadline simply drops the middle clause and
-/// never adds a second utterance.
-fn far_end_note(shell: Option<&str>) -> String {
-    match shell {
-        Some(shell) => format!("{shell}, with no shell integration set up on this host"),
-        None => "with no shell integration set up on this host".to_owned(),
+/// thing to change lives. A probe that hit its deadline drops the name and never adds a
+/// second utterance.
+///
+/// `missing_in` is `None` for a far end Acter did integrate, which since B5.5 is a real case
+/// here: a WSL distribution running bash is named and nothing more is said about it. `None`
+/// for both is a far end with nothing to add at all, and it adds nothing.
+fn far_end_note(shell: Option<&str>, missing_in: Option<&str>) -> Option<String> {
+    match (shell, missing_in) {
+        (Some(shell), None) => Some(shell.to_owned()),
+        (Some(shell), Some(place)) => {
+            Some(format!("{shell}, with no shell integration set up {place}"))
+        }
+        (None, Some(place)) => Some(format!("with no shell integration set up {place}")),
+        (None, None) => None,
     }
 }
 
@@ -575,6 +678,69 @@ mod tests {
             assert!(
                 offered.is_empty(),
                 "a release build never names a scripted session"
+            );
+        }
+    }
+
+    /// **The three sentences of B5.5's decision 5, and each says what it knows.** They are
+    /// asserted as whole clauses because that is what a listener hears: the connection
+    /// announcement is this string appended to the row's own label, so "Ubuntu 24.04" plus
+    /// what is below is the utterance.
+    #[test]
+    fn a_distribution_says_which_shell_it_runs_and_whether_acter_integrated_it() {
+        assert_eq!(
+            far_end_note(Some("bash"), None).as_deref(),
+            Some("bash"),
+            "integrated: named, and nothing more is said about integration"
+        );
+        assert_eq!(
+            far_end_note(Some("zsh"), Some(IN_THIS_DISTRIBUTION)).as_deref(),
+            Some("zsh, with no shell integration set up in this distribution"),
+            "known of but unmeasured: named, and told where the fix lives"
+        );
+        assert_eq!(
+            far_end_note(None, Some(IN_THIS_DISTRIBUTION)).as_deref(),
+            Some("with no shell integration set up in this distribution"),
+            "nothing answered: no name is invented"
+        );
+    }
+
+    /// **One word apart from the WSL sentence, and the word is the whole point** (spec B5.5,
+    /// decision 5). Over SSH the account frequently belongs to somebody else and the fix may
+    /// not be the listener's to make; a distribution is their own machine and it is.
+    #[test]
+    fn the_two_far_ends_point_at_two_different_places() {
+        let host = far_end_note(Some("bash"), Some(ON_THIS_HOST)).expect("SSH always adds one");
+        let distribution =
+            far_end_note(Some("bash"), Some(IN_THIS_DISTRIBUTION)).expect("so does an unasked WSL");
+
+        assert!(host.ends_with("on this host"));
+        assert!(distribution.ends_with("in this distribution"));
+        assert_ne!(host, distribution);
+    }
+
+    /// A far end with nothing to add adds nothing, which is every local shell the row the
+    /// user chose already described — the case `only` builds by construction.
+    #[test]
+    fn a_far_end_with_nothing_to_say_says_nothing() {
+        assert_eq!(far_end_note(None, None), None);
+    }
+
+    /// **What is heard during the five to six seconds a cold distribution takes to boot.**
+    /// A whole sentence, because it is read aloud exactly as it arrives, and it names the
+    /// distribution the user chose rather than describing what Acter is doing to it.
+    #[test]
+    fn a_distribution_that_is_starting_says_so_before_the_wait() {
+        assert_eq!(starting(Some("Ubuntu 24.04")), "Starting Ubuntu 24.04.");
+        assert_eq!(
+            starting(None),
+            "Starting Linux.",
+            "a launch that named no distribution invents no name for WSL's default"
+        );
+        for said in [starting(Some("Debian")), starting(None)] {
+            assert!(
+                said.ends_with('.'),
+                "a spoken sentence ends in a full stop, so a reader pauses: {said}"
             );
         }
     }
