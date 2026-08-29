@@ -2171,6 +2171,130 @@ mod the_session_is_set_up_after_it_is_established {
         );
     }
 
+    /// **What a listener hears when a command does not exist**, in `sh` and in bash, because
+    /// a shell that gives headings and swallows what a command printed would be worse than one
+    /// that gives neither.
+    ///
+    /// Reported by the user on 2026-08-29, driving the real window against `docker-desktop`:
+    /// "if I type an invalid command, no message". Nothing in this suite covered it —
+    /// `a_distribution_running_sh_is_set_up_as_far_as_its_prompt_reaches` asserts what `echo`
+    /// prints, which goes to stdout, and an error goes to stderr and is written by the shell
+    /// itself rather than by a child. This is that gap, and the output is the point, so run
+    /// with `--nocapture`.
+    #[tokio::test]
+    #[ignore = "spawns a real shell and needs the docker-desktop distribution"]
+    async fn a_command_that_does_not_exist_still_says_so_in_sh() {
+        if !has(SH_DISTRIBUTION) {
+            println!("skipped: this machine has no {SH_DISTRIBUTION}");
+            return;
+        }
+
+        let shell = ThisMachine::new().login_shell(Some(SH_DISTRIBUTION));
+        let adapter = Wsl::in_distribution(WSL, SH_DISTRIBUTION, shell.as_deref());
+        let session = RealSession::adapted(&adapter, PacingConfig::default().integration_grace);
+        let line = acter_shells::setup_for(Some("sh"))
+            .expect("sh has a measured setup")
+            .line;
+        session.set_up(&line).await;
+
+        let command = session.submit("acter-no-such-command");
+        // Long enough for the shell to have answered and for the next prompt to have been
+        // drawn, rather than waiting on a needle that may never arrive.
+        tokio::time::sleep(Duration::from_secs(5)).await;
+
+        println!("--- what sh said about a command that does not exist ---");
+        for event in session.events.0.lock().expect("recorder poisoned").iter() {
+            println!("  {event:?}");
+        }
+        println!("--- heading: {:?} ---", session.heading_of(command));
+
+        assert!(
+            session.rendered().contains("not found"),
+            "a listener is told the command does not exist: {:?}",
+            session.rendered()
+        );
+    }
+
+    /// **The same, with a line long enough to cross the margin busybox thinks it has** — which
+    /// is 23.14's sixteen phantom columns met by a user typing rather than by Acter setting up.
+    ///
+    /// The short case above is 21 characters after a 30-column prompt: 30 + 16 + 21 is 67, so
+    /// busybox never believes it wrapped and everything works. This one is 59 characters, which
+    /// it does believe wrapped. The output is the point, so run with `--nocapture`.
+    ///
+    /// **What it measured, 2026-08-29.** The shell's own message survives and is read aloud,
+    /// which is what this asserts and what makes the session usable. Two things around it do
+    /// not. The **heading is truncated at the phantom margin** — the block is headed
+    /// `acter-no-such-command-0123456789a`, thirty-three characters of a fifty-nine character
+    /// command, because that is where busybox believed the row ended. And the **tail of the
+    /// echo is read aloud as output**, ahead of the message: a listener hears
+    /// `123456789b123456789c123456` and then the error.
+    ///
+    /// So 23.14 is not only about a cursor landing oddly while typing. It reaches the heading a
+    /// listener navigates by and the text they are read, for any command long enough — which
+    /// against this distribution's own prompt is about thirty-four characters.
+    #[tokio::test]
+    #[ignore = "spawns a real shell and needs the docker-desktop distribution"]
+    async fn a_long_command_that_does_not_exist_still_says_so_in_sh() {
+        if !has(SH_DISTRIBUTION) {
+            println!("skipped: this machine has no {SH_DISTRIBUTION}");
+            return;
+        }
+
+        let shell = ThisMachine::new().login_shell(Some(SH_DISTRIBUTION));
+        let adapter = Wsl::in_distribution(WSL, SH_DISTRIBUTION, shell.as_deref());
+        let session = RealSession::adapted(&adapter, PacingConfig::default().integration_grace);
+        let line = acter_shells::setup_for(Some("sh"))
+            .expect("sh has a measured setup")
+            .line;
+        session.set_up(&line).await;
+
+        // Sixty characters, which no prompt this distribution draws can keep under the margin
+        // once sixteen phantom columns are added to it.
+        let long = "acter-no-such-command-0123456789a123456789b123456789c123456";
+        let command = session.submit(long);
+        tokio::time::sleep(Duration::from_secs(5)).await;
+
+        println!("--- what sh said about a long command that does not exist ---");
+        for event in session.events.0.lock().expect("recorder poisoned").iter() {
+            println!("  {event:?}");
+        }
+        println!("--- heading: {:?} ---", session.heading_of(command));
+
+        assert!(
+            session.rendered().contains("not found"),
+            "a listener is told the command does not exist: {:?}",
+            session.rendered()
+        );
+    }
+
+    /// The same question put to bash, which is the control: if bash says it and `sh` does not,
+    /// what differs is the marker claim rather than the product.
+    #[tokio::test]
+    #[ignore = "spawns a real shell and needs a WSL distribution installed"]
+    async fn a_command_that_does_not_exist_still_says_so_in_bash() {
+        if !wsl_is_available() {
+            println!("skipped: this machine has no WSL distribution");
+            return;
+        }
+
+        let session = RealSession::wsl().await;
+        let command = session.submit("acter-no-such-command");
+        tokio::time::sleep(Duration::from_secs(5)).await;
+
+        println!("--- what bash said about a command that does not exist ---");
+        for event in session.events.0.lock().expect("recorder poisoned").iter() {
+            println!("  {event:?}");
+        }
+        println!("--- heading: {:?} ---", session.heading_of(command));
+
+        assert!(
+            session.rendered().contains("not found"),
+            "a listener is told the command does not exist: {:?}",
+            session.rendered()
+        );
+    }
+
     /// **The distribution's own files are untouched**, which is the property B5.3 decision 2
     /// fought for and this entry gives back rather than trading away: nothing is written into
     /// the distribution, no snippet, no dotfile, nothing left behind on a machine the user has
