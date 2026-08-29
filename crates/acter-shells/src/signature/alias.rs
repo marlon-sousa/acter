@@ -132,8 +132,10 @@ fn parse(buffer: &[u8]) -> Option<AppExecLink> {
 /// The null-terminated wide strings packed one after another in the payload.
 fn utf16_strings(payload: &[u8]) -> impl Iterator<Item = String> + '_ {
     let units: Vec<u16> = payload
-        .chunks_exact(2)
-        .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|pair| u16::from_le_bytes(*pair))
         .collect();
     units
         .split(|unit| *unit == 0)
