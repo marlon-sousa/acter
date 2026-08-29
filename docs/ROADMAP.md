@@ -2756,13 +2756,32 @@ thing to pick up once the adapters land, not merely the next number.
     read aloud; it does nothing about a user's own long command line being redrawn wrongly
     sixteen columns early. The two entries are not alternatives.
 
-    **What this entry has to decide is what `sh` gets**, and none of the three is obviously
-    right. Ship it as measured, on the grounds that a heading for every command is worth
-    sixteen columns to a listener who mostly types short lines. Send only `A` and halve the
-    cost to eight, losing the command-line boundary with it. Or send nothing for `sh` and let
-    the session be honestly unintegrated, which is what it was before B9.5. The question is a
-    user's rather than an implementer's, and it is the one thing here that should not be
-    settled by whoever picks the entry up.
+    **What this entry has to decide is what `sh` gets, and one belief that framed the choice
+    was wrong.** "Refusing the setup loses the headings" was asserted here and the user doubted
+    it, correctly. Measured 2026-08-29 against the same distribution with the setup refused
+    exactly as cancelling the dialog refuses it (`real_session.rs`,
+    `a_refused_sh_session_still_heads_every_command`): **every command is still headed, with
+    the line the user submitted, and the long one is headed in full** — all fifty-nine
+    characters, where the set-up session truncated it to thirty-three. A heading comes from the
+    submit ack and from B6.1's echo correlation, not from a marker. So refusing costs no
+    headings at all.
+
+    **What the markers actually buy is B4.9's suppression**, and that is the whole of it: in a
+    refused session the prompt and the echo of the command are read back to the listener before
+    the output — `splyt:/mnt/host/c/Users/marlo# lsa` ahead of `-sh: lsa: not found` — and in a
+    set-up session they are not, because the tracker delimits them. The refused session also
+    ends with `IntegrationUnavailable`, which is the honest sentence rather than a cost.
+
+    So the trade is narrower and sharper than it looked. Under about thirty-four characters the
+    markers are better: same heading, no echo read back. Over it they are worse in three ways
+    at once — a silently truncated heading, a fragment of the user's own line read aloud
+    anyway, and Acter's own setup command read aloud at connect. **A heading that is truncated
+    without saying so is the part that should decide this**, because a listener cannot tell it
+    happened.
+
+    Three candidates remain: ship as measured; send only `A` and halve the cost to eight
+    columns, losing the command-line boundary; or send nothing and take B4.9's loss knowingly.
+    The question is a user's rather than an implementer's.
 
 23.13. The connection sentence is sometimes not announced. Spec: none yet → specify first.
     **Found in B9.5's NVDA pass, 2026-08-29**, and **not caused by it**: the announcement path

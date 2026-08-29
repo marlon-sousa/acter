@@ -2268,6 +2268,59 @@ mod the_session_is_set_up_after_it_is_established {
         );
     }
 
+    /// **What a refused `sh` session actually loses**, measured because the answer was
+    /// asserted and the user was right to doubt it.
+    ///
+    /// Asked on 2026-08-29: "not even unintegrated sessions lost their headings". They do not.
+    /// A user's block is headed from the submit ack in the frontend (spec B6.1, decision 1),
+    /// and the pump names it from the far end's *echo* rather than from any marker — which is
+    /// the mechanism B6.1 built precisely so that a session with no markers still correlates.
+    /// So "you lose the headings" was wrong, and this is the measurement that says what is
+    /// really lost instead.
+    ///
+    /// The same two commands as the two cases above, against the same distribution, with the
+    /// setup refused exactly as cancelling the dialog refuses it — `ShellFacts::declined`, the
+    /// one the connect service builds for that answer. Run with `--nocapture`.
+    #[tokio::test]
+    #[ignore = "spawns a real shell and needs the docker-desktop distribution"]
+    async fn a_refused_sh_session_still_heads_every_command() {
+        if !has(SH_DISTRIBUTION) {
+            println!("skipped: this machine has no {SH_DISTRIBUTION}");
+            return;
+        }
+
+        let shell = ThisMachine::new().login_shell(Some(SH_DISTRIBUTION));
+        let adapter = Wsl::in_distribution(WSL, SH_DISTRIBUTION, shell.as_deref());
+        let session = RealSession::launched(
+            &adapter.launch(),
+            ShellFacts::of(&adapter).declined(),
+            PacingConfig::default().integration_grace,
+        );
+
+        let short = session.submit("lsa");
+        session.wsl_until(short, "not found").await;
+        let long = session.submit("acter-no-such-command-0123456789a123456789b123456789c123456");
+        tokio::time::sleep(Duration::from_secs(5)).await;
+
+        println!("--- what a refused sh session said ---");
+        for event in session.events.0.lock().expect("recorder poisoned").iter() {
+            println!("  {event:?}");
+        }
+        println!("--- short heading: {:?} ---", session.heading_of(short));
+        println!("--- long heading:  {:?} ---", session.heading_of(long));
+
+        assert_eq!(
+            session.heading_of(short),
+            Some(Some("lsa".to_owned())),
+            "a refused session still heads a command with the line that was submitted"
+        );
+        assert!(
+            session.rendered().contains("not found"),
+            "and still reads the shell's own message aloud: {:?}",
+            session.rendered()
+        );
+    }
+
     /// The same question put to bash, which is the control: if bash says it and `sh` does not,
     /// what differs is the marker claim rather than the product.
     #[tokio::test]
