@@ -76,7 +76,16 @@ export class SetUpDialog {
     // What refusing costs, last, so it is the sentence a listener arrives at before the
     // controls. It is A13's shipped sentence with what still works in front of it, and it is
     // the backend's words rather than this file's.
+    //
+    // **It is focusable, and that is a measured requirement rather than a flourish.** This
+    // dialog is inside `role="application"`, where the arrows belong to the widget and prose
+    // cannot be arrowed at all — the cost the Connect dialog's own panel records and pays the
+    // same way. Found in the NVDA pass for this entry: the two sentences above are announced
+    // as the dialog opens, through its description, and this one was reachable by nothing.
+    // A listener could read the command Acter was about to run and never hear what saying no
+    // would cost them, which is the one sentence the dialog is built around.
     const refusal = document.createElement('p');
+    refusal.tabIndex = 0;
     refusal.textContent = question.refusal;
     said.append(refusal);
     this.body.replaceChildren(said);

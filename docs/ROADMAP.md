@@ -2676,6 +2676,53 @@ thing to pick up once the adapters land, not merely the next number.
     simplification, not only a fix, and it is worth stating because it is the reason this is a
     revision of the strategy rather than a patch to the program.
 
+23.12. A busybox `sh` session reads a fragment of Acter's own setup command aloud. Spec:
+    none yet → specify first. **Found in B9.5's NVDA pass, 2026-08-29**, driving NVDA 2026.1.1
+    as the `user` persona in silent capture against a real `docker-desktop` session.
+
+    What a listener heard between the connection sentence and the prompt was
+    `splyt:/mnt/host/c/Users/marlo# A\007')$PS1$(printf '\033]133;B\007')" printf
+    '\033]133;C\007'; PS1="$(printf '\033]133;` — the prompt with the setup command's echo
+    behind it, **split and reordered**. The buffer shows the same: two lines of the echo in the
+    unclaimed block, in the wrong order, in front of the setup's own properly headed block.
+
+    **The cause is the wrap, not the setup.** `sh`'s line is 93 characters and busybox's prompt
+    is 30, so the line wraps at 80 columns and busybox redraws it in an order the echo matcher
+    cannot recognise — so B4.9's suppression does not fire and the text is published as output.
+    bash in the same pass is clean, and its line is five times longer: what differs is the
+    shell's line editor.
+
+    **It is a defect in what a listener hears rather than in the setup**, which worked: the
+    connection sentence is right, the block is headed by the command verbatim, the prompt
+    boundaries arrive, and the grace period never contradicts any of it. What is wrong is that
+    Acter's own command is read aloud once, at connect, in that shell.
+
+    Shortening the line is not the fix and should not be attempted as one: the prompt's width
+    is the user's, so any length can wrap. What this entry has to work out is what the echo
+    matcher can do about a far end that redraws a wrapped line out of order — which is B4.4's
+    subject met on a shell it was not measured against.
+
+23.13. The connection sentence is sometimes not announced. Spec: none yet → specify first.
+    **Found in B9.5's NVDA pass, 2026-08-29**, and **not caused by it**: the announcement path
+    is A9's and B9.5 did not touch it.
+
+    Four connections were driven with NVDA listening. Two announced
+    `connected to WSL: Ubuntu, bash` and two said nothing at all, including the cold start,
+    where the listener heard `Starting Ubuntu.`, then five and a half seconds, then the prompt —
+    and never what they had connected to. The status region carried the sentence correctly in
+    every one of the four, so nothing is *lost*; what is intermittent is whether the reader
+    picks it up.
+
+    **The likely cause is a race the announcer already documents**: it empties its live region
+    shortly after each announcement, and the connection announcement lands in the same instant
+    as a window swap, which is when NVDA is busiest. It is the one announcement in the product
+    that competes with a focus change it caused.
+
+    It matters more than a missed utterance usually would, because it is the *first* thing a
+    listener hears about a session and because A13 decided what it says. B9.5's checklist item
+    for a cold distribution is checked on what it asserts — the starting sentence, the
+    connection, and no unintegrated sentence — with this recorded against it.
+
 24. **Done** — B6.1, correlation that cannot drift. Spec:
     [b6.1-correlation-that-cannot-drift.md](specs/b6.1-correlation-that-cannot-drift.md).
     **An iteration entry from B6's manual NVDA pass**, not a planned step. B6's decision 3
