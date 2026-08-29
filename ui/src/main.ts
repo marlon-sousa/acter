@@ -13,6 +13,7 @@ import { ConnectDialog } from './adapters/connect_dialog';
 import { HostKeyDialog } from './adapters/host_key_dialog';
 import { MessageDialog } from './adapters/message_dialog';
 import { PasswordDialog } from './adapters/password_dialog';
+import { UnverifiedDialog } from './adapters/unverified_dialog';
 import { installMenuBar } from './adapters/menu_bar';
 import { WindowChrome } from './adapters/window_chrome';
 import { AppController } from './controllers/app';
@@ -67,14 +68,29 @@ const passwordDialog = new PasswordDialog(
   byId('password-prompt'),
   byId<HTMLInputElement>('password-field'),
 );
+// The third question, and the one that is about this machine rather than the far end: the
+// file about to be started did not verify (spec B5.7, decision 6). It is built beside the
+// other two and knows nothing about connecting either — it shows a path and a signer and
+// comes back with a decision.
+const unverifiedDialog = new UnverifiedDialog(
+  byId<HTMLDialogElement>('unverified-dialog'),
+  byId('unverified-summary'),
+  byId('unverified-body'),
+);
 // Which dialog a question goes to is decided by the question's own shape, so a variant
 // added to the protocol without a dialog to put it in fails to compile rather than
 // silently reaching nobody.
 const questions = {
-  ask: (question: ConnectQuestion): Promise<ConnectAnswer> =>
-    question.question === 'HostKey'
-      ? hostKeyDialog.ask(question)
-      : passwordDialog.ask(question),
+  ask: (question: ConnectQuestion): Promise<ConnectAnswer> => {
+    switch (question.question) {
+      case 'HostKey':
+        return hostKeyDialog.ask(question);
+      case 'Password':
+        return passwordDialog.ask(question);
+      case 'Unverified':
+        return unverifiedDialog.ask(question);
+    }
+  },
 };
 // A connection that failed is acknowledged rather than announced (reported 2026-08-26).
 const failureDialog = new MessageDialog(

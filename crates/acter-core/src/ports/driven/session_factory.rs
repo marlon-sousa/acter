@@ -10,9 +10,32 @@
 //! **The one driven port that starts something rather than observing it.** Every other one
 //! is a seam in a session already running; this one is what makes a session exist.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::{ProfileId, SessionApi, SshQuestions};
+
+/// What the user chose, and the file that choosing it starts.
+///
+/// **The second half is why this type exists** (spec B5.7, decision 1). A profile names a
+/// kind or a program; a *file* is what gets verified and what must then get started, and
+/// handing the factory only the name would let Windows resolve it a second time — so the
+/// check would have been made against one file and the spawn made against another. The
+/// connect service resolves once, through
+/// [`InstalledShells::installs`](crate::InstalledShells::installs), and the path travels
+/// here.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Chosen {
+    /// The profile as the user chose it, which is what everything else about the session is
+    /// named after.
+    pub profile: ProfileId,
+    /// The file to start, resolved and verified before this was built.
+    ///
+    /// `None` for a far end that is not a program on this machine — an SSH server, which
+    /// Acter speaks to itself, and a scripted session, which is a composition rather than a
+    /// file.
+    pub program: Option<PathBuf>,
+}
 
 /// A session that started, and what there is to say about the far end it reached.
 ///
@@ -51,9 +74,9 @@ pub trait SessionFactory: Send + Sync {
     /// window — asked through this, so no implementation of this port ever opens a dialog.
     ///
     /// Ignored by every other kind of far end, which asks nothing.
-    fn open(
-        &self,
-        profile: &ProfileId,
-        questions: &Arc<dyn SshQuestions>,
-    ) -> Result<Started, String>;
+    ///
+    /// **It is handed a [`Chosen`] rather than a profile, since B5.7.** The file was
+    /// resolved and verified before this call, and an implementation that resolved the name
+    /// again would be starting something other than what was checked (decision 1).
+    fn open(&self, chosen: &Chosen, questions: &Arc<dyn SshQuestions>) -> Result<Started, String>;
 }

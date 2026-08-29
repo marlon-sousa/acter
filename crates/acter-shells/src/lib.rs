@@ -14,9 +14,17 @@
 //! edition, and bash inside a WSL distribution. cmd marks two, which is all its `PROMPT`
 //! can carry, and `Plain` marks nothing it was told about.
 //!
-//! **One module here is not a shell.** `installed` answers what this particular computer
+//! **Two modules here are not shells.** `installed` answers what this particular computer
 //! has, which is I/O rather than knowledge and therefore a port of its own: a WSL adapter
 //! with no distribution to name is not a session anyone can start (spec B5.3, decision 4).
+//! `signature` answers who signed a file this machine would start, which is I/O twice over —
+//! and which since B5.7 is the same question, because a program is discovered as a *file* so
+//! that the file checked and the file started are one thing (spec B5.7, decision 1).
+//!
+//! `signature` is Windows-only, and deliberately not stubbed out on other platforms: a
+//! composition root that cannot build it uses acter-core's `Unchecked`, which vouches for
+//! nothing. A stub that answered "trusted" because there was nothing to ask would be the
+//! accept-everything mode this product does not have.
 #![warn(unreachable_pub)]
 
 mod cmd;
@@ -25,6 +33,8 @@ mod installed;
 mod plain;
 mod powershell;
 mod selection;
+#[cfg(windows)]
+mod signature;
 mod wsl;
 
 pub use cmd::Cmd;
@@ -33,4 +43,8 @@ pub use installed::ThisMachine;
 pub use plain::Plain;
 pub use powershell::PowerShell;
 pub use selection::adapter_for;
+#[cfg(windows)]
+pub use signature::WindowsTrust;
+#[cfg(windows)]
+pub(crate) use signature::target as signature_target;
 pub use wsl::Wsl;

@@ -14,6 +14,7 @@
 // so.
 
 import { keepTabInside } from './dialog_tab';
+import { readableField } from './readable_field';
 import type { ConnectAnswer, ConnectQuestion } from '../protocol';
 
 /** What the dialog is called, which is the first thing a reader announces. */
@@ -78,7 +79,7 @@ export class HostKeyDialog {
     const said = document.createElement('div');
     if (changed) {
       said.append(
-        fingerprint(
+        readableField(
           document,
           'host-key-recorded',
           'Fingerprint Acter recorded before',
@@ -87,7 +88,7 @@ export class HostKeyDialog {
       );
     }
     said.append(
-      fingerprint(
+      readableField(
         document,
         'host-key-offered',
         'Fingerprint this server is offering now',
@@ -142,54 +143,4 @@ export class HostKeyDialog {
     }
     event.preventDefault();
   }
-}
-
-/**
- * A fingerprint, as a **read-only edit field**.
- *
- * **Reported by the user on 2026-08-26, and it was a real defect rather than a preference.**
- * It used to be a focusable `<code>`, on the reasoning that a fingerprint has to be read
- * character by character and therefore needs somewhere to put a cursor. That reasoning was
- * half right and the conclusion was wrong: this dialog is inside `role="application"`, where
- * the arrows do **not** read prose, so the only way to walk a paragraph is NVDA's review
- * cursor — which is outside the vocabulary an ordinary user is assumed to have. The thing it
- * most needed to be comparable was the thing it was not.
- *
- * A read-only text box is arrowable with the plain arrow keys in every mode, which is what
- * comparing forty-three characters of mixed-case base64 against a printed one actually takes.
- * `readonly` rather than `disabled`, because a disabled control is skipped by focus entirely.
- */
-function fingerprint(document: Document, id: string, label: string, value: string): HTMLElement {
-  const group = document.createElement('p');
-  const name = document.createElement('label');
-  name.htmlFor = id;
-  name.textContent = label;
-  const said = document.createElement('input');
-  said.id = id;
-  said.type = 'text';
-  said.value = value;
-  // **Editable, with every edit refused** — and that is the fix rather than a compromise.
-  //
-  // Measured with NVDA 2026.1.1 on 2026-08-26, after the user reported twice that the
-  // arrows did nothing here. With `readonly` set, the field has focus and reports its value
-  // through the accessibility API — `get_focus_info` returned role EDITABLETEXT, states
-  // READONLY FOCUSABLE FOCUSED, and the full fingerprint as its value — and yet **every**
-  // caret key answered "blank": Right, Left, Home and End alike. The same dialog's editable
-  // Host field, arrowed in the same session, read "1", "2", "2". So a read-only input in
-  // this webview exposes a value with no caret-navigable text behind it, and a fingerprint
-  // nobody can walk is a fingerprint nobody can compare.
-  //
-  // Refusing the edit at `beforeinput` keeps the caret a real caret while making the value
-  // unchangeable — including by paste, which is one of the input types this cancels.
-  said.addEventListener('beforeinput', (event) => event.preventDefault());
-  // Belt and braces, for any path that reaches the value without a cancellable event.
-  said.addEventListener('input', () => {
-    said.value = value;
-  });
-  // Nothing here is a thing to fill in, and a browser offering to complete a fingerprint
-  // would be offering the one value that must not come from anywhere but the server.
-  said.autocomplete = 'off';
-  said.spellcheck = false;
-  group.append(name, said);
-  return group;
 }

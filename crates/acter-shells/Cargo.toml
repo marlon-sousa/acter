@@ -9,6 +9,36 @@ license.workspace = true
 # The `ShellMarkers` value a shell declares about its own prompt. The domain crate, not an
 # adapter: what a shell can mark is a fact the domain acts on (spec B4.5, decision 1).
 acter-core = { path = "../acter-core" }
+# Every file `PATH` would resolve a name to, rather than the first — because on the
+# developer's own machine `pwsh` yields two hits for one install, and because the entry
+# `PATH` names first is the one that has to be marked as this user's default (spec B5.7,
+# decision 2). `which_all` is the one function used; the crate is small and does exactly
+# the `PATH`/`PATHEXT` walk this file used to carry by hand.
+which = "8"
+
+# **Everything Windows-only this crate does lives behind one dependency**, and none of it is
+# a wrapper: `windows-sys` is the raw declarations, already a dependency of
+# `acter-transports`, and spec B5.7 decision 5 chose it over `codesign-verify` deliberately —
+# this is the one place in the product where being wrong is a security answer, and a small
+# low-traffic crate is a poor thing to put there.
+#
+# The features are one per thing asked of Windows: `WinTrust` verifies a signature,
+# `Cryptography` reads who signed it, `Cryptography_Catalog` finds the catalog that claims a
+# file Windows ships (which is every shell Windows ships), `FileSystem` and `Ioctl` and `IO`
+# open and read an execution alias's reparse point, and `Registry` reads the two keys that
+# record a PowerShell install.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security_Cryptography",
+    "Win32_Security_Cryptography_Catalog",
+    "Win32_Security_WinTrust",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Ioctl",
+    "Win32_System_IO",
+    "Win32_System_Registry",
+    "Win32_System_SystemServices",
+] }
 
 [lints]
 workspace = true

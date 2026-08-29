@@ -20,7 +20,7 @@
 
 use std::sync::Arc;
 
-use crate::{Connectable, Connected, ProfileId, SshQuestions};
+use crate::{ConnectQuestions, Connectable, Connected, ProfileId};
 
 /// Connecting, as two actions and a question.
 pub trait ConnectApi: Send + Sync {
@@ -53,10 +53,15 @@ pub trait ConnectApi: Send + Sync {
     /// be holding the thread the answering invoke needs, and would deadlock rather than
     /// merely wait. The composition root runs it on a task and reports each step through
     /// the conversation that `questions` belongs to.
+    ///
+    /// **`questions` is every question this attempt may have to ask**, since B5.7: the two
+    /// a server raises, and the one this machine raises about a file that did not verify.
+    /// The SSH half is passed on to the factory; the third is asked here, before anything is
+    /// started (spec B5.7, decision 6).
     fn use_profile(
         &self,
         id: &ProfileId,
-        questions: &Arc<dyn SshQuestions>,
+        questions: &Arc<dyn ConnectQuestions>,
     ) -> Result<Connected, String>;
 
     /// Which far end is behind the window now, or `None` for a window connected to

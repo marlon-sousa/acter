@@ -16,13 +16,16 @@
 //! it through the same action a menu would.
 
 use std::env;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use acter_core::{
-    Clock, ConnectApi, ConnectService, PacingConfig, ProfileId, SessionApi, SessionFactory,
-    SessionService, ShellAdapter, ShellFacts, SshQuestions, Started, Transport, Unasked,
+    Chosen, Clock, ConnectApi, ConnectQuestions, ConnectService, PacingConfig, ProfileId,
+    SessionApi, SessionFactory, SessionService, ShellAdapter, ShellFacts, Signatures, SshQuestions,
+    Started, Transport, Unasked,
 };
+#[cfg(windows)]
+use acter_shells::WindowsTrust;
 use acter_shells::{Plain, ThisMachine, Wsl, adapter_for};
 use acter_term::AlacrittyEngine;
 use acter_transports::{
@@ -175,7 +178,7 @@ pub(crate) fn connected_state() -> AppState {
         // B8's, where a `--profile` that resolves to nothing has to name what was asked for.
         // Nobody to ask at launch: there is no window yet, so a far end that needs a
         // decision is refused rather than trusted (`Unasked`).
-        let _ = service.use_profile(&profile, &(Arc::new(Unasked) as Arc<dyn SshQuestions>));
+        let _ = service.use_profile(&profile, &(Arc::new(Unasked) as Arc<dyn ConnectQuestions>));
     }
     let connect = Arc::clone(&service) as Arc<dyn ConnectApi>;
     AppState {
@@ -190,8 +193,26 @@ pub(crate) fn state() -> ConnectService {
     ConnectService::new(
         Arc::new(Shells::new()),
         Arc::new(ThisMachine::new()),
+        signatures(),
         scripted_profiles(),
     )
+}
+
+/// Who signed the files this machine would start (spec B5.7).
+///
+/// **The platform choice is made here and nowhere else**, which is what the composition root
+/// is for. Windows has `WinVerifyTrust`, a catalog database and a certificate store; nothing
+/// else this product runs on has any of the three, and acter-core's `Unchecked` is what
+/// stands in — it vouches for nothing, so a build with no way to check asks the user rather
+/// than assuming (spec B5.7, decision 6).
+#[cfg(windows)]
+fn signatures() -> Arc<dyn Signatures> {
+    Arc::new(WindowsTrust::new())
+}
+
+#[cfg(not(windows))]
+fn signatures() -> Arc<dyn Signatures> {
+    Arc::new(acter_core::Unchecked)
 }
 
 /// Which profile this launch asked for, or `None` for a window that starts unconnected.
@@ -362,40 +383,53 @@ impl SessionFactory for Shells {
     /// on — which is not inside that runtime. Doing it here rather than at each call site is
     /// the same reasoning that puts the rest of this file in the composition root: knowing a
     /// runtime exists at all is its privilege.
-    fn open(
-        &self,
-        profile: &ProfileId,
-        questions: &Arc<dyn SshQuestions>,
-    ) -> Result<Started, String> {
+    fn open(&self, chosen: &Chosen, questions: &Arc<dyn SshQuestions>) -> Result<Started, String> {
         let runtime = tauri::async_runtime::handle();
         let _entered = runtime.inner().enter();
-        self.start(profile, questions).map_err(ended)
+        self.start(chosen, questions).map_err(ended)
     }
 }
 
 impl Shells {
     /// The branch per kind of profile, with the runtime already entered.
-    fn start(
-        &self,
-        profile: &ProfileId,
-        questions: &Arc<dyn SshQuestions>,
-    ) -> Result<Started, String> {
-        match profile {
+    ///
+    /// **Every local branch starts the file it was handed rather than the name it was
+    /// chosen by** (spec B5.7, decision 1). The connect service resolved that file once and
+    /// verified it; resolving the name again here is what would let Windows land on a
+    /// different one, which is the whole thing this entry removes.
+    fn start(&self, chosen: &Chosen, questions: &Arc<dyn SshQuestions>) -> Result<Started, String> {
+        let program = chosen.program.as_deref().map(Path::to_string_lossy);
+        let program = program.as_deref();
+        match &chosen.profile {
             ProfileId::Ssh { host, port, user } => self.ssh(host, *port, user, questions),
             // The composition root names no shell since B5.1: which shell this is, what it
             // is started with and what it can mark are one object's answers, and the same
-            // object answers them for the suites that measure a real one.
-            ProfileId::Shell { kind } => self.real(adapter_for(kind.program())).map(only),
+            // object answers them for the suites that measure a real one. **Which shell it
+            // is stays the kind's answer and where it is stays the file's**: an adapter
+            // selected by the resolved path is the same adapter, because `adapter_for`
+            // recognises a full path as readily as a bare name.
+            ProfileId::Shell { kind } => self
+                .real(adapter_for(program.unwrap_or_else(|| kind.program())))
+                .map(only),
+            ProfileId::Install { kind, .. } => self
+                .real(adapter_for(program.unwrap_or_else(|| kind.program())))
+                .map(only),
             ProfileId::Distribution { name } => self
-                .real(Box::new(Wsl::in_distribution(WSL_CLIENT, name)))
+                .real(Box::new(Wsl::in_distribution(
+                    program.unwrap_or(WSL_CLIENT),
+                    name,
+                )))
                 .map(only),
             // Trimmed for the reason A9 found: `set ACTER_SHELL=x && acter` in cmd puts
             // everything up to the `&&` into the value, trailing space included — and a
             // name with a stray space matches no adapter, so the session silently became an
             // unintegrated shell with no injection, no markers and no prompt. A shell nobody
             // recognises is a real state this product supports; being pushed into it by
-            // punctuation is not.
-            ProfileId::Program { program } => self.real(adapter_for(program.trim())).map(only),
+            // punctuation is not. The trimming now happens where the name is resolved, and
+            // this falls back to it for a name nothing resolved.
+            ProfileId::Program { program: named } => self
+                .real(adapter_for(program.unwrap_or_else(|| named.trim())))
+                .map(only),
             #[cfg(debug_assertions)]
             ProfileId::Scripted { name } => self.scripted(name).map(only),
             // **The gate, at the factory.** A release build does not refuse to construct a
