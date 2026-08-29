@@ -13,6 +13,7 @@ import { ConnectDialog } from './adapters/connect_dialog';
 import { HostKeyDialog } from './adapters/host_key_dialog';
 import { MessageDialog } from './adapters/message_dialog';
 import { PasswordDialog } from './adapters/password_dialog';
+import { SetUpDialog } from './adapters/set_up_dialog';
 import { UnverifiedDialog } from './adapters/unverified_dialog';
 import { installMenuBar } from './adapters/menu_bar';
 import { WindowChrome } from './adapters/window_chrome';
@@ -77,6 +78,16 @@ const unverifiedDialog = new UnverifiedDialog(
   byId('unverified-summary'),
   byId('unverified-body'),
 );
+// The fourth question, and the one that is not a warning: the connection has succeeded, the
+// far end has said what shell it runs, and this is the command Acter would run inside the
+// session (spec B9.5, decision 9). Built beside the other three and knowing nothing about
+// connecting either — it shows a command and comes back with a decision.
+const setUpDialog = new SetUpDialog(
+  byId<HTMLDialogElement>('set-up-dialog'),
+  byId('set-up-summary'),
+  byId('set-up-body'),
+  byId<HTMLInputElement>('set-up-remember'),
+);
 // Which dialog a question goes to is decided by the question's own shape, so a variant
 // added to the protocol without a dialog to put it in fails to compile rather than
 // silently reaching nobody.
@@ -89,6 +100,8 @@ const questions = {
         return passwordDialog.ask(question);
       case 'Unverified':
         return unverifiedDialog.ask(question);
+      case 'SetUpSession':
+        return setUpDialog.ask(question);
     }
   },
 };
@@ -122,7 +135,7 @@ const connectDialog = new ConnectDialog(
   byId('connect-panel-title'),
   byId('connect-panel-body'),
   connectApi,
-  (id) => controller.connectTo(id),
+  (id, setUp) => controller.connectTo(id, setUp),
   announcer,
   windowChrome,
 );

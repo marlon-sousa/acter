@@ -30,8 +30,8 @@ use std::sync::mpsc::{Sender, channel};
 
 use crate::{
     AttemptId, ConnectAnswer, ConnectQuestion, ConnectQuestions, ConnectSink, ConnectStep,
-    HostKeyAnswer, HostKeyQuestion, HostKeyState, PasswordQuestion, ProgramAnswer, ProgramQuestion,
-    Secret, SshQuestions,
+    HostKeyAnswer, HostKeyQuestion, HostKeyState, IF_YOU_CANCEL, PasswordQuestion, ProgramAnswer,
+    ProgramQuestion, Secret, SetupAnswer, SetupQuestion, SshQuestions,
 };
 
 /// One attempt to connect, and the one question it may be waiting on.
@@ -131,9 +131,10 @@ impl SshQuestions for Conversation {
 
         match self.ask(asked) {
             ConnectAnswer::Trust => HostKeyAnswer::Accept,
-            ConnectAnswer::GiveUp | ConnectAnswer::Password { .. } | ConnectAnswer::StartAnyway => {
-                HostKeyAnswer::Refuse
-            }
+            ConnectAnswer::GiveUp
+            | ConnectAnswer::Password { .. }
+            | ConnectAnswer::StartAnyway
+            | ConnectAnswer::SetUpSession { .. } => HostKeyAnswer::Refuse,
         }
     }
 
@@ -145,7 +146,10 @@ impl SshQuestions for Conversation {
             // Trusting is not a password. It can only arrive here as a stale answer to a
             // host-key question that is no longer being asked, and treating it as consent
             // to continue with no password would be inventing an answer nobody gave.
-            ConnectAnswer::GiveUp | ConnectAnswer::Trust | ConnectAnswer::StartAnyway => None,
+            ConnectAnswer::GiveUp
+            | ConnectAnswer::Trust
+            | ConnectAnswer::StartAnyway
+            | ConnectAnswer::SetUpSession { .. } => None,
         }
     }
 
@@ -179,9 +183,37 @@ impl ConnectQuestions for Conversation {
 
         match self.ask(asked) {
             ConnectAnswer::StartAnyway => ProgramAnswer::Start,
-            ConnectAnswer::GiveUp | ConnectAnswer::Trust | ConnectAnswer::Password { .. } => {
-                ProgramAnswer::DoNotStart
-            }
+            ConnectAnswer::GiveUp
+            | ConnectAnswer::Trust
+            | ConnectAnswer::Password { .. }
+            | ConnectAnswer::SetUpSession { .. } => ProgramAnswer::DoNotStart,
+        }
+    }
+
+    /// **Nothing but pressing the button that says so sets a session up**, which is the rule
+    /// the other two questions established applied to a friendlier subject (spec B9.5,
+    /// decision 9). Cancelling refuses this session only, and says so; the Connect dialog's
+    /// checkbox is what refuses durably.
+    ///
+    /// The four things a listener is entitled to hear are composed *here*, from the question,
+    /// so the words are decided in the domain and a dialog renders them rather than inventing
+    /// them — and the command travels on its own so it can be put somewhere it can be read
+    /// character by character.
+    fn set_up_session(&self, question: SetupQuestion) -> SetupAnswer {
+        let asked = ConnectQuestion::SetUpSession {
+            detected: question.detected(),
+            offer: question.offer(),
+            command: question.command().to_owned(),
+            refusal: IF_YOU_CANCEL.to_owned(),
+            shell: question.shell,
+        };
+
+        match self.ask(asked) {
+            ConnectAnswer::SetUpSession { remember } => SetupAnswer::SetUp { remember },
+            ConnectAnswer::GiveUp
+            | ConnectAnswer::Trust
+            | ConnectAnswer::Password { .. }
+            | ConnectAnswer::StartAnyway => SetupAnswer::Skip,
         }
     }
 }
@@ -458,6 +490,7 @@ mod tests {
             session: SessionId(3),
             label: "SSH: acter at acter-ssh".to_owned(),
             note: None,
+            limit_explained: false,
         }));
         conversation.finished(Err("Acter could not reach acter-ssh.".to_owned()));
 

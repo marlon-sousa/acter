@@ -33,6 +33,7 @@ mod installed;
 mod plain;
 mod powershell;
 mod selection;
+mod setup;
 #[cfg(windows)]
 mod signature;
 mod wsl;
@@ -43,6 +44,7 @@ pub use installed::ThisMachine;
 pub use plain::Plain;
 pub use powershell::PowerShell;
 pub use selection::adapter_for;
+pub use setup::setup_for;
 #[cfg(windows)]
 pub use signature::WindowsTrust;
 #[cfg(windows)]

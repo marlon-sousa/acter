@@ -8,7 +8,12 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { ConnectDialog, panelSummary } from '../../src/adapters/connect_dialog';
 import type { AnnouncerView } from '../../src/ports/announcer_view';
 import type { ConnectApi } from '../../src/ports/connect_api';
-import type { Connectable, Connected, ProfileId } from '../../src/protocol';
+import type {
+  Connectable,
+  Connected,
+  ProfileId,
+  SetUp,
+} from '../../src/protocol';
 
 // The dialog's static skeleton, copied from views/main_window.html. It is a copy on
 // purpose: what this file asserts is the behaviour over that structure, and the structure
@@ -22,6 +27,12 @@ const SKELETON = `
       <h2 id="connect-panel-title">Options</h2>
       <div id="connect-panel-body"></div>
     </div>
+    <p>
+      <input id="connect-set-up" type="checkbox" checked />
+      <label for="connect-set-up"
+        >Let Acter set this session up so it can tell you more about what you run</label
+      >
+    </p>
     <button id="connect-start" type="button">Connect</button>
     <button id="connect-cancel" type="button">Cancel</button>
   </div>
@@ -128,6 +139,8 @@ function byId<T extends HTMLElement>(id: string): T {
 let connect: FakeConnect;
 let announcer: FakeAnnouncer;
 let attempted: ProfileId[];
+/** What the checkbox said on each attempt (spec B9.5, decision 9). */
+let asked: SetUp[];
 /** What the next connect attempt answers: connected, or could not be started. */
 let succeeds: boolean;
 let returned: number;
@@ -140,8 +153,9 @@ function make(): ConnectDialog {
     byId('connect-panel-title'),
     byId('connect-panel-body'),
     connect,
-    (id) => {
+    (id, setUp) => {
       attempted.push(id);
+      asked.push(setUp);
       return Promise.resolve(succeeds);
     },
     announcer,
@@ -167,6 +181,7 @@ beforeEach(() => {
   connect = new FakeConnect();
   announcer = new FakeAnnouncer();
   attempted = [];
+  asked = [];
   succeeds = true;
   returned = 0;
   dialog = make();
@@ -459,13 +474,17 @@ describe('keeping Tab inside', () => {
     byId('connect-kinds').focus();
 
     const walked: string[] = [];
-    for (let step = 0; step < 4; step += 1) {
+    for (let step = 0; step < 5; step += 1) {
       press2('Tab');
       walked.push(document.activeElement?.id ?? '');
     }
 
+    // The checkbox sits between the panel and the buttons, which is the order somebody works
+    // through this dialog in: choose a kind, fill in what it needs, decide whether the
+    // session is set up, then connect (spec B9.5, decision 9).
     expect(walked).toEqual([
       'connect-variant',
+      'connect-set-up',
       'connect-start',
       'connect-cancel',
       'connect-kinds',
@@ -819,5 +838,60 @@ describe('while an attempt is running', () => {
     await Promise.resolve();
 
     expect(document.activeElement?.id).toBe('connect-kinds');
+  });
+});
+
+/**
+ * The checkbox that authorises a session being set up (spec B9.5, decision 9).
+ *
+ * **Its whole reason for being on this dialog rather than only inside the one that discloses
+ * the command** is that unticking it has to be reachable without the dialog ever appearing.
+ */
+describe('setting the session up', () => {
+  it('is ticked when the dialog opens, because that is the default', async () => {
+    await dialog.open();
+
+    const box = byId<HTMLInputElement>('connect-set-up');
+    expect(box.checked).toBe(true);
+  });
+
+  it('is labelled with a whole sentence, because it is read aloud', () => {
+    const label = document.querySelector('label[for="connect-set-up"]');
+
+    expect(label?.textContent).toContain('set this session up');
+  });
+
+  it('carries a ticked box to whoever connects', async () => {
+    await dialog.open();
+
+    byId('connect-start').dispatchEvent(new Event('click'));
+    await Promise.resolve();
+
+    expect(asked).toEqual(['Yes']);
+  });
+
+  /** **Unticking it skips both the dialog and the setup**, which is what refusing durably is
+   * until B8 has a profile to keep the answer in (decision 10). */
+  it('carries an unticked box to whoever connects', async () => {
+    await dialog.open();
+    byId<HTMLInputElement>('connect-set-up').checked = false;
+
+    byId('connect-start').dispatchEvent(new Event('click'));
+    await Promise.resolve();
+
+    expect(asked).toEqual(['No']);
+  });
+
+  /** It is read at the moment Connect is pressed rather than remembered, so a listener who
+   * changes their mind after choosing a kind gets what the box says now. */
+  it('is read when Connect is pressed rather than when the dialog opened', async () => {
+    await dialog.open();
+    byId<HTMLInputElement>('connect-set-up').checked = false;
+    byId<HTMLInputElement>('connect-set-up').checked = true;
+
+    byId('connect-start').dispatchEvent(new Event('click'));
+    await Promise.resolve();
+
+    expect(asked).toEqual(['Yes']);
   });
 });

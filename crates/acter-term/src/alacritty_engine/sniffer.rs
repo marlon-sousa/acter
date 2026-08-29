@@ -121,6 +121,60 @@ mod tests {
         sniffer.drain()
     }
 
+    /// A handler that counts bells, for the one question the sniffer itself cannot answer:
+    /// whether a marker terminated by a bell rings one.
+    #[derive(Default)]
+    struct Bells(usize);
+
+    impl Handler for Bells {
+        fn bell(&mut self) {
+            self.0 += 1;
+        }
+    }
+
+    fn bells(bytes: &[u8]) -> usize {
+        let mut parser = Processor::<StdSyncHandler>::new();
+        let mut counted = Bells::default();
+        parser.advance(&mut counted, bytes);
+        counted.0
+    }
+
+    /// **A bell that ends a marker is a terminator and not a bell**, and this is the assertion
+    /// that keeps it that way.
+    ///
+    /// OSC allows two spellings of its terminator, `ESC \` and a bell, and `sh`'s setup uses
+    /// the bell because busybox expands backslash escapes in `PS1` and the other spelling ate
+    /// the first character of the user's own prompt (spec B9.5, decision 8, measured
+    /// 2026-08-29). The bell is also DESIGN's beep, which a later entry may well make audible
+    /// — and a session that beeped at every prompt would be this entry's doing.
+    ///
+    /// The parser consumes it inside the sequence, so nothing rings: what a future beep hooks
+    /// is a bell in the ordinary stream, which still arrives.
+    #[test]
+    fn a_bell_that_ends_a_marker_never_rings() {
+        assert_eq!(
+            bells(b"\x1b]133;A\x07\x1b]133;B\x07\x1b]133;C\x07\x1b]133;D;0\x07"),
+            0,
+            "every marker of the cycle, bell-terminated, and not one bell"
+        );
+        assert_eq!(
+            bells(b"\x07"),
+            1,
+            "and a bell the far end actually rang still arrives, so a beep has something to \
+             hook"
+        );
+    }
+
+    /// The same markers, spelled with the other terminator, mean the same thing — so a shell
+    /// whose setup uses one is read exactly as a shell whose setup uses the other.
+    #[test]
+    fn the_two_spellings_of_the_terminator_are_the_same_markers() {
+        assert_eq!(
+            sniff(b"\x1b]133;A\x07\x1b]133;B\x07"),
+            sniff(b"\x1b]133;A\x1b\\\x1b]133;B\x1b\\")
+        );
+    }
+
     #[test]
     fn the_four_markers_are_recognized() {
         assert_eq!(

@@ -68,17 +68,6 @@ const REQUESTS: usize = 64;
 /// which is why it took a real shell to find (spec B4).
 const ENTER: char = '\r';
 
-/// What `cmd.exe`'s line editor treats as "discard whatever is pending on this line".
-///
-/// Written ahead of a submitted line when the far end is a shell sitting at its prompt
-/// with something queued in front of it that the user did not type — see
-/// [`Pump::cancel_pending_input`] for what that something turned out to be and why the
-/// byte goes out on its own.
-///
-/// It belongs to `ShellAdapter` and moves there in B5: which byte discards a pending line
-/// is a fact about a shell's line editor, the same category as its prompt injection.
-const CANCEL: u8 = 0x1b;
-
 /// One session: the [`SessionApi`] the routers hold, and the handle on the two tasks
 /// behind it.
 ///
@@ -125,6 +114,12 @@ impl SessionService {
     /// and a composition root forwarding facts one at a time is the branch B5.1 deleted
     /// growing back a parameter at a time. Borrowed rather than held: both answers are
     /// read once, here, and nothing below this line asks a shell anything (spec B5.2).
+    ///
+    /// **What the shell says it needs run inside it goes out on the far end's first byte**,
+    /// not here (spec B9.5, decisions 1 and 4). Bytes written before the shell has read them
+    /// are an unmeasured race, and they are the launch-time injection wearing a different
+    /// hat; what the pump already tracks is whether the far end has spoken, which is the same
+    /// fact that makes a session "connected" at all.
     pub fn start(
         mut transport: Box<dyn Transport>,
         engine: Box<dyn TerminalEngine + Send>,
@@ -133,6 +128,8 @@ impl SessionService {
         shell: ShellFacts,
     ) -> Self {
         let markers = shell.markers;
+        let discards_line = shell.discards_line;
+        let setup = shell.setup.map(|setup| setup.line);
         let sink = Arc::new(AttachedSink::default());
         let (bytes, reads) = channel(READS);
         transport.start(bytes);
@@ -163,6 +160,8 @@ impl SessionService {
                 integration: Integration::Pending,
                 drawing: None,
                 spoken: false,
+                setup,
+                discards_line,
                 markers,
                 submitted: VecDeque::new(),
                 echo: Echo::default(),
@@ -389,6 +388,27 @@ struct Pump {
     /// prompt is not one anybody can use, and a window that called it connected would be
     /// telling a listener to go ahead and type.
     spoken: bool,
+    /// The line to submit once the far end has spoken, taken once and never again.
+    ///
+    /// **The whole of B9.5 as far as this file is concerned.** Nothing is armed at launch any
+    /// more, so what makes a far end mark its boundaries is this line arriving *after* the
+    /// user's own startup files have had their say — which is the only ordering in which
+    /// Acter has the last word rather than the first (spec B9.5, decision 1).
+    ///
+    /// `None` for a far end that is not being set up: one running a shell nobody has measured
+    /// a setup for, one whose Connect dialog checkbox was unticked, and one whose dialog was
+    /// cancelled. All three are the same thing from here — a session that runs and is told
+    /// nothing.
+    setup: Option<String>,
+    /// What this shell's line editor reads as "discard whatever is pending on this line", or
+    /// `None` for a shell that has no such byte (spec B4.5, decision 7).
+    ///
+    /// **The shell's own answer since B9.5, where it used to be inferred from the marker
+    /// claim.** `PromptAndCommandLine` meant `cmd.exe` and said so exactly, until decision 8
+    /// made POSIX `sh` the second shell to claim it — and an escape reaching a POSIX reader is
+    /// a keypress rather than a discard. Measured 2026-08-29 against `docker-desktop`: the
+    /// escape left busybox running a fragment of the line behind it.
+    discards_line: Option<u8>,
     /// What the far end's prompt is able to say (spec B4.5). Only [`Pump::wants`] reads it
     /// here; the rest of the difference is the tracker's.
     markers: ShellMarkers,
@@ -459,8 +479,15 @@ struct Pump {
 
 impl Pump {
     /// Runs until the far end goes away or the session is torn down.
+    ///
+    /// **The grace period is not armed here** (spec B9.5, decision 5). It used to run from
+    /// `SessionService::start`, and a cold WSL distribution takes five to six seconds to say
+    /// anything at all — so a session that was going to be set up perfectly well heard the
+    /// unintegrated sentence first and recovered from it silently. `integration_grace` asks
+    /// how long the far end has been talking without marking anything; a far end that has not
+    /// spoken has not had its chance, and the clock should not be running.
     async fn run(mut self) {
-        let mut grace = Some(self.clock.timer(self.grace));
+        let mut grace = None;
         loop {
             // Resolved before any state is touched, so no timer future is alive while
             // the step below mutates the pump.
@@ -483,13 +510,20 @@ impl Pump {
                     break;
                 }
                 Woke::Read(Some(bytes)) => {
-                    if !self.spoken {
+                    let first = !self.spoken;
+                    if first {
                         self.spoken = true;
                         self.send(SessionInput::Connection {
                             state: ConnectionState::Connected,
                         });
                     }
+                    if first {
+                        // Armed here rather than at session start, because this is the moment
+                        // the far end has had its chance (spec B9.5, decision 5).
+                        grace = Some(self.clock.timer(self.grace));
+                    }
                     self.feed(&bytes).await;
+                    self.set_up().await;
                 }
                 // Every `SessionApi` handle is gone, so nothing can ask for anything
                 // again.
@@ -543,6 +577,45 @@ impl Pump {
         }
     }
 
+    /// Sets the session up, once, on the far end's first byte.
+    ///
+    /// **It is submitted through the same path a typed line takes, and nothing about it is
+    /// hidden** (spec B9.5, decision 3, decided by the user: *"this is just another command.
+    /// Nothing will be hidden."*). It gets a block, the block's heading is the command
+    /// verbatim, and the shell's own history keeps it — so a listener arrowing the buffer or
+    /// pressing F6 finds exactly what ran.
+    ///
+    /// **Traced through, that is silent**: opening a block says nothing, a successful setup
+    /// prints nothing, and since A6 decision 2 a successful command's exit code is not on the
+    /// wire at all. What a listener hears is the connection sentence and then the prompt.
+    ///
+    /// The id is minted here rather than by [`SessionApi::submit_command`] for the reason
+    /// [`Pump::unclaimed`] mints one: it shares the same counter, so an id minted for Acter's
+    /// own line can never collide with one minted for the user's.
+    ///
+    /// **It waits for the far end to have drawn something, not merely to have spoken, and a
+    /// real distribution is what taught that difference.** Measured 2026-08-29 against Ubuntu
+    /// 24.04 under WSL: bash's first read carried bytes that produced no line at all, so a
+    /// setup sent on it was pending before the pump knew which row the echo would be written
+    /// onto — and the prompt that arrived next was held with the echo instead of being
+    /// published in front of it. What a listener got was Acter's own five-hundred-character
+    /// command read aloud between the connection sentence and the prompt.
+    ///
+    /// A cursor is exactly B4.9 decision 1's precondition: at that instant the far end has
+    /// drawn its prompt, so everything appended to that row afterwards is the echo of what
+    /// this pump writes next. Waiting for it costs nothing — a far end that draws nothing has
+    /// no prompt to mark, and the grace period is already running.
+    async fn set_up(&mut self) {
+        if self.cursor.is_none() {
+            return;
+        }
+        let Some(line) = self.setup.take() else {
+            return;
+        };
+        let command_id = CommandId(self.next_id.fetch_add(1, Ordering::SeqCst));
+        self.submit_line(command_id, &line, true).await;
+    }
+
     async fn request(&mut self, request: Request) {
         match request {
             Request::Submit { command_id, line } => self.submit(command_id, &line).await,
@@ -591,6 +664,11 @@ impl Pump {
     /// restored by a keystroke. Not queueing it also keeps `running` honest, so Ctrl+C
     /// after a bare Enter still answers that there is nothing to stop.
     async fn submit(&mut self, command_id: CommandId, line: &str) {
+        self.submit_line(command_id, line, false).await;
+    }
+
+    /// The same, saying whether the line is Acter's own — see [`Submitted::ours`].
+    async fn submit_line(&mut self, command_id: CommandId, line: &str, ours: bool) {
         // Before the queue is touched, so "nothing else was already pending" is still
         // answerable — and so the escape is written ahead of the line it protects.
         self.cancel_pending_input();
@@ -598,6 +676,7 @@ impl Pump {
             self.submitted.push_back(Submitted {
                 id: command_id,
                 line: line.to_owned(),
+                ours,
             });
             self.pending_row = self.cursor;
         }
@@ -624,11 +703,14 @@ impl Pump {
     ///
     /// **Two gates, and both are load-bearing.**
     ///
-    /// *The shell is one Acter injected cmd's prompt into.* Escape clearing the line is
-    /// `cmd.exe`'s line editor, not a universal; a POSIX shell's reader takes it as a meta
-    /// prefix. That is `ShellAdapter`'s knowledge and B5's port; until then the marker
-    /// declaration is the only thing that says which shell this is, and it says it
-    /// exactly.
+    /// *The shell has a byte for it.* Escape clearing the line is `cmd.exe`'s line editor, not
+    /// a universal; a POSIX shell's reader takes it as a meta prefix. That is
+    /// `ShellAdapter`'s knowledge and it is asked there since B9.5 — until then the marker
+    /// declaration stood in for it, on the reasoning that `PromptAndCommandLine` meant cmd and
+    /// said so exactly. Decision 8 ended that by making `sh` the second shell to claim it, and
+    /// the cost was measured the same afternoon: an escape written ahead of the setup line
+    /// left busybox executing a fragment of it, which answered `-sh: r-sh: not found` in front
+    /// of somebody who could not see what had happened.
     ///
     /// *The shell is reading a line, and this is the line.* An escape reaching a program
     /// that reads raw input is a keypress — in `vim` it leaves insert mode — so it may only
@@ -654,9 +736,12 @@ impl Pump {
     /// submitted as a command line, and instead of the prompt the user hears that
     /// something they never typed is not recognized as an internal or external command.
     fn cancel_pending_input(&mut self) {
+        let Some(cancel) = self.discards_line else {
+            return;
+        };
         let reading = matches!(self.tracker.region(), Region::Prompt | Region::CommandLine);
-        if !self.markers.marks_output_start() && reading && self.submitted.is_empty() {
-            self.write(&[CANCEL]);
+        if reading && self.submitted.is_empty() {
+            self.write(&[cancel]);
         }
     }
 
@@ -717,8 +802,20 @@ impl Pump {
             return;
         }
         self.close(None).await;
-        let command_id = self.claim(echoed.as_deref());
-        self.open(command_id, echoed);
+        let claimed = self.claim(echoed.as_deref());
+        // **Named by the shell's echo when there is one, and by Acter's own line when there
+        // is not** (spec B9.5, decision 3). `claim` used to answer with an id and drop the
+        // line it came from, so a block opened here rather than by [`Pump::boundary`] reached
+        // the frontend with no heading at all. For a line the user typed that is the right
+        // answer and B6.1's — the frontend's own heading stands. For the setup line, which no
+        // frontend ever submitted, it is the empty level 2 heading B4.4's NVDA pass found.
+        let named = echoed.or_else(|| {
+            claimed
+                .ours
+                .then_some(claimed.line)
+                .filter(|line| !line.trim().is_empty())
+        });
+        self.open(claimed.id, named);
         self.settle_running();
     }
 
@@ -1065,9 +1162,16 @@ impl Pump {
     /// else — or nothing — falls back to B6's claim from the front, and two identical
     /// submissions match at the front, which is right: the older one is running.
     ///
-    /// With nothing queued at all, a fresh id: a block genuinely opened and its output
-    /// has to go somewhere.
-    fn claim(&mut self, echoed: Option<&str>) -> CommandId {
+    /// With nothing queued at all, a fresh id and an empty line: a block genuinely opened and
+    /// its output has to go somewhere.
+    ///
+    /// **It answers with the whole submission rather than only its id** (spec B9.5,
+    /// decision 3). Dropping the line meant a block opened on this path — a `C` arriving for a
+    /// submission whose echo was never recognised — reached the frontend as
+    /// `command_line: None`, which is the empty level 2 heading B4.4's NVDA pass found: the
+    /// listener's buffer ended with a heading that said nothing, and the command line was
+    /// repeated as text beneath it.
+    fn claim(&mut self, echoed: Option<&str>) -> Submitted {
         if let Some(echoed) = echoed
             && let Some(index) = self
                 .submitted
@@ -1076,10 +1180,11 @@ impl Pump {
         {
             self.submitted.drain(..index);
         }
-        self.submitted
-            .pop_front()
-            .map(|submitted| submitted.id)
-            .unwrap_or_else(|| CommandId(self.next_id.fetch_add(1, Ordering::SeqCst)))
+        self.submitted.pop_front().unwrap_or_else(|| Submitted {
+            id: CommandId(self.next_id.fetch_add(1, Ordering::SeqCst)),
+            line: String::new(),
+            ours: false,
+        })
     }
 
     fn open(&mut self, command_id: CommandId, command_line: Option<String>) {
@@ -1285,6 +1390,22 @@ fn before_echo(held: &str, row: Option<&str>, line: &str) -> Option<String> {
 struct Submitted {
     id: CommandId,
     line: String,
+    /// Whether this line is Acter's own rather than the user's — and therefore whether the
+    /// block it opens has to be named from here.
+    ///
+    /// **A line the user typed is already headed by the frontend**, which puts the text on the
+    /// block the moment the submit ack answers; `command_line: None` then means "the shell did
+    /// not say what it is running" and the heading the ack gave stands. Naming it from here
+    /// with anything but the shell's own echo would overwrite it with a guess, which is the
+    /// whole of B6.1's decision 1 — a drifted id must not be able to put the wrong words on a
+    /// block.
+    ///
+    /// **Acter's own setup line has no ack and no frontend heading** (spec B9.5, decision 3).
+    /// It is submitted by the pump on the far end's first byte, so a block opened for it by
+    /// [`Pump::block_started`] rather than by [`Pump::boundary`] would reach the buffer with
+    /// nothing on it at all — the empty level 2 heading B4.4's NVDA pass found, with the
+    /// command line repeated as text beneath it.
+    ours: bool,
 }
 
 /// The command line the shell echoed, read as it arrives.
@@ -1383,7 +1504,7 @@ mod tests {
     use tokio::sync::oneshot;
     use tokio::task::yield_now;
 
-    use crate::{Announcement, Key, Osc133Marker, TerminalItem, TransportError};
+    use crate::{Announcement, Key, Osc133Marker, SessionSetup, TerminalItem, TransportError};
 
     use super::*;
 
@@ -1506,7 +1627,33 @@ mod tests {
     /// record and nothing to script (spec B5.1 decision 2, and the value B5.2 bundled it
     /// into).
     fn marking(markers: ShellMarkers) -> ShellFacts {
-        ShellFacts { markers, eof: None }
+        ShellFacts {
+            markers,
+            eof: None,
+            setup: None,
+            discards_line: None,
+        }
+    }
+
+    /// The same, for the one shell whose line editor discards on a byte — which is `cmd.exe`,
+    /// and which the session is now *told* rather than inferring from the marker claim.
+    fn discarding_on(byte: u8) -> ShellFacts {
+        ShellFacts {
+            discards_line: Some(byte),
+            ..marking(ShellMarkers::PromptAndCommandLine)
+        }
+    }
+
+    /// The same, for a far end Acter is going to set up once it speaks — which since B9.5 is
+    /// the only reason a WSL or SSH far end marks anything at all.
+    fn set_up_with(line: &str) -> ShellFacts {
+        ShellFacts {
+            setup: Some(SessionSetup {
+                line: line.to_owned(),
+                markers: ShellMarkers::Full,
+            }),
+            ..marking(ShellMarkers::Full)
+        }
     }
 
     /// A shell that answers end-of-input with these bytes. Deliberately not the answer
@@ -1517,6 +1664,8 @@ mod tests {
         ShellFacts {
             markers: ShellMarkers::Full,
             eof: Some(bytes.to_vec()),
+            setup: None,
+            discards_line: None,
         }
     }
 
@@ -2227,19 +2376,51 @@ mod tests {
         }
     }
 
+    /// **The clock starts when the far end speaks, not when the session starts** (spec
+    /// B9.5, decision 5). `integration_grace` asks how long the far end has been talking
+    /// without marking anything, and a far end that has not spoken has not had its chance.
     #[tokio::test]
     async fn a_session_with_no_markers_is_flagged_when_the_grace_period_expires() {
         let session = Session::with_config(quick_grace()).await;
 
+        // The far end speaks, which is what starts the clock. Bytes that produce no line
+        // item at all are the plainest way to say it — a shell clearing its screen, say.
+        session.emit(Vec::new()).await;
         session.advance_to(100).await;
         assert!(
-            session.events().is_empty(),
-            "nothing is said while the shell may still be starting: {:?}",
+            !session
+                .events()
+                .contains(&SessionEvent::IntegrationUnavailable),
+            "nothing is said while the shell may still be marking: {:?}",
             session.events()
         );
 
         session.advance_to(300).await;
-        assert_eq!(session.events(), vec![SessionEvent::IntegrationUnavailable]);
+        assert!(
+            session
+                .events()
+                .contains(&SessionEvent::IntegrationUnavailable)
+        );
+    }
+
+    /// **A far end that has said nothing is never flagged**, however long anybody waits.
+    ///
+    /// Forced by decision 4 and correct on its own terms: the grace period used to run from
+    /// `SessionService::start`, and a cold WSL distribution takes five to six seconds to say
+    /// anything at all — so a session that was going to be set up perfectly well heard the
+    /// unintegrated sentence first and recovered from it silently, which is roadmap 23.10's
+    /// defect made systematic rather than incidental.
+    #[tokio::test]
+    async fn a_far_end_that_has_not_spoken_yet_is_not_flagged_for_saying_nothing() {
+        let session = Session::with_config(quick_grace()).await;
+
+        session.advance_to(10_000).await;
+
+        assert!(
+            session.events().is_empty(),
+            "a far end that is still starting has had no chance to mark anything: {:?}",
+            session.events()
+        );
     }
 
     /// **27.4, and the reason it was worth its own entry** (spec B6.2). What a far end
@@ -2336,6 +2517,9 @@ mod tests {
     #[tokio::test]
     async fn a_late_marker_recovers_a_flagged_session() {
         let session = Session::with_config(quick_grace()).await;
+        // The far end speaks first, because that is what starts the clock this test is
+        // waiting out (spec B9.5, decision 5).
+        session.emit(Vec::new()).await;
         session.advance_to(300).await;
 
         let command_id = session.submit("late").await;
@@ -2355,9 +2539,11 @@ mod tests {
             session.events()
         );
         assert_eq!(
-            session.started(),
-            vec![command_id],
-            "the block that opened is the command that was submitted, not a second one"
+            session.started().last(),
+            Some(&command_id),
+            "the block that opened for the command is the one that was submitted, not a \
+             second one — the block before it is the unmarked prompt's, which B6.2 gives a \
+             block of its own"
         );
         assert!(
             session
@@ -3409,8 +3595,13 @@ mod tests {
     mod the_cancel_ahead_of_a_submission {
         use super::*;
 
+        /// A session over the one shell whose line editor discards on a byte.
+        ///
+        /// **The shell says so, since B9.5**, where this used to be inferred from the marker
+        /// claim: `PromptAndCommandLine` meant `cmd.exe` and said so exactly until POSIX `sh`
+        /// became the second shell to claim it.
         async fn cmd() -> Session {
-            Session::of(quick_grace(), ShellMarkers::PromptAndCommandLine).await
+            Session::over(quick_grace(), discarding_on(0x1b)).await
         }
 
         fn prompt(row: u64, at: &str) -> Vec<TerminalItem> {
@@ -3512,17 +3703,34 @@ mod tests {
             );
         }
 
-        /// And no shell Acter did not inject cmd's prompt into ever gets one. Escape
-        /// clearing the line is `cmd.exe`'s line editor; a POSIX shell's reader takes it as
-        /// a meta prefix.
+        /// And a shell that named no such byte never gets one. Escape clearing the line is
+        /// `cmd.exe`'s line editor; a POSIX shell's reader takes it as a meta prefix.
         #[tokio::test]
-        async fn a_shell_that_is_not_cmd_never_gets_one() {
+        async fn a_shell_that_named_no_such_byte_never_gets_one() {
             let session = Session::with_config(quick_grace()).await;
             session.advance_to(300).await;
             session.emit(vec![line(1, PROMPT)]).await;
             session.submit("dir").await;
 
             assert_eq!(session.written(), "dir\r");
+        }
+
+        /// **The case B9.5 made reachable, and the reason this stopped being read off the
+        /// marker claim** (measured 2026-08-29 against `docker-desktop`). POSIX `sh` marks its
+        /// prompt boundaries and nothing further, exactly as `cmd.exe` does — and an escape
+        /// written into it is a keypress, which left busybox running a fragment of the line
+        /// behind it and answering `-sh: r-sh: not found`.
+        #[tokio::test]
+        async fn a_shell_that_marks_only_its_prompt_gets_none_unless_it_asked_for_one() {
+            let session = Session::of(quick_grace(), ShellMarkers::PromptAndCommandLine).await;
+            session.emit(prompt(1, PROMPT)).await;
+            session.submit("dir").await;
+
+            assert_eq!(
+                session.written(),
+                "dir\r",
+                "marking only the prompt is not the same fact as discarding on a byte"
+            );
         }
     }
 
@@ -3603,6 +3811,202 @@ mod tests {
             session.press(ctrl('d')).await;
 
             assert_eq!(session.interrupts(), 0);
+        }
+    }
+
+    /// The session is set up after it is established (spec B9.5).
+    mod the_setup_is_sent_once_the_far_end_speaks {
+        use super::*;
+
+        /// Short enough to read in an assertion, and shaped like the real one: a statement
+        /// that marks its own output, then the assignment that does the work.
+        const SETUP: &str = "printf mark; PROMPT_COMMAND=__acter_prompt";
+
+        async fn set_up() -> Session {
+            Session::over(quick_grace(), set_up_with(SETUP)).await
+        }
+
+        /// **Not at session start** (spec B9.5, decision 4). Bytes written before the shell
+        /// has read them are an unmeasured race, and they are the launch-time injection
+        /// wearing a different hat.
+        #[tokio::test]
+        async fn nothing_is_written_before_the_far_end_has_said_anything() {
+            let session = set_up().await;
+
+            assert_eq!(session.written(), "");
+        }
+
+        /// **The trigger is the far end speaking**, which is the same fact that makes a
+        /// session "connected" at all (spec A9, decision 3) — so the machinery already
+        /// existed and this entry did not invent a second one.
+        #[tokio::test]
+        async fn the_setup_goes_out_on_the_far_ends_first_byte() {
+            let session = set_up().await;
+
+            session.emit(vec![line(1, PROMPT)]).await;
+
+            assert_eq!(
+                session.written(),
+                format!("{SETUP}\r"),
+                "submitted exactly as a typed line is, Enter included"
+            );
+        }
+
+        /// Once, however much the far end goes on to say. A second copy would be a second
+        /// command in the buffer that nobody typed.
+        #[tokio::test]
+        async fn it_is_sent_once_however_often_the_far_end_speaks() {
+            let session = set_up().await;
+
+            session.emit(vec![line(1, PROMPT)]).await;
+            session.emit(vec![line(2, "more")]).await;
+            session.emit(vec![line(3, "and more")]).await;
+
+            assert_eq!(session.written(), format!("{SETUP}\r"));
+        }
+
+        /// **A far end with nothing measured for it has nothing run in it**, which is the
+        /// state a shell nobody has written a setup for is in, and the state a connection
+        /// whose checkbox was unticked is in. Both reach the session as the same absence.
+        #[tokio::test]
+        async fn a_far_end_with_no_setup_has_nothing_written_into_it() {
+            let session = Session::with_config(quick_grace()).await;
+
+            session.emit(vec![line(1, PROMPT)]).await;
+
+            assert_eq!(session.written(), "");
+        }
+
+        /// **The block opens, is headed by the command verbatim, and closes with a real exit
+        /// code** (spec B9.5, decision 3). The far end echoes the line, prints the `C` the
+        /// setup asks for, and the next prompt carries the `D` — which is the whole cycle,
+        /// and the thing that stops the session reporting "running" from the moment it
+        /// connects.
+        #[tokio::test]
+        async fn the_setup_opens_one_block_headed_by_the_command_and_closes_it() {
+            let session = set_up().await;
+
+            session.emit(vec![line(1, PROMPT)]).await;
+            session
+                .emit(vec![
+                    line(1, SETUP),
+                    marker(Osc133Marker::OutputStart),
+                    marker(Osc133Marker::CommandEnd(Some(ExitCode(0)))),
+                ])
+                .await;
+
+            let started = session.started();
+            let setup = *started.last().expect("the setup opened a block");
+            assert_eq!(
+                session.headings().last(),
+                Some(&Some(SETUP.to_owned())),
+                "the heading is the command verbatim, so a listener finds exactly what ran"
+            );
+            assert!(
+                session
+                    .events()
+                    .contains(&SessionEvent::CommandFinished { command_id: setup }),
+                "and it closes before the user's first command: {:?}",
+                session.events()
+            );
+        }
+
+        /// **Nothing is spoken about it, and that is what makes disclosure affordable.**
+        /// Opening a block says nothing, a successful setup prints nothing, and since A6
+        /// decision 2 a successful command's exit code is not on the wire at all — so the
+        /// listener hears the connection sentence and then the prompt, with the command
+        /// sitting in the buffer for anyone who goes looking.
+        #[tokio::test]
+        async fn the_setup_is_never_read_back_to_the_listener() {
+            let session = set_up().await;
+
+            session.emit(vec![line(1, PROMPT)]).await;
+            session
+                .emit(vec![
+                    line(1, SETUP),
+                    marker(Osc133Marker::OutputStart),
+                    marker(Osc133Marker::CommandEnd(Some(ExitCode(0)))),
+                ])
+                .await;
+
+            assert!(
+                !session.rendered().contains("PROMPT_COMMAND"),
+                "the echo of Acter's own line is not output: {:?}",
+                session.rendered()
+            );
+            assert!(
+                !session
+                    .announcements()
+                    .iter()
+                    .any(|said| matches!(said, Announcement::Failed { .. })),
+                "an assignment succeeds, and a success says nothing: {:?}",
+                session.announcements()
+            );
+        }
+
+        /// **The empty heading, pinned** (spec B9.5, decision 3). A far end that rewrites the
+        /// line instead of echoing it leaves the block to be opened by the `C` the setup
+        /// printed — and `claim` used to drop the line it came from, so the block reached the
+        /// buffer with nothing on it at all. The frontend cannot fill this one in for itself:
+        /// there is no submit ack, because no frontend submitted it.
+        #[tokio::test]
+        async fn a_block_the_marker_opens_for_acters_own_line_is_still_named() {
+            let session = set_up().await;
+
+            session.emit(vec![line(1, PROMPT)]).await;
+            session
+                .emit(vec![
+                    marker(Osc133Marker::OutputStart),
+                    marker(Osc133Marker::CommandEnd(Some(ExitCode(0)))),
+                ])
+                .await;
+
+            assert_eq!(
+                session.headings().last(),
+                Some(&Some(SETUP.to_owned())),
+                "a block nobody can name from the frontend is named from here"
+            );
+        }
+
+        /// **And a line the *user* typed is still left alone**, which is B6.1's decision 1 and
+        /// is not weakened by the rule above: the frontend already put the typed text on that
+        /// block, so a heading from here that is not the shell's own echo would overwrite it
+        /// with a guess a drifted id could attach to the wrong block.
+        #[tokio::test]
+        async fn a_block_the_marker_opens_for_the_users_line_keeps_the_frontends_heading() {
+            let session = Session::with_config(quick_grace()).await;
+
+            session.submit("quiet").await;
+            session
+                .emit(vec![
+                    marker(Osc133Marker::PromptStart),
+                    line(1, "> "),
+                    marker(Osc133Marker::CommandStart),
+                    marker(Osc133Marker::OutputStart),
+                    line(2, "output"),
+                ])
+                .await;
+
+            assert_eq!(session.headings(), vec![None]);
+        }
+
+        /// **Ctrl+C immediately after connecting has nothing to act on**, because the setup
+        /// has opened and closed. The failure this guards is a listener told they stopped a
+        /// command they never ran.
+        #[tokio::test]
+        async fn an_interrupt_after_the_setup_has_closed_has_nothing_to_stop() {
+            let session = set_up().await;
+
+            session.emit(vec![line(1, PROMPT)]).await;
+            session
+                .emit(vec![
+                    line(1, SETUP),
+                    marker(Osc133Marker::OutputStart),
+                    marker(Osc133Marker::CommandEnd(Some(ExitCode(0)))),
+                ])
+                .await;
+
+            assert_eq!(session.press(ctrl('c')).await, KeyAck::NothingToActOn);
         }
     }
 }

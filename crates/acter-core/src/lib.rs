@@ -15,8 +15,9 @@ pub use entities::{
     Announcement, AttemptId, CommandId, ConnectAnswer, ConnectQuestion, ConnectStep, Connectable,
     Connected, ConnectionKind, ConnectionState, ExitCode, Fault, Integration, Key, KeyAck,
     KeyPress, LineId, LineRevision, Mode, Osc133Marker, PacingConfig, PacingState, PathStanding,
-    ProfileId, Provenance, Screen, SessionEvent, SessionId, SessionIntent, SessionState,
-    ShellInstall, ShellMarkers, Signer, SubmitAck, TerminalItem, Variant, Verdict,
+    ProfileId, Provenance, Screen, SessionEvent, SessionId, SessionIntent, SessionSetup,
+    SessionState, SetUp, ShellInstall, ShellMarkers, Signer, SubmitAck, TerminalItem, Variant,
+    Verdict,
 };
 // The pacing verdict is domain-internal since A6: `ReadMode` no longer crosses the wire,
 // so the items whose signatures mention it — `PacingAction`, `PacingOutcome`, `verdict`
@@ -27,10 +28,10 @@ pub use policies::{
     measure,
 };
 pub use ports::{
-    Chosen, Clock, ConnectApi, ConnectQuestions, ConnectSink, EventSink, HostKeyAnswer,
-    HostKeyQuestion, HostKeyState, InstalledShells, NoDistributions, PasswordQuestion,
-    ProgramAnswer, ProgramQuestion, Secret, SessionApi, SessionFactory, ShellAdapter, ShellFacts,
-    ShellLaunch, Signatures, SshQuestions, Started, TerminalEngine, Timer, Transport,
-    TransportError, Unasked, Unchecked,
+    Chosen, Clock, ConnectApi, ConnectQuestions, ConnectSink, EventSink, Explained, HostKeyAnswer,
+    HostKeyQuestion, HostKeyState, IF_YOU_CANCEL, InstalledShells, NeverExplained, NoDistributions,
+    PasswordQuestion, ProgramAnswer, ProgramQuestion, Secret, SessionApi, SessionFactory,
+    SetupAnswer, SetupQuestion, ShellAdapter, ShellFacts, ShellLaunch, Signatures, SshQuestions,
+    Started, TerminalEngine, Timer, Transport, TransportError, Unasked, Unchecked,
 };
 pub use services::{ConnectService, Conversation, SessionService};

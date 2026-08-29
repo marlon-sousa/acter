@@ -12,12 +12,17 @@
 //! distribution WSL calls the default: naming one is the connect list's business, and the
 //! connect list builds that adapter directly rather than through here.
 //!
-//! **Since B5.5 that limit costs the WSL client its injection here, and it should.** What
-//! `wsl.exe` starts is whatever login shell the distribution's account runs, which is
-//! another thing only I/O can find out — so a name alone no longer licenses pushing bash's
-//! `PROMPT_COMMAND` at it. This selects a WSL session with nothing claimed about its far
-//! end; a caller that has *asked* builds [`Wsl`] directly with the answer, which is what the
-//! composition root does for every WSL start including `wsl.exe` named on its own.
+//! **Since B5.5 that limit costs the WSL client its setup here, and it should.** What
+//! `wsl.exe` starts is whatever login shell the distribution's account runs, which is another
+//! thing only I/O can find out — so a name alone no longer licenses running bash's setup in
+//! it. This selects a WSL session with nothing claimed about its far end; a caller that has
+//! *asked* builds [`Wsl`] directly with the answer, which is what the composition root does
+//! for every WSL start including `wsl.exe` named on its own.
+//!
+//! **Since B9.5 no launch carries a setup at all**, so what an unasked client loses is no
+//! longer part of its launch: nothing is armed when the client is started, and what makes a
+//! far end mark its boundaries is a line sent into the session once it is up. What a name
+//! alone still cannot license is that line.
 
 use acter_core::ShellAdapter;
 
@@ -77,11 +82,11 @@ mod tests {
     /// Asserted through the port for the reason cmd's is: what a caller can observe is the
     /// launch and the markers.
     ///
-    /// **It gets no injection here, and that changed with B5.5.** A name does not say which
-    /// shell the distribution's account runs, so nothing licenses pushing bash's
-    /// `PROMPT_COMMAND` at it from this function. The composition root asks and then builds
-    /// [`Wsl`] with the answer; what is asserted here is that a name alone selects the right
-    /// adapter and claims nothing about its far end.
+    /// **It gets no setup here, and that changed with B5.5.** A name does not say which shell
+    /// the distribution's account runs, so nothing licenses running bash's line in it from
+    /// this function. The composition root asks and then builds [`Wsl`] with the answer; what
+    /// is asserted here is that a name alone selects the right adapter and claims nothing
+    /// about its far end.
     #[test]
     fn the_wsl_client_is_selected_however_it_was_named() {
         for named in ["wsl", "wsl.exe", "WSL.EXE", r"C:\Windows\system32\wsl.exe"] {
@@ -95,7 +100,7 @@ mod tests {
             assert_eq!(adapter.launch().program, named, "started as it was named");
             assert!(
                 adapter.launch().environment.is_empty(),
-                "{named} was never asked what it runs, so nothing is injected into it"
+                "{named} starts with an empty environment, as every shell does since B9.5"
             );
             assert!(
                 adapter.launch().args.is_empty(),
@@ -105,26 +110,30 @@ mod tests {
     }
 
     /// **The distinction the test above no longer draws, drawn here instead.** An
-    /// unrecognised program and an unasked WSL client now produce the same launch, so what
-    /// separates them is what happens once somebody asks: only the WSL client can be told
-    /// what its far end runs and start marking its boundaries.
+    /// unrecognised program and an unasked WSL client produce the same launch, so what
+    /// separates them is what happens once somebody asks: only the WSL client can be told what
+    /// its far end runs and be given a setup to run inside it.
+    ///
+    /// **The difference moved out of the launch with B9.5** (decision 1). It used to be two
+    /// environment variables — a `PROMPT_COMMAND` and the `WSLENV` entry that carried it
+    /// across the kernel boundary — and it is now a line sent into the session after it is
+    /// established, which is the only ordering in which the user's own startup files do not
+    /// get the last word.
     #[test]
-    fn a_wsl_client_that_was_asked_is_the_one_that_gets_the_injection() {
-        let launch = Wsl::new("wsl.exe", Some("bash")).launch();
-
+    fn a_wsl_client_that_was_asked_is_the_one_that_gets_a_setup() {
+        assert!(
+            Wsl::new("wsl.exe", Some("bash")).setup().is_some(),
+            "a distribution known to run bash has a line to run inside it"
+        );
         assert_eq!(
-            launch
-                .environment
-                .iter()
-                .map(|(name, _)| name.clone())
-                .collect::<Vec<String>>(),
-            ["WSLENV", "PROMPT_COMMAND"],
-            "a distribution known to run bash gets the injection and the entry carrying it"
+            adapter_for("wsl.exe").setup(),
+            None,
+            "and one nobody asked has nothing run in it at all"
         );
         assert_eq!(
             adapter_for("wsl.exe").launch().environment,
-            Wsl::new("wsl.exe", Some("zsh")).launch().environment,
-            "and a distribution running anything else is started exactly as an unasked one"
+            Wsl::new("wsl.exe", Some("bash")).launch().environment,
+            "which is a difference in what is run, not in how the client is started"
         );
     }
 

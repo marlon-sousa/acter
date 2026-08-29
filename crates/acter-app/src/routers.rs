@@ -74,6 +74,7 @@ mod tests {
                         &ProfileId::Scripted {
                             name: BUILTIN.to_owned(),
                         },
+                        acter_core::SetUp::Yes,
                         &(Arc::new(acter_core::Unasked) as Arc<dyn acter_core::ConnectQuestions>),
                     )
                     .expect("the built-in scripted session starts");
@@ -252,6 +253,9 @@ mod tests {
             "use_profile",
             json!({
                 "profile": { "profile": "Scripted", "name": BUILTIN },
+                // The Connect dialog's checkbox, which travels with the attempt (spec B9.5,
+                // decision 9). Ticked is what the dialog sends by default.
+                "setUp": "Yes",
                 "steps": "__CHANNEL__:1",
             }),
         )

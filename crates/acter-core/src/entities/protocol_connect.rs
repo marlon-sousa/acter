@@ -105,6 +105,36 @@ pub enum ConnectQuestion {
         /// character.
         signer: Option<String>,
     },
+    /// The connection succeeded, the far end runs this shell, and this is what Acter would
+    /// run inside the session so a listener hears more about what they run.
+    ///
+    /// **The one question here that is not a warning** (spec B9.5, decision 9). The checkbox
+    /// on the Connect dialog is what authorises the setup; this is what discloses it, and
+    /// both are needed — "on by default" is what makes an ordinary user hear headings and
+    /// failures without knowing the words this project uses, and the dialog is what stops
+    /// that from being a surprise.
+    ///
+    /// **The sentences arrive composed rather than as facts to assemble**, which is
+    /// [`Self::Unverified`]'s rule: the words a listener hears are decided in the domain, in
+    /// one place, and the dialog renders them. What the dialog owns is the shape — four
+    /// paragraphs that can be arrowed, and the command in a field that can be walked
+    /// character by character.
+    SetUpSession {
+        /// The shell the far end said it runs, carried on its own so a dialog can name what
+        /// it is asking about without parsing a sentence.
+        shell: String,
+        /// "Acter has detected that this session runs bash."
+        detected: String,
+        /// What the person gets for saying yes — and, for a shell that reaches only the
+        /// prompt boundaries, what they do not.
+        offer: String,
+        /// The command Acter would run, **verbatim**, for a read-only field: the same
+        /// treatment a host-key fingerprint and a program path get, and for the same reason.
+        command: String,
+        /// What refusing costs, which is A13's shipped sentence with what still works in
+        /// front of it.
+        refusal: String,
+    },
     /// The server will take a password, and there is not one yet.
     Password {
         host: String,
@@ -139,6 +169,13 @@ pub enum ConnectAnswer {
     /// [`Self::Trust`] has for a host key, and for the same reason (spec B5.7, decision 6).
     /// What was agreed to is then said out loud at connection, so nobody is left unsure.
     StartAnyway,
+    /// Set this session up, and — if `remember` — do not ask about this shell again.
+    ///
+    /// **The one way to reach [`SetupAnswer::SetUp`](crate::SetupAnswer)**, so nothing but a
+    /// person pressing the button that says so runs anything in their session. `remember` is
+    /// the dialog's own "do not show this dialog again", and it is kept per shell and for no
+    /// host and no profile (spec B9.5, decision 10).
+    SetUpSession { remember: bool },
     /// Stop: the key was refused, the dialog was cancelled, or the user changed their mind.
     ///
     /// **One variant for all three**, because the connection does the same thing for each
@@ -181,6 +218,7 @@ mod tests {
                     session: SessionId(2),
                     label: "SSH: acter at acter-ssh".to_owned(),
                     note: None,
+                    limit_explained: false,
                 },
             },
             ConnectStep::Failed {

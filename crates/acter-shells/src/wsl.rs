@@ -1,41 +1,42 @@
-//! Adapter: bash inside a WSL distribution, reached through `wsl.exe`, behind the
-//! `ShellAdapter` port — how the client is started, which distribution it is pointed at,
-//! and the `PROMPT_COMMAND` program that makes bash mark its own command boundaries.
+//! Adapter: whatever shell a WSL distribution runs, reached through `wsl.exe`, behind the
+//! `ShellAdapter` port — how the client is started, which distribution it is pointed at, and
+//! what Acter runs inside the session once it is up.
 //!
 //! **The first far end Acter sets up that is not in its own process tree.** `wsl.exe` is a
-//! client to a shell in another kernel, exactly as `docker.exe` is (ROADMAP 22.6), and two
-//! things follow that no earlier adapter had to think about. An environment variable set
-//! on the Windows side is *not* in the distribution's environment unless `WSLENV` names it,
-//! which is why the injection here is two variables rather than one. And an interrupt does
-//! cross, because it travels as data: `0x03` written to the pseudoconsole reaches bash's
-//! own line discipline, which turns it into `SIGINT` — measured by 22.6, and re-measured
-//! here on 2026-08-24 as the exit code `130` arriving in a `D` marker.
+//! client to a shell in another kernel, exactly as `docker.exe` is (ROADMAP 22.6). An
+//! interrupt does cross, because it travels as data: `0x03` written to the pseudoconsole
+//! reaches bash's own line discipline, which turns it into `SIGINT` — measured by 22.6, and
+//! re-measured on 2026-08-24 as the exit code `130` arriving in a `D` marker.
 //!
 //! **The one adapter whose variants are discovered rather than known.** `Cmd` is the same
 //! shell on every Windows machine; which distributions exist is the same answer on no two
 //! machines at all, so *that* question is I/O and lives behind
-//! [`InstalledShells`](acter_core::InstalledShells) rather than here. This module knows
-//! only how to start one once its name is in hand.
+//! [`InstalledShells`](acter_core::InstalledShells) rather than here. This module knows only
+//! how to start one once its name is in hand.
 //!
-//! **Since B5.5, which shell it starts is discovered too.** `wsl.exe` is a client, and what
-//! it runs is whatever login shell the distribution's account carries in its own passwd
-//! entry — so this adapter is *told* what that shell is rather than assuming bash, and it
-//! injects only when it was told the one shell the injection was measured against. An
-//! account running zsh is named and left alone. The same port answers that question, on the
-//! same client, and [`login_shell`] is what its answer means. What it is *not* is a gate: a
-//! distribution that would not answer starts anyway, with nothing claimed about it.
+//! **Since B5.5, which shell it starts is discovered too**, because `wsl.exe` runs whatever
+//! login shell the distribution's account carries in its own passwd entry. This adapter is
+//! *told* what that shell is rather than assuming bash, and [`login_shell`] is what its answer
+//! means. What it is not is a gate: a distribution that would not answer starts anyway, with
+//! nothing claimed about it.
 //!
-//! Where the marker program came from, and every byte of what it emits, is in
-//! [`injection`]; how a distribution list is read out of `wsl.exe -l -q` is in
-//! [`distributions`].
+//! **Since B9.5 the launch carries nothing but the client and `-d`.** Everything Acter used to
+//! arm here rode in the environment `wsl.exe` was started with — a `PROMPT_COMMAND` and the
+//! `WSLENV` entry that carried it across the kernel boundary — which meant bash inherited it
+//! *before* it sourced `.bashrc`, and every startup file the user owns got the last word after
+//! it. 23.11 measured what that costs: three separate dotfile shapes that keep markers flowing
+//! while corrupting them, one of which made Acter announce that a failed command had
+//! succeeded. What replaces it is a line sent into the session once it is established, which
+//! is [`setup`](crate::setup)'s and is shared with SSH rather than being WSL's.
+//!
+//! How a distribution list is read out of `wsl.exe -l -q` is in [`distributions`].
 
 pub(crate) mod distributions;
-mod injection;
 pub(crate) mod login_shell;
 
-use acter_core::{ShellAdapter, ShellLaunch, ShellMarkers};
+use acter_core::{SessionSetup, ShellAdapter, ShellLaunch, ShellMarkers};
 
-use crate::wsl::injection::{ENVIRONMENT, MEASURED};
+use crate::setup::setup_for;
 
 /// The `-d` flag that points `wsl.exe` at one distribution rather than at the default.
 const DISTRIBUTION_FLAG: &str = "-d";
@@ -56,10 +57,8 @@ pub struct Wsl {
     /// [`InstalledShells::login_shell`](acter_core::InstalledShells::login_shell) answered,
     /// and `None` when nothing answered.
     ///
-    /// **Carried rather than assumed, since B5.5.** Every constructor here takes it, so
-    /// there is no way to build this adapter without having decided what to believe about
-    /// the far end. Before that the field did not exist and bash was the silent answer
-    /// everywhere, including in the accounts that do not run it.
+    /// **Carried rather than assumed, since B5.5.** Before that the field did not exist and
+    /// bash was the silent answer everywhere, including in the accounts that do not run it.
     shell: Option<String>,
 }
 
@@ -92,87 +91,89 @@ impl Wsl {
         }
     }
 
+    /// The same session, once the distribution has said what it runs.
+    ///
+    /// **It exists because the probe no longer has to run in front of the launch** (spec
+    /// B9.5, decision 14). What is injected used to be part of `ShellLaunch`, so the decision
+    /// whether to inject could not be made after the client had started; nothing is injected
+    /// now, so the client can be started while the probe is still being answered and the
+    /// answer applied to the adapter afterwards. What still has to precede the *session* is
+    /// this answer, because the dialog names the shell it detected.
+    pub fn running(self, shell: Option<&str>) -> Self {
+        Self {
+            shell: shell.map(ToOwned::to_owned),
+            ..self
+        }
+    }
+
     /// What this session is with, for the sentence a listener hears, and `None` when the
     /// distribution said nothing this program is willing to say out loud.
     pub fn login_shell(&self) -> Option<&str> {
         self.shell.as_deref()
     }
-
-    /// Whether Acter put its marker program into this session.
-    ///
-    /// **True for exactly one shell** (spec B5.5, decision 4), which is the one the
-    /// injection was measured against. It is *not* the same question as
-    /// [`markers`](ShellAdapter::markers): every WSL session claims the full cycle, and the
-    /// grace period is what contradicts that claim for a session nothing was injected into.
-    /// This is what the composition root asks in order to decide whether the connection
-    /// sentence carries "with no shell integration set up in this distribution".
-    pub fn is_integrated(&self) -> bool {
-        self.shell.as_deref() == Some(MEASURED)
-    }
 }
 
 impl ShellAdapter for Wsl {
+    /// The client and `-d`, and nothing else.
+    ///
+    /// **The environment is empty and that is the point of B9.5** (decision 1). It used to
+    /// carry the marker program and the `WSLENV` entry that let it cross the kernel boundary,
+    /// which is exactly the ordering that let an ordinary dotfile beat Acter to the prompt.
     fn launch(&self) -> ShellLaunch {
         let mut args = Vec::new();
         if let Some(distribution) = &self.distribution {
             args.push(DISTRIBUTION_FLAG.to_owned());
             args.push(distribution.clone());
         }
-        // **Nothing is pushed into a shell there is no reason to believe reads it** (spec
-        // B5.5, decision 4). `PROMPT_COMMAND` is bash's, and an account running zsh or fish
-        // would carry it across the kernel boundary in `WSLENV` for nothing to read at the
-        // other end. A distribution that did not answer is in the same position: the session
-        // starts, and nothing is claimed about it.
-        let environment = match self.is_integrated() {
-            true => ENVIRONMENT
-                .iter()
-                .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
-                .collect(),
-            false => Vec::new(),
-        };
         ShellLaunch {
             program: self.program.clone(),
             args,
-            environment,
+            environment: Vec::new(),
         }
     }
 
-    /// `Full`, and the first adapter for which that is a *measurement* rather than the
-    /// assumption [`Plain`](crate::Plain) makes.
+    /// What this far end will be able to mark **once the setup has run**, and the optimistic
+    /// default when there is no setup to run.
     ///
-    /// cmd's prompt can carry `A` and `B` and has no post-execution hook, so its adapter
-    /// declares less than the full cycle and the tracker synthesizes what is missing.
-    /// Bash has `PROMPT_COMMAND` and a `DEBUG` trap, so all four markers arrive and `D`
-    /// carries a real exit code — which makes a WSL session the first shipped one where a
-    /// listener is told how a command went rather than only that the prompt came back.
+    /// `Full` for a distribution nothing is set up in is deliberate and unchanged (spec B5.5,
+    /// decision 4, following B9's decision 2): it is a claim rather than a report, and it is
+    /// the claim the startup grace period exists to contradict. A session that never marks
+    /// anything reaches `IntegrationUnavailable` and says so, where answering something
+    /// narrower would leave a listener waiting for boundaries in silence.
     ///
-    /// **Still `Full` for a distribution nothing was injected into, and that is deliberate**
-    /// (spec B5.5, decision 4, following B9's decision 2). `Full` is an optimistic claim
-    /// rather than a report, and it is the claim the startup grace period exists to
-    /// contradict: a session that never marks anything reaches `IntegrationUnavailable` and
-    /// says so. Answering `PromptAndCommandLine` here for zsh would forge a measurement
-    /// nobody made, and answering with something narrower would leave a listener waiting for
-    /// boundaries in silence.
+    /// A shell whose setup reaches only the prompt boundaries says so instead, which is what
+    /// `sh` is (spec B9.5, decision 8) — and saying it here rather than discovering it later
+    /// is what keeps the tracker's belief a construction argument.
     fn markers(&self) -> ShellMarkers {
-        ShellMarkers::Full
+        self.setup()
+            .map(|setup| setup.markers)
+            .unwrap_or(ShellMarkers::Full)
     }
 
-    /// **Nobody has measured what ends a bash session through this transport, so this says
-    /// so rather than guessing.**
+    /// **Nobody has measured what ends a session through this transport, so this says so
+    /// rather than guessing.**
     ///
-    /// `0x04` is the obvious answer and it is probably right: bash reads from a
+    /// `0x04` is the obvious answer and it is probably right: the shell reads from a
     /// pseudoconsole whose line discipline turns that byte into end-of-file. But "probably
-    /// right" is exactly what B5.2 measured and disproved for the shell next door —
-    /// *neither* control byte that is supposed to end a PowerShell session does, both are
-    /// echoed as caret text, and a line submitted behind one runs as a command the user
-    /// never typed. A byte assumed here would fail in the same shape: silently, in front of
-    /// a user who pressed Ctrl+D and cannot see what happened.
+    /// right" is exactly what B5.2 measured and disproved for the shell next door — *neither*
+    /// control byte that is supposed to end a PowerShell session does, both are echoed as
+    /// caret text, and a line submitted behind one runs as a command the user never typed.
     ///
     /// `None` means "Acter does not know how to end this shell", which the session reports
     /// out loud. It becomes a byte the day somebody drives a real distribution and watches
     /// the session close.
     fn eof(&self) -> Option<Vec<u8>> {
         None
+    }
+
+    /// What Acter runs inside the session once it is up, for the shell this distribution
+    /// actually answered with.
+    ///
+    /// **Per shell rather than per transport, which is the whole of B9.5's decision 2**: this
+    /// is the same answer `far_end::over_ssh` gives for the same name, so one WSL bash and one
+    /// SSH bash share a setup for the first time.
+    fn setup(&self) -> Option<SessionSetup> {
+        setup_for(self.shell.as_deref())
     }
 }
 
@@ -253,98 +254,100 @@ mod tests {
         assert_eq!(launch.program, r"C:\Windows\system32\wsl.exe");
     }
 
-    /// Both halves of the injection, in one place, because a `PROMPT_COMMAND` that does
-    /// not cross the kernel boundary is a launch that looks integrated and marks nothing.
+    /// **Nothing is armed at launch, whatever the distribution runs** (spec B9.5,
+    /// decision 1). The `PROMPT_COMMAND` and the `WSLENV` entry that carried it are gone, and
+    /// this is the assertion that stops either coming back: they existed to get a program in
+    /// before `.bashrc` ran, and 23.11 measured that going first is what an ordinary dotfile
+    /// beats.
     #[test]
-    fn every_session_is_started_with_the_injection_and_with_wslenv_carrying_it() {
-        let launch = Wsl::new("wsl.exe", Some("bash")).launch();
-        let names: Vec<&str> = launch
-            .environment
-            .iter()
-            .map(|(name, _)| name.as_str())
-            .collect();
+    fn nothing_is_pushed_into_the_distribution_at_launch() {
+        for named in [Some("bash"), Some("sh"), Some("zsh"), None] {
+            let launch = Wsl::in_distribution("wsl.exe", "Ubuntu 24.04", named).launch();
 
-        assert_eq!(names, ["WSLENV", "PROMPT_COMMAND"]);
+            assert!(
+                launch.environment.is_empty(),
+                "{named:?} starts with an empty environment"
+            );
+            assert_eq!(
+                launch.args,
+                ["-d", "Ubuntu 24.04"],
+                "{named:?} still starts, in the distribution that was named"
+            );
+        }
+    }
+
+    /// The launch does not depend on which distribution it lands in, and since B9.5 it does
+    /// not depend on the shell either — which is what lets the client be started while the
+    /// probe is still being answered.
+    #[test]
+    fn the_launch_says_the_same_thing_whatever_the_distribution_runs() {
         assert_eq!(
-            launch
-                .environment
-                .iter()
-                .find(|(name, _)| name == "WSLENV")
-                .map(|(_, value)| value.as_str()),
-            Some("PROMPT_COMMAND"),
-            "WSLENV names the variable that has to cross, and nothing else"
+            Wsl::new("wsl.exe", Some("bash")).launch(),
+            Wsl::new("wsl.exe", Some("zsh")).launch()
+        );
+        assert_eq!(
+            Wsl::new("wsl.exe", None).launch(),
+            Wsl::new("wsl.exe", Some("bash")).launch()
         );
     }
 
-    /// The injection does not depend on which distribution it lands in — measured against
-    /// Ubuntu 24.04 and Debian on 2026-08-24, which produced the same marker stream — so
-    /// the environment is the same whichever one is named.
+    /// **The setup is the shell's, and it is the same one SSH gets for the same name** (spec
+    /// B9.5, decision 2) — the first time those two transports share a strategy rather than
+    /// having one each.
     #[test]
-    fn the_injection_does_not_change_with_the_distribution() {
-        assert_eq!(
-            Wsl::new("wsl.exe", Some("bash")).launch().environment,
-            Wsl::in_distribution("wsl.exe", "Debian", Some("bash"))
-                .launch()
-                .environment
-        );
-    }
+    fn a_distribution_running_bash_is_set_up_with_bashs_own_line() {
+        let setup = Wsl::new("wsl.exe", Some("bash"))
+            .setup()
+            .expect("bash has a measured setup");
 
-    /// The claim the whole entry turns on, asserted where a reader will look for it.
-    #[test]
-    fn a_wsl_session_claims_the_full_marker_cycle() {
+        assert_eq!(setup.line, crate::setup::BASH);
+        assert_eq!(setup.markers, ShellMarkers::Full);
         assert_eq!(
             Wsl::new("wsl.exe", Some("bash")).markers(),
             ShellMarkers::Full
         );
     }
 
-    /// **The case the whole entry exists for.** An account running zsh gets no
-    /// `PROMPT_COMMAND` and no `WSLENV`: pushing bash's program at it would carry a
-    /// variable across the kernel boundary for nothing to read at the other end.
+    /// **The case that made the sentence able to say "partly"** (spec B9.5, decision 8).
+    /// `sh` reaches the prompt boundaries and no further, and the session is told that before
+    /// its first byte rather than discovering it from the absence of a `D`.
     #[test]
-    fn a_distribution_that_does_not_run_bash_is_started_with_nothing_injected() {
-        for named in ["zsh", "fish", "dash", "sh", "nu"] {
-            let launch = Wsl::in_distribution("wsl.exe", "Ubuntu 24.04", Some(named)).launch();
+    fn a_distribution_running_sh_claims_only_what_its_setup_earns() {
+        let adapter = Wsl::in_distribution("wsl.exe", "docker-desktop", Some("sh"));
 
-            assert!(
-                launch.environment.is_empty(),
-                "{named} is not the shell the injection was measured against"
-            );
+        assert_eq!(adapter.markers(), ShellMarkers::PromptAndCommandLine);
+        assert!(adapter.setup().is_some());
+    }
+
+    /// **The case B5.5 exists for, unchanged by the new mechanism.** An account running zsh
+    /// is named and nothing is run in it — and the session still claims the full cycle, so
+    /// the grace period is what tells the listener the truth.
+    #[test]
+    fn a_distribution_running_a_shell_nobody_measured_has_nothing_run_in_it() {
+        for named in ["zsh", "fish", "nu"] {
+            let adapter = Wsl::in_distribution("wsl.exe", "Ubuntu 24.04", Some(named));
+
+            assert_eq!(adapter.setup(), None, "{named} has no measured setup");
             assert_eq!(
-                launch.args,
-                ["-d", "Ubuntu 24.04"],
-                "{named} still starts, in the distribution that was named"
+                adapter.markers(),
+                ShellMarkers::Full,
+                "{named} is claimed optimistically, so the grace period can contradict it"
             );
         }
     }
 
-    /// A distribution that would not answer is in the same position as one running zsh:
-    /// the session starts and nothing is claimed about it. The probe is advisory, so its
-    /// silence costs a session nothing except the injection it could not justify.
+    /// A distribution that would not answer is in the same position as one running zsh: the
+    /// session starts and nothing is claimed about it.
     #[test]
-    fn a_distribution_that_answered_nothing_is_started_with_nothing_injected() {
-        let launch = Wsl::in_distribution("wsl.exe", "Ubuntu 24.04", None).launch();
+    fn a_distribution_that_answered_nothing_has_nothing_run_in_it() {
+        let adapter = Wsl::in_distribution("wsl.exe", "Ubuntu 24.04", None);
 
-        assert!(launch.environment.is_empty());
-        assert_eq!(launch.args, ["-d", "Ubuntu 24.04"]);
-    }
-
-    /// What the composition root asks in order to decide whether the connection sentence
-    /// carries the missing-integration clause — and it is true for exactly one shell.
-    #[test]
-    fn only_the_measured_shell_counts_as_integrated() {
-        assert!(Wsl::new("wsl.exe", Some("bash")).is_integrated());
-        for named in ["zsh", "fish", "dash", "sh", "Bash", "bash5"] {
-            assert!(
-                !Wsl::new("wsl.exe", Some(named)).is_integrated(),
-                "{named} has not been measured under WSL"
-            );
-        }
-        assert!(!Wsl::new("wsl.exe", None).is_integrated());
+        assert_eq!(adapter.setup(), None);
+        assert_eq!(adapter.markers(), ShellMarkers::Full);
     }
 
     /// The name is carried through for the sentence a listener hears, whether or not it is
-    /// a shell Acter integrated.
+    /// a shell Acter has a setup for.
     #[test]
     fn the_shell_the_distribution_named_is_what_the_session_is_called_with() {
         assert_eq!(
@@ -352,6 +355,21 @@ mod tests {
             Some("zsh")
         );
         assert_eq!(Wsl::new("wsl.exe", None).login_shell(), None);
+    }
+
+    /// The probe's answer can be applied after the client has been started, which is what
+    /// lets the two happen side by side (spec B9.5, decision 14).
+    #[test]
+    fn a_distribution_can_be_told_what_it_runs_after_it_has_been_started() {
+        let adapter = Wsl::in_distribution("wsl.exe", "Ubuntu 24.04", None).running(Some("bash"));
+
+        assert_eq!(adapter.login_shell(), Some("bash"));
+        assert!(adapter.setup().is_some());
+        assert_eq!(
+            adapter.launch().args,
+            ["-d", "Ubuntu 24.04"],
+            "and the launch it was started with is the launch it still describes"
+        );
     }
 
     /// **The transport is part of the measurement, and this is where that is asserted.**

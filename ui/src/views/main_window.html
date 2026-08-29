@@ -332,6 +332,22 @@
         <h2 id="connect-panel-title">Options</h2>
         <div id="connect-panel-body"></div>
       </div>
+      <!-- **The checkbox authorises, and the dialog it opens discloses** (spec B9.5,
+           decision 9). Ticked by default, because that is what makes an ordinary user hear a
+           heading for each command and be told when one fails without knowing the words this
+           project uses. Unticking it has to be reachable *without* the dialog ever appearing,
+           which is why it is here rather than only inside the dialog.
+
+           It sits between the panel and the buttons so Tab reaches it on the way to Connect,
+           which is the order somebody works through this dialog in. Its label is a whole
+           sentence for the reason every string in this product is: it is read aloud. -->
+      <p>
+        <input id="connect-set-up" type="checkbox" checked />
+        <label for="connect-set-up"
+          >Let Acter set this session up so it can tell you more about what you
+          run</label
+        >
+      </p>
       <button id="connect-start" type="button">Connect</button>
       <button id="connect-cancel" type="button">Cancel</button>
       </div>
@@ -456,6 +472,43 @@
           <button id="unverified-start" type="submit" value="start">
             Start it anyway
           </button>
+        </form>
+      </div>
+    </dialog>
+    <!-- **The disclosure, and the one dialog here that is not a warning** (spec B9.5,
+         decision 9). The connection has succeeded, the far end has said what shell it runs,
+         and Acter is about to run one command inside the session. It says what was detected,
+         what the person gets, the command verbatim in a field that can be walked character by
+         character, and what refusing costs — which is A13's own sentence, and is the register
+         test: if the refusal reads like the help topic F1 opens, the dialog is in the user's
+         words.
+
+         **The default here is to continue, unlike every other dialog on this seam.** A host
+         key and an unverified file are security decisions where the safe answer does nothing;
+         this is Acter offering to tell a listener more about their own session, and what it
+         defends against is surprise rather than harm. So Continue holds initial focus after
+         the command, and cancelling is still one keystroke away.
+
+         **Escape and every other way of closing answers "not this session"** — the session
+         still runs, and says what it will and will not be able to tell them. -->
+    <dialog
+      id="set-up-dialog"
+      aria-label="Set this session up"
+      aria-describedby="set-up-summary"
+    >
+      <div role="application" aria-label="Set this session up">
+        <h1>Set this session up</h1>
+        <p id="set-up-summary"></p>
+        <div id="set-up-body"></div>
+        <p>
+          <input id="set-up-remember" type="checkbox" />
+          <label for="set-up-remember">Do not show this dialog again</label>
+        </p>
+        <form method="dialog">
+          <!-- Continue comes first because it is the default, and Cancel is beside it
+               rather than behind anything: refusing has to be as reachable as accepting. -->
+          <button id="set-up-continue" type="submit" value="set-up">Continue</button>
+          <button id="set-up-cancel" type="submit" value="cancel">Cancel</button>
         </form>
       </div>
     </dialog>

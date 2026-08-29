@@ -66,6 +66,15 @@ export type ConnectAnswer =
  */
 { answer: "StartAnyway" } | 
 /**
+ *  Set this session up, and — if `remember` — do not ask about this shell again.
+ * 
+ *  **The one way to reach [`SetupAnswer::SetUp`](crate::SetupAnswer)**, so nothing but a
+ *  person pressing the button that says so runs anything in their session. `remember` is
+ *  the dialog's own "do not show this dialog again", and it is kept per shell and for no
+ *  host and no profile (spec B9.5, decision 10).
+ */
+{ answer: "SetUpSession"; remember: boolean } | 
+/**
  *  Stop: the key was refused, the dialog was cancelled, or the user changed their mind.
  * 
  *  **One variant for all three**, because the connection does the same thing for each
@@ -131,6 +140,45 @@ said: string;
  *  character.
  */
 signer: string | null } | 
+/**
+ *  The connection succeeded, the far end runs this shell, and this is what Acter would
+ *  run inside the session so a listener hears more about what they run.
+ * 
+ *  **The one question here that is not a warning** (spec B9.5, decision 9). The checkbox
+ *  on the Connect dialog is what authorises the setup; this is what discloses it, and
+ *  both are needed — "on by default" is what makes an ordinary user hear headings and
+ *  failures without knowing the words this project uses, and the dialog is what stops
+ *  that from being a surprise.
+ * 
+ *  **The sentences arrive composed rather than as facts to assemble**, which is
+ *  [`Self::Unverified`]'s rule: the words a listener hears are decided in the domain, in
+ *  one place, and the dialog renders them. What the dialog owns is the shape — four
+ *  paragraphs that can be arrowed, and the command in a field that can be walked
+ *  character by character.
+ */
+{ question: "SetUpSession"; 
+/**
+ *  The shell the far end said it runs, carried on its own so a dialog can name what
+ *  it is asking about without parsing a sentence.
+ */
+shell: string; 
+/**  "Acter has detected that this session runs bash." */
+detected: string; 
+/**
+ *  What the person gets for saying yes — and, for a shell that reaches only the
+ *  prompt boundaries, what they do not.
+ */
+offer: string; 
+/**
+ *  The command Acter would run, **verbatim**, for a read-only field: the same
+ *  treatment a host-key fingerprint and a program path get, and for the same reason.
+ */
+command: string; 
+/**
+ *  What refusing costs, which is A13's shipped sentence with what still works in
+ *  front of it.
+ */
+refusal: string } | 
 /**  The server will take a password, and there is not one yet. */
 { question: "Password"; host: string; user: string; 
 /**
@@ -257,6 +305,17 @@ export type Connected = {
 	 *  from the label.
 	 */
 	note: string | null,
+	/**
+	 *  Whether that note already told the listener that this session cannot say how a command
+	 *  went, so the session's own `IntegrationUnavailable` is not said a second time.
+	 * 
+	 *  **A fact rather than a phrase to look for** (spec B9.5, decision 13). The frontend
+	 *  used to decide this by searching the note for the words "shell integration" — which is
+	 *  exactly the vocabulary A13 removed and this entry rewrote, so a rewording of the
+	 *  sentence silently changed what a listener heard afterwards. It is computed by the one
+	 *  function that composes the note, so the two cannot disagree.
+	 */
+	limit_explained: boolean,
 };
 
 /**
@@ -571,6 +630,30 @@ export type SessionEvent =
  *  never approaches four billion.
  */
 export type SessionId = number;
+
+/**
+ *  Whether this connection may set its session up at all.
+ * 
+ *  **The checkbox authorises and the dialog discloses, and neither is optional** (spec B9.5,
+ *  decision 9). This is the checkbox: it is ticked by default, because that is what makes an
+ *  ordinary user hear headings and failures without knowing the words this project uses, and
+ *  unticking it has to be reachable without the dialog ever appearing.
+ * 
+ *  **It travels with the attempt rather than being stored**, until B8 has a profile to keep
+ *  it in (decision 10). Which shells this person has said not to be asked about again is a
+ *  different thing entirely and is kept behind [`Explained`](crate::Explained).
+ * 
+ *  A two-variant enum rather than a `bool`, for [`ProgramAnswer`](crate::ProgramAnswer)'s
+ *  reason: `true` at a call site three files away does not say which way it went.
+ */
+export type SetUp = 
+/**  Set it up: ask about it unless this person has said not to, then send the line. */
+"Yes" | 
+/**
+ *  Do not. No dialog, no setup line, and the connection says what the session will and
+ *  will not be able to tell them.
+ */
+"No";
 
 /**
  *  The immediate answer to `submit_command`.

@@ -526,9 +526,24 @@ the answer to "what should we do now?".
     inside one cannot be arrowed, and a help topic that cannot be read line by line is not
     help.
 
-13.8. The connection sentence uses the same vocabulary 13.7 removed. Spec: none yet →
-    specify first. **Filed 2026-08-27** while A13 was being written, rather than fixed
-    quietly inside it.
+13.8. **Done** — B9.5 rewrote the connection sentence into A13's register. Spec:
+    [b9.5-the-session-is-set-up-after-it-is-established.md](specs/b9.5-the-session-is-set-up-after-it-is-established.md), decision 13.
+    **Filed 2026-08-27** while A13 was being written, rather than fixed quietly inside it.
+
+    **Closed as a consequence rather than as a favour.** B9.5 rewrote this sentence anyway — it
+    has two new states to say, "set up as far as its prompt reaches" and "named, with nothing
+    written for it" — and leaving one clause in a user's words beside two in the project's would
+    have been worse than either. There are five clauses now and the phrase A13 removed is in
+    none of them, asserted as whole clauses because that is what a listener hears.
+
+    **The place went with it.** "on this host" and "in this distribution" existed to point at
+    the dotfile a user would have to edit; B9.5 writes to no dotfile, so every clause is about
+    *this session* instead. B5.5's decision 5 is superseded rather than contradicted.
+
+    **And the frontend stopped reading the sentence.** It decided whether to repeat
+    `IntegrationUnavailable` by searching the note for the words "shell integration" — the exact
+    phrase this entry deletes — so the fact now travels as a fact beside the clause, computed by
+    the one function that composes it.
 
     A connection announces *"connected to SSH: acter at 127.0.0.1, port 2222, bash, with no
     shell integration set up on this host"*, and "shell integration" is exactly the phrase
@@ -2563,11 +2578,26 @@ thing to pick up once the adapters land, not merely the next number.
     sentence that is withheld until the session has been quiet for a while — the last of
     which is the only one that costs nothing on a fast machine.
 
-23.11. The WSL injection can be beaten by an ordinary dotfile, and three of the four ways
-    are silent. Spec: none yet → specify first, together with 27.1, because the two share a
-    mechanism. **Raised by the user 2026-08-29**, reading B5.5's account of why bash under WSL
-    is integrated on a machine that installed nothing: *"a .bashrc might override completely
-    this, or add or edit it, so we are not guaranteed here."*
+23.11. **Done** — B9.5 removed the ordering all four failures came from. Spec:
+    [b9.5-the-session-is-set-up-after-it-is-established.md](specs/b9.5-the-session-is-set-up-after-it-is-established.md).
+    **Raised by the user 2026-08-29**, reading B5.5's account of why bash under WSL is
+    integrated on a machine that installed nothing: *"a .bashrc might override completely this,
+    or add or edit it, so we are not guaranteed here."*
+
+    **What shipped.** Nothing is armed at launch: `Wsl::launch` is the client and `-d` and an
+    empty environment, `WSLENV` and the `PROMPT_COMMAND` crossing are gone, and
+    `wsl/injection.rs` is deleted with its measurements moved to `acter-shells/src/setup.rs`
+    intact. What replaces it is one line sent into the session once it is established, which
+    captures the user's own hook and runs it in the middle of Acter's — so Acter has the last
+    word instead of the first.
+
+    **Measured against six dotfile shapes on 2026-08-29**, the same rig this entry was written
+    from: plain, assign, append, prepend, a hook that rebuilds `PS1` every prompt, and one that
+    installs its own `DEBUG` trap. All six produced the identical stream
+    `C D;0 A B C D;0 A B C D;7 A B C` — including the prepend case, which is the one that used
+    to announce `D;0` for a command that exited 7. All four are then asserted through the whole
+    stack in `crates/acter-transports/tests/real_session.rs`, where what is measured is what a
+    listener is told rather than what bytes arrived.
 
     They were right, and the measurement found more than the objection did.
 
@@ -2956,11 +2986,29 @@ thing to pick up once the adapters land, not merely the next number.
     session it is**. Whether the region grows, or whether that belongs somewhere else
     entirely, is what this entry decides.
 
-27.1. B9.5, offer to integrate the far end. Spec: none yet → specify when 27 is Done, and
-    **specify it together with 23.11**, which is the same mechanism arriving from the other
-    side. **Substantially revised 2026-08-29**, on the user's proposal — see "The mechanism
-    changed" below. The paragraph that follows is what the entry said before, kept because the
-    revision is a change of *means* and not of ends.
+27.1. **Done** — B9.5, the session is set up after it is established. Spec:
+    [b9.5-the-session-is-set-up-after-it-is-established.md](specs/b9.5-the-session-is-set-up-after-it-is-established.md).
+    **Substantially revised 2026-08-29**, on the user's proposal — see "The mechanism changed"
+    below. The paragraph that follows is what the entry said before, kept because the revision
+    is a change of *means* and not of ends.
+
+    **What shipped**: one mechanism for every shell and every transport, keyed by the shell's
+    name rather than by how Acter reached it; a checkbox on the Connect dialog that authorises
+    it, ticked by default; a dialog that discloses the command verbatim before it runs, asked
+    once per shell per person behind an `Explained` port of its own; five connection sentences
+    in A13's register; and `sh` shipping `PromptAndCommandLine`, measured against
+    `docker-desktop`, so the sentence can say "partly". Nothing is written into any
+    distribution or onto any host.
+
+    **Four defects a real distribution found and a fake could not** are recorded as amendments
+    in the spec: the setup has to wait for the far end's first *drawn line* rather than its
+    first byte, or Acter's own five-hundred-character command is read aloud; `sh`'s markers need
+    a bell terminator, because busybox expands backslashes in `PS1` and the string terminator
+    ate the first character of the user's own prompt; which byte discards a pending line had to
+    become the shell's own answer, because `sh` is now the second shell to claim
+    `PromptAndCommandLine` and an escape reaching a POSIX reader is a keypress; and `claim`
+    names a block only for Acter's own line, because a user's line is already headed by the
+    frontend and B6.1 forbids guessing at it.
 
     A button that writes the integration snippet into the remote account's shell startup,
     with consent, so the *next* connection to that host has blocks and exit codes — the
@@ -3111,16 +3159,32 @@ thing to pick up once the adapters land, not merely the next number.
 
     **A consequence B5.5 will be glad of: the probe leaves the critical path.**
 
+    **Amended by the spec, decision 14, and then by the measurement: the deadline is narrowed
+    rather than retired, and the number does not move.**
+
     **B5.5's twelve-second deadline exists only because the injection is part of the launch.**
     Its amendment 2 says so plainly: what is injected is carried in `ShellLaunch`, so the
     decision cannot be made after the client has started, so the probe must run first, so a
     cold distribution's five-to-six-second boot lands in front of the user's first byte.
 
-    Setting the session up *after* it is established removes that constraint entirely. The
-    session starts immediately; the probe runs beside it or after it; nothing about the first
-    byte waits on curiosity. The deadline can shrink to something that only catches a
-    distribution that is genuinely not coming up, and B5.5's amendment 1 — twelve seconds
-    chosen to clear a cold boot — is retired rather than tuned.
+    Setting the session up *after* it is established removes most of that. The client is started
+    while the probe is still outstanding, so the two wait on the same boot rather than one
+    waiting for the other — which is the whole of what a healthy cold start stops paying.
+
+    **What it does not remove is the probe being ahead of the session**, and that is decision
+    14's, for a reason that is the user's rather than the implementation's: the dialog names the
+    shell it detected, so the shell has to be known before the dialog is asked. Keeping it there
+    also keeps `ShellFacts` a construction argument, so a narrower marker claim for `sh` is known
+    before the first byte is tracked and nothing has to mutate the tracker mid-session.
+
+    So the deadline stops being "long enough that a cold boot is not a coin toss" and becomes
+    "long enough that a distribution which is coming up is not given up on" — and re-measuring it
+    under that question kept the number. **Measured 2026-08-29**, same machine, Ubuntu 24.04
+    under WSL 2.5.7.0: warm 141, 151, 161, 161 and 170 milliseconds; cold 5.22, 5.29, 5.35 and
+    5.35 seconds with `wsl --shutdown` before each; `wsl.exe -l -q` 50 to 91 milliseconds cold or
+    warm. Halving it to six would land the deadline in the middle of the observed cold spread,
+    which is the worst place for one to be and is exactly what B5.5's amendment 1 recorded.
+    Twelve stays, for a new reason.
 
     It softens **23.10** too, though it does not close it: a cold WSL start still takes five to
     six seconds before there is a prompt, and a listener still has to be told that waiting is

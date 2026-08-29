@@ -20,9 +20,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use acter_core::{
-    Chosen, Clock, ConnectApi, ConnectQuestions, ConnectService, InstalledShells, PacingConfig,
-    ProfileId, SessionApi, SessionFactory, SessionService, ShellAdapter, ShellFacts, Signatures,
-    SshQuestions, Started, Transport, Unasked,
+    Chosen, Clock, ConnectApi, ConnectQuestions, ConnectService, Explained, InstalledShells,
+    PacingConfig, ProfileId, SessionApi, SessionFactory, SessionService, SetUp, SetupAnswer,
+    SetupQuestion, ShellAdapter, ShellFacts, ShellLaunch, ShellMarkers, Signatures, SshQuestions,
+    Started, Transport, Unasked,
 };
 #[cfg(windows)]
 use acter_shells::WindowsTrust;
@@ -34,7 +35,7 @@ use acter_transports::{
 };
 use tauri::{Builder, generate_context, generate_handler};
 
-use crate::adapters::SystemClock;
+use crate::adapters::{ExplainedShells, SystemClock};
 use crate::controllers::Connecting;
 
 /// The environment variable choosing which simulated session to run: a built-in name, or
@@ -90,6 +91,11 @@ const PROFILES_DIR: &str = "ACTER_PROFILES_DIR";
 /// The file both records of host keys are kept in, in OpenSSH's own format so it stays
 /// inspectable with the tools a user already has.
 const KNOWN_HOSTS: &str = "known_hosts";
+
+/// The file listing the shells this person has said not to be asked about again, one name per
+/// line (spec B9.5, decision 10). Beside `known_hosts` and for the same reason: a record of a
+/// person's own decisions, kept somewhere they can read and empty it.
+const EXPLAINED_SHELLS: &str = "explained_shells";
 
 /// The two things every router reaches: the session that is live, and the actions that
 /// change which one that is.
@@ -178,7 +184,15 @@ pub(crate) fn connected_state() -> AppState {
         // B8's, where a `--profile` that resolves to nothing has to name what was asked for.
         // Nobody to ask at launch: there is no window yet, so a far end that needs a
         // decision is refused rather than trusted (`Unasked`).
-        let _ = service.use_profile(&profile, &(Arc::new(Unasked) as Arc<dyn ConnectQuestions>));
+        // **Set up by nobody, because there is nobody to ask** (spec B9.5, decision 9): the
+        // checkbox authorises and the dialog discloses, and a launch that names a profile from
+        // the environment has neither. `Unasked` refuses, so such a session runs and is told
+        // nothing — which is what it does for a host key and for an unverified file already.
+        let _ = service.use_profile(
+            &profile,
+            SetUp::Yes,
+            &(Arc::new(Unasked) as Arc<dyn ConnectQuestions>),
+        );
     }
     let connect = Arc::clone(&service) as Arc<dyn ConnectApi>;
     AppState {
@@ -270,6 +284,13 @@ struct Shells {
     /// the one branch that needs an answer before it can decide what to inject, and that
     /// decision has to be made before the client is started at all.
     machine: Arc<dyn InstalledShells>,
+    /// Which shells this person has already had Acter's setup command explained to them for
+    /// (spec B9.5, decision 10).
+    ///
+    /// It is here rather than in `ConnectService` because this is where the question is asked:
+    /// the dialog names the shell it detected, and which shell that is is not known until the
+    /// far end has answered — which happens inside this factory.
+    explained: Arc<dyn Explained>,
 }
 
 impl Shells {
@@ -277,6 +298,7 @@ impl Shells {
         Self {
             clock: Arc::new(SystemClock::new()),
             machine: Arc::new(ThisMachine::new()),
+            explained: Arc::new(ExplainedShells::new(explained_shells())),
         }
     }
 
@@ -320,7 +342,8 @@ impl Shells {
         host: &str,
         port: u16,
         user: &str,
-        questions: &Arc<dyn SshQuestions>,
+        set_up: SetUp,
+        questions: &Arc<dyn ConnectQuestions>,
     ) -> Result<Started, String> {
         let target = SshTarget {
             host: host.to_owned(),
@@ -328,14 +351,16 @@ impl Shells {
             user: user.to_owned(),
         };
         let hosts = Arc::new(KnownHosts::new(acter_known_hosts(), users_known_hosts()));
-        let questions = Arc::clone(questions);
+        // The SSH half of the same asker: the transport must not be handed a question it can
+        // never ask, and it is measured against a real server with no window anywhere near it.
+        let asker = Arc::clone(questions) as Arc<dyn SshQuestions>;
         let (done, waiting) = std::sync::mpsc::channel();
         tauri::async_runtime::spawn(async move {
             let _ = done.send(
                 SshTransport::connect(
                     &target,
                     hosts,
-                    questions,
+                    asker,
                     COLUMNS,
                     SCREEN_LINES,
                     probe_patience(),
@@ -347,15 +372,68 @@ impl Shells {
             .recv()
             .map_err(|_| "The connection stopped before it could be made.".to_owned())??;
 
-        // **The name is used for what to say and for what ends the session, never for
-        // markers** (spec B9, decision 7): knowing a far end is bash does not make bash emit
-        // any, so an SSH session is unintegrated and says so.
+        // **The name is what decides the setup, and the setup is what decides the markers**
+        // (spec B9.5, decision 2). Knowing a far end is bash still does not make bash emit
+        // anything — what does is the line Acter sends into the session once it is up, which
+        // is the same line a WSL bash gets, because a setup is a property of the shell rather
+        // than of how Acter reached it.
         let name = transport.far_end().name();
-        let facts = acter_shells::over_ssh(name.as_deref());
+        let (facts, outcome) = self.agreed(
+            acter_shells::over_ssh(name.as_deref()),
+            name.as_deref(),
+            set_up,
+            questions,
+        );
+        let note = far_end_note(name.as_deref(), outcome);
         Ok(Started {
             session: self.session_with(Box::new(transport), facts),
-            note: far_end_note(name.as_deref(), Some(ON_THIS_HOST)),
+            note: note.said,
+            limit_explained: note.limit_explained,
         })
+    }
+
+    /// Whether this session may be set up, and what to run inside it if it may.
+    ///
+    /// **Asked here because this is the window the question belongs in** (spec B9.5,
+    /// decision 9): the connection has succeeded, the far end has said what shell it runs, and
+    /// nothing has been sent yet. It is asked *at all* only because the Connect dialog's
+    /// checkbox said so, and asked *of a person* only when this shell has not been explained
+    /// to them before — which is `Explained`'s, kept per shell and by nothing else.
+    ///
+    /// The two refusals are one outcome, deliberately: a listener is owed the same sentence
+    /// whether they unticked a box a minute ago or cancelled a dialog a second ago, because
+    /// what it says is what this session will and will not be able to tell them.
+    fn agreed(
+        &self,
+        facts: ShellFacts,
+        shell: Option<&str>,
+        set_up: SetUp,
+        questions: &Arc<dyn ConnectQuestions>,
+    ) -> (ShellFacts, SetUpOutcome) {
+        // A far end that answered nothing, or one running a shell nobody has measured a setup
+        // for. Both start, and neither is experimented on.
+        let (Some(setup), Some(shell)) = (facts.setup.clone(), shell) else {
+            return (facts, SetUpOutcome::NothingWritten);
+        };
+        if !set_up.wanted() {
+            return (facts.declined(), SetUpOutcome::Refused);
+        }
+        if !self.explained.already(shell) {
+            let asked = SetupQuestion {
+                shell: shell.to_owned(),
+                setup,
+            };
+            match questions.set_up_session(asked) {
+                SetupAnswer::SetUp { remember } if remember => self.explained.remember(shell),
+                SetupAnswer::SetUp { .. } => {}
+                SetupAnswer::Skip => return (facts.declined(), SetUpOutcome::Refused),
+            }
+        }
+        let outcome = match facts.markers {
+            ShellMarkers::Full => SetUpOutcome::Fully,
+            ShellMarkers::PromptAndCommandLine => SetUpOutcome::Partly,
+        };
+        (facts, outcome)
     }
 
     /// A far end this machine starts itself, named by the program that is it.
@@ -366,30 +444,41 @@ impl Shells {
     /// whose far end has to be asked about first. `ConnectionKind::Wsl` and
     /// `ACTER_SHELL=wsl` both arrive here and both mean the distribution WSL calls the
     /// default, which is a real session and the one `wsl.exe` with no arguments opens.
-    fn local(&self, program: &str, questions: &Arc<dyn SshQuestions>) -> Result<Started, String> {
+    fn local(
+        &self,
+        program: &str,
+        set_up: SetUp,
+        questions: &Arc<dyn ConnectQuestions>,
+    ) -> Result<Started, String> {
         match is_wsl(program) {
-            true => self.wsl(program, None, questions),
+            true => self.wsl(program, None, set_up, questions),
             false => self.real(adapter_for(program)).map(only),
         }
     }
 
     /// Whatever shell one WSL distribution's account actually runs.
     ///
-    /// **The probe happens here, before the client is started, and that ordering is forced**
-    /// (spec B5.5, decision 4). What is injected is part of the launch, so the decision
-    /// whether to inject cannot be made after the launch has happened — unlike B9's probe,
-    /// which only has to beat `SessionService::start`. The cost is bounded by the deadline
-    /// inside the port, and on a cold distribution it is not a cost at all: this call is
-    /// what boots the distribution, so the session's own start then finds one that is up.
+    /// **The probe runs beside the launch rather than in front of it** (spec B9.5,
+    /// decision 14). Until this entry, what was injected was part of `ShellLaunch`, so the
+    /// decision whether to inject could not be made after the client had started and the
+    /// probe's whole wait landed in front of the user's first byte. Nothing is injected now,
+    /// so the two are started together and the client's boot and the probe's answer overlap —
+    /// which on a cold distribution is the difference between waiting for one boot and waiting
+    /// for two things that each wait for it.
     ///
-    /// **The answer decides two things and no more**: whether the marker program is
-    /// injected, and what the connection sentence says. It never decides whether the session
-    /// starts.
+    /// **The answer still has to arrive before the session does**, and that is why the probe
+    /// did not leave the critical path entirely: the dialog names the shell it detected, and
+    /// `ShellFacts` is a construction argument, so a narrower marker claim for `sh` is known
+    /// before the first byte is tracked and nothing has to mutate the tracker mid-session.
+    ///
+    /// **The answer decides two things and no more**: what is run inside the session, and what
+    /// the connection sentence says. It never decides whether the session starts.
     fn wsl(
         &self,
         client: &str,
         distribution: Option<&str>,
-        questions: &Arc<dyn SshQuestions>,
+        set_up: SetUp,
+        questions: &Arc<dyn ConnectQuestions>,
     ) -> Result<Started, String> {
         // **Said before the wait, not after it** — the one thing SSH does here that the
         // local branches never needed to. `LocalPty` spawns a process in milliseconds, so
@@ -400,17 +489,35 @@ impl Shells {
         // acter-ssh." does.
         questions.tell(&starting(distribution));
 
-        let shell = self.machine.login_shell(distribution);
+        // Asked on a thread of its own so the client can be started while the distribution is
+        // still working out what it runs. Both wait on the same cold boot, so what is saved is
+        // the whole of one of them.
+        let machine = Arc::clone(&self.machine);
+        let named = distribution.map(ToOwned::to_owned);
+        let asking = std::thread::spawn(move || machine.login_shell(named.as_deref()));
+
         let adapter = match distribution {
-            Some(name) => Wsl::in_distribution(client, name, shell.as_deref()),
-            None => Wsl::new(client, shell.as_deref()),
+            Some(name) => Wsl::in_distribution(client, name, None),
+            None => Wsl::new(client, None),
         };
-        let note = far_end_note(
+        let pty = self.pty(&adapter.launch())?;
+        // A probe whose thread died is a probe that answered nothing, which is a state this
+        // product supports: the session starts, and nothing is claimed about it.
+        let shell = asking.join().unwrap_or_default();
+        let adapter = adapter.running(shell.as_deref());
+
+        let (facts, outcome) = self.agreed(
+            ShellFacts::of(&adapter),
             adapter.login_shell(),
-            (!adapter.is_integrated()).then_some(IN_THIS_DISTRIBUTION),
+            set_up,
+            questions,
         );
-        let session = self.real(Box::new(adapter))?;
-        Ok(Started { session, note })
+        let note = far_end_note(adapter.login_shell(), outcome);
+        Ok(Started {
+            session: self.session_with(Box::new(pty), facts),
+            note: note.said,
+            limit_explained: note.limit_explained,
+        })
     }
 
     /// A real shell on a pseudoconsole.
@@ -420,15 +527,23 @@ impl Shells {
     /// `C` produces a session that receives markers, opens no block and speaks nothing at
     /// all — measured before either half was written (ROADMAP 22.5).
     fn real(&self, shell: Box<dyn ShellAdapter>) -> Result<Arc<dyn SessionApi>, String> {
-        let launch = shell.launch();
+        let pty = self.pty(&shell.launch())?;
+        Ok(self.session(Box::new(pty), shell.as_ref()))
+    }
+
+    /// The pseudoconsole one launch describes.
+    ///
+    /// Separate from [`Self::real`] since B9.5, for the one branch that starts the client
+    /// before it knows what shell is behind it: the launch no longer depends on that answer,
+    /// so the process can be spawned while the probe is still being answered.
+    fn pty(&self, launch: &ShellLaunch) -> Result<LocalPty, String> {
         let args: Vec<&str> = launch.args.iter().map(String::as_str).collect();
         let environment: Vec<(&str, &str)> = launch
             .environment
             .iter()
             .map(|(name, value)| (name.as_str(), value.as_str()))
             .collect();
-        let pty = LocalPty::spawn(&launch.program, &args, &environment, COLUMNS, SCREEN_LINES)?;
-        Ok(self.session(Box::new(pty), shell.as_ref()))
+        LocalPty::spawn(&launch.program, &args, &environment, COLUMNS, SCREEN_LINES)
     }
 
     /// A scripted far end: a shell Acter knows nothing about, which is what [`Plain`] is.
@@ -447,10 +562,15 @@ impl SessionFactory for Shells {
     /// on — which is not inside that runtime. Doing it here rather than at each call site is
     /// the same reasoning that puts the rest of this file in the composition root: knowing a
     /// runtime exists at all is its privilege.
-    fn open(&self, chosen: &Chosen, questions: &Arc<dyn SshQuestions>) -> Result<Started, String> {
+    fn open(
+        &self,
+        chosen: &Chosen,
+        set_up: SetUp,
+        questions: &Arc<dyn ConnectQuestions>,
+    ) -> Result<Started, String> {
         let runtime = tauri::async_runtime::handle();
         let _entered = runtime.inner().enter();
-        self.start(chosen, questions).map_err(ended)
+        self.start(chosen, set_up, questions).map_err(ended)
     }
 }
 
@@ -461,11 +581,16 @@ impl Shells {
     /// chosen by** (spec B5.7, decision 1). The connect service resolved that file once and
     /// verified it; resolving the name again here is what would let Windows land on a
     /// different one, which is the whole thing this entry removes.
-    fn start(&self, chosen: &Chosen, questions: &Arc<dyn SshQuestions>) -> Result<Started, String> {
+    fn start(
+        &self,
+        chosen: &Chosen,
+        set_up: SetUp,
+        questions: &Arc<dyn ConnectQuestions>,
+    ) -> Result<Started, String> {
         let program = chosen.program.as_deref().map(Path::to_string_lossy);
         let program = program.as_deref();
         match &chosen.profile {
-            ProfileId::Ssh { host, port, user } => self.ssh(host, *port, user, questions),
+            ProfileId::Ssh { host, port, user } => self.ssh(host, *port, user, set_up, questions),
             // The composition root names no shell since B5.1: which shell this is, what it
             // is started with and what it can mark are one object's answers, and the same
             // object answers them for the suites that measure a real one. **Which shell it
@@ -473,13 +598,13 @@ impl Shells {
             // selected by the resolved path is the same adapter, because `adapter_for`
             // recognises a full path as readily as a bare name.
             ProfileId::Shell { kind } => {
-                self.local(program.unwrap_or_else(|| kind.program()), questions)
+                self.local(program.unwrap_or_else(|| kind.program()), set_up, questions)
             }
             ProfileId::Install { kind, .. } => {
-                self.local(program.unwrap_or_else(|| kind.program()), questions)
+                self.local(program.unwrap_or_else(|| kind.program()), set_up, questions)
             }
             ProfileId::Distribution { name } => {
-                self.wsl(program.unwrap_or(WSL_CLIENT), Some(name), questions)
+                self.wsl(program.unwrap_or(WSL_CLIENT), Some(name), set_up, questions)
             }
             // Trimmed for the reason A9 found: `set ACTER_SHELL=x && acter` in cmd puts
             // everything up to the `&&` into the value, trailing space included — and a
@@ -489,7 +614,7 @@ impl Shells {
             // punctuation is not. The trimming now happens where the name is resolved, and
             // this falls back to it for a name nothing resolved.
             ProfileId::Program { program: named } => {
-                self.local(program.unwrap_or_else(|| named.trim()), questions)
+                self.local(program.unwrap_or_else(|| named.trim()), set_up, questions)
             }
             #[cfg(debug_assertions)]
             ProfileId::Scripted { name } => self.scripted(name).map(only),
@@ -511,6 +636,7 @@ fn only(session: Arc<dyn SessionApi>) -> Started {
     Started {
         session,
         note: None,
+        limit_explained: false,
     }
 }
 
@@ -533,41 +659,92 @@ fn starting(distribution: Option<&str>) -> String {
     }
 }
 
-/// Where the thing to change lives, for a far end on somebody else's machine.
-const ON_THIS_HOST: &str = "on this host";
+/// What became of setting this session up, which is what the connection sentence has to say
+/// (spec B9.5, decision 13).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SetUpOutcome {
+    /// The setup went out, and what it earns reaches every boundary.
+    Fully,
+    /// The setup went out, and it marks where commands begin but not how they ended — which
+    /// is POSIX `sh`, and is the only case where the grace period will never speak, because
+    /// markers do arrive.
+    Partly,
+    /// Nothing has been measured for this shell, so there was nothing to run.
+    NothingWritten,
+    /// There is a setup and it was not run: the Connect dialog's checkbox was unticked, or its
+    /// dialog was cancelled.
+    ///
+    /// **One outcome for both refusals**, because a listener is owed the same sentence either
+    /// way: what it says is what this session will and will not be able to tell them, not
+    /// which control they used to say no.
+    Refused,
+}
 
-/// And for one on the user's own — a distribution they installed, whose dotfiles are theirs
-/// to edit.
+/// What a connection adds to what a listener hears, said once, and whether it has already
+/// covered what the grace period would otherwise say.
 ///
-/// **One word different from [`ON_THIS_HOST`], and the difference is deliberate** (spec
-/// B5.5, decision 5). Over SSH the account frequently belongs to somebody else and the fix
-/// may not be the listener's to make; a WSL distribution is their own and it is.
-const IN_THIS_DISTRIBUTION: &str = "in this distribution";
+/// **Both come out of one function**, which is what keeps the status region and the
+/// announcement the same string (roadmap 27.5) and what stops the sentence and the fact about
+/// it from drifting apart.
+struct Note {
+    said: Option<String>,
+    limit_explained: bool,
+}
 
-/// What a connection adds to what a listener hears, said once (spec B9, decisions 2 and 7,
-/// and B5.5's decision 5).
+/// What a connection adds to what a listener hears, said once (spec B9.5, decision 13, which
+/// rewrites B9's decision 7 and B5.5's decision 5 and closes roadmap 13.8).
 ///
-/// **One function for every far end that has anything to add**, which is what keeps the
-/// status region and the announcement the same string (roadmap 27.5): there is one of it, so
-/// there is nothing to keep in step.
+/// **The phrase A13 removed is gone from all of it.** A connection used to announce "bash,
+/// with no shell integration set up on this host", and "shell integration" is exactly the
+/// vocabulary A13 concluded a user does not have — said as the *first* thing a listener hears
+/// on connecting, so it met the objection before the announcement A13 rewrote did. This entry
+/// writes clauses for two new states anyway, so it rewrites all of them rather than leaving
+/// the product speaking in two registers.
 ///
-/// **It names the far end when it can, and points at the fix when there is one.** "Shell
-/// integration is unavailable" tells a listener nothing they can act on; "bash, with no
-/// shell integration set up on this host" names what they are talking to and says where the
-/// thing to change lives. A probe that hit its deadline drops the name and never adds a
-/// second utterance.
+/// **Four cases, and each says what it knows.** Set up fully: the name and nothing more,
+/// because nothing is missing. Set up partly: the name, and what a listener will and will not
+/// get. Named with nothing written for it: the reason B5.5 currently only implies. Nothing
+/// answered: no clause at all — the name is not invented, and the sentence that covers this
+/// case is A13's, said when the grace period expires. Saying it twice in two registers is what
+/// 13.8 objected to.
 ///
-/// `missing_in` is `None` for a far end Acter did integrate, which since B5.5 is a real case
-/// here: a WSL distribution running bash is named and nothing more is said about it. `None`
-/// for both is a far end with nothing to add at all, and it adds nothing.
-fn far_end_note(shell: Option<&str>, missing_in: Option<&str>) -> Option<String> {
-    match (shell, missing_in) {
-        (Some(shell), None) => Some(shell.to_owned()),
-        (Some(shell), Some(place)) => {
-            Some(format!("{shell}, with no shell integration set up {place}"))
-        }
-        (None, Some(place)) => Some(format!("with no shell integration set up {place}")),
-        (None, None) => None,
+/// **A fifth case the spec's decision 13 did not enumerate**, and it is the one the checkbox
+/// and the dialog create: a shell that has a setup, refused. It says the name and then A13's
+/// own sentence, which is the same words the help topic F1 opens uses — recorded as an
+/// amendment in the spec.
+///
+/// **The place is gone**, and that is deliberate rather than lost. "on this host" and "in this
+/// distribution" existed to point at the dotfile a user would have to edit; there is no
+/// dotfile to edit any more, and every one of these sentences is now about *this session*.
+fn far_end_note(shell: Option<&str>, outcome: SetUpOutcome) -> Note {
+    let Some(shell) = shell else {
+        return Note {
+            said: None,
+            limit_explained: false,
+        };
+    };
+    match outcome {
+        SetUpOutcome::Fully => Note {
+            said: Some(shell.to_owned()),
+            limit_explained: false,
+        },
+        SetUpOutcome::Partly => Note {
+            said: Some(format!(
+                "{shell}. You will hear a heading for each command here, but not whether it \
+                 worked."
+            )),
+            limit_explained: true,
+        },
+        SetUpOutcome::NothingWritten => Note {
+            said: Some(format!("{shell}, which Acter cannot set up yet.")),
+            limit_explained: true,
+        },
+        SetUpOutcome::Refused => Note {
+            said: Some(format!(
+                "{shell}. You will hear what commands print here, but not whether they worked."
+            )),
+            limit_explained: true,
+        },
     }
 }
 
@@ -578,11 +755,27 @@ fn far_end_note(shell: Option<&str>, missing_in: Option<&str>) -> Option<String>
 /// which is also why `KnownHosts` takes both paths rather than resolving them: the whole of
 /// the host-key behaviour is then testable against a directory made for the test.
 fn acter_known_hosts() -> PathBuf {
-    let directory = env::var_os(PROFILES_DIR)
+    profiles_directory().join(KNOWN_HOSTS)
+}
+
+/// The directory Acter keeps its own records in, until B8 has a profile store to keep them
+/// beside.
+fn profiles_directory() -> PathBuf {
+    env::var_os(PROFILES_DIR)
         .map(PathBuf::from)
         .or_else(|| env::var_os("APPDATA").map(|appdata| PathBuf::from(appdata).join("acter")))
-        .unwrap_or_else(|| PathBuf::from("."));
-    directory.join(KNOWN_HOSTS)
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+/// Where the record of explained shells is kept, under the same directory Acter's own
+/// `known_hosts` is (spec B9.5, decision 10).
+///
+/// **Read here because this is where the environment is allowed in** (spec B8, decision 2),
+/// which is what makes the whole preference testable against a directory made for the test.
+/// `ACTER_PROFILES_DIR` points it elsewhere for development, tests and the NVDA fixture — the
+/// precedent B9 set for Acter's own record of host keys before B8 existed.
+fn explained_shells() -> PathBuf {
+    profiles_directory().join(EXPLAINED_SHELLS)
 }
 
 /// The user's own `known_hosts`, which Acter reads and never writes (spec B9, decision 5) —
@@ -682,48 +875,130 @@ mod tests {
         }
     }
 
-    /// **The three sentences of B5.5's decision 5, and each says what it knows.** They are
-    /// asserted as whole clauses because that is what a listener hears: the connection
-    /// announcement is this string appended to the row's own label, so "Ubuntu 24.04" plus
-    /// what is below is the utterance.
+    /// **The connection sentences, asserted as whole clauses because that is what a listener
+    /// hears** (spec B9.5, decision 13): the announcement is this string appended to the row's
+    /// own label, so "Ubuntu 24.04" plus what is below is the utterance.
     #[test]
-    fn a_distribution_says_which_shell_it_runs_and_whether_acter_integrated_it() {
-        assert_eq!(
-            far_end_note(Some("bash"), None).as_deref(),
-            Some("bash"),
-            "integrated: named, and nothing more is said about integration"
-        );
-        assert_eq!(
-            far_end_note(Some("zsh"), Some(IN_THIS_DISTRIBUTION)).as_deref(),
-            Some("zsh, with no shell integration set up in this distribution"),
-            "known of but unmeasured: named, and told where the fix lives"
-        );
-        assert_eq!(
-            far_end_note(None, Some(IN_THIS_DISTRIBUTION)).as_deref(),
-            Some("with no shell integration set up in this distribution"),
-            "nothing answered: no name is invented"
+    fn a_session_that_was_set_up_is_named_and_nothing_more_is_said_about_it() {
+        let note = far_end_note(Some("bash"), SetUpOutcome::Fully);
+
+        assert_eq!(note.said.as_deref(), Some("bash"));
+        assert!(
+            !note.limit_explained,
+            "nothing has been said about a limit, so the grace period may still speak"
         );
     }
 
-    /// **One word apart from the WSL sentence, and the word is the whole point** (spec B5.5,
-    /// decision 5). Over SSH the account frequently belongs to somebody else and the fix may
-    /// not be the listener's to make; a distribution is their own machine and it is.
+    /// **The only case where the grace period will never speak**, because markers do arrive —
+    /// so this clause is the one chance to say what a listener will not get (spec B9.5,
+    /// decision 8).
     #[test]
-    fn the_two_far_ends_point_at_two_different_places() {
-        let host = far_end_note(Some("bash"), Some(ON_THIS_HOST)).expect("SSH always adds one");
-        let distribution =
-            far_end_note(Some("bash"), Some(IN_THIS_DISTRIBUTION)).expect("so does an unasked WSL");
+    fn a_session_set_up_only_as_far_as_its_prompt_says_what_it_cannot_do() {
+        let note = far_end_note(Some("sh"), SetUpOutcome::Partly);
 
-        assert!(host.ends_with("on this host"));
-        assert!(distribution.ends_with("in this distribution"));
-        assert_ne!(host, distribution);
+        assert_eq!(
+            note.said.as_deref(),
+            Some("sh. You will hear a heading for each command here, but not whether it worked.")
+        );
+        assert!(note.limit_explained);
+    }
+
+    /// **The reason B5.5 currently only implies**, said out loud: the shell is named, and the
+    /// listener is told that Acter has nothing measured for it rather than being left to infer
+    /// it from five seconds of silence.
+    #[test]
+    fn a_shell_nobody_measured_is_named_and_said_to_be_one() {
+        let note = far_end_note(Some("zsh"), SetUpOutcome::NothingWritten);
+
+        assert_eq!(
+            note.said.as_deref(),
+            Some("zsh, which Acter cannot set up yet.")
+        );
+        assert!(note.limit_explained);
+    }
+
+    /// **What a listener hears when they said no**, whether by unticking the Connect dialog's
+    /// checkbox or by cancelling the dialog: the name, and A13's own sentence about what this
+    /// session will and will not tell them.
+    #[test]
+    fn a_session_that_was_not_set_up_says_what_it_will_and_will_not_tell_them() {
+        let note = far_end_note(Some("bash"), SetUpOutcome::Refused);
+
+        assert_eq!(
+            note.said.as_deref(),
+            Some("bash. You will hear what commands print here, but not whether they worked.")
+        );
+        assert!(note.limit_explained);
+    }
+
+    /// **Nothing answered: no clause at all.** The name is not invented, and the sentence that
+    /// covers this case is A13's, said when the grace period expires — so this one must leave
+    /// room for it rather than saying the same thing in another register, which is what
+    /// roadmap 13.8 objected to.
+    #[test]
+    fn a_far_end_that_answered_nothing_invents_no_name_and_leaves_the_sentence_to_a13() {
+        for outcome in [
+            SetUpOutcome::Fully,
+            SetUpOutcome::Partly,
+            SetUpOutcome::NothingWritten,
+            SetUpOutcome::Refused,
+        ] {
+            let note = far_end_note(None, outcome);
+
+            assert_eq!(note.said, None, "{outcome:?} invents no name");
+            assert!(
+                !note.limit_explained,
+                "{outcome:?} leaves the grace period free to say it"
+            );
+        }
+    }
+
+    /// **The phrase A13 removed is in none of them, which is the whole of roadmap 13.8.**
+    /// "Shell integration" is project vocabulary a user does not have, and this is the *first*
+    /// thing a listener hears on connecting.
+    #[test]
+    fn no_connection_sentence_uses_the_vocabulary_a13_removed() {
+        for outcome in [
+            SetUpOutcome::Fully,
+            SetUpOutcome::Partly,
+            SetUpOutcome::NothingWritten,
+            SetUpOutcome::Refused,
+        ] {
+            let Some(said) = far_end_note(Some("bash"), outcome).said else {
+                continue;
+            };
+
+            for forbidden in ["shell integration", "integrated", "marker", "exit code"] {
+                assert!(
+                    !said.to_lowercase().contains(forbidden),
+                    "{outcome:?} says {forbidden:?} to a listener: {said}"
+                );
+            }
+        }
+    }
+
+    /// Every clause a listener hears ends as a sentence does, so a reader pauses where the
+    /// thought finished — except the bare name, which is a noun the label runs into.
+    #[test]
+    fn every_clause_that_is_a_sentence_ends_like_one() {
+        for outcome in [
+            SetUpOutcome::Partly,
+            SetUpOutcome::NothingWritten,
+            SetUpOutcome::Refused,
+        ] {
+            let said = far_end_note(Some("bash"), outcome)
+                .said
+                .expect("this outcome always says something");
+
+            assert!(said.ends_with('.'), "{outcome:?} does not end: {said}");
+        }
     }
 
     /// A far end with nothing to add adds nothing, which is every local shell the row the
     /// user chose already described — the case `only` builds by construction.
     #[test]
     fn a_far_end_with_nothing_to_say_says_nothing() {
-        assert_eq!(far_end_note(None, None), None);
+        assert_eq!(far_end_note(None, SetUpOutcome::NothingWritten).said, None);
     }
 
     /// **What is heard during the five to six seconds a cold distribution takes to boot.**
@@ -805,5 +1080,258 @@ mod tests {
             "Access is denied.",
             "including one that ends in trailing space"
         );
+    }
+
+    /// Whether a session is set up, and what it is told when it is not (spec B9.5,
+    /// decisions 9, 10 and 13).
+    mod the_checkbox_authorises_and_the_dialog_discloses {
+        use std::sync::Mutex;
+
+        use acter_core::{
+            HostKeyAnswer, HostKeyQuestion, PasswordQuestion, ProgramAnswer, ProgramQuestion,
+            Secret, SessionSetup, SshQuestions,
+        };
+
+        use super::*;
+
+        /// A record of what has been explained, held in memory: the file adapter's behaviour
+        /// is its own to test, and this is about what the factory does with the answer.
+        #[derive(Default)]
+        struct Remembered(Mutex<Vec<String>>);
+
+        impl Explained for Remembered {
+            fn already(&self, shell: &str) -> bool {
+                self.0.lock().unwrap().iter().any(|at| at == shell)
+            }
+
+            fn remember(&self, shell: &str) {
+                self.0.lock().unwrap().push(shell.to_owned());
+            }
+        }
+
+        /// Somebody who answers the setup question the way a test says, and refuses
+        /// everything else — so nothing here can pass by answering the wrong question.
+        struct Answering {
+            answer: SetupAnswer,
+            asked: Mutex<Vec<SetupQuestion>>,
+        }
+
+        impl Answering {
+            fn with(answer: SetupAnswer) -> Arc<Self> {
+                Arc::new(Self {
+                    answer,
+                    asked: Mutex::new(Vec::new()),
+                })
+            }
+        }
+
+        impl SshQuestions for Answering {
+            fn host_key(&self, _question: HostKeyQuestion) -> HostKeyAnswer {
+                HostKeyAnswer::Refuse
+            }
+            fn password(&self, _question: PasswordQuestion) -> Option<Secret> {
+                None
+            }
+            fn tell(&self, _sentence: &str) {}
+        }
+
+        impl ConnectQuestions for Answering {
+            fn unverified(&self, _question: ProgramQuestion) -> ProgramAnswer {
+                ProgramAnswer::DoNotStart
+            }
+
+            fn set_up_session(&self, question: SetupQuestion) -> SetupAnswer {
+                self.asked.lock().unwrap().push(question);
+                self.answer
+            }
+        }
+
+        fn factory(explained: Arc<dyn Explained>) -> Shells {
+            Shells {
+                clock: Arc::new(SystemClock::new()),
+                machine: Arc::new(ThisMachine::new()),
+                explained,
+            }
+        }
+
+        fn facts(shell: &str) -> ShellFacts {
+            let setup = acter_shells::setup_for(Some(shell));
+            ShellFacts {
+                markers: setup
+                    .as_ref()
+                    .map(|setup| setup.markers)
+                    .unwrap_or(ShellMarkers::Full),
+                eof: None,
+                setup,
+                discards_line: None,
+            }
+        }
+
+        /// The ordinary case: the box is ticked, the person has not seen this shell's command
+        /// before, they are shown it, and they say yes.
+        #[test]
+        fn a_shell_that_was_agreed_to_is_set_up_and_named() {
+            let asker = Answering::with(SetupAnswer::SetUp { remember: false });
+            let questions = Arc::clone(&asker) as Arc<dyn ConnectQuestions>;
+
+            let (facts, outcome) = factory(Arc::new(Remembered::default())).agreed(
+                facts("bash"),
+                Some("bash"),
+                SetUp::Yes,
+                &questions,
+            );
+
+            assert_eq!(outcome, SetUpOutcome::Fully);
+            assert!(facts.setup.is_some(), "the line goes to the session");
+            let asked = asker.asked.lock().unwrap();
+            assert_eq!(asked.len(), 1, "asked once");
+            assert_eq!(asked[0].shell, "bash", "and it names what it detected");
+        }
+
+        /// **Unticking the box skips both the dialog and the setup** (spec B9.5, decision 9),
+        /// which is what makes refusing reachable without the dialog ever appearing.
+        #[test]
+        fn an_unticked_box_asks_nothing_and_runs_nothing() {
+            let asker = Answering::with(SetupAnswer::SetUp { remember: false });
+            let questions = Arc::clone(&asker) as Arc<dyn ConnectQuestions>;
+
+            let (facts, outcome) = factory(Arc::new(Remembered::default())).agreed(
+                facts("bash"),
+                Some("bash"),
+                SetUp::No,
+                &questions,
+            );
+
+            assert_eq!(outcome, SetUpOutcome::Refused);
+            assert_eq!(facts.setup, None, "nothing is sent into the session");
+            assert!(
+                asker.asked.lock().unwrap().is_empty(),
+                "and nobody is asked about a setup that is not going to happen"
+            );
+        }
+
+        /// **Cancelling refuses this session only, and the session still runs** — and the
+        /// marker claim goes back to the optimistic default, so the grace period is what tells
+        /// the listener the truth about it.
+        #[test]
+        fn cancelling_leaves_the_session_running_and_unmodified() {
+            let asker = Answering::with(SetupAnswer::Skip);
+            let questions = Arc::clone(&asker) as Arc<dyn ConnectQuestions>;
+
+            let (facts, outcome) = factory(Arc::new(Remembered::default())).agreed(
+                facts("sh"),
+                Some("sh"),
+                SetUp::Yes,
+                &questions,
+            );
+
+            assert_eq!(outcome, SetUpOutcome::Refused);
+            assert_eq!(facts.setup, None);
+            assert_eq!(
+                facts.markers,
+                ShellMarkers::Full,
+                "a claim the grace period can contradict, rather than one nothing will"
+            );
+        }
+
+        /// **Asked once per shell per person, and per shell is the decision** (spec B9.5,
+        /// decision 10): somebody who has read and accepted what Acter runs in bash has not
+        /// thereby accepted what it runs in another shell, because it is a different command.
+        #[test]
+        fn do_not_show_this_again_is_remembered_for_that_shell_and_for_no_other() {
+            let explained = Arc::new(Remembered::default());
+            let asker = Answering::with(SetupAnswer::SetUp { remember: true });
+            let questions = Arc::clone(&asker) as Arc<dyn ConnectQuestions>;
+            let shells = factory(Arc::clone(&explained) as Arc<dyn Explained>);
+
+            shells.agreed(facts("bash"), Some("bash"), SetUp::Yes, &questions);
+            shells.agreed(facts("bash"), Some("bash"), SetUp::Yes, &questions);
+            let (facts, outcome) = shells.agreed(facts("sh"), Some("sh"), SetUp::Yes, &questions);
+
+            let asked = asker.asked.lock().unwrap();
+            assert_eq!(
+                asked.len(),
+                2,
+                "bash asked once and never again; sh asked for itself"
+            );
+            assert_eq!(asked[1].shell, "sh");
+            assert_eq!(
+                outcome,
+                SetUpOutcome::Partly,
+                "and sh is set up as far as its own line reaches"
+            );
+            assert!(facts.setup.is_some());
+        }
+
+        /// **A shell with nothing written for it produces no dialog**, because there is no
+        /// command to show. The connection sentence says so instead and the session goes on.
+        #[test]
+        fn a_shell_nobody_measured_is_named_with_no_dialog_and_no_wait() {
+            let asker = Answering::with(SetupAnswer::Skip);
+            let questions = Arc::clone(&asker) as Arc<dyn ConnectQuestions>;
+
+            let (facts, outcome) = factory(Arc::new(Remembered::default())).agreed(
+                facts("zsh"),
+                Some("zsh"),
+                SetUp::Yes,
+                &questions,
+            );
+
+            assert_eq!(outcome, SetUpOutcome::NothingWritten);
+            assert_eq!(facts.setup, None);
+            assert!(asker.asked.lock().unwrap().is_empty(), "nothing to show");
+            assert_eq!(
+                far_end_note(Some("zsh"), outcome).said.as_deref(),
+                Some("zsh, which Acter cannot set up yet.")
+            );
+        }
+
+        /// A far end that answered nothing is asked about nothing, whatever the checkbox said:
+        /// there is no shell to name in the dialog and nothing measured to run.
+        #[test]
+        fn a_far_end_that_answered_nothing_is_asked_about_nothing() {
+            let asker = Answering::with(SetupAnswer::SetUp { remember: false });
+            let questions = Arc::clone(&asker) as Arc<dyn ConnectQuestions>;
+
+            let (facts, outcome) = factory(Arc::new(Remembered::default())).agreed(
+                facts("nothing-answered"),
+                None,
+                SetUp::Yes,
+                &questions,
+            );
+
+            assert_eq!(outcome, SetUpOutcome::NothingWritten);
+            assert_eq!(facts.setup, None);
+            assert!(asker.asked.lock().unwrap().is_empty());
+        }
+
+        /// **The command is shown before it runs, verbatim** (spec B9.5, decision 3): what the
+        /// dialog puts in its read-only field is the same string the session submits.
+        #[test]
+        fn the_question_carries_the_command_that_would_run() {
+            let asker = Answering::with(SetupAnswer::SetUp { remember: false });
+            let questions = Arc::clone(&asker) as Arc<dyn ConnectQuestions>;
+
+            let (facts, _) = factory(Arc::new(Remembered::default())).agreed(
+                facts("bash"),
+                Some("bash"),
+                SetUp::Yes,
+                &questions,
+            );
+
+            let asked = asker.asked.lock().unwrap();
+            assert_eq!(
+                asked[0].setup,
+                facts.setup.clone().expect("bash is set up"),
+                "the disclosure and the submission are one string"
+            );
+            assert_eq!(
+                asked[0].setup,
+                SessionSetup {
+                    line: acter_shells::setup_for(Some("bash")).unwrap().line,
+                    markers: ShellMarkers::Full,
+                }
+            );
+        }
     }
 }

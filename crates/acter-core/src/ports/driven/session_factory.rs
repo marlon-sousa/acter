@@ -13,7 +13,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::{ProfileId, SessionApi, SshQuestions};
+use crate::{ConnectQuestions, ProfileId, SessionApi, SetUp};
 
 /// What the user chose, and the file that choosing it starts.
 ///
@@ -49,6 +49,15 @@ pub struct Started {
     pub session: Arc<dyn SessionApi>,
     /// One clause about this far end, to be said once at connection, or `None`.
     pub note: Option<String>,
+    /// Whether that clause already told the listener that this session cannot say how a
+    /// command went.
+    ///
+    /// **Carried rather than read out of the sentence** (spec B9.5, decision 13). The
+    /// frontend used to look for the words "shell integration" in the note in order to decide
+    /// whether to repeat `IntegrationUnavailable`; those words are exactly what A13 removed
+    /// and what this entry rewrote, so the fact travels as a fact. It is set by the one
+    /// function that composes the clause, so the two cannot come to disagree.
+    pub limit_explained: bool,
 }
 
 /// Where a session comes from.
@@ -78,5 +87,20 @@ pub trait SessionFactory: Send + Sync {
     /// **It is handed a [`Chosen`] rather than a profile, since B5.7.** The file was
     /// resolved and verified before this call, and an implementation that resolved the name
     /// again would be starting something other than what was checked (decision 1).
-    fn open(&self, chosen: &Chosen, questions: &Arc<dyn SshQuestions>) -> Result<Started, String>;
+    ///
+    /// **It is every question rather than SSH's two, since B9.5.** The setup question is
+    /// asked *after* the connection succeeds and *before* the setup line is sent — the far
+    /// end has to have said what shell it runs before a dialog can name it — and that window
+    /// is inside this call rather than in front of it. The SSH half is passed down to the
+    /// transport, which must not be handed a question it can never ask.
+    ///
+    /// **`set_up` is the Connect dialog's checkbox** (spec B9.5, decision 9), which travels
+    /// with the attempt because there is no profile store to keep it in yet (decision 10).
+    /// [`SetUp::No`] means no dialog and no setup line, and the connection says so.
+    fn open(
+        &self,
+        chosen: &Chosen,
+        set_up: SetUp,
+        questions: &Arc<dyn ConnectQuestions>,
+    ) -> Result<Started, String>;
 }
