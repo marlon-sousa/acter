@@ -47,4 +47,4 @@ pub use selection::adapter_for;
 pub use signature::WindowsTrust;
 #[cfg(windows)]
 pub(crate) use signature::target as signature_target;
-pub use wsl::Wsl;
+pub use wsl::{Wsl, is_wsl};

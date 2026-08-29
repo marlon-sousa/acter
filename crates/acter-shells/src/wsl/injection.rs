@@ -111,6 +111,16 @@ pub(crate) const PROMPT_COMMAND: &str = concat!(
 /// cross is a session that looks integrated in the launch and marks nothing at all.
 pub(crate) const ENVIRONMENT: &[(&str, &str)] = &[WSLENV, ("PROMPT_COMMAND", PROMPT_COMMAND)];
 
+/// The one shell this injection was measured against, and therefore the only one it is
+/// given to (spec B5.5, decision 4).
+///
+/// **The identity may be guessed from a name; the injection may never be.** Every line of
+/// the program above cost real measurement — a `DEBUG` trap cannot remove itself from
+/// inside a function, and the version built on the wrong assumption emitted four `C`
+/// markers per command. Knowing a distribution runs zsh licenses *saying* "zsh" and
+/// nothing else until a zsh injection has been measured the same way.
+pub(crate) const MEASURED: &str = "bash";
+
 #[cfg(test)]
 mod tests {
     use super::*;

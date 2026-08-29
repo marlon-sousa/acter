@@ -780,6 +780,15 @@ mod tests {
                 standing: PathStanding::First,
             }]
         }
+
+        /// **Nothing, and the assertion is that nothing calls it.** Which shell a
+        /// distribution runs is asked once per connection and never while the list is built
+        /// (spec B5.5, decision 3) — asking per row would start one `wsl.exe` for every
+        /// distribution every time the connect dialog opens, in the very place a listener is
+        /// already waiting. This service does not connect, so it does not ask.
+        fn login_shell(&self, _distribution: Option<&str>) -> Option<String> {
+            None
+        }
     }
 
     /// Signatures a test decides, keyed by the file — and a record of every file anything
@@ -1167,6 +1176,9 @@ mod tests {
                     Provenance::Windows,
                     PathStanding::First,
                 )]
+            }
+            fn login_shell(&self, _distribution: Option<&str>) -> Option<String> {
+                unreachable!("building the list never asks a distribution what it runs")
             }
         }
         let machine = Arc::new(Counting(AtomicUsize::new(0)));

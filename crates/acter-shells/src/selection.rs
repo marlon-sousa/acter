@@ -11,6 +11,13 @@
 //! is all this function has, which is why `wsl.exe` selects a session in whatever
 //! distribution WSL calls the default: naming one is the connect list's business, and the
 //! connect list builds that adapter directly rather than through here.
+//!
+//! **Since B5.5 that limit costs the WSL client its injection here, and it should.** What
+//! `wsl.exe` starts is whatever login shell the distribution's account runs, which is
+//! another thing only I/O can find out — so a name alone no longer licenses pushing bash's
+//! `PROMPT_COMMAND` at it. This selects a WSL session with nothing claimed about its far
+//! end; a caller that has *asked* builds [`Wsl`] directly with the answer, which is what the
+//! composition root does for every WSL start including `wsl.exe` named on its own.
 
 use acter_core::ShellAdapter;
 
@@ -30,7 +37,10 @@ pub fn adapter_for(program: &str) -> Box<dyn ShellAdapter> {
     } else if powershell::is_powershell(program) {
         Box::new(PowerShell::new(program))
     } else if wsl::is_wsl(program) {
-        Box::new(Wsl::new(program))
+        // `None`, because a name is all there is here and the far end has not been asked
+        // (spec B5.5, decision 4). An unasked distribution is started as it stands, which
+        // is the third of decision 4's three states rather than a degradation.
+        Box::new(Wsl::new(program, None))
     } else {
         Box::new(Plain::new(program))
     }
@@ -63,9 +73,15 @@ mod tests {
         }
     }
 
-    /// `wsl.exe` reaches the WSL adapter and gets the injection, in whatever distribution
-    /// WSL calls the default. Asserted through the port for the reason cmd's is: what a
-    /// caller can observe is the launch and the markers.
+    /// `wsl.exe` reaches the WSL adapter, in whatever distribution WSL calls the default.
+    /// Asserted through the port for the reason cmd's is: what a caller can observe is the
+    /// launch and the markers.
+    ///
+    /// **It gets no injection here, and that changed with B5.5.** A name does not say which
+    /// shell the distribution's account runs, so nothing licenses pushing bash's
+    /// `PROMPT_COMMAND` at it from this function. The composition root asks and then builds
+    /// [`Wsl`] with the answer; what is asserted here is that a name alone selects the right
+    /// adapter and claims nothing about its far end.
     #[test]
     fn the_wsl_client_is_selected_however_it_was_named() {
         for named in ["wsl", "wsl.exe", "WSL.EXE", r"C:\Windows\system32\wsl.exe"] {
@@ -77,21 +93,39 @@ mod tests {
                 "{named} marks the whole cycle"
             );
             assert_eq!(adapter.launch().program, named, "started as it was named");
-            assert_eq!(
-                adapter
-                    .launch()
-                    .environment
-                    .iter()
-                    .map(|(name, _)| name.clone())
-                    .collect::<Vec<String>>(),
-                ["WSLENV", "PROMPT_COMMAND"],
-                "{named} gets the injection and the entry that carries it across"
+            assert!(
+                adapter.launch().environment.is_empty(),
+                "{named} was never asked what it runs, so nothing is injected into it"
             );
             assert!(
                 adapter.launch().args.is_empty(),
                 "{named} names no distribution, so WSL picks its own default"
             );
         }
+    }
+
+    /// **The distinction the test above no longer draws, drawn here instead.** An
+    /// unrecognised program and an unasked WSL client now produce the same launch, so what
+    /// separates them is what happens once somebody asks: only the WSL client can be told
+    /// what its far end runs and start marking its boundaries.
+    #[test]
+    fn a_wsl_client_that_was_asked_is_the_one_that_gets_the_injection() {
+        let launch = Wsl::new("wsl.exe", Some("bash")).launch();
+
+        assert_eq!(
+            launch
+                .environment
+                .iter()
+                .map(|(name, _)| name.clone())
+                .collect::<Vec<String>>(),
+            ["WSLENV", "PROMPT_COMMAND"],
+            "a distribution known to run bash gets the injection and the entry carrying it"
+        );
+        assert_eq!(
+            adapter_for("wsl.exe").launch().environment,
+            Wsl::new("wsl.exe", Some("zsh")).launch().environment,
+            "and a distribution running anything else is started exactly as an unasked one"
+        );
     }
 
     /// Both editions reach PowerShell's adapter, and each is started by the name it was

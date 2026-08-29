@@ -2350,11 +2350,26 @@ thing to pick up once the adapters land, not merely the next number.
     spinner in words**: a listener needs to know that waiting is correct, and to be told when
     waiting stopped being correct.
 
-23.8. WSL assumes the far end is bash, and never checks. Spec: **B5.5, agreed in
-    conversation 2026-08-27**, travelling with its implementation as
-    `docs/specs/b5.5-the-distribution-says-what-shell-it-runs.md`.
+23.8. **Done** — B5.5, the distribution says what shell it runs. Spec:
+    [b5.5-the-distribution-says-what-shell-it-runs.md](specs/b5.5-the-distribution-says-what-shell-it-runs.md)
+    — agreed in conversation 2026-08-27, and landed early in A13's PR rather than travelling
+    with its implementation, so PR #47 (2026-08-29) carried the code, seven amendments and
+    this flip.
     **Found in conversation 2026-08-26**, while deciding how SSH would recognise a shell it
     did not name. WSL has the same shape and it had gone unnoticed.
+
+    **What implementing it measured, and it changed a number.** The probe is 148 to 206
+    milliseconds against a warm distribution and **5.35 to 6.30 seconds** against a cold one,
+    timed four times each with `wsl --shutdown` between the cold runs (Ubuntu 24.04, WSL
+    2.5.7.0, 2026-08-29). The six-second deadline tried first landed inside that spread and
+    failed reproducibly, which would have made a cold bash distribution a coin toss between
+    integrated and unnamed; it is twelve now. `wsl.exe -l -q` warms nothing — 57 to 74
+    milliseconds either way — so it is the first command run *inside* a distribution that
+    boots it, which is a second reason the connect list must not ask per row.
+
+    **And the probe pays the boot the session would have paid**: on a cold machine this call
+    is what starts the distribution, so the session's own start then finds one that is up.
+    That is 23.10's subject rather than this entry's, but the two now share a measurement.
 
     **One thing the spec had to correct about this entry, agreed 2026-08-27**: the safety
     property is already in place. `ShellMarkers::Full` is not a claim that a shell is

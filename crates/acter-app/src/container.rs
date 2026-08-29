@@ -20,13 +20,13 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use acter_core::{
-    Chosen, Clock, ConnectApi, ConnectQuestions, ConnectService, PacingConfig, ProfileId,
-    SessionApi, SessionFactory, SessionService, ShellAdapter, ShellFacts, Signatures, SshQuestions,
-    Started, Transport, Unasked,
+    Chosen, Clock, ConnectApi, ConnectQuestions, ConnectService, InstalledShells, PacingConfig,
+    ProfileId, SessionApi, SessionFactory, SessionService, ShellAdapter, ShellFacts, Signatures,
+    SshQuestions, Started, Transport, Unasked,
 };
 #[cfg(windows)]
 use acter_shells::WindowsTrust;
-use acter_shells::{Plain, ThisMachine, Wsl, adapter_for};
+use acter_shells::{Plain, ThisMachine, Wsl, adapter_for, is_wsl};
 use acter_term::AlacrittyEngine;
 use acter_transports::{
     Chunking, FakeShell, KnownHosts, LocalPty, ScriptedTransport, SessionTranscript, SshTarget,
@@ -262,12 +262,21 @@ fn scripted_profiles() -> Vec<String> {
 /// is `ConnectService`'s, and is tested with a fake in place of this.
 struct Shells {
     clock: Arc<dyn Clock>,
+    /// What this computer has, for the one question a *connection* asks it: which shell the
+    /// distribution being connected to actually runs (spec B5.5, decision 2).
+    ///
+    /// The same port the connect list is built from, and the same instance would do — it
+    /// holds nothing and caches nothing. It is here rather than passed in because this is
+    /// the one branch that needs an answer before it can decide what to inject, and that
+    /// decision has to be made before the client is started at all.
+    machine: Arc<dyn InstalledShells>,
 }
 
 impl Shells {
     fn new() -> Self {
         Self {
             clock: Arc::new(SystemClock::new()),
+            machine: Arc::new(ThisMachine::new()),
         }
     }
 
@@ -345,8 +354,49 @@ impl Shells {
         let facts = acter_shells::over_ssh(name.as_deref());
         Ok(Started {
             session: self.session_with(Box::new(transport), facts),
-            note: Some(far_end_note(name.as_deref())),
+            note: far_end_note(name.as_deref(), Some(ON_THIS_HOST)),
         })
+    }
+
+    /// A far end this machine starts itself, named by the program that is it.
+    ///
+    /// **One branch rather than three, because WSL has to be told apart before it is
+    /// started** (spec B5.5). Every other local shell is fully described by its name —
+    /// `adapter_for` recognises it and knows what to inject — where `wsl.exe` is a client
+    /// whose far end has to be asked about first. `ConnectionKind::Wsl` and
+    /// `ACTER_SHELL=wsl` both arrive here and both mean the distribution WSL calls the
+    /// default, which is a real session and the one `wsl.exe` with no arguments opens.
+    fn local(&self, program: &str) -> Result<Started, String> {
+        match is_wsl(program) {
+            true => self.wsl(program, None),
+            false => self.real(adapter_for(program)).map(only),
+        }
+    }
+
+    /// Whatever shell one WSL distribution's account actually runs.
+    ///
+    /// **The probe happens here, before the client is started, and that ordering is forced**
+    /// (spec B5.5, decision 4). What is injected is part of the launch, so the decision
+    /// whether to inject cannot be made after the launch has happened — unlike B9's probe,
+    /// which only has to beat `SessionService::start`. The cost is bounded by the deadline
+    /// inside the port, and on a cold distribution it is not a cost at all: this call is
+    /// what boots the distribution, so the session's own start then finds one that is up.
+    ///
+    /// **The answer decides two things and no more**: whether the marker program is
+    /// injected, and what the connection sentence says. It never decides whether the session
+    /// starts.
+    fn wsl(&self, client: &str, distribution: Option<&str>) -> Result<Started, String> {
+        let shell = self.machine.login_shell(distribution);
+        let adapter = match distribution {
+            Some(name) => Wsl::in_distribution(client, name, shell.as_deref()),
+            None => Wsl::new(client, shell.as_deref()),
+        };
+        let note = far_end_note(
+            adapter.login_shell(),
+            (!adapter.is_integrated()).then_some(IN_THIS_DISTRIBUTION),
+        );
+        let session = self.real(Box::new(adapter))?;
+        Ok(Started { session, note })
     }
 
     /// A real shell on a pseudoconsole.
@@ -408,18 +458,11 @@ impl Shells {
             // is stays the kind's answer and where it is stays the file's**: an adapter
             // selected by the resolved path is the same adapter, because `adapter_for`
             // recognises a full path as readily as a bare name.
-            ProfileId::Shell { kind } => self
-                .real(adapter_for(program.unwrap_or_else(|| kind.program())))
-                .map(only),
-            ProfileId::Install { kind, .. } => self
-                .real(adapter_for(program.unwrap_or_else(|| kind.program())))
-                .map(only),
-            ProfileId::Distribution { name } => self
-                .real(Box::new(Wsl::in_distribution(
-                    program.unwrap_or(WSL_CLIENT),
-                    name,
-                )))
-                .map(only),
+            ProfileId::Shell { kind } => self.local(program.unwrap_or_else(|| kind.program())),
+            ProfileId::Install { kind, .. } => {
+                self.local(program.unwrap_or_else(|| kind.program()))
+            }
+            ProfileId::Distribution { name } => self.wsl(program.unwrap_or(WSL_CLIENT), Some(name)),
             // Trimmed for the reason A9 found: `set ACTER_SHELL=x && acter` in cmd puts
             // everything up to the `&&` into the value, trailing space included — and a
             // name with a stray space matches no adapter, so the session silently became an
@@ -427,9 +470,9 @@ impl Shells {
             // recognises is a real state this product supports; being pushed into it by
             // punctuation is not. The trimming now happens where the name is resolved, and
             // this falls back to it for a name nothing resolved.
-            ProfileId::Program { program: named } => self
-                .real(adapter_for(program.unwrap_or_else(|| named.trim())))
-                .map(only),
+            ProfileId::Program { program: named } => {
+                self.local(program.unwrap_or_else(|| named.trim()))
+            }
             #[cfg(debug_assertions)]
             ProfileId::Scripted { name } => self.scripted(name).map(only),
             // **The gate, at the factory.** A release build does not refuse to construct a
@@ -453,18 +496,41 @@ fn only(session: Arc<dyn SessionApi>) -> Started {
     }
 }
 
-/// The one clause an SSH connection adds to what a listener hears, said once (spec B9,
-/// decisions 2 and 7).
+/// Where the thing to change lives, for a far end on somebody else's machine.
+const ON_THIS_HOST: &str = "on this host";
+
+/// And for one on the user's own — a distribution they installed, whose dotfiles are theirs
+/// to edit.
 ///
-/// **It names the far end when it can, and points at the fix either way.** "Shell
+/// **One word different from [`ON_THIS_HOST`], and the difference is deliberate** (spec
+/// B5.5, decision 5). Over SSH the account frequently belongs to somebody else and the fix
+/// may not be the listener's to make; a WSL distribution is their own and it is.
+const IN_THIS_DISTRIBUTION: &str = "in this distribution";
+
+/// What a connection adds to what a listener hears, said once (spec B9, decisions 2 and 7,
+/// and B5.5's decision 5).
+///
+/// **One function for every far end that has anything to add**, which is what keeps the
+/// status region and the announcement the same string (roadmap 27.5): there is one of it, so
+/// there is nothing to keep in step.
+///
+/// **It names the far end when it can, and points at the fix when there is one.** "Shell
 /// integration is unavailable" tells a listener nothing they can act on; "bash, with no
 /// shell integration set up on this host" names what they are talking to and says where the
-/// thing to change lives. A probe that hit its deadline simply drops the middle clause and
-/// never adds a second utterance.
-fn far_end_note(shell: Option<&str>) -> String {
-    match shell {
-        Some(shell) => format!("{shell}, with no shell integration set up on this host"),
-        None => "with no shell integration set up on this host".to_owned(),
+/// thing to change lives. A probe that hit its deadline drops the name and never adds a
+/// second utterance.
+///
+/// `missing_in` is `None` for a far end Acter did integrate, which since B5.5 is a real case
+/// here: a WSL distribution running bash is named and nothing more is said about it. `None`
+/// for both is a far end with nothing to add at all, and it adds nothing.
+fn far_end_note(shell: Option<&str>, missing_in: Option<&str>) -> Option<String> {
+    match (shell, missing_in) {
+        (Some(shell), None) => Some(shell.to_owned()),
+        (Some(shell), Some(place)) => {
+            Some(format!("{shell}, with no shell integration set up {place}"))
+        }
+        (None, Some(place)) => Some(format!("with no shell integration set up {place}")),
+        (None, None) => None,
     }
 }
 
