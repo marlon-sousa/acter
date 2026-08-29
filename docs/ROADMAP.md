@@ -2676,31 +2676,51 @@ thing to pick up once the adapters land, not merely the next number.
     simplification, not only a fix, and it is worth stating because it is the reason this is a
     revision of the strategy rather than a patch to the program.
 
-23.12. A busybox `sh` session reads a fragment of Acter's own setup command aloud. Spec:
-    none yet → specify first. **Found in B9.5's NVDA pass, 2026-08-29**, driving NVDA 2026.1.1
-    as the `user` persona in silent capture against a real `docker-desktop` session.
+23.12. Acter's own setup command is read aloud when the far end's echo cannot be matched.
+    Spec: none yet → specify first. **Two causes measured, 2026-08-29, on two different far
+    ends**, and they are one entry because the symptom, the window and the fix are the same.
 
-    What a listener heard between the connection sentence and the prompt was
-    `splyt:/mnt/host/c/Users/marlo# A\007')$PS1$(printf '\033]133;B\007')" printf
+    **Cause one: a shell that redraws a wrapped line out of order.** Found in B9.5's NVDA
+    pass, driving NVDA 2026.1.1 as the `user` persona in silent capture against a real
+    `docker-desktop` session. What a listener heard between the connection sentence and the
+    prompt was `splyt:/mnt/host/c/Users/marlo# A\007')$PS1$(printf '\033]133;B\007')" printf
     '\033]133;C\007'; PS1="$(printf '\033]133;` — the prompt with the setup command's echo
     behind it, **split and reordered**. The buffer shows the same: two lines of the echo in the
     unclaimed block, in the wrong order, in front of the setup's own properly headed block.
+    `sh`'s line is 93 characters and busybox's prompt is 30, so it wraps at 80 columns and
+    busybox redraws it in an order the echo matcher cannot recognise. bash in the same pass is
+    clean and its line is five times longer, so what differs is the shell's line editor.
 
-    **The cause is the wrap, not the setup.** `sh`'s line is 93 characters and busybox's prompt
-    is 30, so the line wraps at 80 columns and busybox redraws it in an order the echo matcher
-    cannot recognise — so B4.9's suppression does not fire and the text is published as output.
-    bash in the same pass is clean, and its line is five times longer: what differs is the
-    shell's line editor.
+    **Cause two: a far end that draws a banner before its prompt.** Found in the SSH rig,
+    `ssh_rig.rs`, `the_markers_a_session_sets_itself_up_with_cross_an_ssh_connection`, against
+    Debian bookworm and bash 5.2.15 over a real `sshd`. `sshd` prints `Last login: ...` first,
+    so the first *drawn line* the setup waits for — B9.5's amendment 3 — is the banner and not
+    the prompt, and `pending_row` is therefore a row the echo is never written to. B4.9's
+    suppression cannot fire, and a listener gets Acter's five-hundred-character command read
+    aloud **twice**: once in the unclaimed block the banner opened, once in the setup's own.
+    This is a plain bash with no dotfile shape involved, which is what says the defect is the
+    window rather than the shell.
 
-    **It is a defect in what a listener hears rather than in the setup**, which worked: the
-    connection sentence is right, the block is headed by the command verbatim, the prompt
-    boundaries arrive, and the grace period never contradicts any of it. What is wrong is that
-    Acter's own command is read aloud once, at connect, in that shell.
+    **In both, what is wrong is what a listener hears and nothing else.** The setup worked
+    each time: the connection sentence is right, the block is headed by the command verbatim,
+    the markers arrive, the grace period never contradicts any of it, and the user's own
+    commands afterwards are clean in the same run.
 
-    Shortening the line is not the fix and should not be attempted as one: the prompt's width
-    is the user's, so any length can wrap. What this entry has to work out is what the echo
-    matcher can do about a far end that redraws a wrapped line out of order — which is B4.4's
-    subject met on a shell it was not measured against.
+    **The candidate fix, and it is one line of policy rather than a better matcher.** From the
+    instant Acter writes its own line to the instant that line's block closes, the session is
+    Acter talking to itself, and nothing in it is the user's to hear. `ReadMode::Quiet` already
+    means exactly "accumulates silently in the buffer" and is already shipped, driven today by
+    the babble guard — so the mechanism exists and what is missing is a second thing that can
+    ask for it. That has the property this entry needs: it does not depend on recognising the
+    echo, so it is indifferent to how any far end redraws a wrapped line, and it keeps every
+    byte in the buffer, where the disclosure the whole dialog is about can still be read back.
+
+    It also settles the **doubled prompt** B9.5 recorded as an observation on its second
+    checklist item: the unmarked prompt drawn before the setup and the marked prompt drawn
+    after it are 155 milliseconds apart and say the same thing, and only one of them is news.
+
+    Shortening the setup line is not the fix and should not be attempted as one: the prompt's
+    width is the user's, so any length can wrap, and a banner has no length at all to shorten.
 
 23.13. The connection sentence is sometimes not announced. Spec: none yet → specify first.
     **Found in B9.5's NVDA pass, 2026-08-29**, and **not caused by it**: the announcement path
@@ -3062,9 +3082,9 @@ thing to pick up once the adapters land, not merely the next number.
     bargain iTerm2 and VS Code document, made reachable instead of written down. Three
     things it has to answer, none of them small: which file it writes and what it does
     about a shell that is not bash; whether OSC 133 markers actually cross the connection
-    (expected, unmeasured); and how consent to modify somebody's remote account is asked
-    for in a way a listener can hear fully and refuse easily. That last one is why this is
-    its own entry rather than a corner of 27.
+    (**measured in B9.5 on 2026-08-29: they do**); and how consent to modify somebody's
+    remote account is asked for in a way a listener can hear fully and refuse easily. That
+    last one is why this is its own entry rather than a corner of 27.
 
     **The mechanism changed: set it up in the live session, and write nothing anywhere.**
 
@@ -3260,10 +3280,15 @@ thing to pick up once the adapters land, not merely the next number.
     established does not care which files bash read on the way in.
 
     **Still owned, unchanged: everything about the far end itself** — that no terminal can
-    identify a shell it did not name, that whether OSC 133 markers actually cross an SSH
-    connection is expected and unmeasured, and that a setup which claims to have worked must be
+    identify a shell it did not name, and that a setup which claims to have worked must be
     *verified* rather than trusted. That last one survives the change of mechanism completely:
     the marker has to come back before Acter tells anybody the session is integrated.
+
+    **One thing this entry used to own is settled: OSC 133 markers do cross an SSH connection.**
+    Measured 2026-08-29 in B9.5 against `docker/ssh` — Debian bookworm, bash 5.2.15, OpenSSH 9.2
+    — with the whole pipeline a window has rather than bytes on a wire: the remote prompt arrives
+    delimited and `(exit 7)` is announced as having failed with 7, which needs the far end's
+    `D;7` to have survived the trip.
 
     **Recognising the shell is the far end's job, and it happens once, at install.** No
     terminal identifies a shell it did not name — kitty matches a basename, VS Code injects

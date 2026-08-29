@@ -24,13 +24,19 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+// `tokio::time::Instant` is the one this file waits on; the pipeline's clock is the real
+// one, so both are in scope and each is named for what it is.
+use std::time::Instant as SystemInstant;
 
 use acter_core::{
-    Announcement, HostKeyAnswer, HostKeyQuestion, HostKeyState, PasswordQuestion, Secret,
-    SshQuestions, Transport,
+    Announcement, Clock, EventSink, ExitCode, HostKeyAnswer, HostKeyQuestion, HostKeyState,
+    PacingConfig, PasswordQuestion, Secret, SessionApi, SessionEvent, SessionService, SshQuestions,
+    Timer, Transport,
 };
+use acter_term::AlacrittyEngine;
 use acter_transports::{KnownHosts, SshTarget, SshTransport};
 use tokio::sync::mpsc::{Receiver, channel};
+use tokio::sync::oneshot;
 use tokio::time::{Instant, timeout};
 
 /// The account whose login shell is `dash`, which is the control for the probe: dash has
@@ -773,6 +779,110 @@ async fn the_byte_that_ends_a_bash_session_over_ssh() {
 
 // --- What a freshly connected session says, measured ------------------------------------
 
+/// A real clock, for the two tests that build the whole pipeline rather than watching bytes.
+struct RealClock(SystemInstant);
+
+impl Clock for RealClock {
+    fn now(&self) -> Duration {
+        self.0.elapsed()
+    }
+
+    fn timer(&self, after: Duration) -> Timer {
+        let (fire, fired) = oneshot::channel();
+        tokio::spawn(async move {
+            tokio::time::sleep(after).await;
+            let _ = fire.send(());
+        });
+        Timer::new(fired)
+    }
+}
+
+/// Everything the frontend would have received.
+#[derive(Default)]
+struct Recorder(Mutex<Vec<SessionEvent>>);
+
+impl EventSink for Recorder {
+    fn send(&self, event: SessionEvent) {
+        self.0.lock().unwrap().push(event);
+    }
+}
+
+impl Recorder {
+    fn events(&self) -> Vec<SessionEvent> {
+        self.0.lock().unwrap().clone()
+    }
+}
+
+/// The whole pipeline a window has, over a real SSH connection.
+///
+/// **Exactly what the composition root builds for an SSH far end**, so what these tests
+/// assert is what a listener gets rather than what bytes arrived: the transport, a real
+/// terminal engine, the real pacing policy, and `over_ssh`'s shell facts — which since B9.5
+/// carry a setup, and are therefore the thing under measurement here.
+struct Pipeline {
+    session: SessionService,
+    recorder: Arc<Recorder>,
+}
+
+impl Pipeline {
+    async fn connect(scratch: &Scratch) -> Self {
+        let target = SshTarget {
+            host: HOST.to_owned(),
+            port: PORT,
+            user: USER.to_owned(),
+        };
+        let transport = SshTransport::connect(
+            &target,
+            scratch.empty(),
+            Answers::accepting() as Arc<dyn SshQuestions>,
+            COLUMNS,
+            SCREEN_LINES,
+            acter_transports::probe_patience(),
+        )
+        .await
+        .expect("the rig connects");
+
+        let name = transport.far_end().name();
+        let facts = acter_shells::over_ssh(name.as_deref());
+        let session = SessionService::start(
+            Box::new(transport),
+            Box::new(AlacrittyEngine::new(COLUMNS, SCREEN_LINES)),
+            Arc::new(RealClock(SystemInstant::now())) as Arc<dyn Clock>,
+            PacingConfig::default(),
+            facts,
+        );
+
+        let recorder = Arc::new(Recorder::default());
+        session.attach_session(
+            acter_core::SessionId(1),
+            Arc::clone(&recorder) as Arc<dyn EventSink>,
+        );
+        Self { session, recorder }
+    }
+
+    /// Waits until an event the far end has to produce shows up, or gives up loudly.
+    async fn wait_until(&self, what: &str, mut ready: impl FnMut(&[SessionEvent]) -> bool) {
+        let deadline = Instant::now() + PATIENCE;
+        while Instant::now() < deadline {
+            if ready(&self.recorder.events()) {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        self.print("what the session said before it was given up on");
+        panic!("waited {PATIENCE:?} for {what}");
+    }
+
+    fn print(&self, title: &str) {
+        let seen = self.recorder.events();
+        println!("--- {title} ---");
+        for event in &seen {
+            println!("  {event:?}");
+        }
+        println!("--- {} events in total ---", seen.len());
+    }
+}
+
 /// **Where the far end's first prompt goes**, measured rather than reasoned about.
 ///
 /// Reported by the user on 2026-08-26: "on connection, I heard no prompt." The answer that
@@ -780,97 +890,29 @@ async fn the_byte_that_ends_a_bash_session_over_ssh() {
 /// for *output* and its prompt is still heard, so "unintegrated" plainly does not mean
 /// silent across this product.
 ///
-/// This builds the whole pipeline the window has — the transport, a real terminal engine,
-/// the real pacing policy and the shell facts an SSH far end actually gets — and records
-/// every `SessionEvent` the frontend would have received in the seconds after connecting.
-/// The output is the point, so run with `--nocapture`.
+/// **What it measured, and what it measures now** (spec B6.2, then B9.5). Filed as roadmap
+/// 27.4, this recorded two events and no output at all: `Connected`, then
+/// `IntegrationUnavailable`, with the far end's prompt discarded inside the pump for having
+/// fallen in no region. B6.2 made it record the login banner and the prompt, in a block
+/// nobody submitted, read aloud.
 ///
-/// **What it measured, and what it measures now** (spec B6.2). Filed as roadmap 27.4, this
-/// recorded two events and no output at all: `Connected`, then `IntegrationUnavailable`,
-/// with the far end's prompt discarded inside the pump for having fallen in no region. It
-/// now records the login banner and the prompt, in a block nobody submitted, read aloud,
-/// and *then* the flag — so the assertion below is the fix rather than a smoke test.
+/// **B9.5 removed the second half of that**: an SSH bash is set up now, so the sentence
+/// saying it is not integrated is gone — which is the subject of
+/// [`the_markers_a_session_sets_itself_up_with_cross_an_ssh_connection`] below. The prompt
+/// still has to reach a listener before any of that happens, and that is what is asserted
+/// here.
 #[tokio::test(flavor = "multi_thread")]
 #[ignore]
 async fn what_a_session_says_when_it_has_just_connected() {
-    use std::time::Instant;
-
-    use acter_core::{
-        Clock, EventSink, PacingConfig, SessionApi, SessionEvent, SessionService, Timer,
-    };
-    use acter_term::AlacrittyEngine;
-    use tokio::sync::oneshot;
-
-    struct RealClock(Instant);
-    impl Clock for RealClock {
-        fn now(&self) -> Duration {
-            self.0.elapsed()
-        }
-        fn timer(&self, after: Duration) -> Timer {
-            let (fire, fired) = oneshot::channel();
-            tokio::spawn(async move {
-                tokio::time::sleep(after).await;
-                let _ = fire.send(());
-            });
-            Timer::new(fired)
-        }
-    }
-
-    /// Everything the frontend would have received.
-    #[derive(Default)]
-    struct Recorder(Mutex<Vec<SessionEvent>>);
-    impl EventSink for Recorder {
-        fn send(&self, event: SessionEvent) {
-            self.0.lock().unwrap().push(event);
-        }
-    }
-
     let scratch = Scratch::new();
-    let answers = Answers::accepting();
-    let target = SshTarget {
-        host: HOST.to_owned(),
-        port: PORT,
-        user: USER.to_owned(),
-    };
-    let transport = SshTransport::connect(
-        &target,
-        scratch.empty(),
-        answers as Arc<dyn SshQuestions>,
-        COLUMNS,
-        SCREEN_LINES,
-        acter_transports::probe_patience(),
-    )
-    .await
-    .expect("the rig connects");
+    let pipeline = Pipeline::connect(&scratch).await;
 
-    // Exactly what the composition root builds for an SSH far end.
-    let name = transport.far_end().name();
-    let facts = acter_shells::over_ssh(name.as_deref());
-    let session = SessionService::start(
-        Box::new(transport),
-        Box::new(AlacrittyEngine::new(COLUMNS, SCREEN_LINES)),
-        Arc::new(RealClock(Instant::now())) as Arc<dyn Clock>,
-        PacingConfig::default(),
-        facts,
-    );
-
-    let recorder = Arc::new(Recorder::default());
-    session.attach_session(
-        acter_core::SessionId(1),
-        Arc::clone(&recorder) as Arc<dyn EventSink>,
-    );
-
-    // Long enough for the prompt to arrive, be rendered, fall quiet, and for the startup
-    // grace period to expire — which is when an unintegrated session reports itself.
+    // Long enough for the prompt to arrive, be rendered and fall quiet — and, since B9.5,
+    // for the setup to have run and the marked prompt to have been drawn behind it.
     tokio::time::sleep(Duration::from_secs(6)).await;
+    pipeline.print("what a freshly connected SSH session said, in order");
 
-    let seen = recorder.0.lock().unwrap().clone();
-    println!("--- what a freshly connected SSH session said, in order ---");
-    for event in &seen {
-        println!("  {event:?}");
-    }
-    println!("--- {} events in total ---", seen.len());
-
+    let seen = pipeline.recorder.events();
     let spoken: String = seen
         .iter()
         .filter_map(|event| match event {
@@ -883,10 +925,6 @@ async fn what_a_session_says_when_it_has_just_connected() {
         "the prompt the far end had already drawn never reached the frontend: {seen:?}"
     );
     assert!(
-        seen.contains(&SessionEvent::IntegrationUnavailable),
-        "and the session still says it has no shell integration: {seen:?}"
-    );
-    assert!(
         seen.iter().any(|event| matches!(
             event,
             SessionEvent::Announce {
@@ -895,5 +933,65 @@ async fn what_a_session_says_when_it_has_just_connected() {
             } if text.contains('$')
         )),
         "and a listener hears it rather than having to go looking: {seen:?}"
+    );
+}
+
+/// **Whether OSC 133 markers cross an SSH connection, measured** — the one question spec
+/// B9.5 listed and could not answer on the machine it was implemented on, because the engine
+/// this rig needs was not running there.
+///
+/// It matters because B9.5's decision 2 is that one mechanism serves every transport: the
+/// line that sets a distribution up is the line that sets a host on the other side of the
+/// world up, since Acter controls no launch arguments over SSH and never did. That decision
+/// was taken on the reasoning that markers are ordinary bytes in the stream and an SSH
+/// channel is a byte pipe — which is a good argument and not a measurement.
+///
+/// **Measured 2026-08-29** against `docker/ssh` (Debian bookworm, bash 5.2.15, OpenSSH 9.2)
+/// from Windows 11, over a real `sshd` on a real channel: they cross, whole and in both
+/// directions of the cycle. The far end's prompt arrives delimited — a `PromptDrawn` is an
+/// `A`..`B` pair and nothing else produces one — and a command that exits 7 is announced as
+/// having failed with 7, which needs the `D` the far end wrote to have survived the trip.
+/// So the answer is yes for the two markers a listener actually hears.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore]
+async fn the_markers_a_session_sets_itself_up_with_cross_an_ssh_connection() {
+    let scratch = Scratch::new();
+    let pipeline = Pipeline::connect(&scratch).await;
+
+    // The setup goes out on the far end's first drawn line and the shell re-draws its prompt
+    // behind it; the marked prompt is the first evidence the far end accepted the line.
+    pipeline
+        .wait_until("the far end to draw a marked prompt", |seen| {
+            seen.iter()
+                .any(|event| matches!(event, SessionEvent::PromptDrawn { .. }))
+        })
+        .await;
+
+    // A command that genuinely fails, which no echo can forge and no assumption can supply:
+    // the verdict can only come from a `D;7` the far end wrote and the channel carried.
+    pipeline
+        .session
+        .submit_command(acter_core::SessionId(1), "(exit 7)");
+    pipeline
+        .wait_until("a verdict for a command that failed", |seen| {
+            seen.iter().any(|event| {
+                matches!(
+                    event,
+                    SessionEvent::Announce {
+                        announcement: Announcement::Failed {
+                            exit_code: ExitCode(7)
+                        },
+                        ..
+                    }
+                )
+            })
+        })
+        .await;
+    pipeline.print("what an SSH session said once it had set itself up");
+
+    let seen = pipeline.recorder.events();
+    assert!(
+        !seen.contains(&SessionEvent::IntegrationUnavailable),
+        "a session that marks its boundaries never says it has none: {seen:?}"
     );
 }

@@ -22,6 +22,15 @@
 //! answer, and it decides the marker claim: a far end that is being set up claims what its
 //! line earns, and one that is not stays optimistic so the grace period can contradict it.
 //!
+//! **And the markers cross, measured rather than argued.** Decision 2 was taken on the
+//! reasoning that markers are ordinary bytes and an SSH channel is a byte pipe, which is a
+//! good argument and is not a measurement. Measured 2026-08-29 against `docker/ssh` — Debian
+//! bookworm, bash 5.2.15, OpenSSH 9.2 — the remote shell accepted the same line unchanged and
+//! the whole cycle came back: the prompt arrives delimited and a command that exits 7 is
+//! announced as having failed with 7, which needs the far end's `D;7` to have survived the
+//! trip (`tests/ssh_rig.rs`,
+//! `the_markers_a_session_sets_itself_up_with_cross_an_ssh_connection`).
+//!
 //! **What is claimed is measured, and the scope of the measurement is the transport too.**
 //! `bash` ends on `0x04` here because B9 sent that byte down a real SSH connection and
 //! watched the session close (`tests/ssh_rig.rs`,
