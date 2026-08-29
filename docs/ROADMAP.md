@@ -2690,6 +2690,9 @@ thing to pick up once the adapters land, not merely the next number.
     `sh`'s line is 93 characters and busybox's prompt is 30, so it wraps at 80 columns and
     busybox redraws it in an order the echo matcher cannot recognise. bash in the same pass is
     clean and its line is five times longer, so what differs is the shell's line editor.
+    **Why it differs is measured in 23.14**: busybox counts the sixteen bytes of the two
+    markers as sixteen columns, so it wraps sixteen characters before the real margin and
+    redraws around a row that is not there.
 
     **Cause two: a far end that draws a banner before its prompt.** Found in the SSH rig,
     `ssh_rig.rs`, `the_markers_a_session_sets_itself_up_with_cross_an_ssh_connection`, against
@@ -2706,7 +2709,9 @@ thing to pick up once the adapters land, not merely the next number.
     the markers arrive, the grace period never contradicts any of it, and the user's own
     commands afterwards are clean in the same run.
 
-    **The candidate fix, and it is one line of policy rather than a better matcher.** From the
+    **The candidate fix covers this entry and not 23.14**, which matters: quieting the window
+    stops Acter's own command being read aloud, and does nothing about a user's own long line
+    being redrawn wrongly. **It is one line of policy rather than a better matcher.** From the
     instant Acter writes its own line to the instant that line's block closes, the session is
     Acter talking to itself, and nothing in it is the user's to hear. `ReadMode::Quiet` already
     means exactly "accumulates silently in the buffer" and is already shipped, driven today by
@@ -2721,6 +2726,43 @@ thing to pick up once the adapters land, not merely the next number.
 
     Shortening the setup line is not the fix and should not be attempted as one: the prompt's
     width is the user's, so any length can wrap, and a banner has no length at all to shorten.
+
+23.14. In busybox `sh`, the markers cost the line editor sixteen columns it does not have.
+    Spec: none yet → specify first. **Measured 2026-08-29**, against `docker-desktop` running
+    busybox 1.37.0 under WSL 2.5.7.0, on a pseudoconsole fixed at 80 columns by `stty`.
+
+    **What was measured.** A prompt four visible columns wide, characters typed into it with
+    no Enter so that the only thing writing to the terminal is the line editor, and the
+    redraw watched for the moment it starts believing the line occupies two rows. Unmarked,
+    that moment is 76 characters: 4 + 76 is 80, and busybox begins a second row at 80.
+    Wrapped in the two markers B9.5 ships for `sh`, it is 60: 4 + 16 + 60. So the editor is
+    counting **all sixteen bytes of the two markers as sixteen printable columns** — each
+    marker is `ESC ] 1 3 3 ; A BEL`, eight bytes, and not one of them is skipped.
+
+    **bash is the control and it is clean.** The same measurement against bash 5.2.21, with
+    the markers wrapped in `\[` and `\]` the way the setup wraps them, moves the cursor
+    right by exactly four columns on redraw — the four the prompt actually occupies. That is
+    readline's non-printing brackets doing precisely their job, and it is why this entry is
+    about `sh` alone.
+
+    **What a user meets.** The drawn prompt is correct — that was B9.5's amendment 4, and the
+    bell terminator fixed it. What is wrong is arithmetic the user never sees until a line
+    gets long: sixteen characters before the real right margin the editor starts a row that
+    is not there, and on redraw it emits a cursor-up for a row it never used. Every line the
+    user types in that session is affected, for the whole session.
+
+    **It is very probably the cause of 23.12's busybox half**, and that changes what fixing
+    23.12 buys. Quieting the window Acter talks to itself in stops Acter's *own* command being
+    read aloud; it does nothing about a user's own long command line being redrawn wrongly
+    sixteen columns early. The two entries are not alternatives.
+
+    **What this entry has to decide is what `sh` gets**, and none of the three is obviously
+    right. Ship it as measured, on the grounds that a heading for every command is worth
+    sixteen columns to a listener who mostly types short lines. Send only `A` and halve the
+    cost to eight, losing the command-line boundary with it. Or send nothing for `sh` and let
+    the session be honestly unintegrated, which is what it was before B9.5. The question is a
+    user's rather than an implementer's, and it is the one thing here that should not be
+    settled by whoever picks the entry up.
 
 23.13. The connection sentence is sometimes not announced. Spec: none yet → specify first.
     **Found in B9.5's NVDA pass, 2026-08-29**, and **not caused by it**: the announcement path

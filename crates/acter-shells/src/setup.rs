@@ -189,6 +189,20 @@ pub(crate) const BASH: &str = concat!(
 /// readline's, and what a shell does to a backslash is its own business. Every line of a
 /// setup costs its own measurement.
 ///
+/// **And the cost this line still carries, measured rather than suspected: sixteen columns.**
+/// `\[` and `\]` are how a shell is told that what follows occupies no width, and busybox has
+/// no equivalent — so the bytes that make the prompt *draw* correctly are still counted by its
+/// line editor. Measured 2026-08-29 on a pseudoconsole fixed at 80 columns, typing into a
+/// prompt four visible columns wide: unmarked, busybox begins a second row at 76 characters
+/// (4 + 76 = 80); wrapped in these two markers, at 60 (4 + 16 + 60). Sixteen bytes, sixteen
+/// columns, none of them skipped. bash under the same measurement moves the cursor right by
+/// exactly the four columns its prompt occupies, which is `\[` and `\]` doing their job.
+///
+/// The consequence is a user's rather than a listener's — a long command line is redrawn
+/// sixteen columns before the real margin, around a row that is not there — and **what `sh`
+/// should therefore ship is roadmap 23.14's to decide**, because it is a trade a user makes
+/// and not one an implementer may make for them.
+///
 /// It prints its own `C` for [`BASH`]'s reason and for a slightly different consequence: with
 /// no `D` in this shell the block opened by the echo is closed by the next prompt's `B`, and
 /// the tracker only closes a block it knows is open.
