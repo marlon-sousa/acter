@@ -2249,8 +2249,15 @@ mod the_session_is_set_up_after_it_is_established {
             .line;
         session.set_up(&line).await;
 
-        // Sixty characters, which no prompt this distribution draws can keep under the margin
-        // once sixteen phantom columns are added to it.
+        // **Forty-five characters: past the margin busybox used to think it had, inside the one
+        // it really has.** This is the case the non-printing brackets fix — before them the
+        // heading was cut here, and after them it is whole.
+        let fits = "acter-no-such-command-0123456789a123456789";
+        let inside = session.submit(fits);
+        session.wsl_until(inside, "not found").await;
+
+        // **Fifty-nine, which genuinely wraps**: this distribution's prompt is 31 columns, so
+        // 31 + 59 passes 80 whatever anyone believes about the markers.
         let long = "acter-no-such-command-0123456789a123456789b123456789c123456";
         let command = session.submit(long);
         tokio::time::sleep(Duration::from_secs(5)).await;
@@ -2259,8 +2266,20 @@ mod the_session_is_set_up_after_it_is_established {
         for event in session.events.0.lock().expect("recorder poisoned").iter() {
             println!("  {event:?}");
         }
-        println!("--- heading: {:?} ---", session.heading_of(command));
+        println!(
+            "--- heading, fits in the row: {:?} ---",
+            session.heading_of(inside)
+        );
+        println!(
+            "--- heading, genuinely wraps: {:?} ---",
+            session.heading_of(command)
+        );
 
+        assert_eq!(
+            session.heading_of(inside),
+            Some(Some(fits.to_owned())),
+            "a command that fits the real row is headed in full"
+        );
         assert!(
             session.rendered().contains("not found"),
             "a listener is told the command does not exist: {:?}",

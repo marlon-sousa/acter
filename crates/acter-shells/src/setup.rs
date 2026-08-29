@@ -198,17 +198,34 @@ pub(crate) const BASH: &str = concat!(
 /// columns, none of them skipped. bash under the same measurement moves the cursor right by
 /// exactly the four columns its prompt occupies, which is `\[` and `\]` doing their job.
 ///
-/// The consequence is a user's rather than a listener's — a long command line is redrawn
-/// sixteen columns before the real margin, around a row that is not there — and **what `sh`
-/// should therefore ship is roadmap 23.14's to decide**, because it is a trade a user makes
-/// and not one an implementer may make for them.
+/// **And busybox does have an equivalent, which is why the line below is not the simple one.**
+/// Measured 2026-08-29, the same boundary at 60, 68 and 76 characters: a prompt wrapped in
+/// `\[` and `\]` puts the boundary back at **76, exactly where the unmarked control is**, and
+/// draws byte-identically — the brackets are consumed by busybox's own prompt parser and never
+/// reach the screen. So the sixteen columns are not a property of the markers; they are the
+/// cost of not telling this shell about them.
+///
+/// **But `\[` may not simply be added, because dash is not busybox.** The same measurement
+/// against dash 0.5.12 on Ubuntu draws them literally: `\[ESC]133;A BEL\]rc$ `, brackets and
+/// all, in the user's own prompt. dash has no line editor to miscount anything, so it needs no
+/// brackets and must not be given them; busybox needs them and honours them; and both answer to
+/// the name `sh`, which is why the name cannot decide it.
+///
+/// **`BB_ASH_VERSION` decides it, at runtime, inside the line itself.** Measured the same day:
+/// busybox ash sets it (`1.37.0` on `docker-desktop`), dash leaves it empty. So the setup asks
+/// the shell which one it is and wraps accordingly — one line, one round trip, and no guess
+/// from a name that two different shells share.
 ///
 /// It prints its own `C` for [`BASH`]'s reason and for a slightly different consequence: with
 /// no `D` in this shell the block opened by the echo is closed by the next prompt's `B`, and
 /// the tracker only closes a block it knows is open.
 pub(crate) const SH: &str = concat!(
     "printf '\\033]133;C\\007'; ",
-    "PS1=\"$(printf '\\033]133;A\\007')$PS1$(printf '\\033]133;B\\007')\""
+    "if [ -n \"$BB_ASH_VERSION\" ]; then ",
+    "PS1=\"\\[$(printf '\\033]133;A\\007')\\]$PS1\\[$(printf '\\033]133;B\\007')\\]\"; ",
+    "else ",
+    "PS1=\"$(printf '\\033]133;A\\007')$PS1$(printf '\\033]133;B\\007')\"; ",
+    "fi"
 );
 
 /// What Acter runs inside a session at this far end, by the name the far end gave.
@@ -395,13 +412,40 @@ mod tests {
     }
 
     /// **`sh` is its own program and not bash's with a substitution** (spec B9.5,
-    /// decision 8). `\[` and `\]` are readline's and dash has no readline: it would draw them
-    /// into the prompt as literal characters, in front of somebody who cannot see that they
-    /// are there.
+    /// decision 8), and it is now two programs in one line because two shells answer to that
+    /// name and they disagree about `\[`.
+    ///
+    /// **The branch dash takes carries no brackets**, which is the assertion this test was
+    /// written for and still is: measured 2026-08-29, dash draws them into the prompt as
+    /// literal characters, in front of somebody who cannot see that they are there. **The
+    /// branch busybox takes carries them**, because measured the same day busybox honours them
+    /// and without them its line editor counts sixteen bytes it cannot see (roadmap 23.14).
     #[test]
-    fn the_sh_program_carries_none_of_readlines_non_printing_brackets() {
-        assert!(!SH.contains(r"\["), "dash would print this literally: {SH}");
-        assert!(!SH.contains(r"\]"), "and this: {SH}");
+    fn only_the_branch_for_a_shell_that_honours_them_carries_the_non_printing_brackets() {
+        let (busybox, dash) = SH.split_once("else ").expect("the line branches");
+
+        assert!(
+            busybox.contains(r"\[$(printf '\033]133;A\007')\]"),
+            "busybox is told the marker takes no columns: {busybox}"
+        );
+        assert!(
+            !dash.contains(r"\["),
+            "and dash, which would print it literally, is not: {dash}"
+        );
+        assert!(!dash.contains(r"\]"), "nor this: {dash}");
+    }
+
+    /// **The shell is asked which it is rather than guessed at from its name**, because
+    /// `/bin/sh` is busybox on one distribution and dash on the next and the probe answers
+    /// `sh` for both. Measured 2026-08-29: busybox ash sets `BB_ASH_VERSION` (`1.37.0` on
+    /// `docker-desktop`), dash leaves it empty.
+    #[test]
+    fn the_sh_program_asks_the_shell_which_shell_it_is() {
+        assert!(
+            SH.contains(r#"if [ -n "$BB_ASH_VERSION" ]; then "#),
+            "one round trip, no guess from a shared name: {SH}"
+        );
+        assert!(SH.ends_with("fi"), "and the branch is closed: {SH}");
     }
 
     /// `sh` marks where the prompt begins and where the command line does, and nothing else —
