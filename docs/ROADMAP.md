@@ -2563,6 +2563,89 @@ thing to pick up once the adapters land, not merely the next number.
     sentence that is withheld until the session has been quiet for a while — the last of
     which is the only one that costs nothing on a fast machine.
 
+23.11. The WSL injection can be beaten by an ordinary dotfile, and three of the four ways
+    are silent. Spec: none yet → specify first, together with 27.1, because the two share a
+    mechanism. **Raised by the user 2026-08-29**, reading B5.5's account of why bash under WSL
+    is integrated on a machine that installed nothing: *"a .bashrc might override completely
+    this, or add or edit it, so we are not guaranteed here."*
+
+    They were right, and the measurement found more than the objection did.
+
+    **What was measured, and how.** Real interactive bash on a pseudoconsole inside Ubuntu
+    24.04 (WSL 2.5.7.0), driven through `script -qec`, with the actual `PROMPT_COMMAND` string
+    read out of `injection.rs` rather than retyped, and a per-scenario rcfile that proves it
+    was sourced. Each run submitted one command that succeeds and one that exits 7, so a wrong
+    exit code is visible rather than inferred. Seven scenarios, 2026-08-29.
+
+    **The one failure the code documents behaves exactly as documented.** A `.bashrc` that
+    assigns `PROMPT_COMMAND` itself produced **no markers at all**. The grace period fires, the
+    listener hears the unintegrated sentence, and nothing is claimed that is not true. That is
+    B5.3 decision 3 working.
+
+    **Three more failures exist, none of them documented, and none of them detected**, because
+    all three keep markers flowing — so `IntegrationUnavailable` never fires and nothing tells
+    the listener anything is wrong:
+
+    - **A hook appended after ours steals the `C` marker.** `PROMPT_COMMAND="$PROMPT_COMMAND;
+      mine"` moved the emitted order from `ABCD` to `CABD`: the trap Acter arms as its last
+      statement fires on *their* hook, which is the next thing to run, and the `__acter_seen`
+      guard then suppresses the marker for the command the user actually typed. The block opens
+      before the prompt is drawn instead of when the command starts. This is precisely the trap
+      `injection.rs` already documents — "a trap armed inside a function fires for the rest of
+      that function" — which Acter fixed for its own statements by arming last, and which
+      anything appended after Acter inherits whole.
+    - **A hook that rebuilds `PS1` kills `A` and `B` permanently.** Result `CDCDC`: the prompt
+      boundaries are simply gone. `__acter_marked` is a one-shot boolean, so once anything
+      rebuilds `PS1` after the first prompt, Acter never wraps it again. This is the **most
+      common prompt pattern there is** — starship, conda, virtualenv and `__git_ps1` all
+      rebuild `PS1` from a `PROMPT_COMMAND` hook.
+    - **A hook prepended before ours reports the wrong exit code.** `PROMPT_COMMAND="mine;
+      $PROMPT_COMMAND"` announced **`D;0`** for a command that exited **7**. `__acter_status=$?`
+      is the first statement of *our string* but not of the *variable* once somebody prepends,
+      so it captures their hook's status. **Acter says out loud that a failed command
+      succeeded.**
+
+    (A `.bashrc` that installs its own `DEBUG` trap does not hurt Acter — ours replaces theirs,
+    since `PROMPT_COMMAND` runs after `.bashrc`. Their tooling breaks silently instead, which
+    is worth saying somewhere a user can find it.)
+
+    **The third one is the serious defect**, and it is a different kind from the others. Losing
+    integration is a degradation the product already knows how to say out loud. Reporting a
+    failure as a success is Acter asserting something false about a command the user ran, with
+    markers flowing so confidently that nothing in the system doubts it.
+
+    **What this narrows.** `injection.rs`'s "What is not claimed" section names only the
+    overwrite, and B5.3 decision 3 says such a session "degrades quietly". Both are true and
+    both are incomplete: quiet degradation is the *best* case, not the general one. The
+    amendment to that spec and that module doc rides in whichever PR fixes this, per CLAUDE.md,
+    rather than on main ahead of it.
+
+    **The fix is 27.1's mechanism, which is why these are specified together.** Going *last*
+    and wrapping the user's own `PROMPT_COMMAND` in a sandwich — Acter's own code before their
+    hooks and again after them — was measured to defeat all of it: against a hostile rcfile
+    that assigns `PROMPT_COMMAND` for itself, where today's launch-time injection produces
+    **no markers**, the sandwich produced `ABCDABCDABC` with exit codes `0` and `7`. Before
+    their hooks is where `$?` is still the user's command's status; after them is where a
+    rebuilt `PS1` can be re-wrapped and where the `DEBUG` trap can be armed with nothing left
+    to steal its first firing. Going first or last alone cannot do both. And the `PS1` guard
+    should become a test of `PS1`'s own contents rather than a boolean, so a prompt rebuilt at
+    any later moment is wrapped again on the next cycle.
+
+    **So WSL gains the checkbox and the dialog too**, which the user said plainly when they
+    proposed them: an "integrate session" preference, true by default, on WSL connections as
+    well as SSH ones, and the same explanation before the setup command runs. This entry is not
+    "fix the injection and leave the interface alone" — a session Acter sets up at runtime
+    behaves visibly differently from one it launches pre-armed, and a listener is entitled to
+    know that before it happens. 27.1 carries the design of both; this entry carries what WSL
+    specifically has to stop doing.
+
+    **What it would let WSL stop doing is the whole launch-time injection.** `ENVIRONMENT`,
+    `WSLENV` and the `PROMPT_COMMAND` variable crossing the kernel boundary all exist to get a
+    program in before `.bashrc` runs, and going last needs none of them — which also removes
+    the one thing `Wsl::launch` does that is not simply starting the client. That is a
+    simplification, not only a fix, and it is worth stating because it is the reason this is a
+    revision of the strategy rather than a patch to the program.
+
 24. **Done** — B6.1, correlation that cannot drift. Spec:
     [b6.1-correlation-that-cannot-drift.md](specs/b6.1-correlation-that-cannot-drift.md).
     **An iteration entry from B6's manual NVDA pass**, not a planned step. B6's decision 3
@@ -2873,7 +2956,11 @@ thing to pick up once the adapters land, not merely the next number.
     session it is**. Whether the region grows, or whether that belongs somewhere else
     entirely, is what this entry decides.
 
-27.1. B9.5, offer to integrate the far end. Spec: none yet → specify when 27 is Done.
+27.1. B9.5, offer to integrate the far end. Spec: none yet → specify when 27 is Done, and
+    **specify it together with 23.11**, which is the same mechanism arriving from the other
+    side. **Substantially revised 2026-08-29**, on the user's proposal — see "The mechanism
+    changed" below. The paragraph that follows is what the entry said before, kept because the
+    revision is a change of *means* and not of ends.
 
     A button that writes the integration snippet into the remote account's shell startup,
     with consent, so the *next* connection to that host has blocks and exit codes — the
@@ -2884,6 +2971,189 @@ thing to pick up once the adapters land, not merely the next number.
     for in a way a listener can hear fully and refuse easily. That last one is why this is
     its own entry rather than a corner of 27.
 
+    **The mechanism changed: set it up in the live session, and write nothing anywhere.**
+
+    **Proposed by the user 2026-08-29**, out of 23.11's measurements: *"I would prefer that we
+    offer to issue an export on behalf of the user, and let this preference ticked when
+    connections are saved, and because we will do an export, it always runs after the files."*
+
+    **The premise was measured and holds.** Bash re-reads `PROMPT_COMMAND` before *every*
+    prompt; it is not a startup-time-only variable. In a session with **nothing** injected at
+    launch, two commands produced zero markers, the session then assigned `PROMPT_COMMAND`
+    itself, and every prompt after that carried the full cycle — `ABCDABCDABC`, with a command
+    that exited 7 correctly reported as `D;7`. Zero markers before the assignment, eleven
+    after. (It needs no `export`: `PROMPT_COMMAND` is read by bash in the current shell, and
+    exporting matters only for child processes. Measured without one.)
+
+    **What that buys is the ordering, and the ordering is the whole problem.** Every failure in
+    23.11 exists because Acter goes first and every startup file gets the last word. A session
+    Acter sets up *after* the files have finished has the last word instead — and can wrap what
+    it finds rather than being wrapped.
+
+    **And it is one mechanism for every shell and every transport.** It needs no launch
+    arguments, so it works over SSH exactly as it works over WSL — which is the first time
+    those two would share a strategy rather than having one each. It extends to zsh and fish by
+    knowing hook names (`precmd`, `fish_prompt`) rather than startup-file conventions, which is
+    what B5.5 made urgent by establishing that the far end may not be bash.
+
+    **It also gives back the property this entry had given up.** B5.3 decision 2 fought for
+    "nothing is written into the distribution" — no snippet, no dotfile, nothing left behind on
+    a machine the user has to live in after Acter closes — and the original shape of this entry
+    traded it away for the remote case. Setting the session up at runtime keeps it. The consent
+    sentence gets correspondingly smaller: "set this session up so you hear blocks and exit
+    codes?" is a different and much easier question from "may I edit a file in your account?",
+    and it is a question about *this session* rather than about the machine.
+
+    **The alternative was measured too, and rejected on reach rather than on merit.**
+    `bash --rcfile <ours>`, where our file sources the user's rc first and then applies the
+    setup, produced the full cycle against the same hostile rcfile — and it puts nothing in the
+    terminal buffer at all. But it is bash-specific (zsh needs `ZDOTDIR`, fish something else),
+    it changes login-shell startup semantics, and it does not exist over SSH, where Acter
+    controls no launch arguments. One mechanism that reaches everywhere beats a cleaner one
+    that reaches half the product.
+
+    **What the runtime route costs, and it is the thing to design.** The setup line is a
+    command nobody typed, appearing in a buffer a screen reader reads — B4.9's whole subject.
+    It is Acter's own submission, so the machinery to know that already exists (B6.1 tracks
+    submitted ids and their echoes), and suppressing its heading and block is the obvious
+    shape. But "obvious shape" is not a measurement, and getting it wrong means a listener
+    hears a command they did not type at the very start of every session. That is what the
+    spec has to settle, and it replaces "how consent to modify somebody's account is asked
+    for" as the hard question of this entry.
+
+    **The known limit, named by the user when they proposed it**: somebody who re-sources
+    `~/.bashrc` afterwards clobbers us, and nothing can foresee that. It degrades the honest
+    way — markers stop, the grace period expires, the listener is told — which is the failure
+    mode this product already handles well, and is the reason the limit is acceptable rather
+    than merely unavoidable.
+
+    **What the user asked for next, and it is two stored things rather than one.**
+
+    **Added by the user 2026-08-29**, immediately after proposing the mechanism: an
+    **"integrate session" checkbox, true by default**, carried by every connection that can be
+    integrated — **WSL included, not only SSH** — and a dialog on connecting that says an
+    integrated connection runs a command in the session once the connection succeeds, with a
+    **"do not show this again"** on the dialog itself.
+
+    **True by default is the decision, and it is the right one.** It is what makes the ordinary
+    user hear blocks and exit codes without knowing the words "shell integration" — A13's whole
+    subject — and it keeps this product's rule that nothing is a gate. What stops "on by
+    default" from being a surprise is the dialog, which is why the two arrive together and
+    neither is optional.
+
+    **Two things are stored, and they are not the same thing.** The checkbox is a property of a
+    *connection* and belongs to the saved profile (B8's). The "do not show again" is a property
+    of the *person* and belongs to their settings: somebody who has understood the explanation
+    once has understood it for every host, and tying it to a profile would re-explain the same
+    sentence for each new one. Storing them together is the mistake to avoid.
+
+    **The dialog is a third question on a seam that already exists.** `SshQuestions` /
+    `ConnectQuestions` already blocks a connection mid-flight to ask a person something and
+    read their answer — an unknown host key (B9, decision 3) and an unverified file (B5.7,
+    decision 6) are the two it carries today, and both established that the safe answer is the
+    default and that refusing is a decision rather than a failure. This is the same shape with
+    a friendlier subject, and it arrives at the same moment: **after** the connection succeeds
+    and **before** the setup command is sent, which is exactly the window the port exists for.
+    That the mechanism is already built and already measured is a strong argument for this
+    entry being small.
+
+    **What the dialog has to say, in plain language.** Not "shell integration" — A13 removed
+    that phrase from what a listener hears because it is project vocabulary a user does not
+    have. It has to say what they get (headings for each command, and being told when one
+    fails), what Acter will do to get it (run one setup command in the session, once, now),
+    and what it will not do (change any file in the distribution or on the host). The refusal
+    has to be as reachable as the acceptance, and unchecking the box has to be reachable
+    without the dialog, from the Connect dialog itself.
+
+    **The preference belongs to the saved profile**, which is B8's. Offering once per
+    connection and remembering the answer is what makes this a setting rather than a prompt
+    people learn to dismiss.
+
+    **The whole flow, as the user stated it.**
+
+    **Stated by the user 2026-08-29**, and it is worth quoting because it is the entry in one
+    sentence: *"If checkbox is checked, we wait connection establish, discover what is our
+    shell and set whatever it requires, zsh, bash, sh ... or warn that we don't support the
+    current shell, and this is all."*
+
+    Five steps, in order: the connection succeeds; Acter asks what shell it got; the checkbox
+    says whether to proceed; the person is told what is about to happen unless they have said
+    not to tell them again; the setup for *that shell* runs. A far end running something nobody
+    has written a setup for is told so, in a sentence, and the session goes on without one.
+
+    **Half of it is already built, in both transports.** Discovering the shell is B9 decision
+    7's probe over SSH and B5.5's `login_shell` over WSL, and both already answer with a name
+    and already have "nothing answered" as a supported state. This entry inherits that rather
+    than inventing it — which is the second time that probe has paid for itself and the
+    strongest argument that this is a small entry wearing a large description.
+
+    **B5.5's three states become the three sentences this entry says.** Measured: set it up.
+    Known of but unmeasured: say so — "this distribution runs zsh, which Acter cannot set up
+    yet" is the *reason* B5.5 currently only implies. Unrecognised or unanswered: say that
+    instead. B5.5's rule survives intact and is what keeps this honest — **the identity may be
+    guessed from the name; the setup may never be.** Each shell's setup is measured the way
+    B5.3 measured bash's, one small additive entry per shell, and a shell nobody has done that
+    for is named rather than experimented on.
+
+    **`sh` is the one to be careful about, and today's pass found the case.** POSIX `sh` has
+    `PS1` but no prompt hook and no `DEBUG` trap, so `A` and `B` are reachable and `C` and `D`
+    very likely are not. That is not a reason to refuse it: cmd already ships
+    `PromptAndCommandLine` and a listener gets real value from prompt boundaries alone. But it
+    means the answer per shell is a `ShellMarkers` rather than a yes, and the sentence has to
+    be able to say "partly". docker-desktop, measured 2026-08-29 in B5.5's pass, runs `/bin/sh`
+    and is the case sitting on this machine to test it against.
+
+    **The adapter is where the per-shell knowledge goes, and its shape changes.**
+    `ShellAdapter` answers "what environment do I launch this with"; what this needs is "what
+    do I run inside it once it is up". That is a different question about the same knowledge,
+    it is per shell rather than per transport, and putting it there is what lets one WSL bash
+    and one SSH bash share a setup for the first time.
+
+    **A consequence B5.5 will be glad of: the probe leaves the critical path.**
+
+    **B5.5's twelve-second deadline exists only because the injection is part of the launch.**
+    Its amendment 2 says so plainly: what is injected is carried in `ShellLaunch`, so the
+    decision cannot be made after the client has started, so the probe must run first, so a
+    cold distribution's five-to-six-second boot lands in front of the user's first byte.
+
+    Setting the session up *after* it is established removes that constraint entirely. The
+    session starts immediately; the probe runs beside it or after it; nothing about the first
+    byte waits on curiosity. The deadline can shrink to something that only catches a
+    distribution that is genuinely not coming up, and B5.5's amendment 1 — twelve seconds
+    chosen to clear a cold boot — is retired rather than tuned.
+
+    It softens **23.10** too, though it does not close it: a cold WSL start still takes five to
+    six seconds before there is a prompt, and a listener still has to be told that waiting is
+    correct. What changes is that Acter is no longer *adding* to that wait to decide something
+    it could decide later.
+
+    **What the original entry got right, and the one thing the revision retires.**
+
+    The paragraphs below were written for the install-time shape. Two of them survive intact
+    and one does not, and it is worth keeping all three visible rather than deleting the
+    reasoning that led here.
+
+    **Retired: "install time dissolves the identification problem".** It was a good argument —
+    a snippet in `~/.zshrc` runs only when zsh starts, so the file written *is* the
+    identification and nothing guesses. It is retired because there is no install any more, and
+    because the thing it was working around turned out to be solvable directly: B9 decision 7's
+    probe and B5.5's `login_shell` both answer "which shell" out loud, before anything is run,
+    with "nothing answered" as a supported state. The identification is a measurement now
+    rather than a side effect, which is strictly better — it can be *said* to the user, where a
+    side effect could only be acted on.
+
+    **Retired with it: the whole login-versus-non-login trap.** The paragraph below is kept
+    because it cost a real measurement and because it is the sharpest illustration in this
+    document of a failure that looks like success. But it is a fact about *which startup file
+    to write to*, and this entry no longer writes to one. A session set up after it is
+    established does not care which files bash read on the way in.
+
+    **Still owned, unchanged: everything about the far end itself** — that no terminal can
+    identify a shell it did not name, that whether OSC 133 markers actually cross an SSH
+    connection is expected and unmeasured, and that a setup which claims to have worked must be
+    *verified* rather than trusted. That last one survives the change of mechanism completely:
+    the marker has to come back before Acter tells anybody the session is integrated.
+
     **Recognising the shell is the far end's job, and it happens once, at install.** No
     terminal identifies a shell it did not name — kitty matches a basename, VS Code injects
     per configured profile, WezTerm ships `assume_shell` because it cannot tell, and Windows
@@ -2891,7 +3161,8 @@ thing to pick up once the adapters land, not merely the next number.
     `shell` request lets *sshd* choose the program, from the account's passwd entry, so the
     one thing we never learn from asking for a session is which shell we got.
 
-    Install time dissolves that rather than solving it. A snippet in `~/.zshrc` runs only
+    **Superseded, kept for its reasoning.** Install time dissolves that rather than solving
+    it. A snippet in `~/.zshrc` runs only
     when zsh starts, so **the file written is the identification** — the shell answers by
     being itself and nothing guesses. It is also the only point where the answer can be put
     to the user as a sentence they can refuse: "this account's login shell is zsh; write the
@@ -2904,7 +3175,8 @@ thing to pick up once the adapters land, not merely the next number.
     *already* installed, whether Acter put it there or the user's own iTerm2 or VS Code
     setup did.
 
-    **Login versus non-login is the trap, and it was measured on the rig 2026-08-26.** A
+    **Superseded, kept because it cost a measurement. Login versus non-login is the trap, and
+    it was measured on the rig 2026-08-26.** A
     `shell` request starts a *login* shell — `$0` comes back as `-bash` — so bash reads
     `/etc/profile` and then the first that exists of `~/.bash_profile`, `~/.bash_login`,
     `~/.profile`, and does **not** read `~/.bashrc`. On Debian `~/.bashrc` runs only because
@@ -2918,8 +3190,13 @@ thing to pick up once the adapters land, not merely the next number.
     `/etc/profile` sources `/etc/bash.bashrc`, which sets a `PS1` of its own. The only
     visible difference was that the prompt lost its colour — and colour is not spoken. So a
     snippet in the wrong file passes every local test, never runs over SSH, and gives a
-    listener no signal whatsoever. This entry writes to the file bash will actually read and
-    then **verifies the marker comes back**, rather than trusting the write.
+    listener no signal whatsoever. The old shape of this entry answered that by writing to the
+    file bash will actually read and then verifying the marker came back.
+
+    **The verification half is what survives**, and it is the durable lesson: a setup that
+    claims to have worked is not one that has. Whatever Acter runs in the session, it does not
+    say the session is integrated until a marker has actually arrived — which the grace period
+    already does for free, and which is why this entry can be small without being optimistic.
 
 ## Convergence (requires B4, B5 and B6 all Done)
 
