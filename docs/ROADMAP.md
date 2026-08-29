@@ -2371,6 +2371,13 @@ thing to pick up once the adapters land, not merely the next number.
     is what starts the distribution, so the session's own start then finds one that is up.
     That is 23.10's subject rather than this entry's, but the two now share a measurement.
 
+    **The wait is narrated, raised by the user on being shown those numbers** — "we just need
+    to show a nice connecting status, like we do with ssh". A WSL connection now says
+    "Starting Ubuntu 24.04." before it waits, through the same `SshQuestions::tell` that says
+    "Connecting to acter-ssh.", so five seconds of boot are not five seconds of silence. It
+    does **not** close 23.7: that entry is the silence after a session exists and before its
+    shell draws a prompt, which is a different clock measuring a different thing.
+
     **One thing the spec had to correct about this entry, agreed 2026-08-27**: the safety
     property is already in place. `ShellMarkers::Full` is not a claim that a shell is
     integrated — `Plain` and `far_end::over_ssh` make the same optimistic claim, and the
