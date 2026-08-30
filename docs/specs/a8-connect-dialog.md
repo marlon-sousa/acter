@@ -187,7 +187,7 @@ Three findings against the shipped dialog, driven by the user. All three are abo
 moment a choice is made, which is the part of this dialog no unit test was ever going to
 question: the code did exactly what it was told, and what it was told was wrong.
 
-### G. A kind's parameters start on nothing chosen
+### G. A kind's parameters are a list, and it starts with nothing chosen
 
 **Reported: choosing WSL and pressing Enter connected to Ubuntu.** A `<select>` selects its
 first option for you, and a kind is chosen by arrowing onto it — so the distribution that
@@ -195,18 +195,29 @@ happened to be first in the list was being connected to by somebody who had neve
 name. Decision 1 says the panel holds "what that kind needs"; it did not say that what it
 holds must be *answered* before there is anything to connect to.
 
-It says so now. A variants list opens on an option reading **"not chosen"**, Connect is
-unavailable until one is picked, and choosing a different kind rebuilds the panel — so a
-choice can never survive into a kind it was not made for.
+The first fix spelled the empty state as an option reading "not chosen", which worked and
+read badly — a row in a list of things you can connect to that is not a thing you can connect
+to. The user's answer, the same day: *"I tend each time more to replace the combo with a
+list, where you can just have nothing selected."*
+
+**So amendment D is retired.** The panel's variants are a listbox, like the kinds above them,
+and a listbox simply starts with none of its rows selected: nothing marked, no
+`aria-activedescendant`, and the first arrow press is the first choice anybody made. D chose
+a combo box to avoid a second widget with its own arrow handling; the arrow handling turned
+out to be worth *sharing* rather than avoiding, and both lists are one implementation now
+(`adapters/option_list.ts`) — the reasoning `dialog_tab` and `readable_field` already carry.
+
+Connect stays unavailable until a row is chosen, and choosing a different kind rebuilds the
+panel, so a choice can never survive into a kind it was not made for.
 
 **This is decision 4's rule about the SSH form reaching the other shape of the same
 question.** An empty host is a form you have not finished, and the answer is a disabled
 button rather than a round trip; a distribution nobody chose is the same thing wearing a
-combo box. What is new is that Enter *says* what is missing — "choose a distribution first"
-— and the NVDA pass for this PR turned that from a courtesy into the only thing carrying
-the information. Measured 2026-08-30: with nothing chosen, Tab goes from the Help button
-straight to **Cancel**, because `keepTabInside` filters disabled controls out of the cycle
-— deliberately, since focusing one swallows the key. Nobody ever hears "Connect
+different control. What is new is that Enter *says* what is missing — "choose a distribution
+first" — and the NVDA pass for this PR turned that from a courtesy into the only thing
+carrying the information. Measured 2026-08-30: with nothing chosen, Tab goes from the Help
+button straight to **Cancel**, because `keepTabInside` filters disabled controls out of the
+cycle — deliberately, since focusing one swallows the key. Nobody ever hears "Connect
 unavailable". The comment in `connect_dialog.ts` that claimed they did is corrected in this
 PR, and the sentence on Enter is what a listener actually gets.
 

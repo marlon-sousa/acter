@@ -24,6 +24,7 @@
 // opens so a distribution installed while Acter is running appears without a restart.
 
 import { keepTabInside } from './dialog_tab';
+import { OptionList } from './option_list';
 import type { AnnouncerView } from '../ports/announcer_view';
 import type { ConnectApi } from '../ports/connect_api';
 import type { HelpView } from '../ports/help_view';
@@ -31,17 +32,6 @@ import type { Connectable, ProfileId, SetUp } from '../protocol';
 
 /** What the panel says when the chosen kind needs nothing. */
 const NO_OPTIONS = 'no options';
-
-/**
- * What a variants list starts on, and the value that means nothing has been chosen.
- *
- * **Reported by the user on 2026-08-30**: choosing WSL and pressing Enter connected to
- * Ubuntu, because the browser selects the first option of a `<select>` for you. A kind is
- * chosen by arrowing onto it, which nobody does deliberately, so the distribution that came
- * first in the list was being connected to by somebody who had never heard its name. What a
- * combo box says it is on has to be something the person did.
- */
-const NOTHING_CHOSEN = 'not chosen';
 
 /** The section of the help topic that explains the checkbox this dialog carries. */
 const SET_UP_TOPIC = 'help-setting-up';
@@ -166,8 +156,15 @@ export class ConnectDialog {
   private rows: Connectable[] = [];
   /** Whether an attempt is in flight, so a second one cannot be started into it. */
   private attempting = false;
-  /** Which kind is chosen, as an index into `rows`. */
-  private at = 0;
+  /**
+   * The panel's own list, while the chosen kind has variants to put in one.
+   *
+   * Rebuilt with the panel rather than kept and refilled, because the panel is rebuilt: a
+   * list belonging to the kind before this one is exactly the choice that must not survive.
+   */
+  private variants: OptionList | null = null;
+  /** The kinds, as the one widget they have always been (spec A8, decision 2). */
+  private readonly kindList: OptionList;
 
   constructor(
     private readonly dialog: HTMLDialogElement,
@@ -194,8 +191,13 @@ export class ConnectDialog {
       keepTabInside(this.dialog, event),
     );
     this.dialog.addEventListener('keydown', (event) => this.enterConnects(event));
-    this.kinds.addEventListener('keydown', (event) => this.navigate(event));
-    this.kinds.addEventListener('click', (event) => this.clicked(event));
+    // Arrowing the kinds moves the selection and never moves focus, which is the widget
+    // rather than this module: `OptionList` owns the keys, the ids and the marking, and
+    // both lists in this dialog are one now (reported 2026-08-30).
+    this.kindList = new OptionList(this.kinds, 'connect-kind', () => {
+      this.showPanel();
+      this.describe();
+    });
     this.dialog
       .querySelector('#connect-cancel')
       ?.addEventListener('click', () => this.dialog.close());
@@ -224,7 +226,6 @@ export class ConnectDialog {
       return;
     }
     this.rows = await this.connect.connectable();
-    this.at = 0;
     this.render();
     this.dialog.showModal();
     // Focus goes to the list rather than to the dialog, so the first thing a listener hears
@@ -248,25 +249,23 @@ export class ConnectDialog {
 
   /** The kinds, as options; the panel, for whichever is chosen. */
   private render(): void {
-    this.kinds.replaceChildren(
-      ...this.rows.map((row, index) => {
-        const option = this.kinds.ownerDocument.createElement('li');
-        option.id = `connect-kind-${index}`;
-        option.setAttribute('role', 'option');
-        option.setAttribute('aria-selected', String(index === this.at));
-        option.textContent = row.label;
-        return option;
-      }),
-    );
-    // Set from the first render, not only when the selection moves: it is what makes the
-    // reader announce the kind — with its position in the list — as focus arrives, which is
-    // a listbox naming itself rather than this module announcing it.
-    this.kinds.setAttribute('aria-activedescendant', `connect-kind-${this.at}`);
+    // Selected from the first render rather than only when the selection moves: it is what
+    // makes the reader announce the kind — with its position in the list — as focus arrives,
+    // which is a listbox naming itself rather than this module announcing it.
+    //
+    // **A kind is always chosen and a variant is not.** Opening onto a kind is opening onto
+    // something you can connect to; opening onto a distribution would be the browser
+    // choosing for you, which is the whole of the 2026-08-30 report.
+    this.kindList.fill({
+      labels: this.rows.map((row) => row.label),
+      selected: this.rows.length === 0 ? null : 0,
+    });
     this.showPanel();
   }
 
   private get row(): Connectable | undefined {
-    return this.rows[this.at];
+    const at = this.kindList.chosen();
+    return at === null ? undefined : this.rows[at];
   }
 
   /**
@@ -286,6 +285,9 @@ export class ConnectDialog {
     this.panelTitle.textContent = panelSummary(row);
     const document = this.panelBody.ownerDocument;
     this.panelBody.replaceChildren();
+    // The list that was here belonged to the kind before this one, and a choice made in it
+    // is exactly what must not survive into this one.
+    this.variants = null;
     // The button comes back on the way out of a kind that could be incomplete — a form, or
     // a list nobody had chosen from — and the branches that build one of those ask
     // `formFilled` for themselves before they are done.
@@ -307,45 +309,47 @@ export class ConnectDialog {
     if (row.variants.length === 0) {
       return;
     }
-    const label = document.createElement('label');
-    label.htmlFor = 'connect-variant';
+    // **A list, and not a combo box** — asked for by the user on 2026-08-30, and it retires
+    // A8's amendment D. That amendment chose a `<select>` because a second listbox would be
+    // a second widget with its own arrow handling; the arrow handling turned out to be worth
+    // sharing rather than avoiding, and it lives in `OptionList` now.
+    //
+    // What the list buys is the state a combo box cannot hold: **nothing selected**. A
+    // `<select>` selects its first option for you, so a listener who chose WSL and pressed
+    // Enter connected to whichever distribution came first — a choice they never made and
+    // never heard. Spelling that as an option reading "not chosen" worked and read badly:
+    // it is a row in a list of things you can connect to that is not a thing you can connect
+    // to. A list simply starts with none of them chosen.
+    const list = document.createElement('ul');
+    list.id = 'connect-variant';
+    list.setAttribute('role', 'listbox');
+    list.tabIndex = 0;
     // Capitalised because it names a control rather than counting things: "Distribution",
     // "Edition". The summary above it does the counting.
     const which = noun(row);
-    label.textContent = which.charAt(0).toUpperCase() + which.slice(1);
-    const select = document.createElement('select');
-    select.id = 'connect-variant';
-    // **It starts on nothing, and that is the whole of the fix** (reported 2026-08-30). A
-    // `<select>` selects its first option for you, so a listener who chose WSL and pressed
-    // Enter connected to whichever distribution happened to be first — a choice they never
-    // made and never heard. An option that says so is the honest starting state: the combo
-    // box reads "not chosen", Connect is unavailable until it is, and nothing is connected
-    // to on somebody's behalf.
-    const nothing = document.createElement('option');
-    nothing.value = '';
-    nothing.textContent = NOTHING_CHOSEN;
-    select.append(nothing);
-    for (const [index, variant] of row.variants.entries()) {
-      const option = document.createElement('option');
-      option.value = String(index);
-      option.textContent = variant.label;
-      select.append(option);
-    }
+    list.setAttribute(
+      'aria-label',
+      which.charAt(0).toUpperCase() + which.slice(1),
+    );
+    this.panelBody.append(list);
     // **A variant can be unavailable while its kind is not** — PowerShell 7 on a machine
     // that only has Windows PowerShell — so what to do about it has to appear when it is
     // chosen, and be *said*, because a panel that changes silently under a listener is the
     // trap decision 2 exists to answer.
-    select.addEventListener('change', () => {
+    this.variants = new OptionList(list, 'connect-variant', () => {
       this.showVariantInstructions(row);
       // Connect follows the choice, exactly as it follows the SSH form: there is nothing to
-      // connect to until one is made, and going back to "not chosen" takes it away again.
+      // connect to until one is made.
       this.formFilled();
       const chosen = this.variant(row);
       if (chosen !== undefined && !chosen.available) {
         this.announcer.announce(NOT_AVAILABLE);
       }
     });
-    this.panelBody.append(label, select);
+    this.variants.fill({
+      labels: row.variants.map((variant) => variant.label),
+      selected: null,
+    });
     this.showVariantInstructions(row);
     // The button follows the panel here exactly as it follows the SSH form: this one has
     // just been rebuilt with nothing chosen in it, so there is nothing to connect to yet.
@@ -512,44 +516,6 @@ export class ConnectDialog {
   }
 
   /**
-   * Arrowing the kinds moves the selection and never moves focus.
-   *
-   * A list you cannot arrow through without leaving it is not a list, so the panel is
-   * reached by Tab rather than by arriving in it (decision 2). Selection travels as
-   * `aria-activedescendant`, which is what lets focus stay on the list while the reader
-   * announces the option.
-   */
-  private navigate(event: KeyboardEvent): void {
-    const last = this.rows.length - 1;
-    if (last < 0) {
-      return;
-    }
-    let to = this.at;
-    switch (event.key) {
-      case 'ArrowDown':
-        to = Math.min(this.at + 1, last);
-        break;
-      case 'ArrowUp':
-        to = Math.max(this.at - 1, 0);
-        break;
-      case 'Home':
-        to = 0;
-        break;
-      case 'End':
-        to = last;
-        break;
-      default:
-        return;
-    }
-    event.preventDefault();
-    if (to !== this.at) {
-      this.at = to;
-      this.select();
-      this.describe();
-    }
-  }
-
-  /**
    * **Enter is the dialog's default action, from anywhere in it.**
    *
    * It used to be handled on the kinds list alone, which meant a user who tabbed into the
@@ -570,29 +536,6 @@ export class ConnectDialog {
     }
     event.preventDefault();
     void this.chosen();
-  }
-
-  private clicked(event: Event): void {
-    const option = (event.target as HTMLElement).closest('[role="option"]');
-    const index = this.rows.findIndex(
-      (_, at) => option?.id === `connect-kind-${at}`,
-    );
-    if (index === -1 || index === this.at) {
-      return;
-    }
-    this.at = index;
-    this.select();
-    this.describe();
-  }
-
-  private select(): void {
-    for (const [index, option] of Array.from(
-      this.kinds.querySelectorAll<HTMLElement>('[role="option"]'),
-    ).entries()) {
-      option.setAttribute('aria-selected', String(index === this.at));
-    }
-    this.kinds.setAttribute('aria-activedescendant', `connect-kind-${this.at}`);
-    this.showPanel();
   }
 
   /**
@@ -707,13 +650,8 @@ export class ConnectDialog {
    * variant, which is what "nothing chosen" must never mean again.
    */
   private variant(row: Connectable): Connectable['variants'][number] | undefined {
-    const select =
-      this.panelBody.querySelector<HTMLSelectElement>('#connect-variant');
-    const value = select?.value ?? '';
-    if (value === '') {
-      return undefined;
-    }
-    return row.variants[Number(value)];
+    const at = this.variants?.chosen();
+    return at === undefined || at === null ? undefined : row.variants[at];
   }
 
   /** What the listener is connecting to, in the words the connection will use itself. */

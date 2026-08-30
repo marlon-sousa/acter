@@ -2,7 +2,7 @@
 // Role: test — the dialog that discloses the one command Acter would run inside a session.
 //
 // What is asserted here is that the disclosure is complete and readable, and that **nothing
-// but pressing Continue sets a session up** — the property a mistake in this file would
+// but pressing Run command sets a session up** — the property a mistake in this file would
 // quietly take away, and the reason the checkbox on the Connect dialog is not enough on its
 // own (spec B9.5, decision 9).
 
@@ -19,10 +19,10 @@ const BASH: SetUpSession = {
   shell: 'bash',
   detected: 'Acter has detected that this session runs bash.',
   offer:
-    'Acter can set it up so it tells you more about what you run. You get a heading for each command, and you are told when a command fails.',
+    'Acter can set it up so it tells you more about what you run. You are told when a command fails, and Acter can tell when each command has finished.',
   command: "printf 'mark'; PROMPT_COMMAND=__acter_prompt",
   refusal:
-    'If you cancel, the session still works. You will hear what commands print here, but not whether they worked.',
+    'If you skip this, the session still works. You will hear what commands print here, but not whether they worked.',
 };
 
 /** And for one that reaches the prompt boundaries and no further (decision 8). */
@@ -31,7 +31,7 @@ const SH: SetUpSession = {
   shell: 'sh',
   detected: 'Acter has detected that this session runs sh.',
   offer:
-    'Acter can set it up so it tells you more about what you run. You get a heading for each command. Acter cannot yet tell you when a command fails in this shell.',
+    'Acter can set it up so it tells you more about what you run. Acter can tell when each command has finished. It cannot yet tell you when a command fails in this shell.',
 };
 
 function build(): {
@@ -49,8 +49,8 @@ function build(): {
         <label for="set-up-remember">Do not show this dialog again</label>
       </p>
       <form method="dialog">
-        <button id="set-up-continue" type="submit" value="set-up">Continue</button>
-        <button id="set-up-cancel" type="submit" value="cancel">Cancel</button>
+        <button id="set-up-continue" type="submit" value="set-up">Run command</button>
+        <button id="set-up-cancel" type="submit" value="cancel">Skip</button>
       </form>
     </dialog>`;
   const dialog = document.getElementById('set-up-dialog') as HTMLDialogElement;
@@ -95,7 +95,7 @@ describe('SetUpDialog', () => {
 
     const summary = document.getElementById('set-up-summary')?.textContent ?? '';
     expect(summary).toContain('this session runs bash');
-    expect(summary).toContain('a heading for each command');
+    expect(summary).toContain('when each command has finished');
     expect(summary).toContain('told when a command fails');
   });
 
@@ -175,7 +175,7 @@ describe('SetUpDialog', () => {
     expect(stops).toEqual([]);
   });
 
-  it('answers that the session may be set up when Continue is pressed', async () => {
+  it('answers that the session may be set up when Run command is pressed', async () => {
     const { dialog, ask } = build();
 
     const answering = ask.ask(BASH);
@@ -205,11 +205,11 @@ describe('SetUpDialog', () => {
   });
 
   /**
-   * **Nothing but the button that says so sets a session up.** Cancelling, Escape and every
+   * **Nothing but the button that says so sets a session up.** Skip, Escape and every
    * other way of closing this refuse — and refuse *this session only*, which the connection
    * sentence then says out loud.
    */
-  it('gives up on every way out that is not Continue', async () => {
+  it('gives up on every way out that is not Run command', async () => {
     for (const closedWith of ['cancel', '', 'set-up-typo']) {
       const { dialog, ask } = build();
 
@@ -259,6 +259,19 @@ describe('SetUpDialog', () => {
     field.dispatchEvent(enter);
 
     expect(enter.defaultPrevented).toBe(true);
+  });
+
+  /**
+   * **The buttons say what they do** — asked for by the user on 2026-08-30, in place of
+   * "Continue" and "Cancel". A listener who arrives on a button hears the answer to the
+   * question this dialog asks: whether one command runs in their shell.
+   */
+  it('names its buttons after what they do', () => {
+    const { ask } = build();
+    void ask.ask(BASH);
+
+    expect(document.getElementById('set-up-continue')?.textContent).toBe('Run command');
+    expect(document.getElementById('set-up-cancel')?.textContent).toBe('Skip');
   });
 
   /** A button that has focus still answers Enter: going to it is the deliberate act. */

@@ -556,17 +556,18 @@ the answer to "what should we do now?".
     re-deciding what the status region says when it is read on demand an hour later, which
     is 27.5's question and not A13's.
 
-13.9. **Done** — six findings from the user's own pass over the shipped window, fixed in one
+13.9. **Done** — ten findings from the user's own pass over the shipped window, fixed in one
     general PR. Spec: amendments to
     [a8-connect-dialog.md](specs/a8-connect-dialog.md) (G, H, I),
     [a10-the-window-has-two-faces.md](specs/a10-the-window-has-two-faces.md),
     [a13-what-a-session-can-tell-you-and-where-that-is-explained.md](specs/a13-what-a-session-can-tell-you-and-where-that-is-explained.md)
     and [b9.5-the-session-is-set-up-after-it-is-established.md](specs/b9.5-the-session-is-set-up-after-it-is-established.md)
-    (7, 8, 9).
+    (7 to 11).
 
-    **Dictated by the user on 2026-08-30**, driving the window they had just merged. They are
-    one entry because they are one pass and one PR; each is named below with what it cost a
-    listener, because that is what says why it was worth a fix rather than a note.
+    **Dictated by the user on 2026-08-30**, driving the window they had just merged, and then
+    again after trying the build this PR made of it. They are one entry because they are one
+    pass and one PR; each is named below with what it cost a listener, because that is what
+    says why it was worth a fix rather than a note.
 
     1. **A paragraph in the set-up dialog took focus.** The "If you cancel…" sentence was a
        tab stop, which is how prose was made reachable inside an application region. A
@@ -591,13 +592,44 @@ the answer to "what should we do now?".
        Connect is unavailable until one is, and Enter says what is missing rather than
        nothing at all.
     6. **Nowhere to find out what "let Acter set this session up" means.** A Help button
-       beside the checkbox, opening A13's topic at a fourth section written for it.
+       beside the checkbox, opening A13's topic at a section written for it.
 
-    **What it changed beyond the six.** The announcer now speaks into the *innermost* open
-    dialog rather than the first it finds, because dialogs stack for the first time; and
+    **Four more the same day, after trying the build.** They are here rather than in an entry
+    of their own because they are the same pass continuing, and because two of them replace
+    what the six above had just landed.
+
+    7. **The combo box became a list.** "Not chosen" as an option worked and read badly — a
+       row in a list of things you can connect to that is not a thing you can connect to.
+       *"I tend each time more to replace the combo with a list, where you can just have
+       nothing selected."* A8's amendment D is retired, and both lists in the dialog are one
+       implementation now.
+    8. **"Continue" and "Cancel" became "Run command" and "Skip."** Those are the words for a
+       dialog asking whether to go on; this one asks whether a command runs in your shell.
+    9. **The offer promised something a session already had.** Reading the set-up dialog back:
+       *"it says that unintegrated sessions don't get headings. Is this true?"* It is not — a
+       block is opened for every submitted line and B4.4 heads it with the shell's own echo,
+       marker or no marker, which the NVDA pass had already recorded without noticing what it
+       proved. Three places said it: the backend's offer sentence, the connection sentence
+       for a partly set-up shell, and the help. What the setup actually buys is the *ending* —
+       a command known to have finished, and, where the shell can say it, how it went.
+    10. **The help topic said the same thing three times, and one of them was out of date.**
+        It told a listener that WSL sets itself up when it starts, which stopped being true
+        with B9.5. Rewritten whole, in five sections that build rather than restate: what
+        Acter is, moving around the window, connecting, the two kinds of session, and the
+        dialog that asks. It names them — "integrated" and "unintegrated" — because a topic
+        is the one place a word can be *given* to somebody rather than used at them.
+
+    **What it changed beyond the ten.** The announcer now speaks into the *innermost* open
+    dialog rather than the first it finds, because dialogs stack for the first time;
     `keepTabInside` keeps the key in a dialog with no controls at all, which the connecting
-    dialog is. `WindowChrome` stopped knowing the buffer exists, since the only thing that
-    read it was the rule finding 4 removes.
+    dialog is; and the two listboxes became one `adapters/option_list.ts`. `WindowChrome`
+    stopped knowing the buffer exists, since the only thing that read it was the rule finding
+    4 removes.
+
+    **And one claim was disproved rather than fixed.** `formFilled`'s note said a listener
+    tabs to a disabled Connect and hears "unavailable". They do not: `keepTabInside` filters
+    disabled controls out of the cycle, so Tab goes from Help straight to Cancel. Measured
+    with NVDA on 2026-08-30, corrected in the comment and in A8's amendment G.
 
 14. A4, completion path. Spec: none yet → specify first. Scope sketch: fake
     completion provider, Tab handling in the edit field, completion announcement.

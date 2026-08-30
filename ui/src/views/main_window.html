@@ -223,8 +223,18 @@
          line by line is not help. So this is a plain dialog, browse mode, headings and
          paragraphs — reachable with `h` and read with the arrow keys.
 
-         The content is static rather than filled from the backend: it explains what a
-         listener hears, and nothing about it depends on the build or the machine. -->
+         The content is static rather than filled from the backend: it explains what Acter
+         is and what a listener hears, and nothing about it depends on the build or the
+         machine.
+
+         **Rewritten whole on 2026-08-30**, at the user's asking. The three sections A13
+         shipped said much the same thing three times, and one of them had gone out of date:
+         it told a listener that WSL sets itself up when it starts, which stopped being true
+         when B9.5 moved the setup out of the launch and into a dialog. What replaces them
+         starts from what the application is, goes through how you move around it and how you
+         connect, and only then explains the difference between a session Acter has set up
+         and one it has not — naming both, because a person is entitled to the word for the
+         thing that changes what they hear. -->
     <dialog
       id="help-dialog"
       aria-labelledby="help-title"
@@ -242,72 +252,123 @@
            reason (spec B9): it names what is here and how to move through it, and the
            sections stay where a heading key can find them. -->
       <p id="help-summary">
-        Four short sections about what you hear when you run a command, and about setting a
-        session up. Use your reader's heading key to move between them.
+        Five short sections: what Acter is, moving around the window, connecting to a shell,
+        sessions Acter has set up, and the dialog that asks. Use your reader's heading key to
+        move between them.
       </p>
 
-      <h2>What you always hear</h2>
+      <!-- Focusable so the dialog can land on it, and out of the tab order because it is a
+           heading: this is where focus goes when nobody asked for a section, and the reason
+           it is here rather than on the title is measured in `help_dialog.ts`. -->
+      <h2 id="help-what-acter-is" tabindex="-1">What Acter is</h2>
       <p>
-        When you run a command, Acter reads out what the command prints. It also keeps it in
-        the results area above the command line, so you can go back over it with the arrow
-        keys, or jump between commands with your reader's heading key.
+        Acter is a terminal you use by listening. You type a command, it runs in a shell, and
+        Acter reads out what the command prints.
+      </p>
+      <p>
+        Everything it reads is also kept in the results area, above the command line, so you
+        can go back over it at your own pace with the arrow keys. Each command you run gets a
+        heading there, so your reader's heading key moves you from one command to the next.
       </p>
 
-      <h2>What you sometimes do not hear</h2>
+      <h2>Moving around the window</h2>
       <p>
-        Acter cannot see whether a command worked. It has to be told, by the shell it is
-        talking to. Some shells are set up to tell it and some are not.
+        The command line is where you type. F6 moves between it and the results area, and
+        Escape brings you back to the command line from anywhere in the window.
       </p>
       <p>
-        When the shell tells Acter, you hear a short sentence at the end of a command that
-        failed, such as "command failed, exit code 3", and you hear nothing extra when it
-        worked. That is the only difference. You are not missing any of the output either
-        way.
+        F1 opens this help. F10 opens the menu bar, and so does pressing and releasing Alt on
+        its own.
       </p>
       <p>
-        When the shell does not tell Acter, you can still see how a command went from what it
-        printed, which is what you would do at any other terminal.
-      </p>
-
-      <h2>Which sessions are which</h2>
-      <p>
-        Sessions on this computer — Command Prompt, PowerShell and WSL — set themselves up
-        when they start, so they normally tell Acter how commands end.
-      </p>
-      <p>
-        A session on another computer, reached over SSH, normally does not. Setting it up
-        means changing something on that other computer, which Acter will not do without
-        asking you first.
+        Ctrl+C, pressed in the command line, stops the command that is running. In the
+        results area the same keys are your reader's own copy command, so they never reach
+        the shell.
       </p>
 
-      <!-- **The section the Connect dialog's Help button opens at**, which is why its
+      <h2>Connecting to a shell</h2>
+      <p>
+        A window with nothing running has one button, Connect. It opens a dialog with a list
+        of the kinds of shell you can start: Command Prompt, PowerShell, WSL, and a shell on
+        another computer over SSH.
+      </p>
+      <p>
+        Some kinds need something more before they can start. WSL needs to know which
+        distribution, PowerShell which edition, and SSH the computer and the account. That is
+        what the panel below the list is for, and it starts with nothing chosen, so nothing
+        is ever connected to on your behalf. Enter connects, from anywhere in the dialog.
+      </p>
+      <p>
+        While the connection is being made, a dialog says so and names what it is connecting
+        to. Some far ends ask you something first, such as a password. When the session is
+        up, the window says what you are connected to.
+      </p>
+      <p>
+        When a session ends, because you typed exit or the shell stopped, everything it
+        printed stays in the results area and the Connect button comes back.
+      </p>
+
+      <!-- **The section the Connect dialog's Help button opens at**, which is why this
            heading carries an id and a tabindex: focus lands on the heading itself, so a
-           listener arrives at the answer rather than at the top of a topic they then have
-           to search. `-1` keeps it out of the tab order — it is a heading, not a control,
-           and the rule the set-up dialog's refusal sentence was fixed under on 2026-08-30.
+           listener arrives at the answer rather than at the top of a topic they then have to
+           search. `-1` keeps it out of the tab order — it is a heading, not a control, and
+           the rule the set-up dialog's refusal sentence was fixed under on 2026-08-30. -->
+      <h2 id="help-setting-up" tabindex="-1">
+        Sessions Acter has set up, and sessions it has not
+      </h2>
+      <p>
+        Acter cannot see inside your shell. It sees what the shell prints and nothing else —
+        the same characters you would see on the screen. Where one command's output ends, and
+        whether that command worked, are things only the shell knows.
+      </p>
+      <p>
+        A shell can be asked to say them: to mark where each command begins and ends, and to
+        say how each one finished. A session where that has been done is called an integrated
+        session; one where it has not is called an unintegrated session.
+      </p>
+      <p>
+        Both kinds work. In both, what you type runs, what it prints is read out and kept in
+        the results area, and each command gets its own heading.
+      </p>
+      <p>
+        In an integrated session you are told when a command fails, and Acter knows when a
+        command has finished — so the prompt is read to you on its own, instead of arriving
+        at the end of what the command printed.
+      </p>
+      <p>
+        In an unintegrated session you are not told whether a command worked. You can still
+        tell from what it printed, which is what you would do at any other terminal.
+      </p>
+      <p>
+        Command Prompt and PowerShell are set up by Acter as it starts them, so they never
+        ask you anything. PowerShell tells Acter everything, including whether a command
+        failed; Command Prompt can only mark where each command begins, so it cannot tell you
+        that.
+      </p>
+      <p>
+        WSL and a shell reached over SSH are not set up when they start. Acter offers to set
+        them up once the session is running, which is the dialog in the next section.
+      </p>
 
-           It says what the checkbox turns on, what turning it off costs, and that nothing
-           is ever run without being shown first — in the words A13 settled on, which name
-           what a person keeps and what they lose rather than what this project calls it. -->
-      <h2 id="help-setting-up" tabindex="-1">What setting a session up means</h2>
+      <h2>The dialog that asks to set a session up</h2>
       <p>
-        When you connect, Acter can run one short command inside the session it has just
-        started. The command asks the shell to say where each command you run begins and
-        ends, and how it finished.
+        It shows you the command Acter would run, in a box you can read through character by
+        character, and two sentences: what shell was found, and what setting it up would give
+        you. Nothing has run when this dialog appears.
       </p>
       <p>
-        With it, you get a heading for each command, which your reader's heading key jumps
-        between, and you are told when a command fails.
+        Run command runs it. Skip leaves the session as it is, and the session then tells you
+        what it will and will not be able to say about your commands. Escape, and any other
+        way of closing the dialog, means the same as Skip.
       </p>
       <p>
-        Without it, the session still works. What you type runs, and Acter reads out what it
-        prints. What you do not get is the headings and the message about a command failing.
+        Do not show this dialog again keeps your answer for that kind of shell, so you are
+        asked about it once rather than every time you connect.
       </p>
       <p>
-        Nothing is run without being shown to you first. When Acter has something to run, a
-        dialog appears with the command in a box you can read through, and it runs only if
-        you choose Continue. You can also switch the whole thing off before you connect,
-        with the box on the Connect dialog.
+        You can also decide before you connect. The box on the Connect dialog, "Let Acter set
+        this session up", is ticked to begin with; unticking it means nothing is offered and
+        nothing is run.
       </p>
 
       <button id="help-close" type="button">Close</button>
@@ -364,8 +425,9 @@
       </div>
       <!-- **The checkbox authorises, and the dialog it opens discloses** (spec B9.5,
            decision 9). Ticked by default, because that is what makes an ordinary user hear a
-           heading for each command and be told when one fails without knowing the words this
-           project uses. Unticking it has to be reachable *without* the dialog ever appearing,
+           told when a command failed without knowing the words this project uses.
+           A heading for each command is not what it buys — a session has those either way,
+           which the user caught this comment's own sentence claiming on 2026-08-30. Unticking it has to be reachable *without* the dialog ever appearing,
            which is why it is here rather than only inside the dialog.
 
            It sits between the panel and the buttons so Tab reaches it on the way to Connect,
@@ -570,7 +632,7 @@
          **The default here is to continue, unlike every other dialog on this seam.** A host
          key and an unverified file are security decisions where the safe answer does nothing;
          this is Acter offering to tell a listener more about their own session, and what it
-         defends against is surprise rather than harm. So Continue holds initial focus after
+         defends against is surprise rather than harm. So Run command holds initial focus after
          the command, and cancelling is still one keystroke away.
 
          **Escape and every other way of closing answers "not this session"** — the session
@@ -589,10 +651,17 @@
           <label for="set-up-remember">Do not show this dialog again</label>
         </p>
         <form method="dialog" role="none">
-          <!-- Continue comes first because it is the default, and Cancel is beside it
+          <!-- **The buttons say what they do rather than how the dialog ends** — asked for
+               by the user on 2026-08-30, replacing "Continue" and "Cancel". Those are the
+               words a dialog uses when the question is whether to go on; the question here
+               is whether one command runs in your shell, and a listener who arrives on a
+               button should hear the answer to *that*. "Run command" is the command in the
+               box above it; "Skip" is this session going ahead without it.
+
+               Run command comes first because it is the default, and Skip is beside it
                rather than behind anything: refusing has to be as reachable as accepting. -->
-          <button id="set-up-continue" type="submit" value="set-up">Continue</button>
-          <button id="set-up-cancel" type="submit" value="cancel">Cancel</button>
+          <button id="set-up-continue" type="submit" value="set-up">Run command</button>
+          <button id="set-up-cancel" type="submit" value="cancel">Skip</button>
         </form>
       </div>
     </dialog>

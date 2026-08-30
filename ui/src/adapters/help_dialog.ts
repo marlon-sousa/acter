@@ -13,6 +13,27 @@
 import { keepTabInside } from './dialog_tab';
 import type { HelpView } from '../ports/help_view';
 
+/**
+ * Where focus lands when nobody asked for a section: the first one.
+ *
+ * **Because the platform's answer turned out to be a section in the middle.** A modal
+ * `<dialog>` focuses the first *focusable area* in it, and that includes anything carrying
+ * `tabindex="-1"` — so the moment one heading became programmatically focusable, F1 started
+ * landing there. Measured with NVDA 2026.1.1 on 2026-08-30: pressing F1 announced the
+ * description and then "Sessions Acter has set up, and sessions it has not, heading level
+ * 2", which is the fourth of five and not where somebody who pressed F1 wants to begin.
+ *
+ * **The title was tried first and reads worse**, measured the same way: the dialog is
+ * *named* by its title, so landing on it made the reader say "Acter help" three times over
+ * with the summary in between. The first section says something new, and it is where reading
+ * from the top actually starts — the description has already said what the topic holds.
+ *
+ * Naming the landing rather than leaving it to the platform also answers it better than the
+ * platform did before there was a topic at all: it used to fall on the Close button, which
+ * is the one control in here that is not about reading.
+ */
+const TOP = 'help-what-acter-is';
+
 
 export class HelpDialog implements HelpView {
   /**
@@ -79,9 +100,6 @@ export class HelpDialog implements HelpView {
     }
     this.comingBackTo = options?.returnTo ?? this.returnTo;
     this.dialog.showModal();
-    const topic = options?.topic;
-    if (topic !== undefined) {
-      this.dialog.querySelector<HTMLElement>(`#${topic}`)?.focus();
-    }
+    this.dialog.querySelector<HTMLElement>(`#${options?.topic ?? TOP}`)?.focus();
   }
 }

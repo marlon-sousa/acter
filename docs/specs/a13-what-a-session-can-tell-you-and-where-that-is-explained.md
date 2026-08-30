@@ -101,32 +101,48 @@ the same vocabulary and the same objection applies to it, but it was decided and
 and 27.5 barely a day ago, and rewording it is a change to a *different* sentence with its own
 reasons. Filed as roadmap 13.8 rather than done quietly here.
 
-## Amendment from the user's own pass, 2026-08-30: a fourth section, and a way in from the control
+## Amendment from the user's own pass, 2026-08-30: the topic is rewritten, and has a way in from a control
 
-**Reported: a Help button after the "Let Acter set this session up…" checkbox, leading to a
-place that explains what it is and how it works.** Decision 2 built exactly that place — a
+Two rounds on the same day, and the second replaced what the first had added to.
+
+**Round one: a Help button after the "Let Acter set this session up…" checkbox**, leading to
+a place that explains what it is and how it works. Decision 2 built exactly that place — a
 topic a listener reads at their own pace instead of an announcement heard once — and gave it
 one way in, F1, which answers "what am I hearing" from anywhere in the window. What it did
-not answer is "what does this control do", asked while standing on the control.
+not answer is "what does this control do", asked while standing on the control. So
+`HelpDialog.open` takes an optional topic — the id of a heading — and focus lands on that
+heading; and an optional place to come back to, because a dialog that opens help on top of
+*itself* cannot send focus to a window that is inert underneath a modal.
 
-Two things change, and neither touches decision 4: this is still the one dialog in the
-product that is deliberately not an application region.
+**Round two: the topic is rewritten whole**, at the user's asking, after they read it:
+*"the help says more or less all the same thing in the headings, and some of them are
+outdated, like WSL always is integrated."* Both halves were true.
 
-**A fourth section, "What setting a session up means."** In the register decision 5 settled
-on: what Acter would run, what you get for it (a heading for each command, and being told
-when one fails), what you keep without it (everything else — what you type runs, and what it
-prints is read out), and that nothing is ever run without being shown to you first. The
-summary line says four sections now instead of three.
+- The three sections said the same thing three times. All three were about the one
+  distinction — what a shell does and does not tell Acter — approached from three angles,
+  which is why the fourth section written for the checkbox had nowhere to sit without
+  repeating them a fourth time.
+- "Sessions on this computer — Command Prompt, PowerShell and WSL — set themselves up when
+  they start" stopped being true when **B9.5** moved WSL's setup out of the launch and into a
+  dialog. A help topic that is out of date about which sessions ask you something is worse
+  than no topic, because it is the one place a listener goes to check.
 
-**Help can be opened at a section.** `HelpDialog.open` takes an optional topic — the id of a
-heading — and focus lands on that heading, so somebody who asks what a checkbox does arrives
-at the answer rather than at the top of a page they then have to search. The heading is
-focusable and still not a tab stop: it is a heading, not a control.
+**Five sections now, and they build rather than restate**: what Acter is; moving around the
+window; connecting to a shell; sessions Acter has set up and sessions it has not; and the
+dialog that asks. Only the fourth is about the distinction, and the ones before it are what
+somebody needs to have read to understand it.
 
-It also takes an optional place to come back to. F1 and the menu still return focus to
-whatever the window is showing; a dialog that opens help on top of *itself* names itself
-instead, because the window underneath a modal is inert and focus sent there would land
-nowhere.
+**And it names the two kinds of session** — "integrated" and "unintegrated" — which decision
+5 removed from *announcements* and which the user asked for here explicitly. The distinction
+is worth stating: a word a listener has never been given cannot be used to tell them
+something, which is what the announcement was doing and why it was rewritten. This topic is
+the one place that can *give* them one. It says what a shell does and does not tell Acter and
+then names both cases, so the word has a meaning by the time it is used. The vocabulary test
+in the suite is narrowed to match: `osc`, `marker`, `verdict` and `exit code` name a
+mechanism rather than a difference anybody can hear, and stay out.
+
+Decision 4 is untouched: this is still the one dialog in the product that is deliberately not
+an application region.
 
 ## Files touched
 

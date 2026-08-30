@@ -8,7 +8,7 @@ mod driving;
 
 pub use driven::{
     Chosen, Clock, ConnectQuestions, ConnectSink, EventSink, Explained, HostKeyAnswer,
-    HostKeyQuestion, HostKeyState, IF_YOU_CANCEL, InstalledShells, NeverExplained, NoDistributions,
+    HostKeyQuestion, HostKeyState, IF_YOU_SKIP, InstalledShells, NeverExplained, NoDistributions,
     PasswordQuestion, ProgramAnswer, ProgramQuestion, Secret, SessionFactory, SetupAnswer,
     SetupQuestion, ShellAdapter, ShellFacts, ShellLaunch, Signatures, SshQuestions, Started,
     TerminalEngine, Timer, Transport, TransportError, Unasked, Unchecked,
