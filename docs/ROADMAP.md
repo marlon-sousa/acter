@@ -2779,29 +2779,40 @@ thing to pick up once the adapters land, not merely the next number.
     without saying so is the part that should decide this**, because a listener cannot tell it
     happened.
 
-    **What setting `sh` up actually earns, side by side.** Asked by the user on 2026-08-29 —
-    "I just can't see the difference between this and an unintegrated session, which gives me
-    headings and no verdicts" — and the measurement says the difference is one thing. The same
-    command, the same distribution, both ways:
+    **What setting `sh` up actually earns, side by side: nothing that was measurable.** Asked by
+    the user on 2026-08-29 — "I just can't see the difference between this and an unintegrated
+    session, which gives me headings and no verdicts" — and then again, decisively: "on an
+    unintegrated session we do filter echo back by comparing the next line to the heading, don't
+    we?" Yes. B4.9 holds the row a submission is pending on and matches it against the submitted
+    line whether or not a marker ever arrives.
 
-    - Refused: `splyt:/mnt/host/c/Users/marlo# lsa`, then `-sh: lsa: not found`, then the prompt.
-    - Set up: `-sh: lsa: not found`, then the prompt.
+    **The first answer written here was wrong, and it was wrong because of the test rather than
+    the product.** It claimed the one gain was that the echo is not read back, on the strength of
+    a refused session that read `splyt:/mnt/host/c/Users/marlo# lsa` before its output — but that
+    session had been given a line to submit *before the shell drew its prompt*, so there was no
+    pending row, no hold, and the echo went out as ordinary output. The set-up path waits for the
+    prompt as part of setting up and so was never compared on the same terms.
 
-    The echo of the user's own line is not read back to them. That is the whole of it. The
-    trailing prompt is spoken as content either way, the heading is the same, and the output is
-    the same. Against that one gain sit two losses measured the same day: a truncated heading on
-    a wrapped line, where the refused session gets it in full, and Acter's own setup command read
-    aloud at connect.
+    Re-measured with both waiting for the prompt, `lsa` in `docker-desktop` produces the same
+    events either way: the block is headed `lsa`, the output is
+    `-sh: lsa: not found` followed by the prompt, and the echo is suppressed in both. Pinned in
+    `real_session.rs`, `a_refused_sh_session_still_heads_every_command`.
 
-    **So the offer sentence oversells what this shell gets.** "Acter can set it up so it tells
-    you more about what you run" is true for bash and thin for `sh`, and thin in a way a listener
-    cannot check.
+    So the accounting is: **nothing gained that anyone has measured**, and two things lost — a
+    heading truncated on a wrapped line, where the refused session gets it in full, and Acter's
+    own setup command read aloud at connect. The refused session also gets
+    `IntegrationUnavailable`, which is an honest sentence rather than a cost.
+
+    **So the offer sentence does not oversell what this shell gets; it describes something this
+    shell does not get.** "Acter can set it up so it tells you more about what you run" is true
+    for bash and, as `sh` ships today, false.
 
     **This is the argument for exit codes rather than against the setup.** Headings come free
-    from the echo (B6.1), output comes free, and the one thing an unintegrated session genuinely
-    cannot offer is whether the command worked. Measured 2026-08-29 and recorded in 23.15: `sh`
-    can report it. Until it does, setting `sh` up buys one thing and costs two, and this entry
-    should be read with that in front of it.
+    from the echo (B6.1), output comes free, echo suppression comes free, and the one thing an
+    unintegrated session genuinely cannot offer is whether the command worked. Measured
+    2026-08-29 and recorded in 23.15: `sh` can report it. Until it does, setting `sh` up buys
+    nothing measurable and costs two things, and this entry should be read with that in front of
+    it.
 
     Three candidates remain: ship as measured; send only `A` and halve the cost to eight
     columns, losing the command-line boundary; or send nothing and take B4.9's loss knowingly.

@@ -2316,6 +2316,16 @@ mod the_session_is_set_up_after_it_is_established {
             PacingConfig::default().integration_grace,
         );
 
+        // **Wait for the far end to have drawn its prompt before submitting anything**, which
+        // the set-up path gets for free from `set_up`. B4.9 suppresses the echo by holding the
+        // row a submission is *pending on*, and that row is the prompt row — so a line
+        // submitted before the shell has drawn one has no pending row, no hold, and its echo
+        // is published as ordinary output. Without this wait the two sessions are not being
+        // compared on the same terms, and the comparison is the whole point of the test.
+        session
+            .until_said(WSL_PATIENCE, |said| said.contains('#'))
+            .await;
+
         let short = session.submit("lsa");
         session.wsl_until(short, "not found").await;
         let long = session.submit("acter-no-such-command-0123456789a123456789b123456789c123456");
@@ -2333,9 +2343,29 @@ mod the_session_is_set_up_after_it_is_established {
             Some(Some("lsa".to_owned())),
             "a refused session still heads a command with the line that was submitted"
         );
+        assert_eq!(
+            session.heading_of(long),
+            Some(Some(
+                "acter-no-such-command-0123456789a123456789b123456789c123456".to_owned()
+            )),
+            "and heads a wrapped one in full, where the set-up session truncates it"
+        );
         assert!(
             session.rendered().contains("not found"),
             "and still reads the shell's own message aloud: {:?}",
+            session.rendered()
+        );
+        // **B4.9 suppresses the echo here too, and that is the whole point of this test.**
+        // Asked by the user on 2026-08-29 — "on an unintegrated session we do filter echo back
+        // by comparing the next line to the heading, don't we?" — and yes: the pending row is
+        // held and matched against the submitted line whether or not any marker ever arrives.
+        // An earlier version of this test submitted before the shell had drawn its prompt, so
+        // there was no pending row, and the echo it published was an artifact of the test
+        // rather than a property of a refused session. This assertion is what stops that
+        // happening again.
+        assert!(
+            !session.rendered().contains("# lsa"),
+            "the echo of the user's own line is not read back to them: {:?}",
             session.rendered()
         );
     }
