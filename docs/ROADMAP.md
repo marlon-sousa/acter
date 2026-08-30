@@ -221,11 +221,14 @@ the answer to "what should we do now?".
     T2 gated the embedded WebDriver, so a release build injects no flag and constructs no
     recorder. `big.spec.ts` now reads the tape and asserts the beep's arming order, which
     is the recorder earning its place on the day it landed.
-12. A7, the menu bar and About. Spec:
+12. **Done** — A7, the menu bar and About. Spec:
     [a7-menu-bar-and-about.md](specs/a7-menu-bar-and-about.md) — **agreed in conversation
     2026-08-23**, ahead of implementation, with the five other entries this reorganisation
-    added. **Raised by the user 2026-08-23**: Acter has no application surface at all, only
-    a window with an edit field, and the far end is chosen by an environment variable.
+    added. Merged as PR #34 (2026-08-25), which shipped the menu bar **in the document**
+    rather than in the window frame, because the measurement recorded below reversed the
+    design while the entry was open. **Raised by the user 2026-08-23**: Acter has no
+    application surface at all, only a window with an edit field, and the far end is
+    chosen by an environment variable.
 
     A native window menu (Tauri `MenuBuilder`, a Win32 `HMENU` underneath, which NVDA
     reads with no ARIA and no mode switch), carrying an **Acter** menu with Exit and an
