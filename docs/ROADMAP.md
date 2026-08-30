@@ -2779,9 +2779,65 @@ thing to pick up once the adapters land, not merely the next number.
     without saying so is the part that should decide this**, because a listener cannot tell it
     happened.
 
+    **What setting `sh` up actually earns, side by side.** Asked by the user on 2026-08-29 —
+    "I just can't see the difference between this and an unintegrated session, which gives me
+    headings and no verdicts" — and the measurement says the difference is one thing. The same
+    command, the same distribution, both ways:
+
+    - Refused: `splyt:/mnt/host/c/Users/marlo# lsa`, then `-sh: lsa: not found`, then the prompt.
+    - Set up: `-sh: lsa: not found`, then the prompt.
+
+    The echo of the user's own line is not read back to them. That is the whole of it. The
+    trailing prompt is spoken as content either way, the heading is the same, and the output is
+    the same. Against that one gain sit two losses measured the same day: a truncated heading on
+    a wrapped line, where the refused session gets it in full, and Acter's own setup command read
+    aloud at connect.
+
+    **So the offer sentence oversells what this shell gets.** "Acter can set it up so it tells
+    you more about what you run" is true for bash and thin for `sh`, and thin in a way a listener
+    cannot check.
+
+    **This is the argument for exit codes rather than against the setup.** Headings come free
+    from the echo (B6.1), output comes free, and the one thing an unintegrated session genuinely
+    cannot offer is whether the command worked. Measured 2026-08-29 and recorded in 23.15: `sh`
+    can report it. Until it does, setting `sh` up buys one thing and costs two, and this entry
+    should be read with that in front of it.
+
     Three candidates remain: ship as measured; send only `A` and halve the cost to eight
     columns, losing the command-line boundary; or send nothing and take B4.9's loss knowingly.
-    The question is a user's rather than an implementer's.
+    **A fourth is better than all three and is 23.15's**: give it verdicts, which is what the
+    dialog is already promising in spirit.
+
+23.15. A POSIX `sh` can report exit codes, and Acter does not ask it to. Spec: none yet →
+    specify first. **Measured 2026-08-29**, against busybox 1.37.0 on `docker-desktop` and dash
+    0.5.12 on Ubuntu.
+
+    B9.5 decision 8 gave `sh` `PromptAndCommandLine` on the reasoning that a verdict needs a
+    post-execution hook and POSIX `sh` has none — only `PS1`. The reasoning is sound and the
+    conclusion is wrong, because `PS1` is expanded **every time the prompt is drawn**, and `$?`
+    at that moment is the status of the command that just finished. Both shells do it:
+
+        PS1='[status=$?]# '
+        true       -> [status=0]#
+        (exit 7)   -> [status=7]#
+
+    So the exit marker goes at the front of the prompt string as `\033]133;D;$?\007` and the
+    shell fills the number in itself. **Measured through the whole stack**, with that marker
+    added and nothing else changed, `(exit 7)` in `docker-desktop` announced
+    `Failed { exit_code: ExitCode(7) }` — the test asserting no verdict is forged failed with
+    `left: Some(ExitCode(7))`, which is the measurement.
+
+    **What it needs, and why it is not in B9.5.** `ShellMarkers` is a Decided entity with two
+    states, and this is a third: marks the prompt and the command line, reports an exit code,
+    and never says where output begins. Two of its call sites in the pump key on the wrong half
+    of the question today — `drawn` and `marked` both ask "is this `Full`" when what they mean is
+    "does this shell report an exit code", which is independent of whether it marks output start.
+    The offer sentence follows from that rather than needing new words: a shell that reports exit
+    codes gets the sentence bash already gets.
+
+    Adding a variant to a Decided value type is a design decision, and CLAUDE.md has those
+    agreed in conversation rather than slipped into an implementation PR. So the measurement
+    landed and the change did not.
 
 23.13. The connection sentence is sometimes not announced. Spec: none yet → specify first.
     **Found in B9.5's NVDA pass, 2026-08-29**, and **not caused by it**: the announcement path
