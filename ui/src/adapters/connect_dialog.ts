@@ -388,9 +388,17 @@ export class ConnectDialog {
    * decision keeps Connect enabled for a kind this machine cannot start, so pressing it
    * answers with the instructions — useful, because nothing you do in the dialog changes
    * that. An empty host is not that: it is a form you have not finished, and the answer is
-   * not information you lacked. A disabled button is itself the information — tabbing to it
-   * and hearing "unavailable" says the form is incomplete without committing to anything,
-   * where the old shape only told you after a round trip you had to wait for.
+   * not information you lacked, and the old shape only told you after a round trip you had
+   * to wait for.
+   *
+   * **What a disabled button is not is an announcement**, and the note here used to claim
+   * otherwise: "tabbing to it and hearing 'unavailable' says the form is incomplete".
+   * Measured with NVDA 2026.1.1 on 2026-08-30 — Tab went from the Help button straight to
+   * Cancel, because `keepTabInside` filters disabled controls out of the cycle, which it
+   * does deliberately and for a good reason of its own. So a listener never meets the
+   * disabled button at all, and what tells them is `chosen`'s sentence when Enter cannot
+   * connect. The button being unavailable is still right; it is simply not the thing that
+   * speaks.
    *
    * The backend keeps refusing an empty host with its own sentence, because a profile can
    * arrive from somewhere that is not this form.

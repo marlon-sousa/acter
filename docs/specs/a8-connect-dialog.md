@@ -203,9 +203,12 @@ choice can never survive into a kind it was not made for.
 question.** An empty host is a form you have not finished, and the answer is a disabled
 button rather than a round trip; a distribution nobody chose is the same thing wearing a
 combo box. What is new is that Enter *says* what is missing — "choose a distribution first"
-— because a disabled button only speaks to somebody who tabs to it, and Enter is the key
-this dialog answers from everywhere (amendment F's sibling: one condition, asked in both
-places, and now with one answer in both places).
+— and the NVDA pass for this PR turned that from a courtesy into the only thing carrying
+the information. Measured 2026-08-30: with nothing chosen, Tab goes from the Help button
+straight to **Cancel**, because `keepTabInside` filters disabled controls out of the cycle
+— deliberately, since focusing one swallows the key. Nobody ever hears "Connect
+unavailable". The comment in `connect_dialog.ts` that claimed they did is corrected in this
+PR, and the sentence on Enter is what a listener actually gets.
 
 ### H. Enter goes forward, into a dialog that says what is happening
 

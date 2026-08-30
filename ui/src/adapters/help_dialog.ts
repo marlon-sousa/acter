@@ -13,6 +13,7 @@
 import { keepTabInside } from './dialog_tab';
 import type { HelpView } from '../ports/help_view';
 
+
 export class HelpDialog implements HelpView {
   /**
    * Where the *current* opening came back to, which is the window unless whoever opened it
@@ -52,6 +53,25 @@ export class HelpDialog implements HelpView {
    * they then have to search. With no section asked for, the platform does what it did
    * before: the dialog announces its title and its one-line description, and the first Tab
    * finds Close.
+   *
+   * **In the same turn as `showModal`, and a hold here was measured and rejected.** Driving
+   * NVDA 2026.1.1 as the `user` persona on 2026-08-30:
+   *
+   * - Focused in the same turn, the dialog announces its description and then the heading,
+   *   which is what A13's decision 7 bought. What it does not do on the *first* opening is
+   *   take the browse cursor with it: the first arrow press after arriving read "Close
+   *   button" rather than the section, and arrowing *up* read the section correctly. The
+   *   second opening, with the reader's view of the dialog already built, arrowed down into
+   *   the section. That is the same lateness `window_chrome.ts` records for the window's
+   *   first focus placement, and it is the reader's view catching up rather than the wrong
+   *   element being focused.
+   * - Focused a turn later (100 ms), the reader reached the open dialog with nothing focused
+   *   inside it and **read the whole topic aloud** — the six-paragraph wall A13 added the
+   *   description to stop — on every opening, not only the first.
+   *
+   * So the hold is not an improvement to make later: it is a worse trade, measured. What is
+   * left is one lagging arrow press, once per window, against a topic read out in full every
+   * time.
    */
   open(options?: { topic?: string; returnTo?: { focus(): void } }): void {
     if (this.dialog.open) {

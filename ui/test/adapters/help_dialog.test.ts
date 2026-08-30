@@ -88,7 +88,14 @@ describe('opening it', () => {
  * has to arrive at the answer, not at the top of a topic they then have to search.
  */
 describe('opening it at a section', () => {
-  it('puts focus on the heading that was asked for', () => {
+  /**
+   * **In the same turn as the dialog opens, and that was measured both ways** with NVDA
+   * 2026.1.1 on 2026-08-30. Placing it a turn later left the reader reaching an open dialog
+   * with nothing focused inside it, and it read the whole six-paragraph topic aloud — every
+   * opening, not only the first. So this assertion is synchronous on purpose: an `await`
+   * here would pass over the thing that has to stay true. See the note on `open`.
+   */
+  it('puts focus on the heading that was asked for, as the dialog opens', () => {
     help.open({ topic: 'help-setting-up' });
 
     expect(document.activeElement?.id).toBe('help-setting-up');
