@@ -626,6 +626,18 @@ the answer to "what should we do now?".
     stopped knowing the buffer exists, since the only thing that read it was the rule finding
     4 removes.
 
+    **And one red check that was nobody's fault is gone.**
+    `a_frontend_that_attaches_late_is_told_everything_it_missed` spawned a real PowerShell and
+    gave it a five-second head start to stand in for the webview loading; on a loaded runner
+    PowerShell's cold start outlasts that, so nothing is held to replay and the test fails
+    with `[ConnectionChanged { state: Connected }]`. It reddened three PRs that could not have
+    caused it, this one included. It runs against `cmd.exe` now, which draws its prompt in
+    tens of milliseconds against the same window — a hundredfold margin — and asserts the
+    prompt arriving as output, since a shell that reports no exit code emits no `PromptDrawn`
+    (spec B4.5, decision 4). Waiting *longer after attaching* would have been the wrong fix:
+    a prompt that arrives after the attach arrives live, and the test would quietly stop
+    exercising replay at all.
+
     **And one claim was disproved rather than fixed.** `formFilled`'s note said a listener
     tabs to a disabled Connect and hears "unavailable". They do not: `keepTabInside` filters
     disabled controls out of the cycle, so Tab goes from Help straight to Cancel. Measured
