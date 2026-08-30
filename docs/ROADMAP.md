@@ -2803,6 +2803,18 @@ thing to pick up once the adapters land, not merely the next number.
     own setup command read aloud at connect. The refused session also gets
     `IntegrationUnavailable`, which is an honest sentence rather than a cost.
 
+    **And "on a wrapped line" is a weaker condition than it sounds.** Later the same day this
+    distribution came back from a restart drawing a seventy-six column prompt —
+    `docker-desktop:/tmp/docker-desktop-root/run/desktop/mnt/host/c/Users/marlo#` — and four
+    characters of an eighty-column row were left. A set-up session headed `echo acter-under-sh`
+    as **`echo`**, and a fifty-nine character command as **`acte`**. The refused session in the
+    same suite run headed both in full. So the loss is not an edge case reachable by typing
+    something long; it is where the user's own directory happens to be, and it can take the
+    heading down to four characters while telling nobody it did.
+
+    Two tests were pinning whole headings and had to stop: how much survives is the far end's
+    prompt width, which is not theirs to depend on.
+
     **So the offer sentence does not oversell what this shell gets; it describes something this
     shell does not get.** "Acter can set it up so it tells you more about what you run" is true
     for bash and, as `sh` ships today, false.
