@@ -167,7 +167,6 @@ void shell.platform().then((os) => {
     menuBarRegion.remove();
     return;
   }
-  menuBarRegion.hidden = false;
   installMenuBar(
     byId('menu-bar'),
     {
@@ -182,6 +181,12 @@ void shell.platform().then((os) => {
     // (measured with NVDA 2026-08-26).
     windowChrome,
   );
+  // **Revealed after it is wired, never before.** A menu bar in the accessibility tree that
+  // does not answer F10 yet is a menu bar that is not there, and a listener who presses for
+  // it in that window hears nothing and has no way to tell why. The two lines used to be the
+  // other way round, which also made `menu.spec.ts`'s guard watch a proxy for "the listeners
+  // are attached" rather than the thing itself.
+  menuBarRegion.hidden = false;
 });
 
 // The edit field is passed because the session hears a keystroke only while that field

@@ -40,24 +40,34 @@ function press(key: string, options: { alt?: boolean; type?: string } = {}) {
 }
 
 /** **The bar is wired asynchronously, and pressing before it exists is a real race.**
- * `main.ts` installs the keyboard contract inside `shell.platform().then(...)` — an IPC
- * round trip — and reveals `#menu-bar-region` in that same callback, so the region losing
- * its `hidden` attribute is exactly the moment the listeners are attached.
+ * `main.ts` installs the keyboard contract inside `shell.platform().then(...)`, an IPC
+ * round trip, so for the first moments of a session there is a document with a menu bar in
+ * it and nothing listening for F10.
  *
- * Without this the suite passed on a fast machine and failed on CI, on a different test
+ * Without a guard the suite passed on a fast machine and failed on CI, on a different test
  * each run: `opens on Alt pressed and released alone` once and `opens on F10 with focus on
- * the first item` the next, both reporting focus still in the edit field because nothing
- * was listening yet. A flake that moves between tests is one cause wearing different
- * hats — so this waits for the cause rather than retrying the symptom. */
+ * the first item` the next, both reporting focus still in the edit field.
+ *
+ * **The first guard watched the wrong thing and the flake came back.** It waited for
+ * `#menu-bar-region` to lose its `hidden` attribute, on the premise that the reveal was
+ * "exactly the moment the listeners are attached" — and in `main.ts` the reveal came
+ * *before* `installMenuBar`, not after it. `menu.spec.ts` was red on main again on
+ * 2026-08-30, on this same test, expecting `menu-acter` and getting `command-input`.
+ *
+ * So this guard asks the question the whole file depends on instead of a proxy for it:
+ * **press F10 until focus actually lands in the bar.** It is indifferent to how the race is
+ * lost — a late install, a reload, an ordering nobody expected — because it waits for the
+ * behaviour rather than for a sign of it. `main.ts` reveals the region after wiring it now,
+ * which is the right order on its own terms; this no longer depends on that being true. */
 before(async () => {
   await browser.waitUntil(
-    () =>
-      browser.execute(
-        () => document.getElementById('menu-bar-region')?.hasAttribute('hidden') === false,
-      ),
+    async () => {
+      await press('F10');
+      return (await focusedId()) === 'menu-acter';
+    },
     {
       timeout: 30_000,
-      timeoutMsg: 'the menu bar was never revealed, so nothing was listening for F10',
+      timeoutMsg: 'F10 never reached the menu bar, so nothing was listening for it',
     },
   );
 });
