@@ -179,10 +179,15 @@ pub trait ShellAdapter: Send + Sync {
     ///
     /// **What forced the move is B9.5.** The session used to infer this from the marker claim,
     /// on the reasoning that `PromptAndCommandLine` meant `cmd.exe` and said so exactly.
-    /// B9.5's decision 8 makes POSIX `sh` the second shell to claim it — and an escape reaching
+    /// B9.5's decision 8 made POSIX `sh` the second shell to claim it — and an escape reaching
     /// a POSIX reader is a *keypress*, not a discard. Measured 2026-08-29 against
     /// `docker-desktop`: an escape written ahead of the setup line left busybox executing a
     /// fragment of it, which answered `-sh: r-sh: not found`.
+    ///
+    /// `sh` has since moved on to its own marker claim (roadmap 23.15), so the inference would
+    /// be sound again today — and it stays retired anyway. A marker claim is what a shell can
+    /// *say*; this is what its line editor does with a byte, and one has never implied the
+    /// other except by coincidence.
     ///
     /// `None` by default, so a shell nobody has measured is never sent a byte on the strength
     /// of what some other shell does with it.

@@ -29,7 +29,7 @@
 //! own, never an invoke, which Tauri runs on the main thread and which would deadlock the
 //! answer it is waiting for.
 
-use crate::{SessionSetup, ShellMarkers, SshQuestions, Verdict};
+use crate::{SessionSetup, SshQuestions, Verdict};
 
 /// The questions an attempt to connect asks, of which SSH's two are the first.
 pub trait ConnectQuestions: SshQuestions {
@@ -88,19 +88,26 @@ impl SetupQuestion {
     ///
     /// **Not "shell integration"** — A13 removed that phrase from everything a listener hears
     /// because it is vocabulary a user does not have. What they get is a heading for each
-    /// command and being told when one fails, and for a shell that reaches only the prompt
-    /// boundaries the second half is missing and is said to be missing (spec B9.5,
-    /// decision 8). Saying "partly" is the whole reason the per-shell answer is a
-    /// [`ShellMarkers`] rather than a yes.
+    /// command and being told when one fails, and for a shell that cannot say how a command
+    /// ended the second half is missing and is said to be missing (spec B9.5, decision 8).
+    /// Saying "partly" is the whole reason the per-shell answer is a
+    /// [`ShellMarkers`](crate::ShellMarkers) rather than a yes.
+    ///
+    /// **And POSIX `sh` stopped being the shell that needed it** (roadmap 23.15): it reports
+    /// exit codes, so it gets the sentence bash gets. The half-sentence stays because the
+    /// question it answers is real — a shell with only a prompt is where `sh` was believed to
+    /// be — and because promising a verdict that never arrives is the one thing this dialog
+    /// must not do.
     pub fn offer(&self) -> String {
-        let gained = match self.setup.markers {
-            ShellMarkers::Full => {
-                "You get a heading for each command, and you are told when a command fails."
-            }
-            ShellMarkers::PromptAndCommandLine => {
-                "You get a heading for each command. Acter cannot yet tell you when a command \
-                 fails in this shell."
-            }
+        // **What a listener gets follows from the verdict, not from the full cycle** (roadmap
+        // 23.15). Where output begins is a boundary the tracker can supply for itself; whether
+        // a command worked is the one thing no amount of inference can recover, so it is the
+        // one thing this sentence has to be careful about.
+        let gained = if self.setup.markers.reports_exit_code() {
+            "You get a heading for each command, and you are told when a command fails."
+        } else {
+            "You get a heading for each command. Acter cannot yet tell you when a command \
+             fails in this shell."
         };
         format!("Acter can set it up so it tells you more about what you run. {gained}")
     }
@@ -188,7 +195,7 @@ impl ConnectQuestions for crate::Unasked {
 
 #[cfg(test)]
 mod tests {
-    use crate::{Fault, Unasked};
+    use crate::{Fault, ShellMarkers, Unasked};
 
     use super::*;
 
@@ -248,13 +255,33 @@ mod tests {
         );
     }
 
-    /// **The sentence has to be able to say "partly"** (spec B9.5, decision 8). POSIX `sh`
-    /// reaches the prompt boundaries and no further, and a dialog that promised failures
-    /// there would be promising something the setup cannot deliver.
+    /// **A shell that reports exit codes gets the sentence bash gets** (roadmap 23.15), and
+    /// the marker set it gets there by is not this sentence's business: where output begins
+    /// is a boundary the tracker supplies for itself, and a listener is never told about it.
+    #[test]
+    fn a_shell_that_says_how_a_command_went_is_offered_failures_too() {
+        let question = SetupQuestion {
+            shell: "sh".to_owned(),
+            setup: SessionSetup {
+                line: "PS1=...".to_owned(),
+                markers: ShellMarkers::PromptCommandLineAndExitCode,
+            },
+        };
+        let offer = question.offer();
+
+        assert!(offer.contains("a heading for each command"), "{offer}");
+        assert!(offer.contains("told when a command fails"), "{offer}");
+    }
+
+    /// **The sentence has to be able to say "partly"** (spec B9.5, decision 8). A shell that
+    /// reaches the prompt boundaries and no further cannot say whether a command worked, and a
+    /// dialog that promised failures there would be promising something the setup cannot
+    /// deliver. POSIX `sh` was that shell until roadmap 23.15 measured otherwise; `cmd.exe`
+    /// still is.
     #[test]
     fn a_shell_that_marks_only_its_prompt_says_what_it_cannot_do() {
         let question = SetupQuestion {
-            shell: "sh".to_owned(),
+            shell: "cmd".to_owned(),
             setup: SessionSetup {
                 line: "PS1=...".to_owned(),
                 markers: ShellMarkers::PromptAndCommandLine,

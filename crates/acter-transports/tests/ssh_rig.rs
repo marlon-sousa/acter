@@ -994,4 +994,37 @@ async fn the_markers_a_session_sets_itself_up_with_cross_an_ssh_connection() {
         !seen.contains(&SessionEvent::IntegrationUnavailable),
         "a session that marks its boundaries never says it has none: {seen:?}"
     );
+
+    // **And Acter's own line is never read aloud** (roadmap 23.12). This far end is where
+    // the second cause was found: `sshd` prints `Last login: ...` before the prompt, so the
+    // first *drawn* line the setup goes out on is the banner, the row B4.9 holds a
+    // submission on is the banner's, and the echo of a five-hundred-character command
+    // arrived as ordinary output — twice. Nothing here recognises an echo; the window Acter
+    // talks to itself in is what quiets it, and every byte is still in the buffer below.
+    let spoken: String = seen
+        .iter()
+        .filter_map(|event| match event {
+            SessionEvent::Announce {
+                announcement: Announcement::ReadAloud { text },
+                ..
+            } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        !spoken.contains("__acter_prompt"),
+        "Acter's own setup command was read to the listener: {spoken:?}"
+    );
+
+    let rendered: String = seen
+        .iter()
+        .filter_map(|event| match event {
+            SessionEvent::Output { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        rendered.contains("__acter_prompt"),
+        "and quieting it must never mean losing it — the buffer is where the disclosure          can be read back: {rendered:?}"
+    );
 }

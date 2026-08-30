@@ -151,12 +151,14 @@ mod tests {
         assert_eq!(facts.markers, ShellMarkers::Full);
     }
 
-    /// And a remote `sh` claims what its own line earns, rather than what bash's does.
+    /// And a remote `sh` claims what its own line earns, rather than what bash's does: the
+    /// prompt boundaries and a verdict, and still nothing about where output begins
+    /// (roadmap 23.15).
     #[test]
-    fn a_remote_sh_claims_only_the_prompt_boundaries_its_setup_reaches() {
+    fn a_remote_sh_claims_the_prompt_boundaries_and_a_verdict() {
         let facts = over_ssh(Some("sh"));
 
         assert!(facts.setup.is_some());
-        assert_eq!(facts.markers, ShellMarkers::PromptAndCommandLine);
+        assert_eq!(facts.markers, ShellMarkers::PromptCommandLineAndExitCode);
     }
 }

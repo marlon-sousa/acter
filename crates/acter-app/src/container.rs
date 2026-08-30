@@ -22,8 +22,8 @@ use std::sync::Arc;
 use acter_core::{
     Chosen, Clock, ConnectApi, ConnectQuestions, ConnectService, Explained, InstalledShells,
     PacingConfig, ProfileId, SessionApi, SessionFactory, SessionService, SetUp, SetupAnswer,
-    SetupQuestion, ShellAdapter, ShellFacts, ShellLaunch, ShellMarkers, Signatures, SshQuestions,
-    Started, Transport, Unasked,
+    SetupQuestion, ShellAdapter, ShellFacts, ShellLaunch, Signatures, SshQuestions, Started,
+    Transport, Unasked,
 };
 #[cfg(windows)]
 use acter_shells::WindowsTrust;
@@ -429,9 +429,13 @@ impl Shells {
                 SetupAnswer::Skip => return (facts.declined(), SetUpOutcome::Refused),
             }
         }
-        let outcome = match facts.markers {
-            ShellMarkers::Full => SetUpOutcome::Fully,
-            ShellMarkers::PromptAndCommandLine => SetUpOutcome::Partly,
+        // **What the sentence has to be careful about is the verdict** (roadmap 23.15): a
+        // shell that says how a command went gets the full sentence whether or not it also
+        // marks where output begins, because the tracker supplies that boundary itself.
+        let outcome = if facts.markers.reports_exit_code() {
+            SetUpOutcome::Fully
+        } else {
+            SetUpOutcome::Partly
         };
         (facts, outcome)
     }
@@ -665,9 +669,16 @@ fn starting(distribution: Option<&str>) -> String {
 enum SetUpOutcome {
     /// The setup went out, and what it earns reaches every boundary.
     Fully,
-    /// The setup went out, and it marks where commands begin but not how they ended — which
-    /// is POSIX `sh`, and is the only case where the grace period will never speak, because
-    /// markers do arrive.
+    /// The setup went out, and it marks where commands begin but not how they ended — the
+    /// only case where the grace period will never speak, because markers do arrive.
+    ///
+    /// **Nothing shipped reaches it since roadmap 23.15**, and it is kept rather than deleted.
+    /// It was POSIX `sh` until `sh` was measured to report exit codes after all, and `cmd.exe`
+    /// — the one remaining shell that marks only its prompt — is injected at launch and never
+    /// reaches this question. What it is waiting for is the next shell somebody measures whose
+    /// prompt is all it has: `zsh` and `fish` both have hooks, but a shell with neither is not
+    /// a hypothesis, it is where `sh` was believed to be a day ago. Deleting the state would
+    /// mean rebuilding it, and rebuilding the sentence a listener hears with it.
     Partly,
     /// Nothing has been measured for this shell, so there was nothing to run.
     NothingWritten,
@@ -851,6 +862,8 @@ fn transcript(path: &str) -> Result<SessionTranscript, String> {
 
 #[cfg(test)]
 mod tests {
+    use acter_core::ShellMarkers;
+
     use super::*;
 
     /// **The release gate, asserted rather than assumed.** What a build offers and what it
@@ -892,13 +905,18 @@ mod tests {
     /// **The only case where the grace period will never speak**, because markers do arrive —
     /// so this clause is the one chance to say what a listener will not get (spec B9.5,
     /// decision 8).
+    ///
+    /// **The name here is a shape rather than a shell.** It was `sh` until roadmap 23.15
+    /// measured `sh` reporting exit codes after all, and nothing that ships reaches this
+    /// outcome today; what it is kept for is the next shell somebody measures whose prompt is
+    /// all it has, and the sentence such a listener would get.
     #[test]
     fn a_session_set_up_only_as_far_as_its_prompt_says_what_it_cannot_do() {
-        let note = far_end_note(Some("sh"), SetUpOutcome::Partly);
+        let note = far_end_note(Some("ksh"), SetUpOutcome::Partly);
 
         assert_eq!(
             note.said.as_deref(),
-            Some("sh. You will hear a heading for each command here, but not whether it worked.")
+            Some("ksh. You will hear a heading for each command here, but not whether it worked.")
         );
         assert!(note.limit_explained);
     }
@@ -1257,8 +1275,8 @@ mod tests {
             assert_eq!(asked[1].shell, "sh");
             assert_eq!(
                 outcome,
-                SetUpOutcome::Partly,
-                "and sh is set up as far as its own line reaches"
+                SetUpOutcome::Fully,
+                "and sh is set up as far as its own line reaches, which since roadmap 23.15                  is a verdict as well as a heading"
             );
             assert!(facts.setup.is_some());
         }
