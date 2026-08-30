@@ -127,10 +127,35 @@ class FakeConnect implements ConnectApi {
   }
 }
 
+/**
+ * The announcer, and the one thing about it this dialog now depends on: it can be asked
+ * whether it still owes the words it was given (spec 13.3).
+ *
+ * `owing` holds the wait open, so a test can assert what is still on screen while the
+ * announcer has not finished — which is the whole of the ordering rule.
+ */
 class FakeAnnouncer implements AnnouncerView {
   announcements: string[] = [];
+  /** How many callers are waiting, and what releases them. */
+  private readonly waiting: (() => void)[] = [];
+  owing = false;
   announce(text: string): void {
     this.announcements.push(text);
+  }
+  settled(): Promise<void> {
+    if (!this.owing) {
+      return Promise.resolve();
+    }
+    return new Promise((resolve) => {
+      this.waiting.push(resolve);
+    });
+  }
+  /** Say that everything announced has reached the reader. */
+  settle(): void {
+    this.owing = false;
+    for (const resolve of this.waiting.splice(0)) {
+      resolve();
+    }
   }
 }
 
@@ -258,6 +283,18 @@ function selected(): string | undefined {
     document.querySelector<HTMLElement>('[role="option"][aria-selected="true"]')
       ?.textContent ?? undefined
   );
+}
+
+/**
+ * Let an attempt run all the way to its end.
+ *
+ * It is one await deeper than the attempt itself since 13.3: nothing is closed until the
+ * announcer says the words it was given have reached the reader.
+ */
+async function attemptEnds(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
 }
 
 function press(key: string): void {
@@ -423,7 +460,7 @@ describe('connecting (decision 4)', () => {
     await dialog.open();
 
     byId('connect-start').click();
-    await Promise.resolve();
+    await attemptEnds();
 
     expect(attempted).toEqual([{ profile: 'Shell', kind: 'Cmd' }]);
     expect(byId<HTMLDialogElement>('connect-dialog').open).toBe(false);
@@ -1083,6 +1120,70 @@ describe('the connecting dialog', () => {
     await Promise.resolve();
 
     expect(connecting.shown).toEqual([]);
+  });
+});
+
+/**
+ * **Nothing is taken away while the announcer still owes it words** (roadmap 13.3 and
+ * 23.13).
+ *
+ * The sentence naming the far end drains into the innermost open dialog's live region, which
+ * is the connecting dialog's. Closing on the spot took that region away in the same
+ * millisecond the sentence reached it — and a live region's first text change after its
+ * document returns to the accessibility tree is not announced at all, so six times across
+ * five NVDA passes a listener heard the shell's prompt and never what they had connected to.
+ *
+ * What these pin is the order, not the margin: how long the words need is the announcer's
+ * measurement, and this dialog's part is to wait for the answer.
+ */
+describe('waiting for what was said', () => {
+  it('keeps both dialogs open until the announcer has settled', async () => {
+    announcer.owing = true;
+    await dialog.open();
+
+    press('Enter');
+    await attemptEnds();
+
+    // The attempt has answered — it is what put the sentence in the region — and nothing has
+    // been closed on top of it.
+    expect(attempted).toEqual([{ profile: 'Shell', kind: 'Cmd' }]);
+    expect(connecting.hidden).toBe(0);
+    expect(byId<HTMLDialogElement>('connect-dialog').open).toBe(true);
+    // And the attempt is not over, so the controls under it still say so.
+    expect(byId<HTMLButtonElement>('connect-start').disabled).toBe(true);
+  });
+
+  it('closes them once it has', async () => {
+    announcer.owing = true;
+    await dialog.open();
+    press('Enter');
+    await attemptEnds();
+
+    announcer.settle();
+    await attemptEnds();
+
+    expect(connecting.hidden).toBe(1);
+    expect(byId<HTMLDialogElement>('connect-dialog').open).toBe(false);
+    expect(returned).toBe(1);
+  });
+
+  /** A refusal waits too. What is owed there is whatever the connection said on its way to
+   * failing, which was put in the same region this is about to take away. */
+  it('waits before putting the listener back on the list when an attempt is refused', async () => {
+    succeeds = false;
+    announcer.owing = true;
+    await dialog.open();
+
+    press('Enter');
+    await attemptEnds();
+    expect(connecting.hidden).toBe(0);
+
+    announcer.settle();
+    await attemptEnds();
+
+    expect(connecting.hidden).toBe(1);
+    expect(byId<HTMLDialogElement>('connect-dialog').open).toBe(true);
+    expect(document.activeElement?.id).toBe('connect-kinds');
   });
 });
 

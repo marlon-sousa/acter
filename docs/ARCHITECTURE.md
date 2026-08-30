@@ -502,7 +502,25 @@ user may or may not have changed. Removing the role to solve something else is a
 regression: it drops every window back to browse mode, so arrows move a virtual cursor
 instead of a caret and prose becomes reachable that should not be.
 
-**Where these are enforced.** Rules 1, 2 and 9 are behaviour and belong in the dialog
+**13. A dialog is not closed while the announcer still owes it words.** A modal makes the
+rest of the document inert, so a dialog that wants to be heard carries its own live region and
+announcements drain into it — and closing that dialog takes the region out of the accessibility
+tree. Words the reader has not taken yet go with it, and worse: a live region's **first text
+change after its document returns to the tree** is not announced at all, because there is no
+earlier state to compare it against. So a sentence drained in the same millisecond a dialog
+closes is lost twice over. The dialog awaits `AnnouncerView.settled()` before it hides or
+closes anything.
+
+Measured 2026-08-30 (NVDA 2026.1.1, silent capture, `user` persona, and the debug binary's
+WebDriver recording the DOM on the same clock): the sentence naming the far end a connection
+reached was not spoken on six occasions across five passes, while reaching `#announcer`
+correctly every time and staying there two seconds. At a zero margin it was heard in 2 of 4
+trials; from 17 ms upwards, in 11 of 11. Taking the region away afterwards is safe — a marker
+put in 90 ms before its dialog closed was spoken 7 ms *after* the region left the tree — so
+what the rule buys is the margin, not the region's survival. Spec:
+[13.3-the-connection-sentence-is-heard.md](specs/13.3-the-connection-sentence-is-heard.md).
+
+**Where these are enforced.** Rules 1, 2, 9 and 13 are behaviour and belong in the dialog
 adapter, tested in `ui/test/adapters/`; rule 3 is the service's, tested in `acter-core`;
 the rest are properties of the markup and its adapter together. A new dialog is reviewed
 against this list, and the list is the checklist item — not "is it accessible".

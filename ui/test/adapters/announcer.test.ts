@@ -11,6 +11,7 @@ import { AnnouncerDom } from '../../src/adapters/announcer';
 // Must match the adapter constants; the tests advance past them.
 const CLEAR_AFTER_MS = 1500;
 const DRAIN_SPACING_MS = 250;
+const SPOKEN_MARGIN_MS = 100;
 
 function makeRegion(): HTMLElement {
   const region = document.createElement('div');
@@ -196,6 +197,119 @@ describe('AnnouncerDom', () => {
     vi.advanceTimersByTime(CLEAR_AFTER_MS);
     expect(region.childNodes).toHaveLength(0);
     expect(region.textContent).toBe('');
+  });
+});
+
+/**
+ * **What `settled` answers: may the region be taken away yet** (roadmap 13.3 and 23.13).
+ *
+ * A live region's first text change after its document returns to the accessibility tree is
+ * not announced, and Acter used to close both connect dialogs and drain the connection
+ * sentence in the same millisecond. So a caller that is about to take a region away — a
+ * dialog closing — asks first, and what it waits for is the reader having taken the words,
+ * not having spoken them.
+ */
+describe('settling', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    document.body.replaceChildren();
+  });
+
+  /** Whether the promise has resolved, without awaiting it — which is the only way to assert
+   * that it has *not*. */
+  function watch(promise: Promise<void>): { done: boolean } {
+    const state = { done: false };
+    void promise.then(() => {
+      state.done = true;
+    });
+    return state;
+  }
+
+  it('is settled at once when nothing was ever announced', async () => {
+    const announcer = new AnnouncerDom(makeRegion(), 0);
+
+    const settled = watch(announcer.settled());
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(settled.done).toBe(true);
+  });
+
+  it('waits for an announcement that has not been drained yet', async () => {
+    const region = makeRegion();
+    const announcer = new AnnouncerDom(region, 0);
+
+    announcer.announce('connected to Command Prompt');
+    const settled = watch(announcer.settled());
+
+    // Drained, so the words are in the region — and that is not yet the question being
+    // asked. Nothing has taken them.
+    await vi.advanceTimersByTimeAsync(0);
+    expect(region.textContent).toBe('connected to Command Prompt');
+    expect(settled.done).toBe(false);
+
+    // Still not, right up to the margin.
+    await vi.advanceTimersByTimeAsync(SPOKEN_MARGIN_MS - 1);
+    expect(settled.done).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(settled.done).toBe(true);
+  });
+
+  /** The hold on the session's first words is a wait like any other: a caller that asked
+   * before it elapsed is still waiting after it. */
+  it('waits out the startup hold as well', async () => {
+    const announcer = new AnnouncerDom(makeRegion(), 1_000);
+
+    announcer.announce('connected to Command Prompt');
+    const settled = watch(announcer.settled());
+
+    await vi.advanceTimersByTimeAsync(999 + SPOKEN_MARGIN_MS);
+    expect(settled.done).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(settled.done).toBe(true);
+  });
+
+  /** **The promise is about the queue when it resolves, not when it was asked for.** A
+   * progress sentence arriving while a caller waits is one more thing the region is owed,
+   * and closing on the older answer would drain it into a region that had just gone. */
+  it('waits for an announcement that arrives while it is being waited on', async () => {
+    const announcer = new AnnouncerDom(makeRegion(), 0);
+
+    announcer.announce('Starting Ubuntu.');
+    const settled = watch(announcer.settled());
+    await vi.advanceTimersByTimeAsync(0);
+
+    announcer.announce('connected to WSL: Ubuntu, bash');
+    await vi.advanceTimersByTimeAsync(SPOKEN_MARGIN_MS);
+    expect(settled.done).toBe(false);
+
+    // The second is held out of the first one's mutation batch, so it only reaches the region
+    // a gap after the first did — and its own margin runs from its own drain.
+    await vi.advanceTimersByTimeAsync(DRAIN_SPACING_MS - SPOKEN_MARGIN_MS);
+    expect(settled.done).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(SPOKEN_MARGIN_MS);
+    expect(settled.done).toBe(true);
+  });
+
+  /** A burst is one wait, not one per item: everybody asking is released together once the
+   * last of them has had its margin. */
+  it('releases every caller together', async () => {
+    const announcer = new AnnouncerDom(makeRegion(), 0);
+
+    announcer.announce('first');
+    announcer.announce('second');
+    const one = watch(announcer.settled());
+    const two = watch(announcer.settled());
+
+    await vi.advanceTimersByTimeAsync(DRAIN_SPACING_MS + SPOKEN_MARGIN_MS);
+
+    expect(one.done).toBe(true);
+    expect(two.done).toBe(true);
   });
 });
 

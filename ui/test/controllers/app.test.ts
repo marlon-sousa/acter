@@ -156,6 +156,10 @@ class FakeAnnouncer implements AnnouncerView {
   announce(text: string): void {
     this.announcements.push(text);
   }
+  /** Nothing is owed: this fake is the queue and it is always empty. */
+  settled(): Promise<void> {
+    return Promise.resolve();
+  }
 }
 
 class FakeBeep implements BeepView {
@@ -509,6 +513,7 @@ describe('event rendering (decision 2)', () => {
       announce: () => {
         order.push('announce');
       },
+      settled: () => Promise.resolve(),
     };
     const controller = new AppController(
       backend,

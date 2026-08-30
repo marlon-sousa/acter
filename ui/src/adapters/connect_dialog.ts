@@ -581,6 +581,19 @@ export class ConnectDialog {
     this.connecting.show(this.chosenLabel(row));
     this.busy(true);
     const started = await this.start(this.profile(row), this.setUp());
+    // **Nothing is taken away while the announcer still owes it words** (roadmap 13.3 and
+    // 23.13, fixed 2026-08-30). The sentence naming the far end is announced by whoever
+    // connects, and it drains into the innermost open dialog's live region — this one's.
+    // Closing on the spot took that region away in the same millisecond the sentence
+    // reached it, and a live region's first text change after its document returns to the
+    // accessibility tree is not announced at all: on six occasions across five NVDA passes
+    // a listener was told the shell's prompt and never what they had connected to.
+    //
+    // So the attempt is not over when it answers, it is over when what it said has been
+    // taken. The whole queue rather than this one sentence, because a progress line still
+    // pending would otherwise drain into a region that had just left the tree, which is
+    // this defect again in different words.
+    await this.announcer.settled();
     this.busy(false);
     this.connecting.hide();
     if (started) {

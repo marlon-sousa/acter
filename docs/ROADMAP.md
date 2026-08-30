@@ -370,56 +370,50 @@ the answer to "what should we do now?".
     it ordinary: an empty results buffer used to last as long as it took a session to draw
     its first prompt, and it is now the state every launch opens in until the user connects.
 
-13.3. The far end a connection reached is not always spoken. Spec: none yet → specify
-    first. **Found 2026-08-26** in A8's NVDA pass and filed rather than fixed there, because
-    the cause is not established and a guess at a timing constant is not a fix.
+13.3. **Done** — the far end a connection reached is spoken, every time. Spec:
+    [13.3-the-connection-sentence-is-heard.md](specs/13.3-the-connection-sentence-is-heard.md) —
+    agreed in conversation 2026-08-30. **Filed twice**: lane 2's 23.13 is the same defect found
+    in B9.5's pass, and closes by reference to this entry.
 
-    **What a listener meets.** Connecting from the dialog announces "connected to Windows
-    PowerShell" and then the shell's own prompt — measured, twice — but on the first connect
-    of the session it was not spoken at all: the status region said "connected", the prompt
-    was read, and the sentence naming the far end was missing. Both runs were NVDA 2026.1.1,
-    silent capture, `user` persona, minutes apart in one window.
+    **What a listener met.** Connecting announces what they are now typing into — "connected to
+    Windows PowerShell", "connected to WSL: Ubuntu, bash", "connected to Command Prompt, started
+    although nothing has signed it" — and six times across five NVDA passes it was not spoken at
+    all: the terminal window, the edit field and the shell's own prompt arrived, and never the
+    sentence naming the far end. Two of B9.5's four connections spoke and two did not. The status
+    region held the whole sentence correctly every time, so nothing was ever *lost*; what was
+    intermittent was whether the reader picked it up.
 
-    **Two more far ends, measured 2026-08-29 in B5.5's pass, and they narrow it hard.** NVDA
-    2026.1.1, silent capture, `user` persona, agent-driven through the screen-readers bridge.
-    Connecting to **WSL: Ubuntu** (cold), to **WSL: docker-desktop** and to **Command Prompt**
-    each produced the terminal window, the edit field and the shell's own prompt — and in
-    every one of the three the sentence naming the far end was **never spoken**, on the first
-    connection of a freshly launched window every time. The words were composed and did reach
-    the page: the status region read back "connected to WSL: Ubuntu, bash", "connected to WSL:
-    docker-desktop, sh, with no shell integration set up in this distribution" and the cmd
-    equivalent, correctly, on demand.
+    It cost more than a missed utterance since B5.5: for a far end Acter cannot integrate the
+    named sentence is the only one said, the generic `IntegrationUnavailable` being suppressed
+    when the note already carried it — so such a listener heard neither.
 
-    So it is **not** about the far end's kind, not about the probe, and not about whether the
-    connection carries a note: cmd takes the `note: None` path and is just as silent as the
-    two that carry one. What the three runs have in common with B5.7's is the *window*: each
-    was the first connection made in a window that had just opened. That is the strongest
-    lead this entry has, and it is now four far ends rather than one.
+    **Both suspicions this entry was filed with were wrong**, and measuring them was the whole
+    of the work. Driven through the screen-readers bridge on 2026-08-30 (NVDA 2026.1.1, silent
+    capture, `user` persona) against a real Command Prompt, with the debug binary's embedded
+    WebDriver recording the DOM on the same wall clock: the text reaches `#announcer` correctly
+    every time, in the document, not inert, nothing over it, and stays about two seconds — so the
+    region is not going away. And the reader is not busy: it emits other utterances 60 to 200 ms
+    later and speaks the shell prompt appended to that same region half a second afterwards, 21
+    to 27 ms after that insertion.
 
-    **And it costs more than it did, since B5.5.** For an unintegrated far end the named
-    sentence is the *only* one said — the generic `IntegrationUnavailable` is deliberately
-    suppressed when the note already said it, which was measured working on docker-desktop.
-    So a listener on a distribution Acter cannot integrate now hears neither, where before
-    this entry they at least heard the generic sentence five seconds later. Fixing 13.3 is
-    what restores it; nothing in B5.5 should be undone for it.
+    **What is lost is the first live-region change carrying text after the region returns to the
+    accessibility tree.** Acter closed both connect dialogs and drained the sentence in the same
+    millisecond, so it arrived exactly as the document was re-admitted, with no earlier state for
+    the reader to compare it against. Two probes fix that: a marker inserted one millisecond
+    after the swallowed sentence *was* spoken, so this is not "wait longer"; and letting a
+    harmless empty node go first, to re-establish the baseline, failed on the real string in the
+    real order — an empty node is not a text change, and the idea is recorded as dead rather than
+    left to be tried again.
 
-    **What is suspected and what is not.** The announcement is queued while the dialog is
-    still open and drained after it closes, so it crosses the moment the dialog leaves the
-    top layer and focus returns to the edit field. Whether what is lost is the drain landing
-    in a region that is going away, or the reader dropping an utterance while focus moves,
-    is not established — and the two want different fixes. It is worth an entry because the
-    sentence is the one that tells a listener what they are now typing into.
-
-    **Seen twice more in B5.7's pass, 2026-08-27** — NVDA 2026.1.1, silent capture, `user`
-    persona, the real application — and this time it was **both** connections of the session
-    rather than only the first: Windows PowerShell and, minutes later, an unsigned Command
-    Prompt started deliberately. Neither spoke its sentence; both read the prompt.
-
-    That run also narrows it usefully. The status region was read back afterwards and held
-    the whole sentence, B5.7's new clause included: *"connected to Command Prompt, started
-    although nothing has signed it"*. So the words are composed, they reach the region, and
-    they stay there to be found — what is lost is the utterance at the moment of connection,
-    which points at the second suspicion above rather than the first.
+    **So the fix is an order, and a measured margin.** The announcer can be asked whether it
+    still owes anything (`settled`), and nothing takes a live region away until it answers.
+    Fifteen bisection trials: at a zero margin the line was heard in 2 of 4, and from 17 ms
+    upwards in 11 of 11, across 17, 30, 47, 66, 123 and 262 ms plus a three-second control, so the
+    landed margin is 100 ms. The risk was measured and cleared in the same session — a marker put
+    into the connecting dialog's region 90 ms before it closed was spoken 7 ms *after* the region
+    left the tree, so removing a region does not retract what the reader has taken. It is now
+    ARCHITECTURE's dialog rule 13, because any dialog that announces and then closes has this
+    waiting in it.
 
 13.4. **Done** — A10, the window has two faces, and the connected one is the terminal
     window. Spec:
@@ -3011,7 +3005,11 @@ thing to pick up once the adapters land, not merely the next number.
     agreed in conversation rather than slipped into an implementation PR. So the measurement
     landed and the change did not.
 
-23.13. The connection sentence is sometimes not announced. Spec: none yet → specify first.
+23.13. **Done** — the connection sentence is sometimes not announced. **Fixed in lane 1 as
+    13.3** and closed by reference: it is one defect filed twice, and the fix is entirely
+    frontend. Spec:
+    [13.3-the-connection-sentence-is-heard.md](specs/13.3-the-connection-sentence-is-heard.md).
+
     **Found in B9.5's NVDA pass, 2026-08-29**, and **not caused by it**: the announcement path
     is A9's and B9.5 did not touch it.
 
@@ -3022,10 +3020,11 @@ thing to pick up once the adapters land, not merely the next number.
     every one of the four, so nothing is *lost*; what is intermittent is whether the reader
     picks it up.
 
-    **The likely cause is a race the announcer already documents**: it empties its live region
-    shortly after each announcement, and the connection announcement lands in the same instant
-    as a window swap, which is when NVDA is busiest. It is the one announcement in the product
-    that competes with a focus change it caused.
+    **The cause guessed at here was wrong, and 13.3 measured it.** Neither the emptying of the
+    region nor a busy reader is what happens: the region still holds the sentence two seconds
+    later, and the reader speaks other things 60 to 200 ms afterwards. What is lost is the first
+    live-region change carrying text after the region returns to the accessibility tree, which is
+    exactly what closing both connect dialogs in the same millisecond as the drain produces.
 
     It matters more than a missed utterance usually would, because it is the *first* thing a
     listener hears about a session and because A13 decided what it says. B9.5's checklist item
