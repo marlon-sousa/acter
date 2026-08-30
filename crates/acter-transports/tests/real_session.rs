@@ -2211,9 +2211,14 @@ mod the_session_is_set_up_after_it_is_established {
             "Acter's own setup command was read to the listener: {:?}",
             session.said_aloud()
         );
+        // Where it is found depends on what the far end did with the echo: in the block's
+        // heading when the echo fell in the region the tracker labels, in the block's output
+        // when a redraw put it elsewhere. The heading is the durable half — it is what F6 and
+        // the previous-heading command reach.
+        let headed = session.setup_block(&line).is_some();
         assert!(
-            session.rendered().contains("BB_ASH_VERSION"),
-            "and quieting it must never mean losing it: {:?}",
+            headed || session.rendered().contains("BB_ASH_VERSION"),
+            "the disclosure has to be readable back, and it is in neither the heading nor              the buffer: {:?}",
             session.rendered()
         );
     }

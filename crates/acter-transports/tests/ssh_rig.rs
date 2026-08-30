@@ -1016,6 +1016,20 @@ async fn the_markers_a_session_sets_itself_up_with_cross_an_ssh_connection() {
         "Acter's own setup command was read to the listener: {spoken:?}"
     );
 
+    // **And quieting it must never mean losing it.** Where the command is found depends on
+    // what the far end did with the echo: when it lands in the `B..C` region the tracker
+    // labels, it is the block's *heading*, and when a banner or a redraw puts it elsewhere it
+    // is the block's output. The heading is the durable half — it is what a listener reaches
+    // with F6 and then the previous-heading command — so that is what is asserted.
+    let headed = seen.iter().any(|event| {
+        matches!(
+            event,
+            SessionEvent::CommandStarted {
+                command_line: Some(line),
+                ..
+            } if line.contains("__acter_prompt")
+        )
+    });
     let rendered: String = seen
         .iter()
         .filter_map(|event| match event {
@@ -1024,7 +1038,7 @@ async fn the_markers_a_session_sets_itself_up_with_cross_an_ssh_connection() {
         })
         .collect();
     assert!(
-        rendered.contains("__acter_prompt"),
-        "and quieting it must never mean losing it — the buffer is where the disclosure          can be read back: {rendered:?}"
+        headed || rendered.contains("__acter_prompt"),
+        "the disclosure has to be readable back, and it is in neither the heading nor the          buffer: {seen:?}"
     );
 }
