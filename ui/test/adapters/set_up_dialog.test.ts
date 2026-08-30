@@ -145,16 +145,34 @@ describe('SetUpDialog', () => {
   /**
    * **What refusing costs, in the user's words** — A13's shipped sentence, which is the
    * register test rather than a placeholder.
+   *
+   * **It is the last sentence of the description, and nothing in the body** — reported by
+   * the user on 2026-08-30, who met it as a focusable paragraph while tabbing this dialog.
+   * A paragraph is not a control; the description is how prose is spoken inside an
+   * application region without being a tab stop.
    */
-  it('says what refusing costs, last, before the controls', () => {
+  it('says what refusing costs, last, as the dialog opens', () => {
     const { ask } = build();
 
     void ask.ask(BASH);
 
-    const body = document.getElementById('set-up-body')?.textContent ?? '';
-    expect(body).toContain(
+    const summary = document.getElementById('set-up-summary')?.textContent ?? '';
+    expect(summary).toContain(
       'You will hear what commands print here, but not whether they worked.',
     );
+    expect(summary.trimEnd().endsWith('whether they worked.')).toBe(true);
+  });
+
+  /** And the only things Tab finds are the command, the box and the two buttons. */
+  it('puts nothing in the tab order that is not a control', () => {
+    const { dialog, ask } = build();
+
+    void ask.ask(BASH);
+
+    const stops = Array.from(
+      dialog.querySelectorAll<HTMLElement>('[tabindex]:not([tabindex="-1"])'),
+    );
+    expect(stops).toEqual([]);
   });
 
   it('answers that the session may be set up when Continue is pressed', async () => {

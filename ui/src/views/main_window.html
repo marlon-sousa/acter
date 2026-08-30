@@ -242,8 +242,8 @@
            reason (spec B9): it names what is here and how to move through it, and the
            sections stay where a heading key can find them. -->
       <p id="help-summary">
-        Three short sections about what you hear when you run a command. Use your reader's
-        heading key to move between them.
+        Four short sections about what you hear when you run a command, and about setting a
+        session up. Use your reader's heading key to move between them.
       </p>
 
       <h2>What you always hear</h2>
@@ -278,6 +278,36 @@
         A session on another computer, reached over SSH, normally does not. Setting it up
         means changing something on that other computer, which Acter will not do without
         asking you first.
+      </p>
+
+      <!-- **The section the Connect dialog's Help button opens at**, which is why its
+           heading carries an id and a tabindex: focus lands on the heading itself, so a
+           listener arrives at the answer rather than at the top of a topic they then have
+           to search. `-1` keeps it out of the tab order — it is a heading, not a control,
+           and the rule the set-up dialog's refusal sentence was fixed under on 2026-08-30.
+
+           It says what the checkbox turns on, what turning it off costs, and that nothing
+           is ever run without being shown first — in the words A13 settled on, which name
+           what a person keeps and what they lose rather than what this project calls it. -->
+      <h2 id="help-setting-up" tabindex="-1">What setting a session up means</h2>
+      <p>
+        When you connect, Acter can run one short command inside the session it has just
+        started. The command asks the shell to say where each command you run begins and
+        ends, and how it finished.
+      </p>
+      <p>
+        With it, you get a heading for each command, which your reader's heading key jumps
+        between, and you are told when a command fails.
+      </p>
+      <p>
+        Without it, the session still works. What you type runs, and Acter reads out what it
+        prints. What you do not get is the headings and the message about a command failing.
+      </p>
+      <p>
+        Nothing is run without being shown to you first. When Acter has something to run, a
+        dialog appears with the command in a box you can read through, and it runs only if
+        you choose Continue. You can also switch the whole thing off before you connect,
+        with the box on the Connect dialog.
       </p>
 
       <button id="help-close" type="button">Close</button>
@@ -348,6 +378,19 @@
           run</label
         >
       </p>
+      <!-- **A way to find out what the box above does, next to the box** — reported by the
+           user on 2026-08-30. The checkbox is ticked by default and its label is one
+           sentence; what it actually turns on, what it costs to turn off, and the fact that
+           nothing runs without being shown first are three more, and an announcement is not
+           where any of that belongs. This opens the help topic that says it, at the section
+           that says it, and comes back to this button when it closes (spec A13, decision 2:
+           explained where a listener can read it at their own pace).
+
+           It is a button rather than a link because there is nowhere to go: it opens a
+           dialog in this window. -->
+      <button id="connect-set-up-help" type="button">
+        Help with setting a session up
+      </button>
       <button id="connect-start" type="button">Connect</button>
       <button id="connect-cancel" type="button">Cancel</button>
       </div>
@@ -361,6 +404,37 @@
         aria-live="polite"
         class="visually-hidden"
       ></div>
+    </dialog>
+    <!-- **What is happening while a connection is being made** — reported by the user on
+         2026-08-30, who pressed Enter on a connection kind and was put back on the list of
+         kinds. Being returned to the control you just acted on says that nothing happened,
+         which for a connection that takes five seconds to a cold distribution is exactly
+         the wrong thing to say. This dialog is what Enter goes to instead: it names what is
+         being connected to, and the backend's own progress sentences arrive in its live
+         region as the stages pass (spec B9, decision 6).
+
+         **It is deliberately plain.** There is nothing to arrow and nothing to choose, so
+         no `role="application"`: what it holds is one sentence to be read, and browse mode
+         reads prose. Nothing in it is focusable either, so the platform focuses the dialog
+         itself and a reader announces its name and its description.
+
+         **Escape closes it, and that is not a trap.** There is no way to call off a
+         connection in flight, so Escape leaves the attempt running and puts the listener
+         back on the Connect dialog underneath — which is still there, with its controls
+         unavailable until the answer comes. Refusing the key would be the trap: a modal
+         with no controls and no way out is one a slow far end could hold a listener in.
+
+         It comes after the Connect dialog in this document because it opens on top of it:
+         the announcer speaks into the last live region an open dialog has, which is the
+         innermost one. -->
+    <dialog
+      id="connecting-dialog"
+      aria-label="Connecting"
+      aria-describedby="connecting-what"
+    >
+      <h1>Connecting</h1>
+      <p id="connecting-what"></p>
+      <div data-live-region aria-live="polite" class="visually-hidden"></div>
     </dialog>
     <!-- **The security decision in SSH, as a dialog rather than a wall of text** (spec B9,
          decision 3). It is an application region for the reason the Connect dialog is one:
@@ -394,7 +468,17 @@
              a cursor in it and reading character by character. -->
         <p id="host-key-summary"></p>
         <div id="host-key-body"></div>
-        <form method="dialog">
+        <!-- **`role="none"` on the form, and it is not decoration** — reported by the user
+             on 2026-08-30, tabbing the set-up dialog, where NVDA announced a form landmark
+             between one control and the next. A landmark inside a dialog says nothing: the
+             dialog is already the boundary a listener navigates by, and a region announced
+             on the way to a button is one more thing to hear before the thing you wanted.
+             What the element is here for is `method="dialog"`, which closes the dialog with
+             the pressed button's value — behaviour the role does not touch, because a
+             presentational role removes the element from the accessibility tree and leaves
+             its children exactly where they were. Every form in this file is one of these
+             and carries it for the same reason. -->
+        <form method="dialog" role="none">
           <button id="host-key-refuse" type="submit" value="refuse">
             Do not connect
           </button>
@@ -415,7 +499,7 @@
       <div role="application" aria-label="Password">
         <h1>Password</h1>
         <p id="password-prompt"></p>
-        <form method="dialog">
+        <form method="dialog" role="none">
           <label for="password-field">Password</label>
           <input
             id="password-field"
@@ -437,7 +521,7 @@
       <div role="application" aria-label="Could not connect">
         <h1>Could not connect</h1>
         <p id="failed-why"></p>
-        <form method="dialog">
+        <form method="dialog" role="none">
           <button id="failed-ok" type="submit" value="ok">OK</button>
         </form>
       </div>
@@ -463,7 +547,7 @@
         <h1>Acter could not confirm who made this program</h1>
         <p id="unverified-summary"></p>
         <div id="unverified-body"></div>
-        <form method="dialog">
+        <form method="dialog" role="none">
           <!-- The refusing button comes first, so Tab from the last box reaches it before
                the one that runs the program. -->
           <button id="unverified-refuse" type="submit" value="refuse">
@@ -504,7 +588,7 @@
           <input id="set-up-remember" type="checkbox" />
           <label for="set-up-remember">Do not show this dialog again</label>
         </p>
-        <form method="dialog">
+        <form method="dialog" role="none">
           <!-- Continue comes first because it is the default, and Cancel is beside it
                rather than behind anything: refusing has to be as reachable as accepting. -->
           <button id="set-up-continue" type="submit" value="set-up">Continue</button>

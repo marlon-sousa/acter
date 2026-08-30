@@ -65,8 +65,6 @@ beforeEach(() => {
       notConnectedWindow: notConnected,
       connectButton,
       terminalWindow: terminal,
-      results,
-      buffer: { focus: () => results.focus() },
       form,
       editField: { focus: () => input.focus() },
       ended,
@@ -186,21 +184,23 @@ describe('which face the window shows', () => {
   /** **Focus is rescued, never stolen.** Hiding the element focus is inside strands it on
    * the document body, where a listener has nothing under them and no obvious way back.
    *
-   * **A session that has ended leaves a transcript, and reading it is what a user does
-   * next.** The user met the opposite on 2026-08-26: focus on the Connect button, and the
-   * history they had just been told was kept was not where they were. */
-  it('moves focus into the transcript when the session ends', () => {
+   * **And it is rescued onto the Connect button, transcript or no transcript** — reported
+   * by the user on 2026-08-30, reversing the rule of 2026-08-26 that sent it into the
+   * buffer. What a listener has to do something about is that they have no session; the
+   * transcript is kept, unmoved, and one Tab away. */
+  it('moves focus to the Connect button when the session ends', () => {
     chrome.showTerminal(true);
     results.hidden = false;
     input.focus();
 
     chrome.showTerminal(false);
 
-    expect(document.activeElement).toBe(results);
+    expect(document.activeElement).toBe(reconnectButton);
   });
 
-  /** With nothing in the buffer there is nothing to land in, so the button it is. */
-  it('moves focus to the Connect button when there is no transcript', () => {
+  /** And the same with nothing in the buffer, which is now the same case rather than the
+   * only case that behaved this way. */
+  it('moves focus to the Connect button when there is no transcript either', () => {
     chrome.showTerminal(true);
     input.focus();
 
@@ -276,7 +276,9 @@ describe('coming back to the window', () => {
     expect(document.activeElement).toBe(reconnectButton);
   });
 
-  it('returns into the transcript when there is one to read', () => {
+  /** Including when there is a transcript to read: it is reached from the button rather
+   * than instead of it (reported 2026-08-30). */
+  it('returns to that button when there is a transcript as well', () => {
     chrome.showTerminal(true);
     results.hidden = false;
     chrome.showTerminal(false);
@@ -285,7 +287,7 @@ describe('coming back to the window', () => {
 
     chrome.focus();
 
-    expect(document.activeElement).toBe(results);
+    expect(document.activeElement).toBe(reconnectButton);
   });
 });
 
@@ -302,8 +304,6 @@ describe('the startup hold', () => {
         notConnectedWindow: notConnected,
         connectButton,
         terminalWindow: terminal,
-        results,
-        buffer: { focus: () => results.focus() },
         form,
         editField: { focus: () => input.focus() },
         ended,

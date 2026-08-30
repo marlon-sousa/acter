@@ -8,6 +8,10 @@
 // through the shell port, and the document's is set here, and the two are set together in
 // one method so they cannot drift.
 //
+// **This adapter no longer knows the buffer exists.** Focus never lands in the transcript
+// now (see `landing`), and showing a window never touched it, so neither the results region
+// nor the buffer is among the elements below.
+//
 // **The two windows are A10's**, and they are swapped as units rather than assembled from
 // controls that wink in and out. A window with no session and a window with one are
 // different things: the first holds a Connect button and nothing else, because a buffer
@@ -53,10 +57,6 @@ export interface WindowElements {
   connectButton: HTMLElement;
   /** The whole window shown from the first connection onward. */
   terminalWindow: HTMLElement;
-  /** The results region, asked only whether it has anything in it. */
-  results: HTMLElement;
-  /** How to put focus into that buffer, which lands on its most recent heading (A5). */
-  buffer: { focus(): void };
   /** The edit field's form: the terminal window's half that takes input. */
   form: HTMLElement;
   /** Where focus belongs while a session is live. */
@@ -103,23 +103,28 @@ export class WindowChrome implements WindowView {
   /**
    * Whichever control the window that is showing keeps focus on.
    *
-   * **A session that has ended leaves a transcript, and reading it is what a user does
-   * next** — so focus lands in the buffer rather than on the Connect button, which is one
-   * Tab away. The user met the opposite on 2026-08-26: focus on the button, and the
-   * history they had just been told was kept was not where they were.
+   * **A session that has ended puts you on the Connect button, transcript or no
+   * transcript** — reported by the user on 2026-08-30, and it reverses what this method did
+   * from 2026-08-26 until then.
    *
-   * With no transcript there is nothing to land in, so the button it is.
+   * That rule sent focus into the buffer, onto the last command's heading, on the reasoning
+   * that a session which has ended leaves a record and reading it is what a user does next.
+   * Driven by the person it was written for, it is the wrong half of the answer: the
+   * transcript is not going anywhere and is one Tab away, while the thing a listener has to
+   * do something about is that they have no session — and the control that answers that is
+   * the one focus should be on. Landing in the buffer also lands on a heading, which sounds
+   * like output arriving rather than like a session ending.
+   *
+   * Nothing about the transcript changes: it is still kept, still where it was, and still
+   * reachable by the Tab that was already the way back into it.
    */
   private landing(): { focus(): void } {
     if (this.elements.terminalWindow.hidden) {
       return this.elements.connectButton;
     }
-    if (this.elements.ended.hidden) {
-      return this.elements.editField;
-    }
-    return this.elements.results.hidden
-      ? this.elements.reconnectButton
-      : this.elements.buffer;
+    return this.elements.ended.hidden
+      ? this.elements.editField
+      : this.elements.reconnectButton;
   }
 
   connectedTo(name: string | null): void {

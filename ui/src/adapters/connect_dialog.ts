@@ -11,6 +11,11 @@
 // put the user back; this stays open with the reason announced and focus where they can
 // choose something else.
 //
+// **It does not hold the listener while the connection is made** (reported 2026-08-30). It
+// stays open, its controls unavailable, underneath a dialog that says what is happening —
+// because being sent back to the list of kinds you have just pressed Enter on is this dialog
+// saying that nothing happened, for as long as a cold distribution takes to come up.
+//
 // **The kinds and the variants are a deliberate division** (decision 3). This module knows
 // what a kind *looks like* — that is what a view is for, and a backend describing its own
 // controls would be a user interface written in Rust and reachable by no test. It knows no
@@ -21,10 +26,30 @@
 import { keepTabInside } from './dialog_tab';
 import type { AnnouncerView } from '../ports/announcer_view';
 import type { ConnectApi } from '../ports/connect_api';
+import type { HelpView } from '../ports/help_view';
 import type { Connectable, ProfileId, SetUp } from '../protocol';
 
 /** What the panel says when the chosen kind needs nothing. */
 const NO_OPTIONS = 'no options';
+
+/**
+ * What a variants list starts on, and the value that means nothing has been chosen.
+ *
+ * **Reported by the user on 2026-08-30**: choosing WSL and pressing Enter connected to
+ * Ubuntu, because the browser selects the first option of a `<select>` for you. A kind is
+ * chosen by arrowing onto it, which nobody does deliberately, so the distribution that came
+ * first in the list was being connected to by somebody who had never heard its name. What a
+ * combo box says it is on has to be something the person did.
+ */
+const NOTHING_CHOSEN = 'not chosen';
+
+/** The section of the help topic that explains the checkbox this dialog carries. */
+const SET_UP_TOPIC = 'help-setting-up';
+
+/** What is missing when a kind with variants has none of them chosen. */
+function chooseOneFirst(row: Connectable): string {
+  return `choose a ${noun(row)} first`;
+}
 
 /**
  * The fields an SSH connection needs, in the order they are filled in.
@@ -140,7 +165,7 @@ export interface ConnectAction {
 export class ConnectDialog {
   private rows: Connectable[] = [];
   /** Whether an attempt is in flight, so a second one cannot be started into it. */
-  private connecting = false;
+  private attempting = false;
   /** Which kind is chosen, as an index into `rows`. */
   private at = 0;
 
@@ -153,6 +178,11 @@ export class ConnectDialog {
     private readonly start: ConnectAction,
     private readonly announcer: AnnouncerView,
     private readonly returnTo: { focus(): void },
+    // **Where Enter goes now** (reported 2026-08-30): the dialog that says a connection is
+    // being made, rather than the list of kinds this used to bounce back to.
+    private readonly connecting: { show(label: string): void; hide(): void },
+    // And what the Help button beside the set-up checkbox opens, at the section about it.
+    private readonly help: HelpView,
   ) {
     // Escape is the platform's, and so is closing; where focus belongs afterwards is not,
     // because what opened this was a menu that no longer exists (spec A7, decision 3).
@@ -172,6 +202,14 @@ export class ConnectDialog {
     this.dialog
       .querySelector('#connect-start')
       ?.addEventListener('click', () => void this.chosen());
+    // The one control here that opens something rather than doing something: what the
+    // checkbox above it turns on is four sentences, and an announcement is not where any of
+    // them belong (spec A13, decision 2). Focus comes back to this button, because the
+    // dialog it opens sits on top of one that is still here.
+    const helpButton = this.dialog.querySelector<HTMLElement>('#connect-set-up-help');
+    helpButton?.addEventListener('click', () =>
+      this.help.open({ topic: SET_UP_TOPIC, returnTo: helpButton }),
+    );
   }
 
   /**
@@ -248,10 +286,11 @@ export class ConnectDialog {
     this.panelTitle.textContent = panelSummary(row);
     const document = this.panelBody.ownerDocument;
     this.panelBody.replaceChildren();
-    // Every other kind is startable as it stands, so the button comes back on the way out
-    // of the one that is a form.
+    // The button comes back on the way out of a kind that could be incomplete — a form, or
+    // a list nobody had chosen from — and the branches that build one of those ask
+    // `formFilled` for themselves before they are done.
     const start = this.dialog.querySelector<HTMLButtonElement>('#connect-start');
-    if (start !== null && !this.connecting) {
+    if (start !== null && !this.attempting) {
       start.disabled = false;
     }
 
@@ -276,6 +315,16 @@ export class ConnectDialog {
     label.textContent = which.charAt(0).toUpperCase() + which.slice(1);
     const select = document.createElement('select');
     select.id = 'connect-variant';
+    // **It starts on nothing, and that is the whole of the fix** (reported 2026-08-30). A
+    // `<select>` selects its first option for you, so a listener who chose WSL and pressed
+    // Enter connected to whichever distribution happened to be first — a choice they never
+    // made and never heard. An option that says so is the honest starting state: the combo
+    // box reads "not chosen", Connect is unavailable until it is, and nothing is connected
+    // to on somebody's behalf.
+    const nothing = document.createElement('option');
+    nothing.value = '';
+    nothing.textContent = NOTHING_CHOSEN;
+    select.append(nothing);
     for (const [index, variant] of row.variants.entries()) {
       const option = document.createElement('option');
       option.value = String(index);
@@ -288,13 +337,19 @@ export class ConnectDialog {
     // trap decision 2 exists to answer.
     select.addEventListener('change', () => {
       this.showVariantInstructions(row);
-      const chosen = row.variants[Number(select.value)];
+      // Connect follows the choice, exactly as it follows the SSH form: there is nothing to
+      // connect to until one is made, and going back to "not chosen" takes it away again.
+      this.formFilled();
+      const chosen = this.variant(row);
       if (chosen !== undefined && !chosen.available) {
         this.announcer.announce(NOT_AVAILABLE);
       }
     });
     this.panelBody.append(label, select);
     this.showVariantInstructions(row);
+    // The button follows the panel here exactly as it follows the SSH form: this one has
+    // just been rebuilt with nothing chosen in it, so there is nothing to connect to yet.
+    this.formFilled();
   }
 
   /**
@@ -362,7 +417,17 @@ export class ConnectDialog {
    */
   private startable(): boolean {
     const row = this.row;
-    if (row === undefined || !isSsh(row)) {
+    if (row === undefined) {
+      return true;
+    }
+    // **A kind with variants is incomplete until one of them is chosen** (reported
+    // 2026-08-30), which is the SSH form's rule reaching the other shape of the same
+    // question: a panel nobody has answered is a panel nobody has answered, whether it asks
+    // for a host or for a distribution.
+    if (!isSsh(row) && row.variants.length > 0) {
+      return this.variant(row) !== undefined;
+    }
+    if (!isSsh(row)) {
       return true;
     }
     const filled = (name: string): boolean =>
@@ -399,9 +464,7 @@ export class ConnectDialog {
   private showVariantInstructions(row: Connectable): void {
     const existing = this.panelBody.querySelector('[data-instructions]');
     existing?.remove();
-    const select =
-      this.panelBody.querySelector<HTMLSelectElement>('#connect-variant');
-    const chosen = row.variants[Number(select?.value ?? 0)];
+    const chosen = this.variant(row);
     if (chosen === undefined || chosen.available) {
       return;
     }
@@ -547,12 +610,28 @@ export class ConnectDialog {
     // It also covers the gap between two questions: the password dialog closes, the next
     // one does not exist yet, and without this there is a moment where focus falls back
     // onto live controls belonging to a conversation still in progress.
-    if (this.connecting || !this.startable()) {
+    if (this.attempting) {
       return;
     }
+    // **Not silently, though.** A disabled Connect says what it says only to somebody who
+    // tabs to it, and Enter is the key this dialog answers from everywhere — so an Enter
+    // that cannot connect says what is missing rather than nothing at all, which is the
+    // difference between a dialog you learn and one you learn by failing.
+    if (!this.startable()) {
+      if (!isSsh(row) && row.variants.length > 0) {
+        this.announcer.announce(chooseOneFirst(row));
+      }
+      return;
+    }
+    // **Forward, into the dialog that says what is happening** — reported by the user on
+    // 2026-08-30, who pressed Enter and was put back on the list of kinds. Shown before the
+    // controls are disabled, so focus moves into it rather than off a control that is being
+    // taken away underneath it.
+    this.connecting.show(this.chosenLabel(row));
     this.busy(true);
     const started = await this.start(this.profile(row), this.setUp());
     this.busy(false);
+    this.connecting.hide();
     if (started) {
       // Closing puts focus back in the edit field; the far end the user is now on has
       // already been announced by whoever connected.
@@ -570,21 +649,22 @@ export class ConnectDialog {
   /**
    * Make the dialog unusable while a connection is being made, and usable again after.
    *
-   * The controls are *disabled* rather than merely ignored, so a reader says so rather
-   * than leaving somebody pressing a button that answers nothing. Focus moves to the kind
-   * list, which stays reachable: it is where they will want to be either way — to choose
-   * something else if this fails, and it is not a control that does anything meanwhile.
+   * The controls are *disabled* rather than merely ignored, so a reader says so rather than
+   * leaving somebody pressing a button that answers nothing. It matters for the seconds
+   * this dialog is underneath the connecting one, and for anybody who presses Escape out of
+   * that and arrives back here while the attempt is still running.
+   *
+   * **It no longer moves focus** (reported 2026-08-30). Sending focus to the list of kinds
+   * was this dialog telling a listener that pressing Enter had achieved nothing; the
+   * connecting dialog is where focus goes now, and it is opened before this is called.
    */
   private busy(connecting: boolean): void {
-    this.connecting = connecting;
+    this.attempting = connecting;
     this.dialog.setAttribute('aria-busy', String(connecting));
     for (const control of this.dialog.querySelectorAll<HTMLButtonElement>(
       'button, input, select',
     )) {
       control.disabled = connecting;
-    }
-    if (connecting) {
-      this.kinds.focus();
     }
   }
 
@@ -606,12 +686,31 @@ export class ConnectDialog {
     if (isSsh(row)) {
       return this.sshProfile(row.id);
     }
-    if (row.variants.length === 0) {
-      return row.id;
-    }
+    // The kind itself when it offers nothing to choose between, and otherwise the variant
+    // that was chosen — which `startable` has already established there is one of.
+    return this.variant(row)?.id ?? row.id;
+  }
+
+  /**
+   * Which variant is chosen, or `undefined` while none is.
+   *
+   * One place asks the combo box, because three used to and each read the empty value its
+   * own way. `Number('')` is `0`, which is exactly the wrong answer here: it is the first
+   * variant, which is what "nothing chosen" must never mean again.
+   */
+  private variant(row: Connectable): Connectable['variants'][number] | undefined {
     const select =
       this.panelBody.querySelector<HTMLSelectElement>('#connect-variant');
-    const at = Number(select?.value ?? 0);
-    return row.variants[at]?.id ?? row.id;
+    const value = select?.value ?? '';
+    if (value === '') {
+      return undefined;
+    }
+    return row.variants[Number(value)];
+  }
+
+  /** What the listener is connecting to, in the words the connection will use itself. */
+  private chosenLabel(row: Connectable): string {
+    const variant = this.variant(row);
+    return variant === undefined ? row.label : `${row.label}: ${variant.label}`;
   }
 }

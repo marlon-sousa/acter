@@ -139,13 +139,19 @@ export class AnnouncerDom implements AnnouncerView {
    * Found by attribute rather than by name, so this adapter knows that dialogs exist and
    * nothing about which ones — a second dialog that needs to be heard adds the attribute
    * and needs no change here.
+   *
+   * **The last one, because dialogs stack.** Since 2026-08-30 the Connect dialog opens a
+   * connecting dialog on top of itself, and only the innermost of a stack is listened to:
+   * everything under it is inert, so a region there changes where nothing is watching —
+   * which is the very thing this method exists to avoid. The innermost is the one written
+   * last in the document, because a dialog is written after the dialog that opens it, and
+   * `querySelectorAll` answers in document order.
    */
   private liveRegion(): HTMLElement {
-    return (
-      this.region.ownerDocument.querySelector<HTMLElement>(
-        'dialog[open] [data-live-region]',
-      ) ?? this.region
+    const regions = this.region.ownerDocument.querySelectorAll<HTMLElement>(
+      'dialog[open] [data-live-region]',
     );
+    return regions[regions.length - 1] ?? this.region;
   }
 
   private drainOne(): void {

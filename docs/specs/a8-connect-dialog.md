@@ -181,6 +181,71 @@ Decision 4 needs the dialog to close on success and stay open on failure, so B7'
 is still announced by the controller, because the words are the backend's and every other
 announced string in the frontend is pinned in one module.
 
+## Amendments from the user's own pass, 2026-08-30
+
+Three findings against the shipped dialog, driven by the user. All three are about the
+moment a choice is made, which is the part of this dialog no unit test was ever going to
+question: the code did exactly what it was told, and what it was told was wrong.
+
+### G. A kind's parameters start on nothing chosen
+
+**Reported: choosing WSL and pressing Enter connected to Ubuntu.** A `<select>` selects its
+first option for you, and a kind is chosen by arrowing onto it — so the distribution that
+happened to be first in the list was being connected to by somebody who had never heard its
+name. Decision 1 says the panel holds "what that kind needs"; it did not say that what it
+holds must be *answered* before there is anything to connect to.
+
+It says so now. A variants list opens on an option reading **"not chosen"**, Connect is
+unavailable until one is picked, and choosing a different kind rebuilds the panel — so a
+choice can never survive into a kind it was not made for.
+
+**This is decision 4's rule about the SSH form reaching the other shape of the same
+question.** An empty host is a form you have not finished, and the answer is a disabled
+button rather than a round trip; a distribution nobody chose is the same thing wearing a
+combo box. What is new is that Enter *says* what is missing — "choose a distribution first"
+— because a disabled button only speaks to somebody who tabs to it, and Enter is the key
+this dialog answers from everywhere (amendment F's sibling: one condition, asked in both
+places, and now with one answer in both places).
+
+### H. Enter goes forward, into a dialog that says what is happening
+
+**Reported: pressing Enter on a kind put focus back on the list of kinds.** That was
+deliberate — `busy()` moved focus off the controls it was disabling — and it is the wrong
+thing to say: being returned to the control you have just acted on is what a dialog does
+when nothing happened. A connection to a cold distribution takes five to six seconds
+(23.10), so the one moment a listener most needs to be told that something is under way was
+the moment the window said the least.
+
+A **connecting dialog** opens instead, named for the far end being reached — "connecting to
+WSL: Ubuntu", the words the connection itself uses when it succeeds — and carrying a live
+region of its own, so the backend's progress sentences (spec B9, decision 6) are heard while
+everything under a modal is inert.
+
+- **It is deliberately plain**: no `role="application"`, nothing focusable, one sentence as
+  its description. There is nothing to arrow and nothing to press.
+- **Escape closes it, and that is not a trap.** Nothing in this product can call off an
+  attempt in flight, so refusing the key would be the trap: a modal with no controls that a
+  slow far end could hold a listener in. Escape leaves the attempt running and puts them back
+  on the Connect dialog, whose controls stay unavailable until the answer arrives.
+- **The Connect dialog stays open underneath**, which is decision 4 unchanged: a failure has
+  to leave the user somewhere they can try again, and reopening a dialog would have thrown
+  away a half-filled SSH form.
+- **The announcer speaks into the innermost open dialog.** Amendment B taught it to find a
+  dialog's own region; dialogs stack now, so it takes the last one in the document — a dialog
+  is written after the dialog that opens it.
+
+### I. A way to find out what the set-up checkbox does, beside the checkbox
+
+**Reported: a Help button after "Let Acter set this session up…".** The box is ticked by
+default and its label is one sentence; what it turns on, what turning it off costs, and the
+fact that nothing is ever run without being shown first are four more, and an announcement is
+not where any of them belong. The button opens A13's help topic at its new fourth section and
+comes back to itself, because the dialog it opens sits on top of one that is still there.
+
+The topic is A13's and the amendment is recorded there; what is A8's is that the control
+lives in this dialog, between the checkbox and Connect, so a listener meets it on the way
+through.
+
 ## Files touched
 
 - `ui/src/views/main_window.html` — the dialog's static skeleton: the kinds listbox, the

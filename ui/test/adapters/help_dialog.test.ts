@@ -17,13 +17,15 @@ import { HelpDialog } from '../../src/adapters/help_dialog';
 const SKELETON = `
   <dialog id="help-dialog" aria-labelledby="help-title" aria-describedby="help-summary">
     <h1 id="help-title">Acter help</h1>
-    <p id="help-summary">Three short sections about what you hear when you run a command. Use your reader's heading key to move between them.</p>
+    <p id="help-summary">Four short sections about what you hear when you run a command, and about setting a session up. Use your reader's heading key to move between them.</p>
     <h2>What you always hear</h2>
     <p>When you run a command, Acter reads out what the command prints.</p>
     <h2>What you sometimes do not hear</h2>
     <p>Acter cannot see whether a command worked. It has to be told, by the shell.</p>
     <h2>Which sessions are which</h2>
     <p>Sessions on this computer set themselves up when they start.</p>
+    <h2 id="help-setting-up" tabindex="-1">What setting a session up means</h2>
+    <p>When you connect, Acter can run one short command inside the session it has just started.</p>
     <button id="help-close" type="button">Close</button>
   </dialog>
   <input id="command-input" />
@@ -77,6 +79,50 @@ describe('opening it', () => {
 
     expect(() => help.open()).not.toThrow();
     expect(dialog.open).toBe(true);
+  });
+});
+
+/**
+ * **Opened at a section, from a control that is about that section** — the Connect dialog's
+ * Help button, reported by the user on 2026-08-30. A listener who asks what a checkbox does
+ * has to arrive at the answer, not at the top of a topic they then have to search.
+ */
+describe('opening it at a section', () => {
+  it('puts focus on the heading that was asked for', () => {
+    help.open({ topic: 'help-setting-up' });
+
+    expect(document.activeElement?.id).toBe('help-setting-up');
+  });
+
+  /** The heading is focusable and is still not a tab stop: it is a heading, not a control. */
+  it('leaves that heading out of the tab order', () => {
+    expect(byId('help-setting-up').tabIndex).toBe(-1);
+  });
+
+  /** **And comes back to what opened it.** The Connect dialog is still there underneath and
+   * is modal, so the window it would otherwise return to is inert — focus sent there would
+   * land nowhere and leave a listener with nothing under them. */
+  it('comes back to whoever opened it rather than to the window', () => {
+    const button = byId('help-close');
+    let cameBack = 0;
+    help.open({ topic: 'help-setting-up', returnTo: { focus: () => (cameBack += 1) } });
+
+    dialog.close();
+
+    expect(cameBack).toBe(1);
+    expect(returned).toBe(0);
+    expect(button).not.toBeNull();
+  });
+
+  /** And the next opening with nobody named goes back to the window, as F1 always has. */
+  it('goes back to the window again when nobody else asks for it', () => {
+    help.open({ topic: 'help-setting-up', returnTo: { focus: () => {} } });
+    dialog.close();
+
+    help.open();
+    dialog.close();
+
+    expect(returned).toBe(1);
   });
 });
 

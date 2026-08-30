@@ -144,6 +144,33 @@ hidden input — which does nothing at all — and left the listener stranded on
 they had just closed. They return to the window now, which puts focus wherever the face that
 is showing keeps it.
 
+## Amendment from the user's own pass, 2026-08-30: where focus lands when a session ends
+
+**This spec's own checklist says "moves focus to the Connect button rather than dropping
+it", and for four days it did not.** On 2026-08-26 the user reported the opposite — focus on
+the button, and the transcript they had just been told was kept was not where they were — so
+`WindowChrome.landing` was changed to land in the results buffer, on the last command's
+heading, whenever there was one to land in. That rule lived in a code comment and in no
+spec, which is part of why it survived.
+
+Driven again on 2026-08-30, by the same person, it is the wrong half of the answer. The
+transcript is not going anywhere and is one Tab away; what a listener has to do something
+about is that they have no session, and the control that answers that is the one focus
+should be on. Landing on a heading also *sounds* like output arriving rather than like a
+session ending.
+
+So the rule returns to what this spec always said, in one place rather than two:
+
+- The window with no session → its Connect button.
+- The terminal window with a live session → the edit field.
+- The terminal window whose session has ended → **its own Connect button**, transcript or no
+  transcript.
+
+Nothing about the transcript changes: it is kept, unmoved, and reachable by the Tab that was
+already the way back into it. And `WindowChrome` no longer knows the buffer exists — the
+results region and the buffer are out of its elements, because the only thing that read them
+was the rule this amendment removes.
+
 ## Files touched
 
 - `ui/src/views/main_window.html` — the terminal wrapper, the not-connected block, and the

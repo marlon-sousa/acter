@@ -18,8 +18,18 @@
 // **Every sentence here is the backend's.** What was detected, what the person gets, and what
 // refusing costs are composed in the domain, in one place, and rendered here (spec B9.5,
 // decision 9) — the rule the unverified dialog established. What this file owns is the shape:
-// paragraphs a listener can arrow, and the command in a field they can walk character by
-// character.
+// the three sentences as the dialog's own description, and the command in a field a listener
+// can walk character by character.
+//
+// **All three sentences are the description, and none of them is a tab stop** — reported by
+// the user on 2026-08-30, who met the refusal sentence as a focusable paragraph while tabbing
+// this dialog. A paragraph is not a control, and putting one in the tab order to make it
+// reachable teaches a listener that Tab lands on things that do nothing. The reachability it
+// was buying is real — inside `role="application"` prose cannot be arrowed — and it is bought
+// instead by the one mechanism that speaks prose in a dialog without any control at all: the
+// description a reader reads out as the dialog opens. So the dialog says what was detected,
+// what saying yes gives, and what saying no costs, in one utterance, and the only things Tab
+// finds are the command, the box and the two buttons.
 //
 // **Cancelling refuses this session only**, and says so through the connection sentence. The
 // Connect dialog's checkbox is what refuses durably.
@@ -61,10 +71,12 @@ export class SetUpDialog {
     question: Extract<ConnectQuestion, { question: 'SetUpSession' }>,
   ): Promise<ConnectAnswer> {
     const document = this.body.ownerDocument;
-    // **What a reader says as the dialog opens.** Two sentences: what was detected, and what
-    // the person gets for saying yes — which for a shell that reaches only the prompt
-    // boundaries also says what they will not get.
-    this.summary.textContent = `${question.detected} ${question.offer}`;
+    // **What a reader says as the dialog opens.** Three sentences: what was detected, what the
+    // person gets for saying yes — which for a shell that reaches only the prompt boundaries
+    // also says what they will not get — and what saying no costs. The last of them is here
+    // rather than in the body because this is the one place prose is spoken inside an
+    // application region without being a tab stop.
+    this.summary.textContent = `${question.detected} ${question.offer} ${question.refusal}`;
 
     const said = document.createElement('div');
     said.append(
@@ -73,21 +85,6 @@ export class SetUpDialog {
       // get, and for the same reason — a value that has to be checked by hand.
       readableField(document, COMMAND, COMMAND_LABEL, question.command),
     );
-    // What refusing costs, last, so it is the sentence a listener arrives at before the
-    // controls. It is A13's shipped sentence with what still works in front of it, and it is
-    // the backend's words rather than this file's.
-    //
-    // **It is focusable, and that is a measured requirement rather than a flourish.** This
-    // dialog is inside `role="application"`, where the arrows belong to the widget and prose
-    // cannot be arrowed at all — the cost the Connect dialog's own panel records and pays the
-    // same way. Found in the NVDA pass for this entry: the two sentences above are announced
-    // as the dialog opens, through its description, and this one was reachable by nothing.
-    // A listener could read the command Acter was about to run and never hear what saying no
-    // would cost them, which is the one sentence the dialog is built around.
-    const refusal = document.createElement('p');
-    refusal.tabIndex = 0;
-    refusal.textContent = question.refusal;
-    said.append(refusal);
     this.body.replaceChildren(said);
 
     // A dialog asked twice in one window starts from an unticked box each time: "do not show

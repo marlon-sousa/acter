@@ -275,7 +275,9 @@ describe('the Help dialog', () => {
     });
 
     await expect(shape.applications).toBe(0);
-    await expect(shape.headings).toBe(3);
+    // Four since 2026-08-30: the Connect dialog's Help button opens this topic at a section
+    // written for the set-up checkbox.
+    await expect(shape.headings).toBe(4);
     await expect(shape.describedBy).toBe('help-summary');
   });
 

@@ -8,6 +8,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { ConnectDialog, panelSummary } from '../../src/adapters/connect_dialog';
 import type { AnnouncerView } from '../../src/ports/announcer_view';
 import type { ConnectApi } from '../../src/ports/connect_api';
+import type { HelpView } from '../../src/ports/help_view';
 import type {
   Connectable,
   Connected,
@@ -33,6 +34,7 @@ const SKELETON = `
         >Let Acter set this session up so it can tell you more about what you run</label
       >
     </p>
+    <button id="connect-set-up-help" type="button">Help with setting a session up</button>
     <button id="connect-start" type="button">Connect</button>
     <button id="connect-cancel" type="button">Cancel</button>
   </div>
@@ -132,8 +134,40 @@ class FakeAnnouncer implements AnnouncerView {
   }
 }
 
+/** The dialog Enter goes to while a connection is being made (reported 2026-08-30). */
+class FakeConnecting {
+  /** What it was told is being connected to, once per attempt. */
+  shown: string[] = [];
+  hidden = 0;
+  show(label: string): void {
+    this.shown.push(label);
+  }
+  hide(): void {
+    this.hidden += 1;
+  }
+}
+
+/** Where the Help button beside the set-up checkbox leads. */
+class FakeHelp implements HelpView {
+  opened: { topic?: string; returnTo?: { focus(): void } }[] = [];
+  open(options?: { topic?: string; returnTo?: { focus(): void } }): void {
+    this.opened.push(options ?? {});
+  }
+}
+
 function byId<T extends HTMLElement>(id: string): T {
   return document.getElementById(id) as T;
+}
+
+/**
+ * Choose one of the panel's variants, the way a person does: the value changes and the
+ * control says so. Since 2026-08-30 a list starts on nothing chosen, so setting the value
+ * without the event leaves the dialog believing — correctly — that nobody has chosen.
+ */
+function chooseVariant(value: string): void {
+  const select = byId<HTMLSelectElement>('connect-variant');
+  select.value = value;
+  select.dispatchEvent(new Event('change'));
 }
 
 let connect: FakeConnect;
@@ -144,6 +178,8 @@ let asked: SetUp[];
 /** What the next connect attempt answers: connected, or could not be started. */
 let succeeds: boolean;
 let returned: number;
+let connecting: FakeConnecting;
+let help: FakeHelp;
 let dialog: ConnectDialog;
 
 function make(): ConnectDialog {
@@ -164,6 +200,8 @@ function make(): ConnectDialog {
         returned += 1;
       },
     },
+    connecting,
+    help,
   );
 }
 
@@ -180,6 +218,8 @@ beforeEach(() => {
   };
   connect = new FakeConnect();
   announcer = new FakeAnnouncer();
+  connecting = new FakeConnecting();
+  help = new FakeHelp();
   attempted = [];
   asked = [];
   succeeds = true;
@@ -283,6 +323,7 @@ describe('the panel (decision 2)', () => {
 
     const select = byId<HTMLSelectElement>('connect-variant');
     expect(Array.from(select.options).map((option) => option.textContent)).toEqual([
+      'not chosen',
       'Ubuntu',
       'Debian',
     ]);
@@ -377,7 +418,7 @@ describe('connecting (decision 4)', () => {
   it('starts the chosen distribution rather than the kind when the panel offered any', async () => {
     await dialog.open();
     press('ArrowDown');
-    byId<HTMLSelectElement>('connect-variant').value = '1';
+    chooseVariant('1');
 
     byId('connect-start').click();
     await Promise.resolve();
@@ -471,10 +512,13 @@ describe('keeping Tab inside', () => {
   it('walks forwards through every control in order', async () => {
     await dialog.open();
     press('ArrowDown'); // WSL, so the panel has a combo box in the tab order
+    // And a distribution chosen, so Connect is available: a disabled control is not a tab
+    // stop, which is what this walk is about.
+    chooseVariant('1');
     byId('connect-kinds').focus();
 
     const walked: string[] = [];
-    for (let step = 0; step < 5; step += 1) {
+    for (let step = 0; step < 6; step += 1) {
       press2('Tab');
       walked.push(document.activeElement?.id ?? '');
     }
@@ -485,6 +529,8 @@ describe('keeping Tab inside', () => {
     expect(walked).toEqual([
       'connect-variant',
       'connect-set-up',
+      // What the box above it means, next to the box (reported 2026-08-30).
+      'connect-set-up-help',
       'connect-start',
       'connect-cancel',
       'connect-kinds',
@@ -512,7 +558,7 @@ describe('Enter as the default action', () => {
   it('connects from the distribution combo box', async () => {
     await dialog.open();
     press('ArrowDown');
-    byId<HTMLSelectElement>('connect-variant').value = '1';
+    chooseVariant('1');
 
     enterOn('connect-variant');
     await Promise.resolve();
@@ -565,6 +611,7 @@ describe('a kind whose variants can be missing', () => {
 
     const select = byId<HTMLSelectElement>('connect-variant');
     expect(Array.from(select.options).map((option) => option.textContent)).toEqual([
+      'not chosen',
       'Windows PowerShell',
       'PowerShell 7 (not available)',
     ]);
@@ -802,6 +849,8 @@ describe('while an attempt is running', () => {
       },
       announcer,
       { focus: () => {} },
+      connecting,
+      help,
     );
     await dialog.open();
 
@@ -893,5 +942,177 @@ describe('setting the session up', () => {
     await Promise.resolve();
 
     expect(asked).toEqual(['Yes']);
+  });
+});
+
+/**
+ * **A kind's parameters start on nothing chosen** — reported by the user on 2026-08-30:
+ * choosing WSL and pressing Enter connected to Ubuntu, because a `<select>` selects its
+ * first option for you. Connecting to something nobody picked is worse than not connecting.
+ */
+describe('choosing what a kind needs', () => {
+  it('starts on nothing chosen', async () => {
+    await dialog.open();
+    press('ArrowDown');
+
+    const select = byId<HTMLSelectElement>('connect-variant');
+    expect(select.value).toBe('');
+    expect(select.options[select.selectedIndex]?.textContent).toBe('not chosen');
+  });
+
+  it('keeps Connect unavailable until one is chosen', async () => {
+    await dialog.open();
+    press('ArrowDown');
+
+    expect(byId<HTMLButtonElement>('connect-start').disabled).toBe(true);
+
+    const select = byId<HTMLSelectElement>('connect-variant');
+    select.value = '1';
+    select.dispatchEvent(new Event('change'));
+
+    expect(byId<HTMLButtonElement>('connect-start').disabled).toBe(false);
+  });
+
+  /** And going back to nothing takes it away again: the rule is about what is chosen now. */
+  it('takes Connect away again when the choice is taken back', async () => {
+    await dialog.open();
+    press('ArrowDown');
+    const select = byId<HTMLSelectElement>('connect-variant');
+    select.value = '1';
+    select.dispatchEvent(new Event('change'));
+
+    select.value = '';
+    select.dispatchEvent(new Event('change'));
+
+    expect(byId<HTMLButtonElement>('connect-start').disabled).toBe(true);
+  });
+
+  /** **Enter connects to nothing, and says why** — silence would leave a listener pressing
+   * a key that does nothing, with no way to find out what is missing. */
+  it('answers Enter with what is missing rather than with a connection', async () => {
+    await dialog.open();
+    press('ArrowDown');
+    announcer.announcements = [];
+
+    press('Enter');
+    await Promise.resolve();
+
+    expect(attempted).toEqual([]);
+    expect(announcer.announcements).toEqual(['choose a distribution first']);
+  });
+
+  /** Choosing a kind again clears what the last one held: the panel is rebuilt, so the
+   * choice cannot survive into a kind it was never made for. */
+  it('clears the choice when the kind changes', async () => {
+    await dialog.open();
+    press('ArrowDown');
+    const select = byId<HTMLSelectElement>('connect-variant');
+    select.value = '1';
+    select.dispatchEvent(new Event('change'));
+
+    press('ArrowUp');
+    press('ArrowDown');
+
+    expect(byId<HTMLSelectElement>('connect-variant').value).toBe('');
+    expect(byId<HTMLButtonElement>('connect-start').disabled).toBe(true);
+  });
+});
+
+/**
+ * **Where Enter goes while a connection is being made** — reported by the user on
+ * 2026-08-30, who pressed Enter on a kind and was put back on the list of kinds. Being
+ * returned to the control you have just acted on is what a dialog does when nothing
+ * happened.
+ */
+describe('the connecting dialog', () => {
+  it('names what is being connected to, kind and variant', async () => {
+    await dialog.open();
+    press('ArrowDown');
+    const select = byId<HTMLSelectElement>('connect-variant');
+    select.value = '1';
+    select.dispatchEvent(new Event('change'));
+
+    byId('connect-start').click();
+    await Promise.resolve();
+
+    expect(connecting.shown).toEqual(['WSL: Debian']);
+  });
+
+  /** A kind with nothing to choose between is named by itself. */
+  it('names a kind that needs nothing by itself', async () => {
+    await dialog.open();
+
+    press('Enter');
+    await Promise.resolve();
+
+    expect(connecting.shown).toEqual(['Command Prompt']);
+  });
+
+  it('takes it away when the attempt succeeds', async () => {
+    await dialog.open();
+
+    press('Enter');
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(connecting.hidden).toBe(1);
+  });
+
+  /** And when it fails, before the listener is put back on the list to choose again. */
+  it('takes it away when the attempt is refused', async () => {
+    succeeds = false;
+    await dialog.open();
+
+    press('Enter');
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(connecting.hidden).toBe(1);
+    expect(document.activeElement?.id).toBe('connect-kinds');
+  });
+
+  /** Nothing is shown for an Enter that cannot connect: there is no attempt to narrate. */
+  it('is not shown for an Enter that connects to nothing', async () => {
+    await dialog.open();
+    press('ArrowDown');
+
+    press('Enter');
+    await Promise.resolve();
+
+    expect(connecting.shown).toEqual([]);
+  });
+});
+
+/**
+ * **The Help button beside the set-up checkbox** (reported 2026-08-30). What the box turns
+ * on is four sentences, and an announcement is not where any of them belong.
+ */
+describe('help with setting a session up', () => {
+  it('opens the help topic at the section about the box', async () => {
+    await dialog.open();
+
+    byId('connect-set-up-help').click();
+
+    expect(help.opened).toHaveLength(1);
+    expect(help.opened[0]?.topic).toBe('help-setting-up');
+  });
+
+  /** And comes back to itself, because the dialog it opens sits on top of one that is
+   * still there — the window underneath is inert. */
+  it('comes back to the button it was opened from', async () => {
+    await dialog.open();
+
+    byId('connect-set-up-help').click();
+
+    expect(help.opened[0]?.returnTo).toBe(byId('connect-set-up-help'));
+  });
+
+  it('connects to nothing', async () => {
+    await dialog.open();
+
+    byId('connect-set-up-help').click();
+    await Promise.resolve();
+
+    expect(attempted).toEqual([]);
   });
 });

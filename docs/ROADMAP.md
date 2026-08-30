@@ -556,6 +556,49 @@ the answer to "what should we do now?".
     re-deciding what the status region says when it is read on demand an hour later, which
     is 27.5's question and not A13's.
 
+13.9. **Done** — six findings from the user's own pass over the shipped window, fixed in one
+    general PR. Spec: amendments to
+    [a8-connect-dialog.md](specs/a8-connect-dialog.md) (G, H, I),
+    [a10-the-window-has-two-faces.md](specs/a10-the-window-has-two-faces.md),
+    [a13-what-a-session-can-tell-you-and-where-that-is-explained.md](specs/a13-what-a-session-can-tell-you-and-where-that-is-explained.md)
+    and [b9.5-the-session-is-set-up-after-it-is-established.md](specs/b9.5-the-session-is-set-up-after-it-is-established.md)
+    (7, 8, 9).
+
+    **Dictated by the user on 2026-08-30**, driving the window they had just merged. They are
+    one entry because they are one pass and one PR; each is named below with what it cost a
+    listener, because that is what says why it was worth a fix rather than a note.
+
+    1. **A paragraph in the set-up dialog took focus.** The "If you cancel…" sentence was a
+       tab stop, which is how prose was made reachable inside an application region. A
+       paragraph is not a control, and Tab landing on things that do nothing costs more than
+       the sentence bought. All three sentences are the dialog's description now, spoken as
+       it opens.
+    2. **A form landmark was announced between the controls of that dialog.** The `<form
+       method="dialog">` exists to close the dialog with the pressed button's value; a
+       landmark inside a dialog says nothing, because the dialog is already the boundary.
+       `role="none"` on every one of them.
+    3. **Connecting bounced focus back to the list of kinds.** Being returned to the control
+       you have just acted on is what a dialog does when nothing happened — for five to six
+       seconds, on a cold distribution (23.10). Enter goes forward now, into a connecting
+       dialog that names the far end and carries the backend's progress sentences.
+    4. **A session that ended put focus in the buffer**, on the last command's heading. That
+       rule came from a report on 2026-08-26 and reversed A10's own checklist; driven again
+       by the same person it is the wrong half of the answer, because the transcript is one
+       Tab away and having no session is the thing to do something about.
+    5. **A kind's parameters were not cleared to nothing chosen.** Choosing WSL and pressing
+       Enter connected to Ubuntu, because a `<select>` selects its first option for you — a
+       distribution nobody had picked and never heard named. Lists open on "not chosen",
+       Connect is unavailable until one is, and Enter says what is missing rather than
+       nothing at all.
+    6. **Nowhere to find out what "let Acter set this session up" means.** A Help button
+       beside the checkbox, opening A13's topic at a fourth section written for it.
+
+    **What it changed beyond the six.** The announcer now speaks into the *innermost* open
+    dialog rather than the first it finds, because dialogs stack for the first time; and
+    `keepTabInside` keeps the key in a dialog with no controls at all, which the connecting
+    dialog is. `WindowChrome` stopped knowing the buffer exists, since the only thing that
+    read it was the rule finding 4 removes.
+
 14. A4, completion path. Spec: none yet → specify first. Scope sketch: fake
     completion provider, Tab handling in the edit field, completion announcement.
 15. A5.3 and onward — iteration entries appear here as NVDA findings arrive.
@@ -2141,6 +2184,37 @@ thing to pick up once the adapters land, not merely the next number.
     a block opening for nothing means an id was claimed by something nobody can name — but
     it is no longer something a listener meets, which is why it is filed here rather than
     fixed in a hurry.
+
+22.15. **Done** — a flood in an unintegrated session took the prompt with it. Spec: amendment
+    to [b4.4-autoread-with-no-boundaries.md](specs/b4.4-autoread-with-no-boundaries.md).
+    **Dictated by the user on 2026-08-30**, in the same pass as 13.9, and it is the one
+    domain finding of the seven.
+
+    **What a listener met.** A session with no boundaries produces enough output to pass the
+    auto-read threshold, hears *"1204 lines arrived, too big to read"*, and hears nothing
+    else — no prompt, so no idea where they now are. The user's own diagnosis and their own
+    fix: *"hold the last line separately and give it to the grace period, so when nothing has
+    changed for a while that one line is read."*
+
+    **Every part of it was the design working as written**, which is why it is worth
+    recording rather than patching quietly. In an unintegrated session the prompt *is*
+    output — B4.4's decision 10 forwards every line, echo included, because there is no
+    structure to filter by — so it accumulates with the flood; `UnspokenText` drops the bytes
+    once the verdict is settled, which is what bounds a gapless flood in the first place; and
+    `PromptDrawn` belongs to a shell that marks its boundaries, so nothing was coming
+    afterwards to say it separately.
+
+    **What shipped.** `UnspokenText` keeps whatever has arrived since the last line ending
+    beside its counts — one row of memory whatever the flood does — and a too-big flush
+    announces the count and then that row. Unterminated is the test, because a shell sitting
+    at its prompt has left the cursor on that row: a span ending at a newline says nothing
+    extra. Only `Integration::Unintegrated` gets it, since an integrated session announces its
+    prompt on its own and a session still inside its grace period may be about to become one;
+    and Acter's own commands cannot reach it, because a self-talk flush is quieted before the
+    size verdict is asked for (23.12).
+
+    The babble guard is left alone: it goes quiet mid-command and comes back at the command's
+    own end, where this is about the verdict that speaks and still leaves a listener nowhere.
 
 23. B5, the shell adapters. **Split into three entries 2026-08-23**, agreed in
     conversation, because "the PowerShell adapter" was three components wearing one number:

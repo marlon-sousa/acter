@@ -101,6 +101,33 @@ the same vocabulary and the same objection applies to it, but it was decided and
 and 27.5 barely a day ago, and rewording it is a change to a *different* sentence with its own
 reasons. Filed as roadmap 13.8 rather than done quietly here.
 
+## Amendment from the user's own pass, 2026-08-30: a fourth section, and a way in from the control
+
+**Reported: a Help button after the "Let Acter set this session up…" checkbox, leading to a
+place that explains what it is and how it works.** Decision 2 built exactly that place — a
+topic a listener reads at their own pace instead of an announcement heard once — and gave it
+one way in, F1, which answers "what am I hearing" from anywhere in the window. What it did
+not answer is "what does this control do", asked while standing on the control.
+
+Two things change, and neither touches decision 4: this is still the one dialog in the
+product that is deliberately not an application region.
+
+**A fourth section, "What setting a session up means."** In the register decision 5 settled
+on: what Acter would run, what you get for it (a heading for each command, and being told
+when one fails), what you keep without it (everything else — what you type runs, and what it
+prints is read out), and that nothing is ever run without being shown to you first. The
+summary line says four sections now instead of three.
+
+**Help can be opened at a section.** `HelpDialog.open` takes an optional topic — the id of a
+heading — and focus lands on that heading, so somebody who asks what a checkbox does arrives
+at the answer rather than at the top of a page they then have to search. The heading is
+focusable and still not a tab stop: it is a heading, not a control.
+
+It also takes an optional place to come back to. F1 and the menu still return focus to
+whatever the window is showing; a dialog that opens help on top of *itself* names itself
+instead, because the window underneath a modal is inert and focus sent there would land
+nowhere.
+
 ## Files touched
 
 - `ui/src/controllers/app.ts` — the corrected string and its comment.

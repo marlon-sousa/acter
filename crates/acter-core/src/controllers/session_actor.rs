@@ -19,7 +19,7 @@ use std::time::Duration;
 
 use tokio::sync::mpsc;
 
-use crate::entities::{ReadMode, UnspokenText};
+use crate::entities::{Integration, ReadMode, UnspokenText};
 use crate::policies::{PacingAction, measure, on_command_end, on_output, on_wake};
 use crate::{
     Announcement, Clock, CommandId, ConnectionState, EventSink, ExitCode, Mode, PacingConfig,
@@ -395,9 +395,13 @@ impl SessionActor {
             PacingAction::None => {}
             PacingAction::Flush(mode) => {
                 self.flush_render();
+                // Read before the span is taken, and read here rather than in the branch
+                // that uses it because taking resets the accumulator.
+                let unintegrated = self.session.integration == Integration::Unintegrated;
                 let Some(active) = self.active.as_mut() else {
                     return;
                 };
+                let last_line = active.unspoken.last_line().map(str::to_owned);
                 let (text, size) = active.unspoken.take();
                 match mode {
                     // Rendered, not spoken: the babble guard went quiet, so the buffer
@@ -420,9 +424,32 @@ impl SessionActor {
                             self.announce(Announcement::ReadAloud { text });
                         }
                     }
-                    ReadMode::TooBig => self.announce(Announcement::TooBig {
-                        lines: size.lines.try_into().unwrap_or(u32::MAX),
-                    }),
+                    // **The count, and then the one row the far end is still sitting
+                    // on** — reported by the user on 2026-08-30. A session with no shell
+                    // integration that floods used to say how many lines arrived and
+                    // nothing else, and what went with the flood was the prompt: in such a
+                    // session the prompt *is* output, the last row of it, and no
+                    // `PromptDrawn` is coming to say it separately. A listener was left
+                    // told that something large had happened, with no way to hear where
+                    // they now were.
+                    //
+                    // **Only where that is true**, which is why the session state is asked:
+                    // an integrated session announces its prompt on its own, and reading
+                    // the last row of its output as well would say a different thing twice.
+                    // `Pending` is left out for the same reason — a session that is about
+                    // to turn out integrated would say it twice, one flush later.
+                    //
+                    // Acter's own commands cannot reach here: [`Self::aside`] turns every
+                    // flush of theirs into `Quiet` before this match sees it (roadmap
+                    // 23.12).
+                    ReadMode::TooBig => {
+                        self.announce(Announcement::TooBig {
+                            lines: size.lines.try_into().unwrap_or(u32::MAX),
+                        });
+                        if unintegrated && let Some(text) = last_line {
+                            self.announce(Announcement::ReadAloud { text });
+                        }
+                    }
                 }
             }
             PacingAction::StillRunning => self.announce(Announcement::StillRunning),
@@ -876,6 +903,112 @@ the user's
                 .to_owned()
             }],
             "what was accumulated while the window was open is spoken with what follows              it, because closing the window is not a reason to throw text away: {:?}",
+            sink.announcements()
+        );
+    }
+
+    /// **The prompt is the last row of a flood, and a listener has to hear it** — reported
+    /// by the user on 2026-08-30. In a session with no shell integration nothing else will
+    /// say it: the prompt reaches the frontend as this block's output, so a flood that is
+    /// too big to read takes it away, and the listener is told a large thing happened
+    /// without being told where they now are.
+    #[test]
+    fn a_flood_in_an_unintegrated_session_still_says_where_the_far_end_is() {
+        let config = PacingConfig::default();
+        let (mut actor, clock, sink) = actor();
+        actor.handle(SessionInput::GracePeriodExpired);
+        started(&mut actor);
+
+        for _ in 0..500 {
+            output(&mut actor, "y\n");
+        }
+        // The prompt, on the row the far end is sitting on: no line ending after it.
+        output(&mut actor, "marlon@ubuntu:~$ ");
+        clock.advance_to(config.quiescence);
+        actor.wake_pacing();
+
+        assert_eq!(
+            sink.announcements(),
+            vec![
+                Announcement::TooBig { lines: 501 },
+                Announcement::ReadAloud {
+                    text: "marlon@ubuntu:~$ ".to_owned()
+                },
+            ],
+            "the count, and then the one row it swallowed"
+        );
+    }
+
+    /// **And only there.** An integrated session says its prompt through `PromptDrawn`,
+    /// so reading the last row of its output as well would say a different thing twice.
+    #[test]
+    fn a_flood_in_an_integrated_session_reads_no_extra_line() {
+        let config = PacingConfig::default();
+        let (mut actor, clock, sink) = actor();
+        actor.handle(SessionInput::MarkersObserved);
+        started(&mut actor);
+
+        for _ in 0..500 {
+            output(&mut actor, "y\n");
+        }
+        output(&mut actor, "marlon@ubuntu:~$ ");
+        clock.advance_to(config.quiescence);
+        actor.wake_pacing();
+
+        assert_eq!(
+            sink.announcements(),
+            vec![Announcement::TooBig { lines: 501 }],
+            "the size verdict, and nothing else: {:?}",
+            sink.announcements()
+        );
+    }
+
+    /// A session still inside its grace period is left out for the reason the integrated
+    /// one is: it may be about to turn out integrated, and would then have said the same
+    /// prompt twice one flush later.
+    #[test]
+    fn a_flood_before_the_grace_period_has_answered_reads_no_extra_line() {
+        let config = PacingConfig::default();
+        let (mut actor, clock, sink) = actor();
+        started(&mut actor);
+
+        for _ in 0..500 {
+            output(&mut actor, "y\n");
+        }
+        output(&mut actor, "marlon@ubuntu:~$ ");
+        clock.advance_to(config.quiescence);
+        actor.wake_pacing();
+
+        assert_eq!(
+            sink.announcements(),
+            vec![Announcement::TooBig { lines: 501 }],
+            "nothing is claimed about a session nobody has answered for yet: {:?}",
+            sink.announcements()
+        );
+    }
+
+    /// **Acter's own command cannot reach it either** (roadmap 23.12): its flushes are
+    /// quieted before the size verdict is ever asked for, so the row it is sitting on is
+    /// not read out of turn.
+    #[test]
+    fn a_flood_acter_started_itself_says_nothing_at_all() {
+        let config = PacingConfig::default();
+        let (mut actor, clock, sink) = actor();
+        actor.handle(SessionInput::GracePeriodExpired);
+        actor.handle(SessionInput::SelfTalk(true));
+        started(&mut actor);
+
+        for _ in 0..500 {
+            output(&mut actor, "y\n");
+        }
+        output(&mut actor, "marlon@ubuntu:~$ ");
+        clock.advance_to(config.quiescence);
+        actor.wake_pacing();
+
+        assert_eq!(
+            sink.announcements(),
+            vec![],
+            "nothing about a command the user did not run: {:?}",
             sink.announcements()
         );
     }
