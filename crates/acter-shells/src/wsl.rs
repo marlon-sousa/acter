@@ -308,14 +308,19 @@ mod tests {
         );
     }
 
-    /// **The case that made the sentence able to say "partly"** (spec B9.5, decision 8).
-    /// `sh` reaches the prompt boundaries and no further, and the session is told that before
-    /// its first byte rather than discovering it from the absence of a `D`.
+    /// **What `sh`'s own line earns, and it is not bash's claim** (spec B9.5, decision 8, as
+    /// roadmap 23.15 revised it). `sh` marks its prompt and reports a verdict and still says
+    /// nothing about where output begins, and the session is told that before its first byte
+    /// rather than discovering it from the absence of a marker.
     #[test]
     fn a_distribution_running_sh_claims_only_what_its_setup_earns() {
         let adapter = Wsl::in_distribution("wsl.exe", "docker-desktop", Some("sh"));
 
-        assert_eq!(adapter.markers(), ShellMarkers::PromptAndCommandLine);
+        assert_eq!(
+            adapter.markers(),
+            ShellMarkers::PromptCommandLineAndExitCode
+        );
+        assert!(!adapter.markers().marks_output_start());
         assert!(adapter.setup().is_some());
     }
 

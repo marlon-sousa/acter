@@ -80,6 +80,23 @@ pub enum SessionInput {
     GracePeriodExpired,
     /// Follow mode was toggled. An explicit override: every chunk is read on arrival.
     FollowMode(bool),
+    /// Acter is talking to itself: everything arriving until this turns off is rendered and
+    /// none of it is spoken (roadmap 23.12).
+    ///
+    /// **From the instant Acter writes its own line to the instant that line's block
+    /// closes**, nothing in the session is the user's to hear — not the shell's echo of a
+    /// command they never typed, not the prompt drawn twice a tenth of a second apart, not
+    /// whatever a far end prints before its first prompt. It was measured being read aloud
+    /// two different ways on two different far ends: busybox redrawing a wrapped line in an
+    /// order the echo matcher cannot recognise, and `sshd` printing `Last login: ...` before
+    /// the prompt so that the row the echo was expected on is the banner's.
+    ///
+    /// **It is one line of policy rather than a better matcher**, and that is the point: it
+    /// does not depend on recognising an echo, so it is indifferent to how any far end
+    /// redraws a wrapped line. Nothing is withheld — [`ReadMode::Quiet`] already means
+    /// "accumulates silently in the buffer", so every byte stays where the disclosure the
+    /// Connect dialog is about can be read back.
+    SelfTalk(bool),
     /// A program entered or left the alternate screen.
     AltScreenEntered,
     AltScreenLeft,
@@ -139,6 +156,9 @@ pub struct SessionActor {
     sink: Arc<dyn EventSink>,
     session: SessionState,
     follow_mode: bool,
+    /// Whether Acter's own line is what the far end is currently talking about, in which
+    /// case nothing coming back is spoken (roadmap 23.12). See [`SessionInput::SelfTalk`].
+    self_talk: bool,
     active: Option<ActiveCommand>,
     requests: Requests,
 }
@@ -153,6 +173,7 @@ impl SessionActor {
             // actor input yet.
             session: SessionState::new(Mode::NonInteractive),
             follow_mode: false,
+            self_talk: false,
             active: None,
             requests: Requests::default(),
         }
@@ -237,6 +258,7 @@ impl SessionActor {
                 }
             }
             SessionInput::FollowMode(on) => self.follow_mode = on,
+            SessionInput::SelfTalk(on) => self.self_talk = on,
             SessionInput::AltScreenEntered => {
                 let next = self.session.alt_screen_entered();
                 if next != self.session {
@@ -369,7 +391,7 @@ impl SessionActor {
     /// Turns one policy decision into events. Every branch that speaks flushes the
     /// rendering path first — the whole mechanism behind DESIGN's invariant.
     fn apply(&mut self, action: PacingAction) {
-        match action {
+        match self.aside(action) {
             PacingAction::None => {}
             PacingAction::Flush(mode) => {
                 self.flush_render();
@@ -405,6 +427,26 @@ impl SessionActor {
             }
             PacingAction::StillRunning => self.announce(Announcement::StillRunning),
             PacingAction::OutputContinues => self.announce(Announcement::OutputContinues),
+        }
+    }
+
+    /// What one policy decision becomes while Acter is talking to itself (roadmap 23.12).
+    ///
+    /// **Applied here rather than in the policy**, and that is where it belongs: the pacing
+    /// policy answers questions about size and repetition, and this is not one — it is a fact
+    /// about *whose* command is running, which the policy has no business knowing. Everything
+    /// still flushes, so the buffer keeps every byte; nothing is announced, including the
+    /// patience and babble announcements, which would otherwise report on the progress of a
+    /// command the user did not run.
+    fn aside(&self, action: PacingAction) -> PacingAction {
+        if !self.self_talk {
+            return action;
+        }
+        match action {
+            PacingAction::Flush(_) => PacingAction::Flush(ReadMode::Quiet),
+            PacingAction::None | PacingAction::StillRunning | PacingAction::OutputContinues => {
+                PacingAction::None
+            }
         }
     }
 
@@ -733,6 +775,109 @@ mod tests {
             }
         }
         assert_eq!(rendered, "one\ntwo\nthree\n");
+    }
+
+    /// **Acter's own line is not the user's to hear** (roadmap 23.12). Everything the far
+    /// end says while it is running reaches the buffer and none of it is announced.
+    #[test]
+    fn while_acter_talks_to_itself_the_buffer_keeps_everything_and_nobody_is_told() {
+        let config = PacingConfig::default();
+        let (mut actor, clock, sink) = actor();
+        actor.handle(SessionInput::SelfTalk(true));
+        started(&mut actor);
+
+        output(
+            &mut actor,
+            "printf mark; PROMPT_COMMAND=__acter_prompt
+",
+        );
+        clock.advance_to(config.quiescence);
+        actor.wake_pacing();
+
+        assert_eq!(
+            sink.rendered(),
+            "printf mark; PROMPT_COMMAND=__acter_prompt
+",
+            "every byte stays reviewable, which is what the disclosure rests on"
+        );
+        assert_eq!(
+            sink.announcements(),
+            vec![],
+            "and none of it is read aloud: {:?}",
+            sink.announcements()
+        );
+    }
+
+    /// **Including the announcements that are about a command rather than its text.** A
+    /// flood normally says how big it was; a flood of Acter's own making says nothing,
+    /// because there is nobody it would be telling about their own command.
+    #[test]
+    fn a_flood_of_acters_own_making_says_nothing_at_all() {
+        let config = PacingConfig::default();
+        let (mut actor, clock, sink) = actor();
+        actor.handle(SessionInput::SelfTalk(true));
+        started(&mut actor);
+
+        for _ in 0..500 {
+            output(
+                &mut actor, "y
+",
+            );
+        }
+        clock.advance_to(config.quiescence);
+        actor.wake_pacing();
+        clock.advance_to(config.quiescence + config.patience);
+        actor.wake_pacing();
+
+        assert_eq!(
+            sink.rendered(),
+            "y
+"
+            .repeat(500),
+            "all of it is reviewable"
+        );
+        assert_eq!(
+            sink.announcements(),
+            vec![],
+            "no size, no patience, no babble: {:?}",
+            sink.announcements()
+        );
+    }
+
+    /// **And the window closes.** What arrives after it is the user's session again, spoken
+    /// exactly as it would have been — the state is a window and not a mode.
+    #[test]
+    fn what_arrives_after_the_window_closes_is_read_aloud_again() {
+        let config = PacingConfig::default();
+        let (mut actor, clock, sink) = actor();
+        actor.handle(SessionInput::SelfTalk(true));
+        started(&mut actor);
+        output(
+            &mut actor,
+            "acter's own
+",
+        );
+        actor.handle(SessionInput::SelfTalk(false));
+
+        output(
+            &mut actor,
+            "the user's
+",
+        );
+        clock.advance_to(config.quiescence);
+        actor.wake_pacing();
+
+        assert_eq!(
+            sink.announcements(),
+            vec![Announcement::ReadAloud {
+                text: "acter's own
+the user's
+"
+                .to_owned()
+            }],
+            "what was accumulated while the window was open is spoken with what follows              it, because closing the window is not a reason to throw text away: {:?}",
+            sink.announcements()
+        );
     }
 
     #[test]

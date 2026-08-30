@@ -332,6 +332,24 @@ impl RealSession {
             .collect()
     }
 
+    /// Everything a listener was actually read, which is a different question from what
+    /// reached the buffer — and the whole of roadmap 23.12 is the gap between them.
+    fn said_aloud(&self) -> String {
+        self.events
+            .0
+            .lock()
+            .expect("recorder poisoned")
+            .iter()
+            .filter_map(|event| match event {
+                SessionEvent::Announce {
+                    announcement: Announcement::ReadAloud { text },
+                    ..
+                } => Some(text.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
     /// Waits until `wanted` has reached `command_id`'s block, then lets the session go
     /// quiet. Panics with what the whole session said, because a timeout reading "timed
     /// out" makes a real failure and a slow machine look identical.
@@ -2116,13 +2134,17 @@ mod the_session_is_set_up_after_it_is_established {
         );
     }
 
-    /// **`sh` reaches the prompt boundaries and says so**, measured against a real
-    /// distribution rather than asserted from documentation (spec B9.5, decision 8).
+    /// **`sh` marks its prompt and says how the command went**, measured against a real
+    /// distribution rather than asserted from documentation (spec B9.5, decision 8, as
+    /// roadmap 23.15 revised it).
     ///
     /// `docker-desktop` runs `/bin/sh`, which on this machine is busybox. What it earns is
-    /// `PromptAndCommandLine`: a heading for each command, and no verdict — and the negative
-    /// half of that is a measurement too, which is why this asserts that no failure is
-    /// announced for a command that genuinely failed.
+    /// `PromptCommandLineAndExitCode`: a heading for each command *and* a verdict, from a
+    /// shell that has no post-execution hook at all. **The verdict half of this test used to
+    /// assert the opposite** — that no failure is announced for a command that genuinely
+    /// failed — on B9.5's reasoning that POSIX `sh` has nowhere to compute one. `PS1` is
+    /// expanded at every prompt and `$?` at that moment is the last command's status, which
+    /// is where it comes from.
     #[tokio::test]
     #[ignore = "spawns a real shell and needs the docker-desktop distribution"]
     async fn a_distribution_running_sh_is_set_up_as_far_as_its_prompt_reaches() {
@@ -2140,7 +2162,7 @@ mod the_session_is_set_up_after_it_is_established {
         let adapter = Wsl::in_distribution(WSL, SH_DISTRIBUTION, shell.as_deref());
         assert_eq!(
             adapter.markers(),
-            ShellMarkers::PromptAndCommandLine,
+            ShellMarkers::PromptCommandLineAndExitCode,
             "what its own line earns, and not bash's claim"
         );
 
@@ -2173,13 +2195,31 @@ mod the_session_is_set_up_after_it_is_established {
         );
 
         let failing = session.submit("(exit 7)");
-        session
-            .until_said(WSL_PATIENCE, |said| said.matches("$").count() >= 2)
-            .await;
         assert_eq!(
-            session.failure_of(failing),
-            None,
-            "and no verdict is forged for a shell that has nowhere to compute one"
+            session.failed_with(failing).await,
+            Some(ExitCode(7)),
+            "a shell with no post-execution hook still reports a real exit code, because              `PS1` is expanded at every prompt and `$?` is the last command's status              (roadmap 23.15)"
+        );
+
+        // **And Acter's own setup command is never read aloud** (roadmap 23.12). This
+        // distribution is where the first cause was found: busybox redraws a wrapped line in
+        // an order the echo matcher cannot recognise, so fragments of the setup went out as
+        // output. The window Acter talks to itself in does not depend on recognising
+        // anything.
+        assert!(
+            !session.said_aloud().contains("BB_ASH_VERSION"),
+            "Acter's own setup command was read to the listener: {:?}",
+            session.said_aloud()
+        );
+        // Where it is found depends on what the far end did with the echo: in the block's
+        // heading when the echo fell in the region the tracker labels, in the block's output
+        // when a redraw put it elsewhere. The heading is the durable half — it is what F6 and
+        // the previous-heading command reach.
+        let headed = session.setup_block(&line).is_some();
+        assert!(
+            headed || session.rendered().contains("BB_ASH_VERSION"),
+            "the disclosure has to be readable back, and it is in neither the heading nor              the buffer: {:?}",
+            session.rendered()
         );
     }
 

@@ -569,10 +569,14 @@ export type SessionEvent =
  *  arrive inside a block, before that block's verdict, reading as though the shell had
  *  printed it. It is not output: it is the state the next command will run in.
  * 
- *  Only a `ShellMarkers::Full` session emits it. A shell that marks only its prompt and
- *  command line already speaks the prompt as content, because with no `D` the returning
- *  prompt is the only ending it has (spec B4.5, decision 4) — emitting this as well
- *  would say everything twice.
+ *  Only a session whose shell reports an exit code emits it. A shell with no `D` already
+ *  speaks the prompt as content, because the returning prompt is the only ending it has
+ *  (spec B4.5, decision 4) — emitting this as well would say everything twice.
+ * 
+ *  **The condition is the verdict rather than the full marker cycle** (roadmap 23.15).
+ *  It read `ShellMarkers::Full` while that was the only shell in the product with a `D`;
+ *  a POSIX `sh` that reports exit codes has one and marks no `C`, and its prompt is news
+ *  for the same reason bash's is.
  */
 { type: "PromptDrawn"; text: string } | 
 /**

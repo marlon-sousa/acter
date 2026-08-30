@@ -161,6 +161,7 @@ impl SessionService {
                 drawing: None,
                 spoken: false,
                 setup,
+                self_talk: None,
                 discards_line,
                 markers,
                 submitted: VecDeque::new(),
@@ -400,6 +401,23 @@ struct Pump {
     /// cancelled. All three are the same thing from here — a session that runs and is told
     /// nothing.
     setup: Option<String>,
+    /// The command Acter's own setup line is running as, while it is still running.
+    ///
+    /// **The window the session is Acter talking to itself in** (roadmap 23.12). From the
+    /// instant that line is written to the instant its block closes, nothing coming back is
+    /// the user's to hear: not the shell's echo of a command they never typed, not the prompt
+    /// drawn twice a tenth of a second apart, not a banner a far end prints before its first
+    /// prompt. The actor is told, and renders everything while announcing none of it.
+    ///
+    /// **It is a window rather than a matcher, which is the whole reason it works.** Both
+    /// measured failures are echo recognition failing — busybox redrawing a wrapped line out
+    /// of order, and `sshd`'s `Last login: ...` taking the row the echo was expected on — so a
+    /// rule that has to recognise the echo cannot be the fix for either.
+    ///
+    /// `None` closes it, and two things do that: the block ending, or the grace period
+    /// expiring with it still open. The second is what stops a setup whose markers never
+    /// arrive from silencing the session for the rest of its life.
+    self_talk: Option<CommandId>,
     /// What this shell's line editor reads as "discard whatever is pending on this line", or
     /// `None` for a shell that has no such byte (spec B4.5, decision 7).
     ///
@@ -613,6 +631,12 @@ impl Pump {
             return;
         };
         let command_id = CommandId(self.next_id.fetch_add(1, Ordering::SeqCst));
+        // Before the write rather than after it, so that whatever the far end has already
+        // drawn and not yet been read is quieted too — which is the doubled prompt, drawn
+        // unmarked before the setup and marked 155 milliseconds after it, of which only one
+        // is news.
+        self.self_talk = Some(command_id);
+        self.send(SessionInput::SelfTalk(true));
         self.submit_line(command_id, &line, true).await;
     }
 
@@ -847,11 +871,17 @@ impl Pump {
     /// types anything, so a listener hears where they are while deciding what to run rather
     /// than after committing to it.
     ///
-    /// Only a `Full` session emits: a shell marking less already has its prompt in the
-    /// block as content (spec B4.5, decision 4), and saying it twice would be worse than
-    /// the silence this fixes.
+    /// Only a session whose shell reports an exit code emits: one that cannot already has
+    /// its prompt in the block as content (spec B4.5, decision 4), and saying it twice
+    /// would be worse than the silence this fixes.
+    ///
+    /// **The question is the verdict and never was the output marker** (roadmap 23.15).
+    /// This asked "is this `Full`" while POSIX `sh` was the only other shell in the
+    /// product, so the two questions had the same answer everywhere. A `sh` that reports
+    /// exit codes separates them: it marks no `C`, and its prompt is still news rather
+    /// than an ending, because the ending is the verdict.
     fn drawn(&mut self, region: Region, text: &str, revision: LineRevision) {
-        if self.markers != ShellMarkers::Full {
+        if !self.markers.reports_exit_code() {
             return;
         }
         match region {
@@ -1223,6 +1253,14 @@ impl Pump {
                 exit_code: exit.unwrap_or(ExitCode(0)),
             }
         });
+        // **After the ending and never before it**, because the ending is the last thing this
+        // command owes the actor and it is Acter's own: the flush it triggers has to be quiet
+        // too, and a verdict on a line the user did not type is not theirs to hear. Whether
+        // the setup worked is the grace period's to answer (spec B9.5, decision 12).
+        if self.self_talk == Some(command_id) {
+            self.self_talk = None;
+            self.send(SessionInput::SelfTalk(false));
+        }
         self.settle_running();
     }
 
@@ -1239,6 +1277,14 @@ impl Pump {
     async fn grace_expired(&mut self) {
         self.integration = self.integration.grace_period_expired();
         self.send(SessionInput::GracePeriodExpired);
+        // **The catch that stops a quiet window becoming a quiet session** (roadmap 23.12). A
+        // setup whose markers never arrive opens no block and closes none, so nothing else
+        // would ever turn speech back on — and the sentence a listener gets at this moment
+        // says the session has no boundaries, which is exactly when they need to hear the
+        // text that does arrive.
+        if self.self_talk.take().is_some() {
+            self.send(SessionInput::SelfTalk(false));
+        }
         self.settle_running();
     }
 
@@ -1276,19 +1322,21 @@ impl Pump {
     /// What a session whose far end marks its boundaries wants, by what those markers are
     /// able to say.
     fn marked(&self, region: Region) -> bool {
-        match self.markers {
-            ShellMarkers::Full => region == Region::Output,
-            // **The prompt is content in a shell that emits no `D`** (spec B4.5,
-            // decision 4). There is no exit code to announce, so nothing at all is
-            // said when a command ends, and the prompt coming back is the only ending
-            // such a session has to offer a listener — which is why 22.12 records it
-            // as a requirement rather than a nicety. An unintegrated session already
-            // speaks it, as output of the block that is still open; marking the
-            // session without this arm would take it away.
-            ShellMarkers::PromptAndCommandLine => {
-                matches!(region, Region::Output | Region::Prompt)
-            }
+        // **The prompt is content in a shell that emits no `D`** (spec B4.5, decision 4).
+        // There is no exit code to announce, so nothing at all is said when a command
+        // ends, and the prompt coming back is the only ending such a session has to offer
+        // a listener — which is why 22.12 records it as a requirement rather than a
+        // nicety. An unintegrated session already speaks it, as output of the block that
+        // is still open; marking the session without this arm would take it away.
+        //
+        // **Asked as "is there a verdict" rather than as "is this `Full`"** (roadmap
+        // 23.15). A `sh` that reports exit codes ends its commands with one, so its prompt
+        // is not the ending and does not belong in the block — it is announced on its own
+        // by [`Pump::drawn`], exactly as bash's is.
+        if self.markers.reports_exit_code() {
+            return region == Region::Output;
         }
+        matches!(region, Region::Output | Region::Prompt)
     }
 
     /// The text this item owes the speech path, if any: an append always, a settlement
@@ -3585,6 +3633,122 @@ mod tests {
         }
     }
 
+    /// A shell that marks no `C` and still says how the command went: POSIX `sh` since
+    /// roadmap 23.15.
+    ///
+    /// **What separates it from the module above is the verdict, and everything follows from
+    /// that.** Its prompt is not the only ending it has, so the prompt stops being block
+    /// content and becomes its own announcement; and a command that fails is announced as
+    /// having failed. What it shares with cmd is the synthesized `C`: nothing marks where
+    /// output begins in either.
+    mod a_shell_that_marks_no_output_start_but_says_how_the_command_went {
+        use super::*;
+
+        async fn posix_sh() -> Session {
+            Session::of(quick_grace(), ShellMarkers::PromptCommandLineAndExitCode).await
+        }
+
+        /// The prompt drawn and the command line marked, with the `D` the previous command
+        /// ended on in front of it — which is the order the real line puts them in, because
+        /// the exit marker is the first thing in `PS1`.
+        fn prompt(row: u64, at: &str) -> Vec<TerminalItem> {
+            vec![
+                marker(Osc133Marker::PromptStart),
+                line(row, at),
+                marker(Osc133Marker::CommandStart),
+            ]
+        }
+
+        fn prompts(session: &Session) -> Vec<String> {
+            session
+                .events()
+                .into_iter()
+                .filter_map(|event| match event {
+                    SessionEvent::PromptDrawn { text } => Some(text),
+                    _ => None,
+                })
+                .collect()
+        }
+
+        /// **The whole of 23.15 from the listener's side.** `(exit 7)` fails, and the shell
+        /// says so through a `D` its own prompt carried — measured through the whole stack
+        /// against `docker-desktop` on 2026-08-29 before any of this was written.
+        #[tokio::test]
+        async fn a_command_that_fails_is_announced_as_having_failed() {
+            let session = posix_sh().await;
+            session.emit(prompt(1, PROMPT)).await;
+            let command = session.submit("(exit 7)").await;
+            session
+                .emit(vec![
+                    line(1, "(exit 7)"),
+                    line(2, "output"),
+                    marker(Osc133Marker::CommandEnd(Some(ExitCode(7)))),
+                ])
+                .await;
+            session.advance_to(1_000).await;
+
+            assert!(
+                session.announcements().contains(&Announcement::Failed {
+                    exit_code: ExitCode(7)
+                }),
+                "the verdict a shell with only a `PS1` was believed unable to give: {:?}",
+                session.announcements()
+            );
+            assert!(
+                session.events().iter().any(|event| matches!(
+                    event,
+                    SessionEvent::CommandFinished { command_id } if *command_id == command
+                )),
+                "and the block closes on it"
+            );
+        }
+
+        /// **The prompt is its own announcement here and block content in cmd**, and the
+        /// difference is exactly the verdict: with a `D` to end a command on, a prompt
+        /// arriving inside the block would read as something the command printed.
+        #[tokio::test]
+        async fn the_prompt_is_announced_on_its_own_rather_than_as_block_content() {
+            let session = posix_sh().await;
+            session.emit(prompt(1, PROMPT)).await;
+            let command = session.submit("ls").await;
+            session
+                .emit(vec![
+                    line(1, "ls"),
+                    line(2, "one.txt"),
+                    marker(Osc133Marker::CommandEnd(Some(ExitCode(0)))),
+                ])
+                .await;
+            session.emit(prompt(3, PROMPT)).await;
+            session.advance_to(1_000).await;
+
+            assert_eq!(
+                session.output_of(command),
+                "one.txt",
+                "the returning prompt is not what the command printed"
+            );
+            assert!(
+                prompts(&session).contains(&PROMPT.to_owned()),
+                "and a listener hears it as the prompt: {:?}",
+                prompts(&session)
+            );
+        }
+
+        /// And what it shares with cmd is unchanged: nothing marks where output begins, so
+        /// the block opens where the echo ends and the echo is never its content.
+        #[tokio::test]
+        async fn the_echo_still_opens_the_block_and_is_never_its_content() {
+            let session = posix_sh().await;
+            session.emit(prompt(1, PROMPT)).await;
+            let command = session.submit("ls").await;
+            session.emit(vec![line(1, "ls"), line(2, "one.txt")]).await;
+            session.advance_to(1_000).await;
+
+            assert_eq!(session.started().last(), Some(&command));
+            assert_eq!(session.headings().last(), Some(&Some("ls".to_owned())));
+            assert_eq!(session.output_of(command), "one.txt");
+        }
+    }
+
     /// The cancel byte that keeps a submitted line from being concatenated onto input
     /// nobody read (spec B4.5, decisions 6 and 7).
     ///
@@ -3909,6 +4073,113 @@ mod tests {
                 "and it closes before the user's first command: {:?}",
                 session.events()
             );
+        }
+
+        /// **A banner before the prompt, which is where the echo matcher cannot help**
+        /// (roadmap 23.12). Found in the SSH rig against Debian bookworm over a real `sshd`:
+        /// `Last login: ...` is the first *drawn* line, so it is what the setup goes out on,
+        /// and the row B4.9 holds a submission on is the banner's rather than the prompt's.
+        /// The echo therefore arrives as ordinary output, and a listener got Acter's own
+        /// five-hundred-character command read aloud.
+        ///
+        /// **The fix does not recognise anything**, which is the point: while Acter's own
+        /// line is running, everything is rendered and nothing is spoken.
+        #[tokio::test]
+        async fn a_banner_before_the_prompt_does_not_get_acters_own_line_read_aloud() {
+            let session = set_up().await;
+
+            session
+                .emit(vec![line(1, "Last login: Fri Aug 29 10:14:02 2026")])
+                .await;
+            // A row nothing is pending on, which is exactly what the banner cost.
+            session.emit(vec![line(2, PROMPT), line(3, SETUP)]).await;
+            session.advance_to(1_000).await;
+
+            assert!(
+                session.rendered().contains(SETUP),
+                "every byte is still in the buffer, where the disclosure can be read back:                  {:?}",
+                session.rendered()
+            );
+            assert!(
+                !said_aloud(&session).contains("PROMPT_COMMAND"),
+                "and none of it reaches the listener: {:?}",
+                session.announcements()
+            );
+        }
+
+        /// **And the window closes with the block Acter's own line opened**, so the very next
+        /// thing the far end says is the user's again. A window that did not close would be a
+        /// session that connects and then never speaks.
+        #[tokio::test]
+        async fn the_far_end_is_heard_again_once_the_setup_block_closes() {
+            let session = set_up().await;
+
+            session.emit(vec![line(1, PROMPT)]).await;
+            session
+                .emit(vec![
+                    line(1, SETUP),
+                    marker(Osc133Marker::OutputStart),
+                    marker(Osc133Marker::CommandEnd(Some(ExitCode(0)))),
+                ])
+                .await;
+            // The next prompt, and then a command the user typed.
+            session
+                .emit(vec![
+                    marker(Osc133Marker::PromptStart),
+                    line(2, PROMPT),
+                    marker(Osc133Marker::CommandStart),
+                    line(2, "echo hi"),
+                    marker(Osc133Marker::OutputStart),
+                    line(3, "hi"),
+                ])
+                .await;
+            session.advance_to(1_000).await;
+
+            assert!(
+                said_aloud(&session).contains("hi"),
+                "{:?}",
+                session.announcements()
+            );
+        }
+
+        /// **The catch that stops a quiet window becoming a quiet session** (roadmap 23.12).
+        /// A setup whose markers never arrive opens no block and closes none, so nothing else
+        /// would turn speech back on — and the grace period expiring is the moment a listener
+        /// is told this session has no boundaries, which is exactly when they need to hear
+        /// the text that does arrive.
+        #[tokio::test]
+        async fn a_setup_that_is_never_answered_does_not_silence_the_session_for_good() {
+            let session = set_up().await;
+
+            session.emit(vec![line(1, PROMPT)]).await;
+            session.advance_to(300).await;
+            session.emit(vec![line(2, "the user's own output")]).await;
+            session.advance_to(1_300).await;
+
+            assert!(
+                session
+                    .events()
+                    .contains(&SessionEvent::IntegrationUnavailable),
+                "the grace period is what expired: {:?}",
+                session.events()
+            );
+            assert!(
+                said_aloud(&session).contains("the user's own output"),
+                "{:?}",
+                session.announcements()
+            );
+        }
+
+        /// Everything the listener was actually read, as one string.
+        fn said_aloud(session: &Session) -> String {
+            session
+                .announcements()
+                .into_iter()
+                .filter_map(|said| match said {
+                    Announcement::ReadAloud { text } => Some(text),
+                    _ => None,
+                })
+                .collect()
         }
 
         /// **Nothing is spoken about it, and that is what makes disclosure affordable.**

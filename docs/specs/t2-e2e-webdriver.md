@@ -96,6 +96,29 @@ live-reload); every standalone build, E2E included, must enable it.
 NVDA/speech automation (impossible in CI; stays manual per DESIGN.md), Linux E2E
 (until a Linux target exists), performance testing.
 
+## Amendment (2026-08-30, rides in B9.6): a guard waits for behaviour, not for a sign of it
+
+`menu.spec.ts` was intermittently red on CI — on main as well as on branches — on "opens on
+F10 with focus on the first item", expecting focus on `menu-acter` and finding it still on
+`command-input`. The menu bar is wired inside an IPC round trip (`shell.platform().then(...)`),
+so a spec that presses F10 early presses it at a document with nothing listening.
+
+**The first guard watched a proxy and the flake survived it.** It waited for
+`#menu-bar-region` to lose its `hidden` attribute, on the premise that the reveal was "exactly
+the moment the listeners are attached" — and in `main.ts` the reveal came *before*
+`installMenuBar`. A7 gains an amendment putting those two in the right order, which is correct
+on its own terms; this amendment is about the test.
+
+**The rule this establishes for every guard in this suite: wait for the property the file
+depends on, not for a sign of it.** The guard presses F10 until focus actually lands in the
+bar. It is then indifferent to *how* the race is lost — a late install, a document reloaded
+during start-up, an ordering nobody anticipated — where any proxy is only as good as the
+belief behind it, and that belief is exactly what a flake falsifies.
+
+A guard of this shape is affordable here because a spec's app instance is its own
+(`beforeSession`/`afterSession` above), so pressing a key in a `before` hook cannot leak into
+another spec file.
+
 ## Ordering
 
 After T1, before A2 — the echo harness from A1 is a sufficient application under

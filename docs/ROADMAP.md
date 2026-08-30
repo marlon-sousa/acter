@@ -2676,9 +2676,19 @@ thing to pick up once the adapters land, not merely the next number.
     simplification, not only a fix, and it is worth stating because it is the reason this is a
     revision of the strategy rather than a patch to the program.
 
-23.12. Acter's own setup command is read aloud when the far end's echo cannot be matched.
-    Spec: none yet → specify first. **Two causes measured, 2026-08-29, on two different far
+23.12. **Done** — B9.6 quieted the window Acter talks to itself in. Spec: [b9.6-verdicts-in-sh-and-nothing-read-aloud-at-connect.md](specs/b9.6-verdicts-in-sh-and-nothing-read-aloud-at-connect.md).
+    **Two causes measured, 2026-08-29, on two different far
     ends**, and they are one entry because the symptom, the window and the fix are the same.
+
+    **What shipped.** One flag, from the instant the pump writes Acter's own line to the
+    instant that line's block closes: everything the far end says in that window is rendered
+    and none of it is spoken, including the size, patience and babble announcements. It never
+    recognises an echo, which is why it fixes both causes at once, and it keeps every byte in
+    the buffer, where the command the Connect dialog disclosed can still be read back. The
+    window closes on the setup's own block, or on the grace period expiring with it still open
+    — the catch that stops a setup whose markers never arrive from silencing the session for
+    good. Shipped with 23.15 in one PR, which is what gave the window a verdict to close on in
+    every shell that has a setup.
 
     **Cause one: a shell that redraws a wrapped line out of order.** Found in B9.5's NVDA
     pass, driving NVDA 2026.1.1 as the `user` persona in silent capture against a real
@@ -2826,14 +2836,32 @@ thing to pick up once the adapters land, not merely the next number.
     nothing measurable and costs two things, and this entry should be read with that in front of
     it.
 
-    Three candidates remain: ship as measured; send only `A` and halve the cost to eight
+    Three candidates remained: ship as measured; send only `A` and halve the cost to eight
     columns, losing the command-line boundary; or send nothing and take B4.9's loss knowingly.
-    **A fourth is better than all three and is 23.15's**: give it verdicts, which is what the
+    **A fourth was better than all three and was 23.15's**: give it verdicts, which is what the
     dialog is already promising in spirit.
 
-23.15. A POSIX `sh` can report exit codes, and Acter does not ask it to. Spec: none yet →
-    specify first. **Measured 2026-08-29**, against busybox 1.37.0 on `docker-desktop` and dash
+    **That fourth shipped in B9.6**, so the accounting above is out of date in the credit
+    column and unchanged in the debit one. A set-up `sh` session now buys something an
+    unintegrated one cannot offer at all — whether the command worked — and the setup command
+    being read aloud at connect is gone with 23.12. What is left of this entry is the sixteen
+    columns themselves, and the truncated heading they cause on a wrapped line, which the
+    brackets B9.5 added fix for busybox and which nothing addresses for a shell that honours
+    neither.
+
+23.15. **Done** — B9.6 asked it to. Spec: [b9.6-verdicts-in-sh-and-nothing-read-aloud-at-connect.md](specs/b9.6-verdicts-in-sh-and-nothing-read-aloud-at-connect.md).
+    **Measured 2026-08-29**, against busybox 1.37.0 on `docker-desktop` and dash
     0.5.12 on Ubuntu.
+
+    **What shipped.** `ShellMarkers` has a third state, `PromptCommandLineAndExitCode`, and a
+    second question beside `marks_output_start`: `reports_exit_code`. The two rules the entry
+    named — `Pump::drawn` and `Pump::marked` — ask the second one now, so a `sh` session
+    announces its prompt on its own instead of carrying it as block content, exactly as bash
+    does. The boundary tracker needed no change: it asks only about output start, and the `D`
+    arrives before the `A`. The offer sentence and the connection sentence follow from the
+    verdict too, so `sh` gets the sentence bash gets. `SetUpOutcome::Partly` is kept although
+    nothing shipped reaches it any more — it is where `sh` was believed to be a day ago, and
+    the next shell measured with only a prompt will need it and the sentence with it.
 
     B9.5 decision 8 gave `sh` `PromptAndCommandLine` on the reasoning that a verdict needs a
     post-execution hook and POSIX `sh` has none — only `PS1`. The reasoning is sound and the

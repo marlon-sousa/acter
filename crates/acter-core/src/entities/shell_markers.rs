@@ -32,6 +32,22 @@ pub enum ShellMarkers {
     /// verdict never becomes available, so the returning prompt is the only ending such a
     /// session has to offer a listener.
     PromptAndCommandLine,
+    /// `A`, `B` and `D` — the prompt region, the start of the command line, and how the
+    /// command ended, with nothing marking where output begins.
+    ///
+    /// **POSIX `sh`, and it took a wrong belief to find it** (roadmap 23.15). B9.5 decision 8
+    /// gave `sh` [`Self::PromptAndCommandLine`] on the reasoning that a verdict needs a
+    /// post-execution hook and POSIX `sh` has none. The reasoning is sound and the conclusion
+    /// was wrong: `PS1` is expanded *every time the prompt is drawn*, and `$?` at that moment
+    /// is the status of the command that just finished. Measured 2026-08-29 against busybox
+    /// 1.37.0 and dash 0.5.12, `PS1='[status=$?]# '` reports `0` after `true` and `7` after
+    /// `(exit 7)` in both.
+    ///
+    /// So the exit marker goes at the front of the prompt string and the shell fills the
+    /// number in itself. What such a shell still cannot say is where output begins — there is
+    /// no hook between Enter and the command running — so the tracker synthesizes `C` at the
+    /// end of the echoed line exactly as it does for [`Self::PromptAndCommandLine`].
+    PromptCommandLineAndExitCode,
 }
 
 impl ShellMarkers {
@@ -41,6 +57,18 @@ impl ShellMarkers {
     /// than matched on in three places.
     pub fn marks_output_start(self) -> bool {
         matches!(self, Self::Full)
+    }
+
+    /// Whether the far end says how a command ended.
+    ///
+    /// **The other half of the question, and until roadmap 23.15 nothing could tell them
+    /// apart.** Two rules in the session asked "is this `Full`" when what they meant was this:
+    /// whether the prompt is its own announcement rather than a block's only ending, and
+    /// whether the prompt belongs in a block's content. Both follow from having a verdict and
+    /// neither follows from marking output start, which is why they are asked separately now
+    /// that a shell exists that answers them differently.
+    pub fn reports_exit_code(self) -> bool {
+        matches!(self, Self::Full | Self::PromptCommandLineAndExitCode)
     }
 }
 
@@ -56,6 +84,23 @@ mod tests {
     #[test]
     fn a_prompt_only_shell_does_not() {
         assert!(!ShellMarkers::PromptAndCommandLine.marks_output_start());
+    }
+
+    /// A `sh` that reports its exit codes still cannot say where output begins, which is what
+    /// keeps the tracker synthesizing a `C` for it.
+    #[test]
+    fn a_shell_that_reports_exit_codes_need_not_mark_where_output_begins() {
+        assert!(!ShellMarkers::PromptCommandLineAndExitCode.marks_output_start());
+        assert!(ShellMarkers::PromptCommandLineAndExitCode.reports_exit_code());
+    }
+
+    /// **The question two rules in the session were asking through the wrong half** (roadmap
+    /// 23.15): the prompt is content, rather than its own announcement, exactly when no
+    /// verdict exists to end a command with.
+    #[test]
+    fn only_the_prompt_only_shell_has_no_verdict_to_offer() {
+        assert!(ShellMarkers::Full.reports_exit_code());
+        assert!(!ShellMarkers::PromptAndCommandLine.reports_exit_code());
     }
 
     /// The default is what every session assumed before this type existed, so adding it

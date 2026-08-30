@@ -75,8 +75,10 @@ impl ShellAdapter for Cmd {
     ///
     /// **It is this adapter's answer rather than an inference from the marker claim, since
     /// B9.5.** The session used to read `PromptAndCommandLine` as "this is cmd"; POSIX `sh`
-    /// now makes that claim too, and a POSIX reader takes an escape as a meta prefix rather
-    /// than as a discard.
+    /// made that claim too for a day, and a POSIX reader takes an escape as a meta prefix
+    /// rather than as a discard. `sh` has since moved on to a claim of its own (roadmap
+    /// 23.15), which leaves cmd alone here again — and the question stays the adapter's,
+    /// because what a line editor does with a byte was never what a marker claim was about.
     fn discards_line(&self) -> Option<u8> {
         Some(ESCAPE)
     }

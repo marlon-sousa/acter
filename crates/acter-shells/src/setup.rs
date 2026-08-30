@@ -163,12 +163,29 @@ pub(crate) const BASH: &str = concat!(
 /// literal characters. Every line of a setup costs its own measurement, which is the rule
 /// that produced this program rather than an exception to it.
 ///
-/// **It reaches the prompt boundaries and no further**, which is why [`setup_for`] answers
-/// [`ShellMarkers::PromptAndCommandLine`] for it: POSIX `sh` has `PS1` but no prompt hook and
-/// no `DEBUG` trap, so there is nowhere for "output starts here" or "the command ended with
-/// this code" to come from. That is not a reason to refuse it — `cmd.exe` already ships the
-/// same claim and a listener gets real value from prompt boundaries alone — and the tracker
-/// synthesizes the missing `C` at the end of the echo exactly as it does for cmd.
+/// **It reaches the prompt boundaries and it says how the command went**, which is why
+/// [`setup_for`] answers [`ShellMarkers::PromptCommandLineAndExitCode`] for it. What POSIX
+/// `sh` has no hook for is "output starts here": nothing runs between Enter and the command,
+/// so the tracker synthesizes the missing `C` at the end of the echo exactly as it does for
+/// `cmd.exe`.
+///
+/// **The verdict was measured after B9.5 said there could not be one** (roadmap 23.15).
+/// Decision 8 reasoned that a verdict needs a post-execution hook and POSIX `sh` has none —
+/// sound reasoning, wrong conclusion. `PS1` is expanded *every time the prompt is drawn*, and
+/// `$?` at that moment is the status of the command that just finished; measured 2026-08-29
+/// against busybox 1.37.0 and dash 0.5.12, `PS1='[status=$?]# '` reports `0` after `true` and
+/// `7` after `(exit 7)` in both. So `\033]133;D;$?\007` goes at the front of the prompt string
+/// and the shell fills the number in itself. Measured through the whole stack the same day,
+/// `(exit 7)` in `docker-desktop` announced `Failed { exit_code: ExitCode(7) }`.
+///
+/// **`$?` is written into `PS1` as text and expanded later, which is the whole trick.** `\$`
+/// inside the double-quoted assignment leaves a literal `$?` in the value, where every other
+/// byte of the markers is put there once by `printf` at setup time. Writing `$?` unescaped
+/// would freeze the setup command's own status into the prompt forever.
+///
+/// **The number is inside the non-printing brackets on the busybox branch**, and it has to be:
+/// the digits are as invisible on screen as the marker around them, so a shell told to skip
+/// the marker and count the digits would miscount by one column per digit.
 ///
 /// **The markers are built with `printf` into the value rather than written as escapes.**
 /// `sh` expands parameters in `PS1`, so `\033` written into the variable would be four
@@ -216,15 +233,16 @@ pub(crate) const BASH: &str = concat!(
 /// the shell which one it is and wraps accordingly — one line, one round trip, and no guess
 /// from a name that two different shells share.
 ///
-/// It prints its own `C` for [`BASH`]'s reason and for a slightly different consequence: with
-/// no `D` in this shell the block opened by the echo is closed by the next prompt's `B`, and
-/// the tracker only closes a block it knows is open.
+/// It prints its own `C` for [`BASH`]'s reason: without it the tracker never learns the block
+/// is open, and it only closes a block it knows about — so the `D` the very next prompt
+/// carries would be ignored and the session would report "running" from the moment it
+/// connected.
 pub(crate) const SH: &str = concat!(
     "printf '\\033]133;C\\007'; ",
     "if [ -n \"$BB_ASH_VERSION\" ]; then ",
-    "PS1=\"\\[$(printf '\\033]133;A\\007')\\]$PS1\\[$(printf '\\033]133;B\\007')\\]\"; ",
+    "PS1=\"\\[$(printf '\\033]133;D;')\\$?$(printf '\\007\\033]133;A\\007')\\]$PS1\\[$(printf '\\033]133;B\\007')\\]\"; ",
     "else ",
-    "PS1=\"$(printf '\\033]133;A\\007')$PS1$(printf '\\033]133;B\\007')\"; ",
+    "PS1=\"$(printf '\\033]133;D;')\\$?$(printf '\\007\\033]133;A\\007')$PS1$(printf '\\033]133;B\\007')\"; ",
     "fi"
 );
 
@@ -237,7 +255,7 @@ pub(crate) const SH: &str = concat!(
 pub fn setup_for(shell: Option<&str>) -> Option<SessionSetup> {
     let (line, markers) = match shell? {
         "bash" => (BASH, ShellMarkers::Full),
-        "sh" | "dash" => (SH, ShellMarkers::PromptAndCommandLine),
+        "sh" | "dash" => (SH, ShellMarkers::PromptCommandLineAndExitCode),
         // Named and nothing more. `zsh` and `fish` both have prompt hooks — `precmd` and
         // `fish_prompt` — and each becomes one small additive entry, measured the way bash's
         // was. Guessing at one from the shape of bash's is exactly what B5.5 forbids.
@@ -425,8 +443,8 @@ mod tests {
         let (busybox, dash) = SH.split_once("else ").expect("the line branches");
 
         assert!(
-            busybox.contains(r"\[$(printf '\033]133;A\007')\]"),
-            "busybox is told the marker takes no columns: {busybox}"
+            busybox.contains(r"\033]133;A\007')\]"),
+            "busybox is told the markers take no columns: {busybox}"
         );
         assert!(
             !dash.contains(r"\["),
@@ -448,15 +466,48 @@ mod tests {
         assert!(SH.ends_with("fi"), "and the branch is closed: {SH}");
     }
 
-    /// `sh` marks where the prompt begins and where the command line does, and nothing else —
-    /// so what it can do is asserted here rather than inferred from the absence of a `D`.
+    /// `sh` marks where the prompt begins, where the command line does, and how the last
+    /// command ended — and still nothing about where output starts, which is the one boundary
+    /// it has no hook for.
     #[test]
-    fn the_sh_program_marks_the_prompt_and_nothing_after_it() {
+    fn the_sh_program_marks_the_prompt_and_says_how_the_command_went() {
         assert!(SH.contains(r"\033]133;A\007"), "the prompt region opens");
         assert!(SH.contains(r"\033]133;B\007"), "the command line begins");
         assert!(
-            !SH.contains("133;D"),
-            "and no verdict is forged for a shell that has nowhere to compute one"
+            SH.contains(r"\033]133;D;"),
+            "and the last command's verdict arrives with the next prompt: {SH}"
+        );
+    }
+
+    /// **The whole of roadmap 23.15 in one assertion.** `$?` is left in `PS1` for the shell to
+    /// expand every time it draws the prompt; expanding it at setup time would freeze the setup
+    /// command's own status into the prompt for the life of the session.
+    #[test]
+    fn the_exit_code_is_left_for_the_shell_to_fill_in_at_every_prompt() {
+        assert_eq!(
+            SH.matches(r"\$?").count(),
+            2,
+            "once on each branch, escaped so the assignment does not expand it: {SH}"
+        );
+        assert!(
+            !SH.contains(r"133;D;$?"),
+            "an unescaped $? is this session's first exit code, forever: {SH}"
+        );
+    }
+
+    /// **The digits are as invisible as the marker around them**, so the branch that tells
+    /// busybox to skip the marker has to have them inside the same brackets — otherwise the
+    /// line editor miscounts by one column per digit of every exit code.
+    #[test]
+    fn the_exit_code_is_inside_the_brackets_busybox_honours() {
+        let (busybox, _) = SH.split_once("else ").expect("the line branches");
+        let opened = busybox.find(r"\[").expect("the busybox branch opens one");
+        let verdict = busybox.find("133;D;").expect("and carries the verdict");
+        let closed = busybox.find(r"\]").expect("and closes it");
+
+        assert!(
+            opened < verdict && verdict < closed,
+            "the exit code takes no columns and must be declared so: {busybox}"
         );
     }
 
@@ -502,9 +553,12 @@ mod tests {
         assert_eq!(sh.line, SH);
         assert_eq!(
             sh.markers,
-            ShellMarkers::PromptAndCommandLine,
-            "the sentence has to be able to say partly"
+            ShellMarkers::PromptCommandLineAndExitCode,
+            "a shell that can say how a command went gets the sentence bash gets (23.15)"
         );
+
+        let dash = setup_for(Some("dash")).expect("dash runs the same measured line");
+        assert_eq!(dash.markers, sh.markers);
     }
 
     /// **The rule that keeps this honest.** A shell Acter can name is named, and nothing is
