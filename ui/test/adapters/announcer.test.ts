@@ -198,3 +198,74 @@ describe('AnnouncerDom', () => {
     expect(region.textContent).toBe('');
   });
 });
+
+/**
+ * **Where an announcement goes while dialogs are open.** `showModal` makes everything
+ * outside the top dialog inert, so a region under one changes where nothing is listening —
+ * which is why a dialog that wants to be heard carries its own.
+ *
+ * Since 2026-08-30 they stack: the Connect dialog opens a connecting dialog on top of
+ * itself, and only the innermost is listened to.
+ */
+describe('speaking into a dialog', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    document.body.replaceChildren();
+  });
+
+  function open(id: string): HTMLElement {
+    const dialog = document.createElement('dialog');
+    dialog.id = id;
+    dialog.setAttribute('open', '');
+    const region = document.createElement('div');
+    region.setAttribute('data-live-region', '');
+    dialog.append(region);
+    document.body.append(dialog);
+    return region;
+  }
+
+  it('speaks into an open dialog rather than into the document', () => {
+    const document_region = makeRegion();
+    const inside = open('connect-dialog');
+    const announcer = new AnnouncerDom(document_region, 0);
+
+    announcer.announce('not available');
+    vi.advanceTimersByTime(0);
+
+    expect(inside.textContent).toBe('not available');
+    expect(document_region.textContent).toBe('');
+  });
+
+  /** The innermost one, which is the last written in the document: a dialog is written
+   * after the dialog that opens it. */
+  it('speaks into the innermost of a stack', () => {
+    const document_region = makeRegion();
+    const outer = open('connect-dialog');
+    const inner = open('connecting-dialog');
+    const announcer = new AnnouncerDom(document_region, 0);
+
+    announcer.announce('Starting Ubuntu.');
+    vi.advanceTimersByTime(0);
+
+    expect(inner.textContent).toBe('Starting Ubuntu.');
+    expect(outer.textContent).toBe('');
+  });
+
+  /** And back to the one underneath when the innermost closes, which is what Escape out of
+   * the connecting dialog leaves behind. */
+  it('speaks into the one underneath once the innermost has closed', () => {
+    const document_region = makeRegion();
+    const outer = open('connect-dialog');
+    const inner = open('connecting-dialog');
+    inner.parentElement?.removeAttribute('open');
+    const announcer = new AnnouncerDom(document_region, 0);
+
+    announcer.announce('not available');
+    vi.advanceTimersByTime(0);
+
+    expect(outer.textContent).toBe('not available');
+  });
+});

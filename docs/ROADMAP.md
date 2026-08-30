@@ -556,6 +556,93 @@ the answer to "what should we do now?".
     re-deciding what the status region says when it is read on demand an hour later, which
     is 27.5's question and not A13's.
 
+13.9. **Done** — ten findings from the user's own pass over the shipped window, fixed in one
+    general PR. Spec: amendments to
+    [a8-connect-dialog.md](specs/a8-connect-dialog.md) (G, H, I),
+    [a10-the-window-has-two-faces.md](specs/a10-the-window-has-two-faces.md),
+    [a13-what-a-session-can-tell-you-and-where-that-is-explained.md](specs/a13-what-a-session-can-tell-you-and-where-that-is-explained.md)
+    and [b9.5-the-session-is-set-up-after-it-is-established.md](specs/b9.5-the-session-is-set-up-after-it-is-established.md)
+    (7 to 11).
+
+    **Dictated by the user on 2026-08-30**, driving the window they had just merged, and then
+    again after trying the build this PR made of it. They are one entry because they are one
+    pass and one PR; each is named below with what it cost a listener, because that is what
+    says why it was worth a fix rather than a note.
+
+    1. **A paragraph in the set-up dialog took focus.** The "If you cancel…" sentence was a
+       tab stop, which is how prose was made reachable inside an application region. A
+       paragraph is not a control, and Tab landing on things that do nothing costs more than
+       the sentence bought. All three sentences are the dialog's description now, spoken as
+       it opens.
+    2. **A form landmark was announced between the controls of that dialog.** The `<form
+       method="dialog">` exists to close the dialog with the pressed button's value; a
+       landmark inside a dialog says nothing, because the dialog is already the boundary.
+       `role="none"` on every one of them.
+    3. **Connecting bounced focus back to the list of kinds.** Being returned to the control
+       you have just acted on is what a dialog does when nothing happened — for five to six
+       seconds, on a cold distribution (23.10). Enter goes forward now, into a connecting
+       dialog that names the far end and carries the backend's progress sentences.
+    4. **A session that ended put focus in the buffer**, on the last command's heading. That
+       rule came from a report on 2026-08-26 and reversed A10's own checklist; driven again
+       by the same person it is the wrong half of the answer, because the transcript is one
+       Tab away and having no session is the thing to do something about.
+    5. **A kind's parameters were not cleared to nothing chosen.** Choosing WSL and pressing
+       Enter connected to Ubuntu, because a `<select>` selects its first option for you — a
+       distribution nobody had picked and never heard named. Lists open on "not chosen",
+       Connect is unavailable until one is, and Enter says what is missing rather than
+       nothing at all.
+    6. **Nowhere to find out what "let Acter set this session up" means.** A Help button
+       beside the checkbox, opening A13's topic at a section written for it.
+
+    **Four more the same day, after trying the build.** They are here rather than in an entry
+    of their own because they are the same pass continuing, and because two of them replace
+    what the six above had just landed.
+
+    7. **The combo box became a list.** "Not chosen" as an option worked and read badly — a
+       row in a list of things you can connect to that is not a thing you can connect to.
+       *"I tend each time more to replace the combo with a list, where you can just have
+       nothing selected."* A8's amendment D is retired, and both lists in the dialog are one
+       implementation now.
+    8. **"Continue" and "Cancel" became "Run command" and "Skip."** Those are the words for a
+       dialog asking whether to go on; this one asks whether a command runs in your shell.
+    9. **The offer promised something a session already had.** Reading the set-up dialog back:
+       *"it says that unintegrated sessions don't get headings. Is this true?"* It is not — a
+       block is opened for every submitted line and B4.4 heads it with the shell's own echo,
+       marker or no marker, which the NVDA pass had already recorded without noticing what it
+       proved. Three places said it: the backend's offer sentence, the connection sentence
+       for a partly set-up shell, and the help. What the setup actually buys is the *ending* —
+       a command known to have finished, and, where the shell can say it, how it went.
+    10. **The help topic said the same thing three times, and one of them was out of date.**
+        It told a listener that WSL sets itself up when it starts, which stopped being true
+        with B9.5. Rewritten whole, in five sections that build rather than restate: what
+        Acter is, moving around the window, connecting, the two kinds of session, and the
+        dialog that asks. It names them — "integrated" and "unintegrated" — because a topic
+        is the one place a word can be *given* to somebody rather than used at them.
+
+    **What it changed beyond the ten.** The announcer now speaks into the *innermost* open
+    dialog rather than the first it finds, because dialogs stack for the first time;
+    `keepTabInside` keeps the key in a dialog with no controls at all, which the connecting
+    dialog is; and the two listboxes became one `adapters/option_list.ts`. `WindowChrome`
+    stopped knowing the buffer exists, since the only thing that read it was the rule finding
+    4 removes.
+
+    **And one red check that was nobody's fault is gone.**
+    `a_frontend_that_attaches_late_is_told_everything_it_missed` spawned a real PowerShell and
+    gave it a five-second head start to stand in for the webview loading; on a loaded runner
+    PowerShell's cold start outlasts that, so nothing is held to replay and the test fails
+    with `[ConnectionChanged { state: Connected }]`. It reddened three PRs that could not have
+    caused it, this one included. It runs against `cmd.exe` now, which draws its prompt in
+    tens of milliseconds against the same window — a hundredfold margin — and asserts the
+    prompt arriving as output, since a shell that reports no exit code emits no `PromptDrawn`
+    (spec B4.5, decision 4). Waiting *longer after attaching* would have been the wrong fix:
+    a prompt that arrives after the attach arrives live, and the test would quietly stop
+    exercising replay at all.
+
+    **And one claim was disproved rather than fixed.** `formFilled`'s note said a listener
+    tabs to a disabled Connect and hears "unavailable". They do not: `keepTabInside` filters
+    disabled controls out of the cycle, so Tab goes from Help straight to Cancel. Measured
+    with NVDA on 2026-08-30, corrected in the comment and in A8's amendment G.
+
 14. A4, completion path. Spec: none yet → specify first. Scope sketch: fake
     completion provider, Tab handling in the edit field, completion announcement.
 15. A5.3 and onward — iteration entries appear here as NVDA findings arrive.
@@ -2141,6 +2228,37 @@ thing to pick up once the adapters land, not merely the next number.
     a block opening for nothing means an id was claimed by something nobody can name — but
     it is no longer something a listener meets, which is why it is filed here rather than
     fixed in a hurry.
+
+22.15. **Done** — a flood in an unintegrated session took the prompt with it. Spec: amendment
+    to [b4.4-autoread-with-no-boundaries.md](specs/b4.4-autoread-with-no-boundaries.md).
+    **Dictated by the user on 2026-08-30**, in the same pass as 13.9, and it is the one
+    domain finding of the seven.
+
+    **What a listener met.** A session with no boundaries produces enough output to pass the
+    auto-read threshold, hears *"1204 lines arrived, too big to read"*, and hears nothing
+    else — no prompt, so no idea where they now are. The user's own diagnosis and their own
+    fix: *"hold the last line separately and give it to the grace period, so when nothing has
+    changed for a while that one line is read."*
+
+    **Every part of it was the design working as written**, which is why it is worth
+    recording rather than patching quietly. In an unintegrated session the prompt *is*
+    output — B4.4's decision 10 forwards every line, echo included, because there is no
+    structure to filter by — so it accumulates with the flood; `UnspokenText` drops the bytes
+    once the verdict is settled, which is what bounds a gapless flood in the first place; and
+    `PromptDrawn` belongs to a shell that marks its boundaries, so nothing was coming
+    afterwards to say it separately.
+
+    **What shipped.** `UnspokenText` keeps whatever has arrived since the last line ending
+    beside its counts — one row of memory whatever the flood does — and a too-big flush
+    announces the count and then that row. Unterminated is the test, because a shell sitting
+    at its prompt has left the cursor on that row: a span ending at a newline says nothing
+    extra. Only `Integration::Unintegrated` gets it, since an integrated session announces its
+    prompt on its own and a session still inside its grace period may be about to become one;
+    and Acter's own commands cannot reach it, because a self-talk flush is quieted before the
+    size verdict is asked for (23.12).
+
+    The babble guard is left alone: it goes quiet mid-command and comes back at the command's
+    own end, where this is about the verdict that speaks and still leaves a listener nowhere.
 
 23. B5, the shell adapters. **Split into three entries 2026-08-23**, agreed in
     conversation, because "the PowerShell adapter" was three components wearing one number:

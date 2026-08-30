@@ -56,8 +56,8 @@ export interface ConnectApi {
    * sentence and carries on.
    *
    * `setUp` is the Connect dialog's checkbox: whether this connection may run one command
-   * inside the session once it is established, so a listener gets a heading for each command
-   * and is told when one fails (spec B9.5, decision 9). It travels with the attempt rather
+   * inside the session once it is established, so a listener is told when each command has
+   * finished and, where the shell can say it, whether it worked (spec B9.5, decision 9). It travels with the attempt rather
    * than being stored, because there is no profile store to keep it in until B8.
    */
   use(id: ProfileId, setUp: SetUp, listener?: ConnectListener): Promise<Connected>;

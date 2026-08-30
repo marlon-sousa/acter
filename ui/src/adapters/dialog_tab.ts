@@ -38,7 +38,13 @@ export function keepTabInside(dialog: HTMLElement, event: KeyboardEvent): void {
   const focusable = Array.from(
     dialog.querySelectorAll<HTMLElement>(FOCUSABLE),
   ).filter((control) => !(control as HTMLButtonElement).disabled);
+  // **A dialog with no controls at all keeps the key too**, for the reason the
+  // single-control case below swallows it: letting Tab through drops the reader into the
+  // dialog's own document, which is the thing this function exists to prevent. The
+  // connecting dialog is one of these — it holds a sentence and nothing to press, because
+  // there is no way to call off a connection in flight.
   if (focusable.length === 0) {
+    event.preventDefault();
     return;
   }
   const at = focusable.indexOf(dialog.ownerDocument.activeElement as HTMLElement);

@@ -739,10 +739,16 @@ fn far_end_note(shell: Option<&str>, outcome: SetUpOutcome) -> Note {
             said: Some(shell.to_owned()),
             limit_explained: false,
         },
+        // **Not "a heading for each command", which it said until 2026-08-30** — reported by
+        // the user, who read the same claim in the set-up dialog and asked whether it was
+        // true. It is not: a session gets a heading for every line it is given, set up or
+        // not (B4.4, and measured with NVDA the same day). What a prompt-only setup buys is
+        // that Acter knows when a command has finished, which is why the prompt is read on
+        // its own rather than at the end of the output.
         SetUpOutcome::Partly => Note {
             said: Some(format!(
-                "{shell}. You will hear a heading for each command here, but not whether it \
-                 worked."
+                "{shell}. Acter can tell when a command has finished here, but not whether \
+                 it worked."
             )),
             limit_explained: true,
         },
@@ -916,7 +922,9 @@ mod tests {
 
         assert_eq!(
             note.said.as_deref(),
-            Some("ksh. You will hear a heading for each command here, but not whether it worked.")
+            Some(
+                "ksh. Acter can tell when a command has finished here, but not whether it worked."
+            )
         );
         assert!(note.limit_explained);
     }

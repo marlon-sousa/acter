@@ -30,7 +30,7 @@ use std::sync::mpsc::{Sender, channel};
 
 use crate::{
     AttemptId, ConnectAnswer, ConnectQuestion, ConnectQuestions, ConnectSink, ConnectStep,
-    HostKeyAnswer, HostKeyQuestion, HostKeyState, IF_YOU_CANCEL, PasswordQuestion, ProgramAnswer,
+    HostKeyAnswer, HostKeyQuestion, HostKeyState, IF_YOU_SKIP, PasswordQuestion, ProgramAnswer,
     ProgramQuestion, Secret, SetupAnswer, SetupQuestion, SshQuestions,
 };
 
@@ -204,7 +204,7 @@ impl ConnectQuestions for Conversation {
             detected: question.detected(),
             offer: question.offer(),
             command: question.command().to_owned(),
-            refusal: IF_YOU_CANCEL.to_owned(),
+            refusal: IF_YOU_SKIP.to_owned(),
             shell: question.shell,
         };
 

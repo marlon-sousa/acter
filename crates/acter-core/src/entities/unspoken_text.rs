@@ -11,6 +11,18 @@
 //! That is what bounds the gapless-flood case (`yes`, a busy `tail -f`) that no pacing
 //! rule reaches: under a flood no quiescent gap ever occurs, so without this nothing
 //! would ever be flushed and nothing ever freed.
+//!
+//! **One line survives the drop, and it is the last one.** Reported by the user on
+//! 2026-08-30: a session with no shell integration that floods says "too big to read" and
+//! nothing else, and the prompt goes with the flood — because in such a session the prompt
+//! *is* output, the last row of it, and no `PromptDrawn` is coming to say it separately. So
+//! the final unterminated row is kept beside the counts, which costs one row of memory
+//! whatever the flood does, and whoever announces the verdict can read it.
+//!
+//! **Unterminated is the whole of the test.** A shell that has drawn its prompt leaves the
+//! cursor on that row with no line ending after it, so a span ending at a newline has
+//! nothing outstanding and this answers `None`. That is why it is the *last line* rather
+//! than the last *complete* line: the complete ones were part of what was too big.
 
 use crate::PacingConfig;
 use crate::entities::ReadMode;
@@ -30,6 +42,9 @@ pub(crate) struct UnspokenText {
     chars: usize,
     ends_with_newline: bool,
     any: bool,
+    /// Whatever has arrived since the last line ending. Kept whether or not the bytes are,
+    /// because it is one row rather than a span.
+    last_line: String,
 }
 
 impl Default for UnspokenText {
@@ -40,6 +55,7 @@ impl Default for UnspokenText {
             chars: 0,
             ends_with_newline: false,
             any: false,
+            last_line: String::new(),
         }
     }
 }
@@ -53,6 +69,15 @@ impl UnspokenText {
         self.newlines += chunk.matches('\n').count();
         self.ends_with_newline = chunk.ends_with('\n');
         self.any = true;
+        // Everything after this chunk's last line ending, or more of the row already being
+        // built when it carried none.
+        match chunk.rfind('\n') {
+            Some(at) => {
+                self.last_line.clear();
+                self.last_line.push_str(&chunk[at + 1..]);
+            }
+            None => self.last_line.push_str(chunk),
+        }
 
         match &mut self.text {
             Some(text) => {
@@ -78,6 +103,15 @@ impl UnspokenText {
             lines: self.newlines + trailing,
             chars: self.chars,
         }
+    }
+
+    /// The row the far end is still sitting on: everything since the last line ending.
+    ///
+    /// `None` when the span ends at one, and when what is outstanding is only whitespace —
+    /// the rule a drawn prompt is held to for the same reason: some shells draw across two
+    /// rows and the first of them is blank.
+    pub(crate) fn last_line(&self) -> Option<&str> {
+        (!self.last_line.trim().is_empty()).then_some(self.last_line.as_str())
     }
 
     /// Takes the span, leaving the accumulator empty. The text is `None` when it was
@@ -169,6 +203,70 @@ mod tests {
         }
         assert_eq!(unspoken.text, None);
         assert_eq!(unspoken.size().lines, 1_000_000);
+    }
+
+    /// **The row the far end is sitting on outlives the bytes.** It is what a listener
+    /// needs when the span itself is too big to read, and in an unintegrated session it is
+    /// the prompt.
+    #[test]
+    fn the_last_unterminated_row_survives_the_bytes_being_dropped() {
+        let config = PacingConfig::default();
+        let mut unspoken = UnspokenText::default();
+        for _ in 0..200 {
+            unspoken.push("a line of output\n", &config);
+        }
+        unspoken.push("marlon@ubuntu:~$ ", &config);
+
+        assert_eq!(unspoken.last_line(), Some("marlon@ubuntu:~$ "));
+        let (text, _) = unspoken.take();
+        assert_eq!(text, None, "the span itself is still not worth holding");
+    }
+
+    /// It is built up as the far end draws it, chunk by chunk, exactly as a prompt arrives.
+    #[test]
+    fn a_row_arriving_in_pieces_is_one_row() {
+        let config = PacingConfig::default();
+        let mut unspoken = UnspokenText::default();
+        unspoken.push("done\nmarlon", &config);
+        unspoken.push("@ubuntu", &config);
+        unspoken.push(":~$ ", &config);
+
+        assert_eq!(unspoken.last_line(), Some("marlon@ubuntu:~$ "));
+    }
+
+    /// **A span that ends at a line ending has nothing outstanding**, which is the test
+    /// for "the far end is sitting at a prompt" and the reason this is the last row rather
+    /// than the last complete line.
+    #[test]
+    fn a_span_that_ends_at_a_line_ending_has_no_last_row() {
+        let config = PacingConfig::default();
+        let mut unspoken = UnspokenText::default();
+        unspoken.push("one\ntwo\n", &config);
+
+        assert_eq!(unspoken.last_line(), None);
+    }
+
+    /// Whitespace is not a row worth reading: some shells draw a prompt across two of them
+    /// and the first is blank.
+    #[test]
+    fn a_blank_row_is_not_a_row() {
+        let config = PacingConfig::default();
+        let mut unspoken = UnspokenText::default();
+        unspoken.push("one\n   ", &config);
+
+        assert_eq!(unspoken.last_line(), None);
+    }
+
+    /// And it belongs to the span it arrived in: taking one leaves nothing behind for the
+    /// next.
+    #[test]
+    fn taking_the_span_takes_the_row_with_it() {
+        let config = PacingConfig::default();
+        let mut unspoken = UnspokenText::default();
+        unspoken.push("one\n$ ", &config);
+        let _ = unspoken.take();
+
+        assert_eq!(unspoken.last_line(), None);
     }
 
     #[test]

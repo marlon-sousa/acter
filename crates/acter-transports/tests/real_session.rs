@@ -1221,10 +1221,29 @@ fn outside_the_session(command: &str) -> String {
 /// dropped. This attaches deliberately late and asserts that nothing said in the meantime
 /// was lost — and that a command submitted *afterwards* is still read aloud, which is the
 /// third symptom of the same report.
+///
+/// **It runs against `cmd.exe`, and that is what stops it being flaky** (2026-08-30). It
+/// used to spawn PowerShell, whose cold start on a loaded CI runner can outlast the
+/// five-second head start below — and then there is no prompt held to replay, the assertion
+/// fires with `[ConnectionChanged { state: Connected }]`, and a change that touched nothing
+/// near this is what looks red. It happened three times on branches that could not have
+/// caused it, most recently on this one.
+///
+/// `cmd.exe` draws its prompt in tens of milliseconds against a five-second window, which is
+/// a hundredfold margin where PowerShell's was a coin toss on a bad day. **Waiting longer
+/// after attaching would have been the wrong fix**: a prompt that arrives after the attach
+/// arrives live, the assertion passes, and the test quietly stops exercising replay, which is
+/// its whole subject. Making the shell speak sooner keeps the premise instead of hiding it.
+///
+/// **What the swap costs is the event's name and nothing else.** A shell that reports no exit
+/// code emits no `PromptDrawn` — its prompt is content in the block (spec B4.5, decision 4) —
+/// so what is asserted here is the prompt arriving as output. That is the same fact the same
+/// replay carries; and `a_real_powershell_reports_the_prompt_it_drew` still covers
+/// `PromptDrawn` itself, on the shell that has one.
 #[tokio::test]
 #[ignore = "spawns a real shell"]
 async fn a_frontend_that_attaches_late_is_told_everything_it_missed() {
-    let adapter = acter_shells::adapter_for(POWERSHELL);
+    let adapter = acter_shells::adapter_for(SHELL);
     let launch = adapter.launch();
     let args: Vec<&str> = launch.args.iter().map(String::as_str).collect();
     let environment: Vec<(&str, &str)> = launch
@@ -1271,9 +1290,10 @@ async fn a_frontend_that_attaches_late_is_told_everything_it_missed() {
         said(&session)
     );
     assert!(
-        said(&session)
-            .iter()
-            .any(|event| matches!(event, SessionEvent::PromptDrawn { .. })),
+        said(&session).iter().any(|event| matches!(
+            event,
+            SessionEvent::Output { text, .. } if text.contains('>')
+        )),
         "and the prompt drawn before it attached is not lost: {:?}",
         said(&session)
     );

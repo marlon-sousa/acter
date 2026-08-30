@@ -275,7 +275,9 @@ describe('the Help dialog', () => {
     });
 
     await expect(shape.applications).toBe(0);
-    await expect(shape.headings).toBe(3);
+    // Five since 2026-08-30, when the topic was rewritten whole: what Acter is, moving
+    // around the window, connecting, the two kinds of session, and the dialog that asks.
+    await expect(shape.headings).toBe(5);
     await expect(shape.describedBy).toBe('help-summary');
   });
 

@@ -11,8 +11,8 @@
 //!
 //! **B9.5 adds a fourth, and it is the first that is not a warning.** The connection has
 //! succeeded, the far end has said what shell it runs, and Acter is about to run one command
-//! inside the session so that a listener gets a heading for each command and is told when one
-//! fails. The command is shown before it runs, verbatim (spec B9.5, decision 9). It arrives
+//! inside the session so that a listener is told when each command has finished and, where
+//! the shell can say it, whether it worked. The command is shown before it runs, verbatim (spec B9.5, decision 9). It arrives
 //! on this seam for the reason the other two do — it is asked after the connection succeeds
 //! and before anything is sent, which is exactly the window this port exists for — and it
 //! inherits both properties the other two established: refusing is a decision rather than a
@@ -103,11 +103,21 @@ impl SetupQuestion {
         // 23.15). Where output begins is a boundary the tracker can supply for itself; whether
         // a command worked is the one thing no amount of inference can recover, so it is the
         // one thing this sentence has to be careful about.
+        //
+        // **And it no longer promises headings, because a session gets those anyway** —
+        // reported by the user on 2026-08-30, reading this sentence back: "it says that
+        // unintegrated sessions do not get headings. Is this true?" It is not. A block is
+        // opened for every submitted line from the ack that accepted it, and B4.4 heads it
+        // with the shell's own echo, whether or not a marker ever arrives. Measured the same
+        // day with NVDA against a real unintegrated WSL session: `h` read back "seq 1 3000"
+        // and "exit" as headings. What the setup actually buys is the *ending* — a command
+        // known to have finished, and, where the shell can say it, how it went.
         let gained = if self.setup.markers.reports_exit_code() {
-            "You get a heading for each command, and you are told when a command fails."
+            "You are told when a command fails, and Acter can tell when each command has \
+             finished."
         } else {
-            "You get a heading for each command. Acter cannot yet tell you when a command \
-             fails in this shell."
+            "Acter can tell when each command has finished. It cannot yet tell you when a \
+             command fails in this shell."
         };
         format!("Acter can set it up so it tells you more about what you run. {gained}")
     }
@@ -123,8 +133,12 @@ impl SetupQuestion {
 /// **It is the register test rather than a placeholder** (spec B9.5, decision 9). If the
 /// refusal reads in the same voice as the help topic F1 opens, the dialog is in the user's
 /// words; if it does not, something in this dialog is speaking this project's.
-pub const IF_YOU_CANCEL: &str = "If you cancel, the session still works. You will hear what \
-                                 commands print here, but not whether they worked.";
+///
+/// **It names the button, so it was renamed with it** (2026-08-30): the dialog's two buttons
+/// became "Run command" and "Skip", and a sentence that told a listener what happens "if you
+/// cancel" would be naming a control that is no longer there.
+pub const IF_YOU_SKIP: &str = "If you skip this, the session still works. You will hear what \
+                               commands print here, but not whether they worked.";
 
 /// What the person decided about setting this session up.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -243,12 +257,20 @@ mod tests {
     }
 
     /// **What a listener gets, in their words** — and none of the phrase A13 removed.
+    ///
+    /// **It is the ending rather than the heading** (reported by the user 2026-08-30): a
+    /// session gets a heading for every line it is given, set up or not, so offering one as
+    /// the reward was offering something they already had.
     #[test]
-    fn a_shell_that_marks_everything_offers_headings_and_failures() {
+    fn a_shell_that_marks_everything_offers_endings_and_failures() {
         let offer = bash().offer();
 
-        assert!(offer.contains("a heading for each command"), "{offer}");
+        assert!(offer.contains("when each command has finished"), "{offer}");
         assert!(offer.contains("told when a command fails"), "{offer}");
+        assert!(
+            !offer.contains("heading"),
+            "a heading is not what setting a session up buys: {offer}"
+        );
         assert!(
             !offer.contains("shell integration"),
             "the phrase A13 removed is not said to a listener: {offer}"
@@ -269,7 +291,7 @@ mod tests {
         };
         let offer = question.offer();
 
-        assert!(offer.contains("a heading for each command"), "{offer}");
+        assert!(offer.contains("when each command has finished"), "{offer}");
         assert!(offer.contains("told when a command fails"), "{offer}");
     }
 
@@ -289,7 +311,7 @@ mod tests {
         };
         let offer = question.offer();
 
-        assert!(offer.contains("a heading for each command"), "{offer}");
+        assert!(offer.contains("when each command has finished"), "{offer}");
         assert!(
             offer.contains("cannot yet tell you when a command fails"),
             "{offer}"
@@ -307,9 +329,9 @@ mod tests {
     /// shipped sentence, so the refusal reads in the same voice as the help topic F1 opens.
     #[test]
     fn the_refusal_says_what_still_works_before_what_does_not() {
-        assert!(IF_YOU_CANCEL.starts_with("If you cancel, the session still works."));
+        assert!(IF_YOU_SKIP.starts_with("If you skip this, the session still works."));
         assert!(
-            IF_YOU_CANCEL
+            IF_YOU_SKIP
                 .ends_with("You will hear what commands print here, but not whether they worked.")
         );
     }

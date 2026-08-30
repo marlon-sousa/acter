@@ -17,13 +17,17 @@ import { HelpDialog } from '../../src/adapters/help_dialog';
 const SKELETON = `
   <dialog id="help-dialog" aria-labelledby="help-title" aria-describedby="help-summary">
     <h1 id="help-title">Acter help</h1>
-    <p id="help-summary">Three short sections about what you hear when you run a command. Use your reader's heading key to move between them.</p>
-    <h2>What you always hear</h2>
-    <p>When you run a command, Acter reads out what the command prints.</p>
-    <h2>What you sometimes do not hear</h2>
-    <p>Acter cannot see whether a command worked. It has to be told, by the shell.</p>
-    <h2>Which sessions are which</h2>
-    <p>Sessions on this computer set themselves up when they start.</p>
+    <p id="help-summary">Five short sections: what Acter is, moving around the window, connecting to a shell, sessions Acter has set up, and the dialog that asks. Use your reader's heading key to move between them.</p>
+    <h2 id="help-what-acter-is" tabindex="-1">What Acter is</h2>
+    <p>Acter is a terminal you use by listening. You type a command, it runs in a shell, and Acter reads out what the command prints.</p>
+    <h2>Moving around the window</h2>
+    <p>The command line is where you type. F6 moves between it and the results area.</p>
+    <h2>Connecting to a shell</h2>
+    <p>A window with nothing running has one button, Connect.</p>
+    <h2 id="help-setting-up" tabindex="-1">Sessions Acter has set up, and sessions it has not</h2>
+    <p>A session where that has been done is called an integrated session; one where it has not is called an unintegrated session.</p>
+    <h2>The dialog that asks to set a session up</h2>
+    <p>Run command runs it. Skip leaves the session as it is.</p>
     <button id="help-close" type="button">Close</button>
   </dialog>
   <input id="command-input" />
@@ -69,6 +73,18 @@ describe('opening it', () => {
     expect(dialog.open).toBe(true);
   });
 
+  /**
+   * **At the top, because the platform's own answer is a section in the middle.** A modal
+   * `<dialog>` focuses the first focusable *area*, which includes `tabindex="-1"` — so once
+   * one heading became programmatically focusable, F1 landed on it. Measured with NVDA on
+   * 2026-08-30: F1 announced the description and then the fourth section's heading.
+   */
+  it('lands on the first section when nobody asked for one', () => {
+    help.open();
+
+    expect(document.activeElement?.id).toBe('help-what-acter-is');
+  });
+
   /** It has two ways in — F1 and the menu item — so being asked while already open is an
    * ordinary thing rather than a double press, and `showModal` on an open dialog throws
    * `InvalidStateError` into a `void` call where nobody sees it. */
@@ -77,6 +93,57 @@ describe('opening it', () => {
 
     expect(() => help.open()).not.toThrow();
     expect(dialog.open).toBe(true);
+  });
+});
+
+/**
+ * **Opened at a section, from a control that is about that section** — the Connect dialog's
+ * Help button, reported by the user on 2026-08-30. A listener who asks what a checkbox does
+ * has to arrive at the answer, not at the top of a topic they then have to search.
+ */
+describe('opening it at a section', () => {
+  /**
+   * **In the same turn as the dialog opens, and that was measured both ways** with NVDA
+   * 2026.1.1 on 2026-08-30. Placing it a turn later left the reader reaching an open dialog
+   * with nothing focused inside it, and it read the whole six-paragraph topic aloud — every
+   * opening, not only the first. So this assertion is synchronous on purpose: an `await`
+   * here would pass over the thing that has to stay true. See the note on `open`.
+   */
+  it('puts focus on the heading that was asked for, as the dialog opens', () => {
+    help.open({ topic: 'help-setting-up' });
+
+    expect(document.activeElement?.id).toBe('help-setting-up');
+  });
+
+  /** The heading is focusable and is still not a tab stop: it is a heading, not a control. */
+  it('leaves that heading out of the tab order', () => {
+    expect(byId('help-setting-up').tabIndex).toBe(-1);
+  });
+
+  /** **And comes back to what opened it.** The Connect dialog is still there underneath and
+   * is modal, so the window it would otherwise return to is inert — focus sent there would
+   * land nowhere and leave a listener with nothing under them. */
+  it('comes back to whoever opened it rather than to the window', () => {
+    const button = byId('help-close');
+    let cameBack = 0;
+    help.open({ topic: 'help-setting-up', returnTo: { focus: () => (cameBack += 1) } });
+
+    dialog.close();
+
+    expect(cameBack).toBe(1);
+    expect(returned).toBe(0);
+    expect(button).not.toBeNull();
+  });
+
+  /** And the next opening with nobody named goes back to the window, as F1 always has. */
+  it('goes back to the window again when nobody else asks for it', () => {
+    help.open({ topic: 'help-setting-up', returnTo: { focus: () => {} } });
+    dialog.close();
+
+    help.open();
+    dialog.close();
+
+    expect(returned).toBe(1);
   });
 });
 
@@ -153,16 +220,43 @@ describe('the topic is shaped to be read', () => {
     expect(dialog.querySelectorAll('h2').length).toBeGreaterThanOrEqual(2);
   });
 
-  /** The vocabulary test, and it is a domain requirement rather than style: the sentence
-   * that sends a user here was rewritten because the product's own author could not
-   * understand it, and a topic that explains it in the same words would undo that. */
+  /** **And the summary counts them**, because it tells a listener how much is here before
+   * they decide to read it — so a section added without touching that line would make the
+   * first thing the dialog says untrue. */
+  it('says how many sections there are, and has that many', () => {
+    const summary = dialog.querySelector('#help-summary')?.textContent ?? '';
+
+    expect(summary).toContain('Five short sections');
+    expect(dialog.querySelectorAll('h2')).toHaveLength(5);
+  });
+
+  /**
+   * The vocabulary test, and it is a domain requirement rather than style: the sentence that
+   * sends a user here was rewritten because the product's own author could not understand
+   * it, and a topic that explains it in the same words would undo that.
+   *
+   * **"Integrated" and "unintegrated" came off this list on 2026-08-30**, at the user's
+   * asking, and the distinction they draw is worth stating. A word a listener has never been
+   * given cannot be used to *tell* them something — which is what A13's announcement was
+   * doing and why it was rewritten. This topic is the one place that can *give* them one: it
+   * says what a shell does and does not tell Acter, and then names the two cases, so the
+   * word has a meaning by the time it is used. What stays banned is the vocabulary that
+   * names a mechanism rather than a difference a person can hear.
+   */
   it('explains without using the words a listener does not have', () => {
     const text = (dialog.textContent ?? '').toLowerCase();
 
-    for (const jargon of ['osc', 'marker', 'integration', 'unintegrated', 'verdict']) {
+    for (const jargon of ['osc', 'marker', 'verdict', 'exit code']) {
       expect(text, `"${jargon}" is this project's word, not a user's`).not.toContain(
         jargon,
       );
     }
+  });
+
+  /** And a word it does use is a word it has explained first. */
+  it('says what an integrated session is before calling one that', () => {
+    const text = dialog.textContent ?? '';
+
+    expect(text).toContain('is called an integrated session');
   });
 });

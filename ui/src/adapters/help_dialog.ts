@@ -11,13 +11,48 @@
 // markup in views/main_window.html and this owns only the opening and closing of it.
 
 import { keepTabInside } from './dialog_tab';
+import type { HelpView } from '../ports/help_view';
 
-export class HelpDialog {
+/**
+ * Where focus lands when nobody asked for a section: the first one.
+ *
+ * **Because the platform's answer turned out to be a section in the middle.** A modal
+ * `<dialog>` focuses the first *focusable area* in it, and that includes anything carrying
+ * `tabindex="-1"` — so the moment one heading became programmatically focusable, F1 started
+ * landing there. Measured with NVDA 2026.1.1 on 2026-08-30: pressing F1 announced the
+ * description and then "Sessions Acter has set up, and sessions it has not, heading level
+ * 2", which is the fourth of five and not where somebody who pressed F1 wants to begin.
+ *
+ * **The title was tried first and reads worse**, measured the same way: the dialog is
+ * *named* by its title, so landing on it made the reader say "Acter help" three times over
+ * with the summary in between. The first section says something new, and it is where reading
+ * from the top actually starts — the description has already said what the topic holds.
+ *
+ * Naming the landing rather than leaving it to the platform also answers it better than the
+ * platform did before there was a topic at all: it used to fall on the Close button, which
+ * is the one control in here that is not about reading.
+ */
+const TOP = 'help-what-acter-is';
+
+
+export class HelpDialog implements HelpView {
+  /**
+   * Where the *current* opening came back to, which is the window unless whoever opened it
+   * asked for somewhere else.
+   *
+   * **A dialog that opens this one has to be come back to**, and the window is not it: the
+   * Connect dialog's Help button opens help on top of a dialog that is still there, and
+   * sending focus to the window afterwards would send it somewhere inert and leave the
+   * listener with nothing under them.
+   */
+  private comingBackTo: { focus(): void };
+
   constructor(
     private readonly dialog: HTMLDialogElement,
     private readonly returnTo: { focus(): void },
   ) {
-    this.dialog.addEventListener('close', () => this.returnTo.focus());
+    this.comingBackTo = returnTo;
+    this.dialog.addEventListener('close', () => this.comingBackTo.focus());
     this.dialog
       .querySelector('#help-close')
       ?.addEventListener('click', () => this.dialog.close());
@@ -30,13 +65,41 @@ export class HelpDialog {
    * Show the topic, or do nothing if it is already showing.
    *
    * The guard is About's and is needed twice over here. Opening an open dialog throws
-   * `InvalidStateError` and the throw is silent, and this one has two ways in — F1 and the
-   * menu — so "asked while already open" is an ordinary thing rather than a double press.
+   * `InvalidStateError` and the throw is silent, and this one has three ways in — F1, the
+   * menu, and the Connect dialog's Help button — so "asked while already open" is an
+   * ordinary thing rather than a double press.
+   *
+   * **Focus lands on the section that was asked for**, so a listener opening help from a
+   * control arrives at the paragraph about that control rather than at the top of a topic
+   * they then have to search. With no section asked for, the platform does what it did
+   * before: the dialog announces its title and its one-line description, and the first Tab
+   * finds Close.
+   *
+   * **In the same turn as `showModal`, and a hold here was measured and rejected.** Driving
+   * NVDA 2026.1.1 as the `user` persona on 2026-08-30:
+   *
+   * - Focused in the same turn, the dialog announces its description and then the heading,
+   *   which is what A13's decision 7 bought. What it does not do on the *first* opening is
+   *   take the browse cursor with it: the first arrow press after arriving read "Close
+   *   button" rather than the section, and arrowing *up* read the section correctly. The
+   *   second opening, with the reader's view of the dialog already built, arrowed down into
+   *   the section. That is the same lateness `window_chrome.ts` records for the window's
+   *   first focus placement, and it is the reader's view catching up rather than the wrong
+   *   element being focused.
+   * - Focused a turn later (100 ms), the reader reached the open dialog with nothing focused
+   *   inside it and **read the whole topic aloud** — the six-paragraph wall A13 added the
+   *   description to stop — on every opening, not only the first.
+   *
+   * So the hold is not an improvement to make later: it is a worse trade, measured. What is
+   * left is one lagging arrow press, once per window, against a topic read out in full every
+   * time.
    */
-  open(): void {
+  open(options?: { topic?: string; returnTo?: { focus(): void } }): void {
     if (this.dialog.open) {
       return;
     }
+    this.comingBackTo = options?.returnTo ?? this.returnTo;
     this.dialog.showModal();
+    this.dialog.querySelector<HTMLElement>(`#${options?.topic ?? TOP}`)?.focus();
   }
 }

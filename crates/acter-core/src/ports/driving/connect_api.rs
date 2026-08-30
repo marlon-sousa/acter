@@ -61,7 +61,7 @@ pub trait ConnectApi: Send + Sync {
     ///
     /// **`set_up` is the Connect dialog's checkbox** (spec B9.5, decision 9): whether this
     /// connection may run one command inside the session once it is established, so a
-    /// listener gets a heading for each command and is told when one fails. Ticked by
+    /// listener is told when each command finished, and whether it worked. Ticked by
     /// default, and unticking it skips both the dialog and the setup — which is what makes
     /// refusing reachable without the dialog ever appearing.
     fn use_profile(

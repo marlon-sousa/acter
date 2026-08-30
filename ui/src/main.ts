@@ -10,6 +10,7 @@ import { EditFieldDom } from './adapters/edit_field';
 import { HelpDialog } from './adapters/help_dialog';
 import { bindKeys } from './adapters/keyboard';
 import { ConnectDialog } from './adapters/connect_dialog';
+import { ConnectingDialog } from './adapters/connecting_dialog';
 import { HostKeyDialog } from './adapters/host_key_dialog';
 import { MessageDialog } from './adapters/message_dialog';
 import { PasswordDialog } from './adapters/password_dialog';
@@ -44,8 +45,6 @@ const windowChrome = new WindowChrome({
   notConnectedWindow: byId('not-connected-window'),
   connectButton: byId('connect-button'),
   terminalWindow: byId('terminal-window'),
-  results: byId('results'),
-  buffer,
   form: byId('command-form'),
   editField,
   ended: byId('terminal-ended'),
@@ -122,10 +121,27 @@ const controller = new AppController(
   failureDialog,
 );
 
+// What a session can and cannot tell you, explained where a listener can read it at their
+// own pace rather than in an announcement that is heard once (spec A13, decision 2).
+//
+// It is built here, before the Connect dialog, because that dialog's Help button opens it
+// at the section about the checkbox it sits beside (reported 2026-08-30). F1 opens it on
+// every platform, which is why it is outside the Windows-only block below.
+const helpDialog = new HelpDialog(
+  byId<HTMLDialogElement>('help-dialog'),
+  windowChrome,
+);
 // The menu bar is in the document rather than in the window frame, and F10 is the way
 // into it (spec A7). Its two items are handed the things they act on, so the bar itself
 // knows about neither the shell nor the dialog.
 const shell = new TauriShell();
+// Where Enter goes while a connection is being made: a dialog that names the far end and
+// carries the backend's progress sentences, instead of the list of kinds this used to put
+// a listener back on (reported 2026-08-30).
+const connectingDialog = new ConnectingDialog(
+  byId<HTMLDialogElement>('connecting-dialog'),
+  byId('connecting-what'),
+);
 // Connecting is three named backend actions and this is the thinnest caller of them: the
 // dialog renders what `connectable()` answered and hands a chosen profile back to the
 // controller, which owns the buffer, the titles and the words (spec A8).
@@ -138,20 +154,14 @@ const connectDialog = new ConnectDialog(
   (id, setUp) => controller.connectTo(id, setUp),
   announcer,
   windowChrome,
+  connectingDialog,
+  helpDialog,
 );
 // One handler, both buttons: the two windows are exclusive, so a listener never meets both,
 // and the action they run is the same one the menu item runs (spec A10).
 for (const id of ['connect-button', 'reconnect-button']) {
   byId(id).addEventListener('click', () => void connectDialog.open());
 }
-// What a session can and cannot tell you, explained where a listener can read it at
-// their own pace rather than in an announcement that is heard once (spec A13, decision 2).
-// It is built outside the Windows-only block below, because F1 opens it on every platform
-// while the menu bar exists only where a native one would freeze the reader.
-const helpDialog = new HelpDialog(
-  byId<HTMLDialogElement>('help-dialog'),
-  windowChrome,
-);
 const aboutDialog = new AboutDialog(
   byId<HTMLDialogElement>('about-dialog'),
   shell,
