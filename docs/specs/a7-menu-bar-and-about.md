@@ -222,6 +222,25 @@ the region is removed outright elsewhere. A native menu bar is right on macOS, w
 live in the system bar rather than in the window; this exists because Windows is where a
 native one freezes the reader.
 
+### 4a. The region is revealed after it is wired, never before
+
+**Amendment, 2026-08-30, riding in B9.6.** `main.ts` used to reveal `#menu-bar-region` and
+*then* call `installMenuBar`, so for the length of one callback the document held a menu bar
+that was in the accessibility tree and answered nothing. A listener who pressed F10 in that
+window would have heard nothing and had no way to tell why — which is the same category of
+defect as decision 4 itself: a menu bar that is not usable should not be present.
+
+The two lines are now the other way round. Nothing in `installMenuBar` needs the region
+visible — it reads the markup, sets a roving tabindex, and attaches its listeners — so the
+order costs nothing.
+
+**It was found through a test rather than through a reader**, which is worth recording because
+this is the kind of race a manual pass cannot catch. `menu.spec.ts` had been intermittently red
+on CI on "opens on F10 with focus on the first item", expecting `menu-acter` and getting
+`command-input`, and the guard written to stop it watched the reveal on the stated premise that
+the reveal "is exactly the moment the listeners are attached". It was not. See T2's amendment
+for what the guard does now.
+
 ### 5. The web inspector is off
 
 `devtools: false` on the window. Found by the user pressing F10 and landing in dev tools:
