@@ -37,6 +37,13 @@ impl Cmd {
     }
 }
 
+/// What `cmd.exe`'s line editor reads as "discard whatever is pending on this line".
+///
+/// Measured, not read: with it a submitted line runs as itself and the caret text ConPTY left
+/// on the row is erased; without it the shell answers about a command the user never typed
+/// (spec B4.5, decision 7).
+const ESCAPE: u8 = 0x1b;
+
 impl ShellAdapter for Cmd {
     fn launch(&self) -> ShellLaunch {
         ShellLaunch {
@@ -60,6 +67,20 @@ impl ShellAdapter for Cmd {
     /// that looked right in documentation is precisely the habit that spec exists to
     /// break. A `Ctrl+D` in a cmd session therefore reports that there was nothing to act
     /// on, which is true.
+    /// **Escape, and `cmd.exe` is the only shell this is measured for** (spec B4.5,
+    /// decision 7). Its line editor treats escape as "discard the pending line", which is what
+    /// lets a submitted line survive the cursor-position answer ConPTY leaves in front of it —
+    /// measured both ways: without it the shell answers `'s not recognized as an internal or
+    /// external command,`, naming a command the user never typed.
+    ///
+    /// **It is this adapter's answer rather than an inference from the marker claim, since
+    /// B9.5.** The session used to read `PromptAndCommandLine` as "this is cmd"; POSIX `sh`
+    /// now makes that claim too, and a POSIX reader takes an escape as a meta prefix rather
+    /// than as a discard.
+    fn discards_line(&self) -> Option<u8> {
+        Some(ESCAPE)
+    }
+
     fn eof(&self) -> Option<Vec<u8>> {
         None
     }

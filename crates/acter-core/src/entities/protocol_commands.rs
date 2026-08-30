@@ -150,6 +150,15 @@ pub struct Connected {
     /// was learned at all — so it travels with the connection rather than being composed
     /// from the label.
     pub note: Option<String>,
+    /// Whether that note already told the listener that this session cannot say how a command
+    /// went, so the session's own `IntegrationUnavailable` is not said a second time.
+    ///
+    /// **A fact rather than a phrase to look for** (spec B9.5, decision 13). The frontend
+    /// used to decide this by searching the note for the words "shell integration" — which is
+    /// exactly the vocabulary A13 removed and this entry rewrote, so a rewording of the
+    /// sentence silently changed what a listener heard afterwards. It is computed by the one
+    /// function that composes the note, so the two cannot disagree.
+    pub limit_explained: bool,
 }
 
 /// One thing that can be started: which far end, and which of it.
@@ -514,11 +523,17 @@ mod tests {
             session: SessionId(2),
             label: "WSL: Ubuntu".to_owned(),
             note: None,
+            limit_explained: false,
         };
 
         assert_eq!(
             serde_json::to_value(&connected).unwrap(),
-            json!({ "session": 2, "label": "WSL: Ubuntu", "note": null })
+            json!({
+                "session": 2,
+                "label": "WSL: Ubuntu",
+                "note": null,
+                "limit_explained": false
+            })
         );
         let back: Connected =
             serde_json::from_value(serde_json::to_value(&connected).unwrap()).unwrap();

@@ -15,7 +15,7 @@ use std::path::PathBuf;
 use acter_core::{
     AttemptId, CommandId, ConnectAnswer, ConnectQuestion, ConnectStep, Connectable, Connected,
     ConnectionKind, ConnectionState, ExitCode, Key, KeyAck, KeyPress, Mode, ProfileId,
-    SessionEvent, SessionId, SubmitAck, Variant,
+    SessionEvent, SessionId, SetUp, SubmitAck, Variant,
 };
 use specta::Types;
 use specta_typescript::Typescript;
@@ -62,7 +62,12 @@ fn render() -> String {
         .register::<ConnectStep>()
         .register::<ConnectQuestion>()
         .register::<ConnectAnswer>()
-        .register::<AttemptId>();
+        .register::<AttemptId>()
+        // B9.5's checkbox. It is an argument to `use_profile` rather than something a step or
+        // an event carries, so nothing else here references it — which is exactly why it is
+        // registered by hand: the whole protocol is emitted here, not only the parts something
+        // happens to reference.
+        .register::<SetUp>();
 
     Typescript::default()
         .header(HEADER)

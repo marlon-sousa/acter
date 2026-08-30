@@ -12,6 +12,7 @@ import type {
   ProfileId,
   SessionEvent,
   SessionId,
+  SetUp,
   SubmitAck,
 } from '../../src/protocol';
 import type { AnnouncerView } from '../../src/ports/announcer_view';
@@ -197,9 +198,25 @@ class FakeConnect implements ConnectApi {
       variants: [],
     },
   ];
-  atStartup: Connected | null = { session: 1, label: 'Command Prompt', note: null };
+  atStartup: Connected | null = {
+    session: 1,
+    label: 'Command Prompt',
+    note: null,
+    limit_explained: false,
+  };
   /** What the far end has to say about itself, once, at connection (spec B9). */
   note: string | null = null;
+  /**
+   * Whether that note already told the listener this session cannot say how a command went
+   * (spec B9.5, decision 13).
+   *
+   * **A fact rather than a phrase to look for.** The controller used to search the note for
+   * the words "shell integration" — the vocabulary A13 removed and B9.5 rewrote — so the
+   * sentence and the suppression could not be changed independently.
+   */
+  limitExplained = false;
+  /** What the Connect dialog's checkbox said on each attempt (spec B9.5, decision 9). */
+  setUps: SetUp[] = [];
   /** What it says while it is connecting (spec B9, decision 6). */
   progress: string[] = [];
   /** The sentence `use` rejects with instead of connecting, when a test wants a failure. */
@@ -210,8 +227,9 @@ class FakeConnect implements ConnectApi {
   connectable(): Promise<Connectable[]> {
     return Promise.resolve(this.rows);
   }
-  use(id: ProfileId, listener?: ConnectListener): Promise<Connected> {
+  use(id: ProfileId, setUp: SetUp, listener?: ConnectListener): Promise<Connected> {
     this.used.push(id);
+    this.setUps.push(setUp);
     for (const said of this.progress) {
       listener?.onProgress?.(said);
     }
@@ -223,6 +241,7 @@ class FakeConnect implements ConnectApi {
       session: this.nextSession,
       label: id.profile === 'Distribution' ? `WSL: ${id.name}` : 'Command Prompt',
       note: this.note,
+      limit_explained: this.limitExplained,
     });
   }
   connected(): Promise<Connected | null> {
@@ -322,12 +341,11 @@ describe('what the window says about its connection (spec A9)', () => {
   it('says what it is connected to, in the region and in the announcement alike', async () => {
     const ubuntu: ProfileId = { profile: 'Distribution', name: 'Ubuntu' };
     const { connect, window, announcer, controller } = await makeApp();
-    connect.note = 'bash, with no shell integration set up on this host';
+    connect.note = 'bash, which Acter cannot set up yet.';
 
     await controller.connectTo(ubuntu);
 
-    const said =
-      'connected to WSL: Ubuntu, bash, with no shell integration set up on this host';
+    const said = 'connected to WSL: Ubuntu, bash, which Acter cannot set up yet.';
     expect(window.statuses).toContain(said);
     expect(announcer.announcements).toContain(said);
   });
@@ -1151,12 +1169,12 @@ describe('connecting to a profile (spec B7)', () => {
    */
   it('says what the far end is in the same sentence as the connection', async () => {
     const { connect, announcer, controller } = await makeApp();
-    connect.note = 'bash, with no shell integration set up on this host';
+    connect.note = 'zsh, which Acter cannot set up yet.';
 
     await controller.connectTo(ubuntu);
 
     expect(announcer.announcements).toEqual([
-      'connected to WSL: Ubuntu, bash, with no shell integration set up on this host',
+      'connected to WSL: Ubuntu, zsh, which Acter cannot set up yet.',
     ]);
   });
 
@@ -1170,7 +1188,8 @@ describe('connecting to a profile (spec B7)', () => {
    */
   it('does not repeat the integration warning the connection already gave', async () => {
     const { backend, connect, announcer, controller } = await makeApp();
-    connect.note = 'bash, with no shell integration set up on this host';
+    connect.note = 'zsh, which Acter cannot set up yet.';
+    connect.limitExplained = true;
     await controller.connectTo(ubuntu);
     announcer.announcements.length = 0;
 

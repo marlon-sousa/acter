@@ -65,25 +65,26 @@ describe('TauriConnect.use', () => {
   });
 
   it('resolves with the session the conversation arrived at', async () => {
-    const connecting = new TauriConnect().use(PROFILE);
+    const connecting = new TauriConnect().use(PROFILE, 'Yes');
     await settle();
 
     steps?.onmessage?.({
       step: 'Arrived',
-      connected: { session: 3, label: 'Scripted: builtin', note: null },
+      connected: { session: 3, label: 'Scripted: builtin', note: null, limit_explained: false },
     });
 
     await expect(connecting).resolves.toEqual({
       session: 3,
       label: 'Scripted: builtin',
       note: null,
+      limit_explained: false,
     });
   });
 
   // The sentence is the backend's, and rejecting with it keeps this the shape every caller
   // has handled since B7 — they say it, and the session that was running is untouched.
   it('rejects with the sentence a failed attempt ended on', async () => {
-    const connecting = new TauriConnect().use(PROFILE);
+    const connecting = new TauriConnect().use(PROFILE, 'Yes');
     await settle();
 
     steps?.onmessage?.({
@@ -98,13 +99,13 @@ describe('TauriConnect.use', () => {
 
   it('passes progress to a caller that wants to hear it', async () => {
     const said: string[] = [];
-    const connecting = new TauriConnect().use(PROFILE, {
-      onProgress: (sentence) => said.push(sentence),
+    const connecting = new TauriConnect().use(PROFILE, 'Yes', {
+      onProgress: (sentence: string) => said.push(sentence),
     });
     await settle();
 
     steps?.onmessage?.({ step: 'Progress', said: 'Connecting to acter-ssh.' });
-    steps?.onmessage?.({ step: 'Arrived', connected: { session: 1, label: 'x', note: null } });
+    steps?.onmessage?.({ step: 'Arrived', connected: { session: 1, label: 'x', note: null, limit_explained: false } });
     await connecting;
 
     expect(said).toEqual(['Connecting to acter-ssh.']);
@@ -114,7 +115,7 @@ describe('TauriConnect.use', () => {
   // whichever attempt happens to be in flight — a password delivered to the wrong question
   // is the worst version of being helpful.
   it('answers against the attempt that asked', async () => {
-    const connecting = new TauriConnect().use(PROFILE, {
+    const connecting = new TauriConnect().use(PROFILE, 'Yes', {
       onQuestion: () => Promise.resolve({ answer: 'Trust' as const }),
     });
     await settle();
@@ -127,14 +128,14 @@ describe('TauriConnect.use', () => {
       args: { attempt: 42, answer: { answer: 'Trust' } },
     });
 
-    steps?.onmessage?.({ step: 'Arrived', connected: { session: 1, label: 'x', note: null } });
+    steps?.onmessage?.({ step: 'Arrived', connected: { session: 1, label: 'x', note: null, limit_explained: false } });
     await connecting;
   });
 
   // **A caller who cannot ask anybody is not a caller who trusts everybody.** Nothing was
   // answered, and the backend reads that as a refusal (spec B9, decision 3).
   it('gives up on a question when nobody can be asked', async () => {
-    const connecting = new TauriConnect().use(PROFILE);
+    const connecting = new TauriConnect().use(PROFILE, 'Yes');
     await settle();
 
     steps?.onmessage?.(asked(42));
@@ -155,10 +156,10 @@ describe('TauriConnect.use', () => {
   // The backend keeps an attempt alive until the window says it is done with it, so a
   // conversation that ended has to say so or the map grows for the life of the process.
   it('tells the backend to forget an attempt that ended', async () => {
-    const connecting = new TauriConnect().use(PROFILE);
+    const connecting = new TauriConnect().use(PROFILE, 'Yes');
     await settle();
 
-    steps?.onmessage?.({ step: 'Arrived', connected: { session: 1, label: 'x', note: null } });
+    steps?.onmessage?.({ step: 'Arrived', connected: { session: 1, label: 'x', note: null, limit_explained: false } });
     await connecting;
     await settle();
 

@@ -21,6 +21,7 @@ use std::sync::{Arc, Mutex};
 
 use acter_core::{
     AttemptId, ConnectAnswer, ConnectApi, ConnectQuestions, ConnectSink, Conversation, ProfileId,
+    SetUp,
 };
 
 /// The attempts in flight, and the means to start another.
@@ -50,7 +51,15 @@ impl Connecting {
     /// Everything after this reaches the window as steps on `steps`: what is happening,
     /// what is being asked, and finally whether there is a session. The invoke that called
     /// this is already free.
-    pub(crate) fn begin(&self, profile: ProfileId, steps: Arc<dyn ConnectSink>) -> AttemptId {
+    /// **`set_up` is the Connect dialog's checkbox**, travelling with the attempt because
+    /// there is no profile store to keep it in yet (spec B9.5, decisions 9 and 10). It is
+    /// carried rather than decided here: this controller owns attempts, not preferences.
+    pub(crate) fn begin(
+        &self,
+        profile: ProfileId,
+        set_up: SetUp,
+        steps: Arc<dyn ConnectSink>,
+    ) -> AttemptId {
         let attempt = AttemptId(self.next.fetch_add(1, Ordering::SeqCst));
         let conversation = Arc::new(Conversation::new(attempt, steps));
         self.live
@@ -59,14 +68,15 @@ impl Connecting {
             .insert(attempt, Arc::clone(&conversation));
 
         let connect = Arc::clone(&self.connect);
-        // Every question this attempt may have to ask, which since B5.7 is three: the two
-        // a server raises and the one this machine raises about a file that did not verify.
+        // Every question this attempt may have to ask, which since B9.5 is four: the two a
+        // server raises, the one this machine raises about a file that did not verify, and the
+        // one that discloses what Acter would run inside the session once it is up.
         let questions = Arc::clone(&conversation) as Arc<dyn ConnectQuestions>;
         // **`spawn_blocking`, not `spawn`.** What runs here parks on a `std` channel
         // waiting for a person, and parking a runtime worker on a human is how a runtime
         // starves. This is the pool that exists for exactly that.
         tauri::async_runtime::spawn_blocking(move || {
-            conversation.finished(connect.use_profile(&profile, &questions));
+            conversation.finished(connect.use_profile(&profile, set_up, &questions));
         });
         attempt
     }
@@ -150,6 +160,7 @@ mod tests {
         fn use_profile(
             &self,
             _id: &ProfileId,
+            _set_up: SetUp,
             questions: &Arc<dyn ConnectQuestions>,
         ) -> Result<Connected, String> {
             if self.asks {
@@ -191,7 +202,7 @@ mod tests {
             outcome: Err("Acter could not reach acter-ssh on port 2222.".to_owned()),
         });
 
-        connecting.begin(scripted(), watcher);
+        connecting.begin(scripted(), SetUp::Yes, watcher);
 
         let ConnectStep::Failed { why } = steps.recv_timeout(PATIENCE).expect("it ends") else {
             panic!("a far end that will not start fails");
@@ -214,10 +225,11 @@ mod tests {
                 session: SessionId(4),
                 label: "Scripted: builtin".to_owned(),
                 note: None,
+                limit_explained: false,
             }),
         });
 
-        connecting.begin(scripted(), watcher);
+        connecting.begin(scripted(), SetUp::Yes, watcher);
 
         let ConnectStep::Arrived { connected } = steps.recv_timeout(PATIENCE).expect("it ends")
         else {
@@ -238,10 +250,11 @@ mod tests {
                 session: SessionId(1),
                 label: "SSH".to_owned(),
                 note: None,
+                limit_explained: false,
             }),
         });
 
-        let attempt = connecting.begin(scripted(), watcher);
+        let attempt = connecting.begin(scripted(), SetUp::Yes, watcher);
         let asked = steps.recv_timeout(PATIENCE).expect("it asks");
         assert!(matches!(asked, ConnectStep::Asked { .. }));
 
@@ -269,7 +282,7 @@ mod tests {
             outcome: Err("It did not start.".to_owned()),
         });
 
-        let attempt = connecting.begin(scripted(), watcher);
+        let attempt = connecting.begin(scripted(), SetUp::Yes, watcher);
         steps.recv_timeout(PATIENCE).expect("it ends");
         connecting.ended(attempt);
         connecting.answer(attempt, ConnectAnswer::Trust);

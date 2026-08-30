@@ -19,7 +19,7 @@
 
 use std::sync::Arc;
 
-use acter_core::{AttemptId, ConnectAnswer, ConnectSink, Connectable, Connected, ProfileId};
+use acter_core::{AttemptId, ConnectAnswer, ConnectSink, Connectable, Connected, ProfileId, SetUp};
 use tauri::ipc::Channel;
 use tauri::{State, command};
 
@@ -36,6 +36,11 @@ pub(crate) fn connectable(state: State<'_, AppState>) -> Vec<Connectable> {
 
 /// Start this profile, and report what happens on `steps`.
 ///
+/// **`set_up` is the Connect dialog's checkbox** (spec B9.5, decision 9): whether this
+/// connection may run one command inside the session once it is established. It travels with
+/// the attempt rather than being stored, because there is no profile store to keep it in until
+/// B8 (decision 10).
+///
 /// Answers with the attempt's id, which is what an answering invoke carries back. The
 /// session, when there is one, arrives as the `Arrived` step; the caller then attaches to
 /// its `session`, which is deliberately a second call — the frontend's chance to clear a
@@ -45,10 +50,12 @@ pub(crate) fn connectable(state: State<'_, AppState>) -> Vec<Connectable> {
 pub(crate) fn use_profile(
     state: State<'_, AppState>,
     profile: ProfileId,
+    set_up: SetUp,
     steps: Channel<acter_core::ConnectStep>,
 ) -> AttemptId {
     state.connecting.begin(
         profile,
+        set_up,
         Arc::new(ConnectSteps::new(steps)) as Arc<dyn ConnectSink>,
     )
 }

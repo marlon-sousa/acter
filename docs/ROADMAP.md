@@ -526,9 +526,24 @@ the answer to "what should we do now?".
     inside one cannot be arrowed, and a help topic that cannot be read line by line is not
     help.
 
-13.8. The connection sentence uses the same vocabulary 13.7 removed. Spec: none yet →
-    specify first. **Filed 2026-08-27** while A13 was being written, rather than fixed
-    quietly inside it.
+13.8. **Done** — B9.5 rewrote the connection sentence into A13's register. Spec:
+    [b9.5-the-session-is-set-up-after-it-is-established.md](specs/b9.5-the-session-is-set-up-after-it-is-established.md), decision 13.
+    **Filed 2026-08-27** while A13 was being written, rather than fixed quietly inside it.
+
+    **Closed as a consequence rather than as a favour.** B9.5 rewrote this sentence anyway — it
+    has two new states to say, "set up as far as its prompt reaches" and "named, with nothing
+    written for it" — and leaving one clause in a user's words beside two in the project's would
+    have been worse than either. There are five clauses now and the phrase A13 removed is in
+    none of them, asserted as whole clauses because that is what a listener hears.
+
+    **The place went with it.** "on this host" and "in this distribution" existed to point at
+    the dotfile a user would have to edit; B9.5 writes to no dotfile, so every clause is about
+    *this session* instead. B5.5's decision 5 is superseded rather than contradicted.
+
+    **And the frontend stopped reading the sentence.** It decided whether to repeat
+    `IntegrationUnavailable` by searching the note for the words "shell integration" — the exact
+    phrase this entry deletes — so the fact now travels as a fact beside the clause, computed by
+    the one function that composes it.
 
     A connection announces *"connected to SSH: acter at 127.0.0.1, port 2222, bash, with no
     shell integration set up on this host"*, and "shell integration" is exactly the phrase
@@ -2563,11 +2578,26 @@ thing to pick up once the adapters land, not merely the next number.
     sentence that is withheld until the session has been quiet for a while — the last of
     which is the only one that costs nothing on a fast machine.
 
-23.11. The WSL injection can be beaten by an ordinary dotfile, and three of the four ways
-    are silent. Spec: none yet → specify first, together with 27.1, because the two share a
-    mechanism. **Raised by the user 2026-08-29**, reading B5.5's account of why bash under WSL
-    is integrated on a machine that installed nothing: *"a .bashrc might override completely
-    this, or add or edit it, so we are not guaranteed here."*
+23.11. **Done** — B9.5 removed the ordering all four failures came from. Spec:
+    [b9.5-the-session-is-set-up-after-it-is-established.md](specs/b9.5-the-session-is-set-up-after-it-is-established.md).
+    **Raised by the user 2026-08-29**, reading B5.5's account of why bash under WSL is
+    integrated on a machine that installed nothing: *"a .bashrc might override completely this,
+    or add or edit it, so we are not guaranteed here."*
+
+    **What shipped.** Nothing is armed at launch: `Wsl::launch` is the client and `-d` and an
+    empty environment, `WSLENV` and the `PROMPT_COMMAND` crossing are gone, and
+    `wsl/injection.rs` is deleted with its measurements moved to `acter-shells/src/setup.rs`
+    intact. What replaces it is one line sent into the session once it is established, which
+    captures the user's own hook and runs it in the middle of Acter's — so Acter has the last
+    word instead of the first.
+
+    **Measured against six dotfile shapes on 2026-08-29**, the same rig this entry was written
+    from: plain, assign, append, prepend, a hook that rebuilds `PS1` every prompt, and one that
+    installs its own `DEBUG` trap. All six produced the identical stream
+    `C D;0 A B C D;0 A B C D;7 A B C` — including the prepend case, which is the one that used
+    to announce `D;0` for a command that exited 7. All four are then asserted through the whole
+    stack in `crates/acter-transports/tests/real_session.rs`, where what is measured is what a
+    listener is told rather than what bytes arrived.
 
     They were right, and the measurement found more than the objection did.
 
@@ -2645,6 +2675,213 @@ thing to pick up once the adapters land, not merely the next number.
     the one thing `Wsl::launch` does that is not simply starting the client. That is a
     simplification, not only a fix, and it is worth stating because it is the reason this is a
     revision of the strategy rather than a patch to the program.
+
+23.12. Acter's own setup command is read aloud when the far end's echo cannot be matched.
+    Spec: none yet → specify first. **Two causes measured, 2026-08-29, on two different far
+    ends**, and they are one entry because the symptom, the window and the fix are the same.
+
+    **Cause one: a shell that redraws a wrapped line out of order.** Found in B9.5's NVDA
+    pass, driving NVDA 2026.1.1 as the `user` persona in silent capture against a real
+    `docker-desktop` session. What a listener heard between the connection sentence and the
+    prompt was `splyt:/mnt/host/c/Users/marlo# A\007')$PS1$(printf '\033]133;B\007')" printf
+    '\033]133;C\007'; PS1="$(printf '\033]133;` — the prompt with the setup command's echo
+    behind it, **split and reordered**. The buffer shows the same: two lines of the echo in the
+    unclaimed block, in the wrong order, in front of the setup's own properly headed block.
+    `sh`'s line is 93 characters and busybox's prompt is 30, so it wraps at 80 columns and
+    busybox redraws it in an order the echo matcher cannot recognise. bash in the same pass is
+    clean and its line is five times longer, so what differs is the shell's line editor.
+    **Why it differs is measured in 23.14**: busybox counts the sixteen bytes of the two
+    markers as sixteen columns, so it wraps sixteen characters before the real margin and
+    redraws around a row that is not there.
+
+    **Cause two: a far end that draws a banner before its prompt.** Found in the SSH rig,
+    `ssh_rig.rs`, `the_markers_a_session_sets_itself_up_with_cross_an_ssh_connection`, against
+    Debian bookworm and bash 5.2.15 over a real `sshd`. `sshd` prints `Last login: ...` first,
+    so the first *drawn line* the setup waits for — B9.5's amendment 3 — is the banner and not
+    the prompt, and `pending_row` is therefore a row the echo is never written to. B4.9's
+    suppression cannot fire, and a listener gets Acter's five-hundred-character command read
+    aloud **twice**: once in the unclaimed block the banner opened, once in the setup's own.
+    This is a plain bash with no dotfile shape involved, which is what says the defect is the
+    window rather than the shell.
+
+    **In both, what is wrong is what a listener hears and nothing else.** The setup worked
+    each time: the connection sentence is right, the block is headed by the command verbatim,
+    the markers arrive, the grace period never contradicts any of it, and the user's own
+    commands afterwards are clean in the same run.
+
+    **The candidate fix covers this entry and not 23.14**, which matters: quieting the window
+    stops Acter's own command being read aloud, and does nothing about a user's own long line
+    being redrawn wrongly. **It is one line of policy rather than a better matcher.** From the
+    instant Acter writes its own line to the instant that line's block closes, the session is
+    Acter talking to itself, and nothing in it is the user's to hear. `ReadMode::Quiet` already
+    means exactly "accumulates silently in the buffer" and is already shipped, driven today by
+    the babble guard — so the mechanism exists and what is missing is a second thing that can
+    ask for it. That has the property this entry needs: it does not depend on recognising the
+    echo, so it is indifferent to how any far end redraws a wrapped line, and it keeps every
+    byte in the buffer, where the disclosure the whole dialog is about can still be read back.
+
+    It also settles the **doubled prompt** B9.5 recorded as an observation on its second
+    checklist item: the unmarked prompt drawn before the setup and the marked prompt drawn
+    after it are 155 milliseconds apart and say the same thing, and only one of them is news.
+
+    Shortening the setup line is not the fix and should not be attempted as one: the prompt's
+    width is the user's, so any length can wrap, and a banner has no length at all to shorten.
+
+23.14. In busybox `sh`, the markers cost the line editor sixteen columns it does not have.
+    Spec: none yet → specify first. **Measured 2026-08-29**, against `docker-desktop` running
+    busybox 1.37.0 under WSL 2.5.7.0, on a pseudoconsole fixed at 80 columns by `stty`.
+
+    **What was measured.** A prompt four visible columns wide, characters typed into it with
+    no Enter so that the only thing writing to the terminal is the line editor, and the
+    redraw watched for the moment it starts believing the line occupies two rows. Unmarked,
+    that moment is 76 characters: 4 + 76 is 80, and busybox begins a second row at 80.
+    Wrapped in the two markers B9.5 ships for `sh`, it is 60: 4 + 16 + 60. So the editor is
+    counting **all sixteen bytes of the two markers as sixteen printable columns** — each
+    marker is `ESC ] 1 3 3 ; A BEL`, eight bytes, and not one of them is skipped.
+
+    **bash is the control and it is clean.** The same measurement against bash 5.2.21, with
+    the markers wrapped in `\[` and `\]` the way the setup wraps them, moves the cursor
+    right by exactly four columns on redraw — the four the prompt actually occupies. That is
+    readline's non-printing brackets doing precisely their job, and it is why this entry is
+    about `sh` alone.
+
+    **What a user meets.** The drawn prompt is correct — that was B9.5's amendment 4, and the
+    bell terminator fixed it. What is wrong is arithmetic the user never sees until a line
+    gets long: sixteen characters before the real right margin the editor starts a row that
+    is not there, and on redraw it emits a cursor-up for a row it never used. Every line the
+    user types in that session is affected, for the whole session.
+
+    **It is very probably the cause of 23.12's busybox half**, and that changes what fixing
+    23.12 buys. Quieting the window Acter talks to itself in stops Acter's *own* command being
+    read aloud; it does nothing about a user's own long command line being redrawn wrongly
+    sixteen columns early. The two entries are not alternatives.
+
+    **What this entry has to decide is what `sh` gets, and one belief that framed the choice
+    was wrong.** "Refusing the setup loses the headings" was asserted here and the user doubted
+    it, correctly. Measured 2026-08-29 against the same distribution with the setup refused
+    exactly as cancelling the dialog refuses it (`real_session.rs`,
+    `a_refused_sh_session_still_heads_every_command`): **every command is still headed, with
+    the line the user submitted, and the long one is headed in full** — all fifty-nine
+    characters, where the set-up session truncated it to thirty-three. A heading comes from the
+    submit ack and from B6.1's echo correlation, not from a marker. So refusing costs no
+    headings at all.
+
+    **What the markers actually buy is B4.9's suppression**, and that is the whole of it: in a
+    refused session the prompt and the echo of the command are read back to the listener before
+    the output — `splyt:/mnt/host/c/Users/marlo# lsa` ahead of `-sh: lsa: not found` — and in a
+    set-up session they are not, because the tracker delimits them. The refused session also
+    ends with `IntegrationUnavailable`, which is the honest sentence rather than a cost.
+
+    So the trade is narrower and sharper than it looked. Under about thirty-four characters the
+    markers are better: same heading, no echo read back. Over it they are worse in three ways
+    at once — a silently truncated heading, a fragment of the user's own line read aloud
+    anyway, and Acter's own setup command read aloud at connect. **A heading that is truncated
+    without saying so is the part that should decide this**, because a listener cannot tell it
+    happened.
+
+    **What setting `sh` up actually earns, side by side: nothing that was measurable.** Asked by
+    the user on 2026-08-29 — "I just can't see the difference between this and an unintegrated
+    session, which gives me headings and no verdicts" — and then again, decisively: "on an
+    unintegrated session we do filter echo back by comparing the next line to the heading, don't
+    we?" Yes. B4.9 holds the row a submission is pending on and matches it against the submitted
+    line whether or not a marker ever arrives.
+
+    **The first answer written here was wrong, and it was wrong because of the test rather than
+    the product.** It claimed the one gain was that the echo is not read back, on the strength of
+    a refused session that read `splyt:/mnt/host/c/Users/marlo# lsa` before its output — but that
+    session had been given a line to submit *before the shell drew its prompt*, so there was no
+    pending row, no hold, and the echo went out as ordinary output. The set-up path waits for the
+    prompt as part of setting up and so was never compared on the same terms.
+
+    Re-measured with both waiting for the prompt, `lsa` in `docker-desktop` produces the same
+    events either way: the block is headed `lsa`, the output is
+    `-sh: lsa: not found` followed by the prompt, and the echo is suppressed in both. Pinned in
+    `real_session.rs`, `a_refused_sh_session_still_heads_every_command`.
+
+    So the accounting is: **nothing gained that anyone has measured**, and two things lost — a
+    heading truncated on a wrapped line, where the refused session gets it in full, and Acter's
+    own setup command read aloud at connect. The refused session also gets
+    `IntegrationUnavailable`, which is an honest sentence rather than a cost.
+
+    **And "on a wrapped line" is a weaker condition than it sounds.** Later the same day this
+    distribution came back from a restart drawing a seventy-six column prompt —
+    `docker-desktop:/tmp/docker-desktop-root/run/desktop/mnt/host/c/Users/marlo#` — and four
+    characters of an eighty-column row were left. A set-up session headed `echo acter-under-sh`
+    as **`echo`**, and a fifty-nine character command as **`acte`**. The refused session in the
+    same suite run headed both in full. So the loss is not an edge case reachable by typing
+    something long; it is where the user's own directory happens to be, and it can take the
+    heading down to four characters while telling nobody it did.
+
+    Two tests were pinning whole headings and had to stop: how much survives is the far end's
+    prompt width, which is not theirs to depend on.
+
+    **So the offer sentence does not oversell what this shell gets; it describes something this
+    shell does not get.** "Acter can set it up so it tells you more about what you run" is true
+    for bash and, as `sh` ships today, false.
+
+    **This is the argument for exit codes rather than against the setup.** Headings come free
+    from the echo (B6.1), output comes free, echo suppression comes free, and the one thing an
+    unintegrated session genuinely cannot offer is whether the command worked. Measured
+    2026-08-29 and recorded in 23.15: `sh` can report it. Until it does, setting `sh` up buys
+    nothing measurable and costs two things, and this entry should be read with that in front of
+    it.
+
+    Three candidates remain: ship as measured; send only `A` and halve the cost to eight
+    columns, losing the command-line boundary; or send nothing and take B4.9's loss knowingly.
+    **A fourth is better than all three and is 23.15's**: give it verdicts, which is what the
+    dialog is already promising in spirit.
+
+23.15. A POSIX `sh` can report exit codes, and Acter does not ask it to. Spec: none yet →
+    specify first. **Measured 2026-08-29**, against busybox 1.37.0 on `docker-desktop` and dash
+    0.5.12 on Ubuntu.
+
+    B9.5 decision 8 gave `sh` `PromptAndCommandLine` on the reasoning that a verdict needs a
+    post-execution hook and POSIX `sh` has none — only `PS1`. The reasoning is sound and the
+    conclusion is wrong, because `PS1` is expanded **every time the prompt is drawn**, and `$?`
+    at that moment is the status of the command that just finished. Both shells do it:
+
+        PS1='[status=$?]# '
+        true       -> [status=0]#
+        (exit 7)   -> [status=7]#
+
+    So the exit marker goes at the front of the prompt string as `\033]133;D;$?\007` and the
+    shell fills the number in itself. **Measured through the whole stack**, with that marker
+    added and nothing else changed, `(exit 7)` in `docker-desktop` announced
+    `Failed { exit_code: ExitCode(7) }` — the test asserting no verdict is forged failed with
+    `left: Some(ExitCode(7))`, which is the measurement.
+
+    **What it needs, and why it is not in B9.5.** `ShellMarkers` is a Decided entity with two
+    states, and this is a third: marks the prompt and the command line, reports an exit code,
+    and never says where output begins. Two of its call sites in the pump key on the wrong half
+    of the question today — `drawn` and `marked` both ask "is this `Full`" when what they mean is
+    "does this shell report an exit code", which is independent of whether it marks output start.
+    The offer sentence follows from that rather than needing new words: a shell that reports exit
+    codes gets the sentence bash already gets.
+
+    Adding a variant to a Decided value type is a design decision, and CLAUDE.md has those
+    agreed in conversation rather than slipped into an implementation PR. So the measurement
+    landed and the change did not.
+
+23.13. The connection sentence is sometimes not announced. Spec: none yet → specify first.
+    **Found in B9.5's NVDA pass, 2026-08-29**, and **not caused by it**: the announcement path
+    is A9's and B9.5 did not touch it.
+
+    Four connections were driven with NVDA listening. Two announced
+    `connected to WSL: Ubuntu, bash` and two said nothing at all, including the cold start,
+    where the listener heard `Starting Ubuntu.`, then five and a half seconds, then the prompt —
+    and never what they had connected to. The status region carried the sentence correctly in
+    every one of the four, so nothing is *lost*; what is intermittent is whether the reader
+    picks it up.
+
+    **The likely cause is a race the announcer already documents**: it empties its live region
+    shortly after each announcement, and the connection announcement lands in the same instant
+    as a window swap, which is when NVDA is busiest. It is the one announcement in the product
+    that competes with a focus change it caused.
+
+    It matters more than a missed utterance usually would, because it is the *first* thing a
+    listener hears about a session and because A13 decided what it says. B9.5's checklist item
+    for a cold distribution is checked on what it asserts — the starting sentence, the
+    connection, and no unintegrated sentence — with this recorded against it.
 
 24. **Done** — B6.1, correlation that cannot drift. Spec:
     [b6.1-correlation-that-cannot-drift.md](specs/b6.1-correlation-that-cannot-drift.md).
@@ -2956,20 +3193,38 @@ thing to pick up once the adapters land, not merely the next number.
     session it is**. Whether the region grows, or whether that belongs somewhere else
     entirely, is what this entry decides.
 
-27.1. B9.5, offer to integrate the far end. Spec: none yet → specify when 27 is Done, and
-    **specify it together with 23.11**, which is the same mechanism arriving from the other
-    side. **Substantially revised 2026-08-29**, on the user's proposal — see "The mechanism
-    changed" below. The paragraph that follows is what the entry said before, kept because the
-    revision is a change of *means* and not of ends.
+27.1. **Done** — B9.5, the session is set up after it is established. Spec:
+    [b9.5-the-session-is-set-up-after-it-is-established.md](specs/b9.5-the-session-is-set-up-after-it-is-established.md).
+    **Substantially revised 2026-08-29**, on the user's proposal — see "The mechanism changed"
+    below. The paragraph that follows is what the entry said before, kept because the revision
+    is a change of *means* and not of ends.
+
+    **What shipped**: one mechanism for every shell and every transport, keyed by the shell's
+    name rather than by how Acter reached it; a checkbox on the Connect dialog that authorises
+    it, ticked by default; a dialog that discloses the command verbatim before it runs, asked
+    once per shell per person behind an `Explained` port of its own; five connection sentences
+    in A13's register; and `sh` shipping `PromptAndCommandLine`, measured against
+    `docker-desktop`, so the sentence can say "partly". Nothing is written into any
+    distribution or onto any host.
+
+    **Four defects a real distribution found and a fake could not** are recorded as amendments
+    in the spec: the setup has to wait for the far end's first *drawn line* rather than its
+    first byte, or Acter's own five-hundred-character command is read aloud; `sh`'s markers need
+    a bell terminator, because busybox expands backslashes in `PS1` and the string terminator
+    ate the first character of the user's own prompt; which byte discards a pending line had to
+    become the shell's own answer, because `sh` is now the second shell to claim
+    `PromptAndCommandLine` and an escape reaching a POSIX reader is a keypress; and `claim`
+    names a block only for Acter's own line, because a user's line is already headed by the
+    frontend and B6.1 forbids guessing at it.
 
     A button that writes the integration snippet into the remote account's shell startup,
     with consent, so the *next* connection to that host has blocks and exit codes — the
     bargain iTerm2 and VS Code document, made reachable instead of written down. Three
     things it has to answer, none of them small: which file it writes and what it does
     about a shell that is not bash; whether OSC 133 markers actually cross the connection
-    (expected, unmeasured); and how consent to modify somebody's remote account is asked
-    for in a way a listener can hear fully and refuse easily. That last one is why this is
-    its own entry rather than a corner of 27.
+    (**measured in B9.5 on 2026-08-29: they do**); and how consent to modify somebody's
+    remote account is asked for in a way a listener can hear fully and refuse easily. That
+    last one is why this is its own entry rather than a corner of 27.
 
     **The mechanism changed: set it up in the live session, and write nothing anywhere.**
 
@@ -3111,16 +3366,32 @@ thing to pick up once the adapters land, not merely the next number.
 
     **A consequence B5.5 will be glad of: the probe leaves the critical path.**
 
+    **Amended by the spec, decision 14, and then by the measurement: the deadline is narrowed
+    rather than retired, and the number does not move.**
+
     **B5.5's twelve-second deadline exists only because the injection is part of the launch.**
     Its amendment 2 says so plainly: what is injected is carried in `ShellLaunch`, so the
     decision cannot be made after the client has started, so the probe must run first, so a
     cold distribution's five-to-six-second boot lands in front of the user's first byte.
 
-    Setting the session up *after* it is established removes that constraint entirely. The
-    session starts immediately; the probe runs beside it or after it; nothing about the first
-    byte waits on curiosity. The deadline can shrink to something that only catches a
-    distribution that is genuinely not coming up, and B5.5's amendment 1 — twelve seconds
-    chosen to clear a cold boot — is retired rather than tuned.
+    Setting the session up *after* it is established removes most of that. The client is started
+    while the probe is still outstanding, so the two wait on the same boot rather than one
+    waiting for the other — which is the whole of what a healthy cold start stops paying.
+
+    **What it does not remove is the probe being ahead of the session**, and that is decision
+    14's, for a reason that is the user's rather than the implementation's: the dialog names the
+    shell it detected, so the shell has to be known before the dialog is asked. Keeping it there
+    also keeps `ShellFacts` a construction argument, so a narrower marker claim for `sh` is known
+    before the first byte is tracked and nothing has to mutate the tracker mid-session.
+
+    So the deadline stops being "long enough that a cold boot is not a coin toss" and becomes
+    "long enough that a distribution which is coming up is not given up on" — and re-measuring it
+    under that question kept the number. **Measured 2026-08-29**, same machine, Ubuntu 24.04
+    under WSL 2.5.7.0: warm 141, 151, 161, 161 and 170 milliseconds; cold 5.22, 5.29, 5.35 and
+    5.35 seconds with `wsl --shutdown` before each; `wsl.exe -l -q` 50 to 91 milliseconds cold or
+    warm. Halving it to six would land the deadline in the middle of the observed cold spread,
+    which is the worst place for one to be and is exactly what B5.5's amendment 1 recorded.
+    Twelve stays, for a new reason.
 
     It softens **23.10** too, though it does not close it: a cold WSL start still takes five to
     six seconds before there is a prompt, and a listener still has to be told that waiting is
@@ -3149,10 +3420,15 @@ thing to pick up once the adapters land, not merely the next number.
     established does not care which files bash read on the way in.
 
     **Still owned, unchanged: everything about the far end itself** — that no terminal can
-    identify a shell it did not name, that whether OSC 133 markers actually cross an SSH
-    connection is expected and unmeasured, and that a setup which claims to have worked must be
+    identify a shell it did not name, and that a setup which claims to have worked must be
     *verified* rather than trusted. That last one survives the change of mechanism completely:
     the marker has to come back before Acter tells anybody the session is integrated.
+
+    **One thing this entry used to own is settled: OSC 133 markers do cross an SSH connection.**
+    Measured 2026-08-29 in B9.5 against `docker/ssh` — Debian bookworm, bash 5.2.15, OpenSSH 9.2
+    — with the whole pipeline a window has rather than bytes on a wire: the remote prompt arrives
+    delimited and `(exit 7)` is announced as having failed with 7, which needs the far end's
+    `D;7` to have survived the trip.
 
     **Recognising the shell is the far end's job, and it happens once, at install.** No
     terminal identifies a shell it did not name — kitty matches a basename, VS Code injects

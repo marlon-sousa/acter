@@ -12,6 +12,7 @@ import type {
   ProfileId,
   SessionEvent,
   SessionId,
+  SetUp,
 } from '../protocol';
 import type { AnnouncerView } from '../ports/announcer_view';
 import type { BackendApi } from '../ports/backend_api';
@@ -240,10 +241,10 @@ export class AppController {
    * to decide with it: the connect dialog closes on success and stays open on failure, so
    * the user is left somewhere they can choose again (spec A8, decision 4).
    */
-  async connectTo(id: ProfileId): Promise<boolean> {
+  async connectTo(id: ProfileId, setUp: SetUp = 'Yes'): Promise<boolean> {
     let connected: Connected;
     try {
-      connected = await this.connect.use(id, {
+      connected = await this.connect.use(id, setUp, {
         // **Said while it happens, because a listener with no feedback cannot tell a slow
         // network from a dead one** (spec B9, decision 6). These are the backend's own
         // sentences: only it knows which stage a connection has reached.
@@ -281,8 +282,11 @@ export class AppController {
   private async show(connected: Connected | null): Promise<void> {
     // Set here rather than beside the announcement, because a launch that brought a session
     // reaches this without going through `connectTo` at all.
-    this.noteSaidIntegrationIsMissing =
-      connected?.note?.includes('shell integration') ?? false;
+    // **Read off the connection rather than out of its sentence** (spec B9.5, decision 13).
+    // This used to search the note for the words "shell integration", which is exactly the
+    // vocabulary A13 removed and B9.5 rewrote — so a reworded sentence silently changed what
+    // a listener heard afterwards. The backend computes it beside the sentence now.
+    this.noteSaidIntegrationIsMissing = connected?.limit_explained ?? false;
     this.buffer.clear();
     this.openBlocks.clear();
     this.tooBig.clear();

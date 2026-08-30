@@ -101,6 +101,31 @@ const POSIX_SHELL: &str = "sh";
 /// booting*, so the session's own start then finds a distribution that is already up; the
 /// boot was going to be paid either way, and roadmap 23.10 is the entry about a listener
 /// being told so while it happens.
+///
+/// # B9.5 narrowed why this number exists, and re-measuring kept the number
+///
+/// **The reason changed.** B5.5's amendment 1 chose twelve because what is injected was part
+/// of `ShellLaunch`, so the probe had to finish before the client could be started at all —
+/// which made a cold boot a coin toss between a distribution being integrated and being
+/// unnamed. Nothing is injected at launch any more (spec B9.5, decision 1), so the client is
+/// started while this call is still outstanding and the two wait on the same boot. The
+/// deadline stopped being "long enough that a cold boot is not a coin toss" and became "long
+/// enough that a distribution which is coming up is not given up on".
+///
+/// **Re-measured on 2026-08-29 under the new question**, same machine, Ubuntu 24.04 under WSL
+/// 2.5.7.0, `wsl.exe -d Ubuntu -- sh -c` timed six times warm and four times cold with
+/// `wsl --shutdown` before each cold run. Warm: 141, 151, 161, 161, 170 milliseconds. Cold:
+/// 5.22, 5.29, 5.35 and 5.35 **seconds** — a tighter cluster than B5.5 saw, and inside the
+/// 5.35-to-6.30-second spread it recorded. `wsl.exe -l -q` came in at 50 to 91 milliseconds
+/// cold or warm, which re-confirms that listing warms nothing and that it is the first command
+/// run *inside* a distribution that boots it.
+///
+/// **So the number stays, and that is the measurement's answer rather than an omission.**
+/// Halving it to six would put the deadline in the middle of the observed cold spread, which
+/// is the worst place for one to be and is precisely what B5.5's amendment recorded. Twelve is
+/// a little under twice the slowest cold start either pass has seen, and what B9.5 removed is
+/// not the wait but the *ordering*: a healthy cold start no longer pays this deadline in front
+/// of the client's own boot, because the two happen at once.
 const PATIENCE: Duration = Duration::from_secs(12);
 
 /// How often the deadline is checked while the answer is outstanding.

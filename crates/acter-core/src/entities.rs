@@ -10,6 +10,7 @@ mod protocol_connect;
 mod protocol_events;
 mod read_mode;
 mod session_intent;
+mod session_setup;
 mod session_state;
 mod shell_install;
 mod shell_markers;
@@ -28,6 +29,7 @@ pub use protocol_connect::{AttemptId, ConnectAnswer, ConnectQuestion, ConnectSte
 pub use protocol_events::{Announcement, SessionEvent};
 pub(crate) use read_mode::ReadMode;
 pub use session_intent::SessionIntent;
+pub use session_setup::{SessionSetup, SetUp};
 pub use session_state::{Integration, Screen, SessionState};
 pub use shell_install::{PathStanding, Provenance, ShellInstall};
 pub use shell_markers::ShellMarkers;

@@ -20,7 +20,7 @@
 
 use std::sync::Arc;
 
-use crate::{ConnectQuestions, Connectable, Connected, ProfileId};
+use crate::{ConnectQuestions, Connectable, Connected, ProfileId, SetUp};
 
 /// Connecting, as two actions and a question.
 pub trait ConnectApi: Send + Sync {
@@ -58,9 +58,16 @@ pub trait ConnectApi: Send + Sync {
     /// a server raises, and the one this machine raises about a file that did not verify.
     /// The SSH half is passed on to the factory; the third is asked here, before anything is
     /// started (spec B5.7, decision 6).
+    ///
+    /// **`set_up` is the Connect dialog's checkbox** (spec B9.5, decision 9): whether this
+    /// connection may run one command inside the session once it is established, so a
+    /// listener gets a heading for each command and is told when one fails. Ticked by
+    /// default, and unticking it skips both the dialog and the setup — which is what makes
+    /// refusing reachable without the dialog ever appearing.
     fn use_profile(
         &self,
         id: &ProfileId,
+        set_up: SetUp,
         questions: &Arc<dyn ConnectQuestions>,
     ) -> Result<Connected, String>;
 

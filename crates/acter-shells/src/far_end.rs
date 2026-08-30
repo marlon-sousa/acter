@@ -8,11 +8,28 @@
 //! the only two things that still matter about such a shell: what to call it, and what ends
 //! its input.
 //!
-//! **The identity may be guessed from the name; the injection may never be.** Knowing a far
-//! end is zsh licenses *saying so* and nothing else until a zsh injection has been measured
-//! the way B5.3 measured bash's. So every value here claims `ShellMarkers::Full` — the same
-//! assumption [`Plain`](crate::Plain) makes, which is what lets the grace period flag the
-//! session as unintegrated rather than a marker being silently forged.
+//! **The identity may be guessed from the name; the setup may never be.** Knowing a far end
+//! is zsh licenses *saying so* and nothing else until a zsh setup has been measured the way
+//! B5.3 measured bash's. A shell with nothing measured for it claims `ShellMarkers::Full` —
+//! the same assumption [`Plain`](crate::Plain) makes, which is what lets the grace period flag
+//! the session as unintegrated rather than a marker being silently forged.
+//!
+//! **Since B9.5 an SSH far end can be set up, and it is set up by the same line WSL's is**
+//! (spec B9.5, decision 2). Nothing here is a launch argument — Acter controls none over SSH —
+//! so the mechanism that reaches a distribution reaches a host on the other side of the world
+//! unchanged, which is the first time these two transports have shared a strategy rather than
+//! having one each. What a shell's setup earns is [`setup_for`](crate::setup::setup_for)'s
+//! answer, and it decides the marker claim: a far end that is being set up claims what its
+//! line earns, and one that is not stays optimistic so the grace period can contradict it.
+//!
+//! **And the markers cross, measured rather than argued.** Decision 2 was taken on the
+//! reasoning that markers are ordinary bytes and an SSH channel is a byte pipe, which is a
+//! good argument and is not a measurement. Measured 2026-08-29 against `docker/ssh` — Debian
+//! bookworm, bash 5.2.15, OpenSSH 9.2 — the remote shell accepted the same line unchanged and
+//! the whole cycle came back: the prompt arrives delimited and a command that exits 7 is
+//! announced as having failed with 7, which needs the far end's `D;7` to have survived the
+//! trip (`tests/ssh_rig.rs`,
+//! `the_markers_a_session_sets_itself_up_with_cross_an_ssh_connection`).
 //!
 //! **What is claimed is measured, and the scope of the measurement is the transport too.**
 //! `bash` ends on `0x04` here because B9 sent that byte down a real SSH connection and
@@ -25,6 +42,8 @@
 
 use acter_core::{ShellFacts, ShellMarkers};
 
+use crate::setup::setup_for;
+
 /// End of transmission, which a line discipline turns into end-of-file for the program
 /// reading the terminal.
 const EOT: u8 = 0x04;
@@ -36,13 +55,23 @@ const EOT: u8 = 0x04;
 /// about it, and ending it reports "Acter does not know how" rather than guessing at a byte
 /// and leaving text on the line.
 pub fn over_ssh(name: Option<&str>) -> ShellFacts {
+    let setup = setup_for(name);
     ShellFacts {
-        // Assumed rather than believed, exactly as `Plain` assumes it: a shell nobody has
-        // integrated may or may not mark its boundaries, and assuming it does is what makes
-        // a session that never marks anything reach `IntegrationUnavailable` — the sentence
-        // that tells a listener why nothing is being read aloud (spec B9, decision 2).
-        markers: ShellMarkers::Full,
+        // What the setup earns once it has run, and otherwise assumed rather than believed,
+        // exactly as `Plain` assumes it: a shell nobody has set up may or may not mark its
+        // boundaries, and assuming it does is what makes a session that never marks anything
+        // reach `IntegrationUnavailable` — the sentence that tells a listener why nothing is
+        // being read aloud (spec B9, decision 2).
+        markers: setup
+            .as_ref()
+            .map(|setup| setup.markers)
+            .unwrap_or(ShellMarkers::Full),
         eof: name.and_then(ends_with),
+        // Nobody has measured a line-discarding byte for any shell over SSH, and escape is a
+        // meta prefix to every POSIX reader — so nothing is written on the strength of what
+        // `cmd.exe`'s line editor does with it.
+        discards_line: None,
+        setup,
     }
 }
 
@@ -90,18 +119,44 @@ mod tests {
         assert_eq!(over_ssh(None).eof, None);
     }
 
-    /// **Every SSH session assumes full markers and therefore says it is unintegrated.**
-    /// This is the assertion that stops somebody "helpfully" giving a recognised remote bash
-    /// the marker claim its local namesake carries — which would produce a session that
-    /// waits for boundaries nothing will ever send, and says nothing at all while it waits.
+    /// **A far end with no measured setup assumes full markers and therefore says it is
+    /// unintegrated.** This is the assertion that stops somebody "helpfully" giving an
+    /// unmeasured remote shell a narrower claim — which would produce a session that waits
+    /// for boundaries nothing will ever send, and says nothing at all while it waits.
     #[test]
-    fn no_far_end_is_ever_credited_with_integration() {
-        for named in [Some("bash"), Some("zsh"), Some("nushell"), None] {
+    fn a_far_end_nothing_is_run_in_is_assumed_to_mark_everything() {
+        for named in [Some("zsh"), Some("nushell"), None] {
+            let facts = over_ssh(named);
+
+            assert_eq!(facts.setup, None, "{named:?} has no measured setup");
             assert_eq!(
-                over_ssh(named).markers,
+                facts.markers,
                 ShellMarkers::Full,
                 "{named:?} is assumed to mark, so the grace period can report the truth"
             );
         }
+    }
+
+    /// **One mechanism for every transport** (spec B9.5, decision 2): a remote bash is set up
+    /// with the same line a distribution's bash is, because the setup is a property of the
+    /// shell rather than of how Acter reached it.
+    #[test]
+    fn a_remote_shell_with_a_measured_setup_is_set_up_with_the_shells_own_line() {
+        let facts = over_ssh(Some("bash"));
+
+        assert_eq!(
+            facts.setup.as_ref().map(|setup| setup.line.as_str()),
+            Some(crate::setup::BASH)
+        );
+        assert_eq!(facts.markers, ShellMarkers::Full);
+    }
+
+    /// And a remote `sh` claims what its own line earns, rather than what bash's does.
+    #[test]
+    fn a_remote_sh_claims_only_the_prompt_boundaries_its_setup_reaches() {
+        let facts = over_ssh(Some("sh"));
+
+        assert!(facts.setup.is_some());
+        assert_eq!(facts.markers, ShellMarkers::PromptAndCommandLine);
     }
 }

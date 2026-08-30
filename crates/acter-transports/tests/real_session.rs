@@ -25,9 +25,8 @@ use std::time::{Duration, Instant};
 
 use acter_core::{
     Announcement, Clock, CommandId, ConnectionState, EventSink, ExitCode, InstalledShells, Key,
-    KeyAck, KeyPress, PacingConfig, SessionApi, SessionEvent, SessionId, SessionService,
-    ShellAdapter, ShellFacts, ShellLaunch, ShellMarkers, SshQuestions, Started, SubmitAck, Timer,
-    Unasked,
+    KeyAck, KeyPress, PacingConfig, SessionApi, SessionEvent, SessionId, SessionService, SetUp,
+    ShellAdapter, ShellFacts, ShellLaunch, ShellMarkers, Started, SubmitAck, Timer, Unasked,
 };
 use acter_shells::{ThisMachine, Wsl};
 use acter_term::AlacrittyEngine;
@@ -152,7 +151,16 @@ impl RealSession {
     /// arrives — but it makes "was this session ever flagged" a question about the clock
     /// rather than about the shell.
     fn over_within(launch: &ShellLaunch, markers: ShellMarkers, grace: Duration) -> Self {
-        Self::launched(launch, ShellFacts { markers, eof: None }, grace)
+        Self::launched(
+            launch,
+            ShellFacts {
+                markers,
+                eof: None,
+                setup: None,
+                discards_line: None,
+            },
+            grace,
+        )
     }
 
     /// The one place a real session is actually built, however the caller described the
@@ -199,8 +207,11 @@ impl RealSession {
     /// The same shell as the application runs it, integration and all: the launch and the
     /// markers exactly as `acter_shells` states them.
     fn marked() -> Self {
-        let adapter = acter_shells::adapter_for(SHELL);
-        Self::over(&adapter.launch(), adapter.markers())
+        // **Every fact from the one object**, which is B5.1 decision 5 applied to the fact
+        // B9.5 added: which byte discards a pending line is the shell's own answer now, and a
+        // suite that took only the launch and the markers would be measuring a cmd session
+        // that never gets the escape the product sends it.
+        Self::adapted(acter_shells::adapter_for(SHELL).as_ref(), GRACE)
     }
 
     fn submit(&self, line: &str) -> CommandId {
@@ -799,6 +810,14 @@ async fn a_bare_enter_brings_the_prompt_back() {
     );
 }
 
+/// The line Acter runs inside a bash session once it is established, taken from the crate
+/// rather than retyped — so this suite and the product cannot measure different streams.
+fn bash_setup() -> String {
+    acter_shells::setup_for(Some("bash"))
+        .expect("bash has a measured setup")
+        .line
+}
+
 /// The WSL client, named the way a user would name it. Which distribution that reaches is
 /// WSL's own default, which is deliberate: naming one here would test a machine's
 /// configuration rather than the adapter.
@@ -819,13 +838,61 @@ impl RealSession {
     /// longer injects into a WSL client, because a name does not say what the distribution
     /// runs. Going through `login_shell` here is what keeps this suite measuring the stream
     /// the product produces rather than one the test arranged.
-    fn wsl() -> Self {
+    /// **Asynchronous since B9.5, and it waits**, because what a user meets is a session
+    /// that is already set up: the frontend attaches, the setup command runs, the shell draws
+    /// a prompt, and only then is there anything to type into. A suite that submitted before
+    /// any of that would be measuring a race no user can be in — and it measured one, which
+    /// is how the ordering below came to be asserted at all.
+    async fn wsl() -> Self {
         let adapter = Wsl::new(WSL, ThisMachine::new().login_shell(None).as_deref());
-        Self::over_within(
-            &adapter.launch(),
-            adapter.markers(),
-            PacingConfig::default().integration_grace,
-        )
+        // **Every fact from the one object, setup included** (spec B9.5). Since nothing is
+        // armed at launch, what makes a WSL session mark its boundaries is the line the
+        // service sends into it once the far end speaks — so a suite that took only the
+        // launch and the markers would be measuring a session the product does not ship.
+        let session = Self::adapted(&adapter, PacingConfig::default().integration_grace);
+        session.set_up(&bash_setup()).await;
+        session
+    }
+
+    /// Which block ran Acter's own setup line, if one has: the block whose heading is that
+    /// line verbatim, which is what decision 3 makes it.
+    fn setup_block(&self, line: &str) -> Option<CommandId> {
+        self.events
+            .0
+            .lock()
+            .expect("recorder poisoned")
+            .iter()
+            .find_map(|event| match event {
+                SessionEvent::CommandStarted {
+                    command_id,
+                    command_line: Some(said),
+                } if said == line => Some(*command_id),
+                _ => None,
+            })
+    }
+
+    /// Waits until the setup has run and its block has closed, which is the moment a session
+    /// becomes one somebody can type into.
+    ///
+    /// **The block closing is the signal, not the markers arriving**, and the difference is
+    /// the shell: bash's setup earns a `D` and `sh`'s does not, so a wait keyed on the full
+    /// cycle would hang on the very shell decision 8 exists for.
+    async fn set_up(&self, line: &str) {
+        let deadline = Instant::now() + WSL_PATIENCE;
+        loop {
+            if let Some(command_id) = self.setup_block(line)
+                && self.ended(command_id)
+            {
+                tokio::time::sleep(SETTLE).await;
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the session was never set up. What it said was:\n{:?}",
+                self.events.0.lock().expect("recorder poisoned")
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
     }
 
     /// The verdict about one block, if the session reached one. `Some(code)` is a failure
@@ -894,7 +961,7 @@ async fn a_real_bash_under_wsl_marks_the_boundaries_of_the_command_it_ran() {
         return;
     }
 
-    let session = RealSession::wsl();
+    let session = RealSession::wsl().await;
 
     let line = "echo acter-under-wsl";
     let command = session.submit(line);
@@ -978,7 +1045,7 @@ async fn nothing_the_probe_asked_reaches_the_session_a_listener_reads() {
         return;
     }
 
-    let session = RealSession::wsl();
+    let session = RealSession::wsl().await;
 
     // A command of the user's own, so the buffer has genuinely been filled by the time the
     // absences below are asserted rather than merely being empty.
@@ -1010,7 +1077,7 @@ async fn a_command_that_fails_under_wsl_is_announced_with_the_code_it_failed_wit
         return;
     }
 
-    let session = RealSession::wsl();
+    let session = RealSession::wsl().await;
 
     // A first command establishes the session and proves the markers are flowing, so a
     // failure to see the verdict below cannot be "bash never started".
@@ -1049,7 +1116,7 @@ async fn an_interrupt_stops_a_program_inside_a_wsl_distribution() {
         return;
     }
 
-    let session = RealSession::wsl();
+    let session = RealSession::wsl().await;
 
     let opener = session.submit("echo acter-before-the-interrupt");
     session
@@ -1095,7 +1162,7 @@ async fn a_wsl_session_leaves_the_distributions_own_files_alone() {
 
     const HASH: &str = "md5sum ~/.bashrc ~/.profile | md5sum";
     let untouched = outside_the_session(HASH);
-    let session = RealSession::wsl();
+    let session = RealSession::wsl().await;
 
     let command = session.submit(HASH);
     let output = session.wsl_until(command, &untouched).await;
@@ -1475,7 +1542,8 @@ mod replacing_a_session {
         fn open(
             &self,
             chosen: &Chosen,
-            _questions: &Arc<dyn SshQuestions>,
+            _set_up: SetUp,
+            _questions: &Arc<dyn ConnectQuestions>,
         ) -> Result<Started, String> {
             let ProfileId::Program { program: path } = &chosen.profile else {
                 return Err("this factory only starts marker shells.".to_owned());
@@ -1506,9 +1574,12 @@ mod replacing_a_session {
                     ShellFacts {
                         markers: ShellMarkers::Full,
                         eof: None,
+                        setup: None,
+                        discards_line: None,
                     },
                 )),
                 note: None,
+                limit_explained: false,
             })
         }
     }
@@ -1532,6 +1603,7 @@ mod replacing_a_session {
                 &ProfileId::Program {
                     program: first.display().to_string(),
                 },
+                SetUp::Yes,
                 &(Arc::new(Unasked) as Arc<dyn ConnectQuestions>),
             )
             .expect("the first shell starts");
@@ -1545,6 +1617,7 @@ mod replacing_a_session {
                 &ProfileId::Program {
                     program: second.display().to_string(),
                 },
+                SetUp::Yes,
                 &(Arc::new(Unasked) as Arc<dyn ConnectQuestions>),
             )
             .expect("the second shell starts");
@@ -1607,7 +1680,8 @@ mod what_this_machine_actually_has {
         fn open(
             &self,
             chosen: &Chosen,
-            _questions: &Arc<dyn SshQuestions>,
+            _set_up: SetUp,
+            _questions: &Arc<dyn ConnectQuestions>,
         ) -> Result<Started, String> {
             let program = chosen
                 .program
@@ -1632,6 +1706,7 @@ mod what_this_machine_actually_has {
                     ShellFacts::of(shell.as_ref()),
                 )),
                 note: None,
+                limit_explained: false,
             })
         }
     }
@@ -1660,6 +1735,7 @@ mod what_this_machine_actually_has {
                 &ProfileId::Shell {
                     kind: ConnectionKind::Cmd,
                 },
+                SetUp::Yes,
                 &(Arc::new(Unasked) as Arc<dyn ConnectQuestions>),
             )
             .expect("cmd.exe is signed by Microsoft, so nobody has to be asked about it");
@@ -1698,7 +1774,681 @@ mod what_this_machine_actually_has {
         );
 
         service
-            .use_profile(&cmd.id, &(Arc::new(Unasked) as Arc<dyn ConnectQuestions>))
+            .use_profile(
+                &cmd.id,
+                SetUp::Yes,
+                &(Arc::new(Unasked) as Arc<dyn ConnectQuestions>),
+            )
             .expect("choosing the row starts it");
+    }
+}
+
+/// What Acter runs inside a session once that session is established, against real
+/// distributions (spec B9.5).
+///
+/// **This is the group that could not exist before B9.5.** Everything the launch-time
+/// injection did was decided before a byte was written, so a suite could assert the
+/// environment and stop; what replaces it is a command submitted into a live session, and the
+/// only honest place to measure that is a live session.
+mod the_session_is_set_up_after_it_is_established {
+    use std::fs::{create_dir_all, write};
+
+    use super::*;
+
+    /// The distribution the hostile-rcfile cases run in. Named rather than left to WSL's
+    /// default, because these cases need a bash and `docker-desktop` is not one.
+    const BASH_DISTRIBUTION: &str = "Ubuntu";
+
+    /// The service distribution that runs `/bin/sh`, which is what makes the "partly" case
+    /// measurable on this machine at all (spec B9.5, decision 8).
+    const SH_DISTRIBUTION: &str = "docker-desktop";
+
+    /// Whether this machine has the distribution a case needs. A machine that does not has
+    /// discovered nothing, so these skip and say so — the rule the Docker cases already
+    /// follow.
+    fn has(distribution: &str) -> bool {
+        ThisMachine::new()
+            .wsl_distributions()
+            .is_ok_and(|installed| installed.iter().any(|named| named == distribution))
+    }
+
+    /// Writes an rcfile where a distribution can read it, and answers with the path it sees.
+    ///
+    /// The file goes on the Windows side and is read through `/mnt`, so nothing is left inside
+    /// a distribution the user has to live in — which is the property this whole entry exists
+    /// to keep.
+    fn rcfile(named: &str, contents: &str) -> String {
+        let mut at = std::env::temp_dir();
+        at.push("acter-b9-5");
+        create_dir_all(&at).expect("a directory for the rcfile");
+        at.push(format!("rc-{named}"));
+        write(&at, contents).expect("an rcfile the distribution can read");
+
+        let windows = at.to_string_lossy().replace('\\', "/");
+        let (drive, rest) = windows.split_once(':').expect("an absolute Windows path");
+        format!("/mnt/{}{rest}", drive.to_lowercase())
+    }
+
+    impl RealSession {
+        /// A real bash in a real distribution, started with an rcfile this test wrote — and
+        /// set up exactly as the product sets one up, with the line `setup_for` ships.
+        ///
+        /// **The launch is the test's and the setup is the product's**, which is the only way
+        /// to put a hostile dotfile in front of the thing under test: `Wsl::launch` carries no
+        /// arguments to say "source this instead", and since B9.5 it carries nothing at all.
+        async fn wsl_with(rc: &str) -> Self {
+            let launch = ShellLaunch {
+                program: WSL.to_owned(),
+                args: ["-d", BASH_DISTRIBUTION, "--", "bash", "--rcfile", rc, "-i"]
+                    .iter()
+                    .map(|argument| (*argument).to_owned())
+                    .collect(),
+                environment: Vec::new(),
+            };
+            let session = Self::launched(
+                &launch,
+                ShellFacts::of(&Wsl::new(WSL, Some("bash"))),
+                PacingConfig::default().integration_grace,
+            );
+            session.set_up(&bash_setup()).await;
+            session
+        }
+
+        /// The exit code one command was announced as failing with, waited for.
+        async fn failed_with(&self, command_id: CommandId) -> Option<ExitCode> {
+            let deadline = Instant::now() + WSL_PATIENCE;
+            while Instant::now() < deadline {
+                if self.ended(command_id) {
+                    tokio::time::sleep(SETTLE).await;
+                    return self.failure_of(command_id);
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            panic!(
+                "{command_id:?} never ended. What the session said was:\n{:?}",
+                self.events.0.lock().expect("recorder poisoned")
+            );
+        }
+    }
+
+    /// **The block the setup command opens, and the block it closes** (spec B9.5,
+    /// decision 3), against a real distribution rather than against a fake.
+    ///
+    /// The failure this guards is precise and it is not hypothetical: without the `C` the
+    /// setup prints for itself, the pump opens the block from the echo, the tracker's own
+    /// `block_open` stays false, and it therefore ignores the `D` that follows. The session
+    /// would report "running" from the moment it connected, and a Ctrl+C pressed before the
+    /// user's first command would report that they had stopped a command nobody ran.
+    #[tokio::test]
+    #[ignore = "spawns a real shell and needs a WSL distribution installed"]
+    async fn the_setup_opens_one_block_headed_by_the_command_and_closes_it() {
+        if !wsl_is_available() {
+            println!("skipped: this machine has no WSL distribution");
+            return;
+        }
+
+        let session = RealSession::wsl().await;
+
+        let setup = session
+            .setup_block(&bash_setup())
+            .expect("the setup opened a block headed by the command verbatim");
+        assert!(
+            session.finished(setup),
+            "and it closed, with an exit code, before the user's first command"
+        );
+        assert_eq!(
+            session.failure_of(setup),
+            None,
+            "an assignment succeeds, and a success is not announced (A6, decision 2)"
+        );
+        assert_eq!(
+            session.output_of(setup),
+            "",
+            "a successful setup prints nothing, so the block is silent as well as closed"
+        );
+    }
+
+    /// **Nothing of Acter's own command is read aloud**, which is what makes disclosing it
+    /// affordable (spec B9.5, decision 3).
+    ///
+    /// **A real distribution is what found the defect this pins.** The setup used to be sent
+    /// on the far end's first *byte*, and bash's first read carries bytes that draw no line at
+    /// all — so the submission was pending before the pump knew which row the echo would land
+    /// on, and the prompt that arrived next was held together with the echo and published with
+    /// it. Five hundred characters of Acter's own command, read aloud between the connection
+    /// sentence and the prompt.
+    #[tokio::test]
+    #[ignore = "spawns a real shell and needs a WSL distribution installed"]
+    async fn nothing_of_the_setup_is_read_aloud() {
+        if !wsl_is_available() {
+            println!("skipped: this machine has no WSL distribution");
+            return;
+        }
+
+        let session = RealSession::wsl().await;
+
+        let said: Vec<String> = session
+            .events
+            .0
+            .lock()
+            .expect("recorder poisoned")
+            .iter()
+            .filter_map(|event| match event {
+                SessionEvent::Announce {
+                    announcement: Announcement::ReadAloud { text },
+                    ..
+                } => Some(text.clone()),
+                SessionEvent::PromptDrawn { text } => Some(text.clone()),
+                _ => None,
+            })
+            .collect();
+
+        for spoken in &said {
+            assert!(
+                !spoken.contains("PROMPT_COMMAND"),
+                "Acter's own command reached the listener: {spoken:?}"
+            );
+        }
+        assert!(
+            !session.rendered().contains("__acter_prompt"),
+            "nor the buffer, as output: {:?}",
+            session.rendered()
+        );
+    }
+
+    /// **Ctrl+C and Ctrl+D immediately after connecting behave as they do with nothing
+    /// running**, which is only true because the setup's block closed.
+    #[tokio::test]
+    #[ignore = "spawns a real shell and needs a WSL distribution installed"]
+    async fn a_session_that_has_just_connected_has_nothing_to_stop() {
+        if !wsl_is_available() {
+            println!("skipped: this machine has no WSL distribution");
+            return;
+        }
+
+        let session = RealSession::wsl().await;
+
+        assert_eq!(
+            session.session.send_key(
+                SESSION,
+                KeyPress {
+                    key: Key::Char('c'),
+                    ctrl: true,
+                    shift: false,
+                    alt: false,
+                },
+            ),
+            KeyAck::NothingToActOn,
+            "a listener is never told they stopped a command nobody ran"
+        );
+        assert_eq!(
+            session.ctrl_d(),
+            KeyAck::NothingToActOn,
+            "and bash under WSL still has no measured end-of-input byte (roadmap 23.8)"
+        );
+    }
+
+    /// **The failure that made Acter announce a success for a command that exited 7** (roadmap
+    /// 23.11), against the dotfile shape that produced it.
+    ///
+    /// A `.bashrc` that prepends its own hook used to run in front of `__acter_status=$?`, so
+    /// the status Acter reported was that hook's rather than the user's command's. It is the
+    /// one case in this group that must never regress: losing integration is a degradation the
+    /// product knows how to say out loud, and reporting a failure as a success is Acter
+    /// asserting something false with markers flowing so confidently that nothing doubts it.
+    #[tokio::test]
+    #[ignore = "spawns a real shell and needs a WSL distribution installed"]
+    async fn a_hook_prepended_before_ours_still_reports_the_code_the_command_failed_with() {
+        if !has(BASH_DISTRIBUTION) {
+            println!("skipped: this machine has no {BASH_DISTRIBUTION}");
+            return;
+        }
+
+        let rc = rcfile(
+            "prepend",
+            "PS1='rc$ '\nPROMPT_COMMAND=\"true; $PROMPT_COMMAND\"\n",
+        );
+        let session = RealSession::wsl_with(&rc).await;
+
+        let failing = session.submit("(exit 7)");
+
+        assert_eq!(
+            session.failed_with(failing).await,
+            Some(ExitCode(7)),
+            "the code the command actually failed with, not the hook's"
+        );
+    }
+
+    /// **The `C` a hook appended after ours used to steal**, which moved the emitted order
+    /// from `ABCD` to `CABD` and opened the block before the prompt was drawn.
+    #[tokio::test]
+    #[ignore = "spawns a real shell and needs a WSL distribution installed"]
+    async fn a_hook_appended_after_ours_no_longer_steals_the_marker() {
+        if !has(BASH_DISTRIBUTION) {
+            println!("skipped: this machine has no {BASH_DISTRIBUTION}");
+            return;
+        }
+
+        let rc = rcfile(
+            "append",
+            "PS1='rc$ '\nPROMPT_COMMAND=\"$PROMPT_COMMAND; true\"\n",
+        );
+        let session = RealSession::wsl_with(&rc).await;
+
+        let command = session.submit("echo acter-appended");
+        let output = session.wsl_until(command, "acter-appended").await;
+
+        assert!(output.contains("acter-appended"));
+        assert_eq!(
+            session.heading_of(command),
+            Some(Some("echo acter-appended".to_owned())),
+            "the block is the command the user ran, opened where their output began"
+        );
+        assert_eq!(
+            session.failed_with(command).await,
+            None,
+            "and a command that worked is not announced as having failed"
+        );
+    }
+
+    /// **The most common prompt pattern there is**, and the one that used to kill `A` and `B`
+    /// permanently: a hook that rebuilds `PS1` from `PROMPT_COMMAND`, which is what starship,
+    /// conda, virtualenv and `__git_ps1` all do. The old guard was a one-shot boolean, so the
+    /// first rebuild after the first prompt lost the prompt boundaries for the session.
+    #[tokio::test]
+    #[ignore = "spawns a real shell and needs a WSL distribution installed"]
+    async fn a_hook_that_rebuilds_the_prompt_is_re_wrapped_every_time() {
+        if !has(BASH_DISTRIBUTION) {
+            println!("skipped: this machine has no {BASH_DISTRIBUTION}");
+            return;
+        }
+
+        let rc = rcfile(
+            "rebuild",
+            "PS1='before$ '\n__mine() { PS1='rebuilt$ '; }\nPROMPT_COMMAND=__mine\n",
+        );
+        let session = RealSession::wsl_with(&rc).await;
+
+        // Two commands, because the guard that used to fail was a one-shot: the boundaries
+        // survived the first prompt and were gone by the second.
+        for round in 0..2 {
+            let command = session.submit(&format!("echo acter-rebuilt-{round}"));
+            session
+                .wsl_until(command, &format!("acter-rebuilt-{round}"))
+                .await;
+            assert_eq!(
+                session.heading_of(command),
+                Some(Some(format!("echo acter-rebuilt-{round}"))),
+                "round {round} still has prompt boundaries to open its block with"
+            );
+        }
+        assert!(
+            session.rendered().contains("rebuilt$"),
+            "and the rcfile's own prompt is what was rebuilt: {:?}",
+            session.rendered()
+        );
+    }
+
+    /// **The case today's strategy cannot do at all**: a `.bashrc` that assigns
+    /// `PROMPT_COMMAND` for itself. The launch-time injection produced no markers whatever in
+    /// this session — the documented failure, behaving as documented — and going last means
+    /// the user's own hook is captured and run in the middle instead of overwriting anything.
+    #[tokio::test]
+    #[ignore = "spawns a real shell and needs a WSL distribution installed"]
+    async fn a_dotfile_that_takes_the_prompt_hook_for_itself_is_still_set_up() {
+        if !has(BASH_DISTRIBUTION) {
+            println!("skipped: this machine has no {BASH_DISTRIBUTION}");
+            return;
+        }
+
+        let rc = rcfile(
+            "assign",
+            "PS1='rc$ '\n__mine() { :; }\nPROMPT_COMMAND=__mine\n",
+        );
+        let session = RealSession::wsl_with(&rc).await;
+
+        let failing = session.submit("(exit 7)");
+
+        assert_eq!(
+            session.failed_with(failing).await,
+            Some(ExitCode(7)),
+            "a session the old strategy could not mark at all reports a real exit code"
+        );
+    }
+
+    /// **`sh` reaches the prompt boundaries and says so**, measured against a real
+    /// distribution rather than asserted from documentation (spec B9.5, decision 8).
+    ///
+    /// `docker-desktop` runs `/bin/sh`, which on this machine is busybox. What it earns is
+    /// `PromptAndCommandLine`: a heading for each command, and no verdict — and the negative
+    /// half of that is a measurement too, which is why this asserts that no failure is
+    /// announced for a command that genuinely failed.
+    #[tokio::test]
+    #[ignore = "spawns a real shell and needs the docker-desktop distribution"]
+    async fn a_distribution_running_sh_is_set_up_as_far_as_its_prompt_reaches() {
+        if !has(SH_DISTRIBUTION) {
+            println!("skipped: this machine has no {SH_DISTRIBUTION}");
+            return;
+        }
+
+        let shell = ThisMachine::new().login_shell(Some(SH_DISTRIBUTION));
+        assert_eq!(
+            shell.as_deref(),
+            Some("sh"),
+            "the probe is what this test is keyed on, and it answers for itself"
+        );
+        let adapter = Wsl::in_distribution(WSL, SH_DISTRIBUTION, shell.as_deref());
+        assert_eq!(
+            adapter.markers(),
+            ShellMarkers::PromptAndCommandLine,
+            "what its own line earns, and not bash's claim"
+        );
+
+        let session = RealSession::adapted(&adapter, PacingConfig::default().integration_grace);
+        let line = acter_shells::setup_for(Some("sh"))
+            .expect("sh has a measured setup")
+            .line;
+        session.set_up(&line).await;
+
+        let command = session.submit("echo acter-under-sh");
+        let output = session.wsl_until(command, "acter-under-sh").await;
+
+        assert!(output.contains("acter-under-sh"));
+        // **A heading, and deliberately not a whole one.** This asserted the command verbatim
+        // until 2026-08-29, when `docker-desktop` came back from a restart drawing a
+        // seventy-six column prompt — `docker-desktop:/tmp/docker-desktop-root/run/desktop/...`
+        // — and four characters of the line fit before the wrap. The heading was `echo`.
+        //
+        // That is roadmap 23.12 rather than a fault in this test's subject, and pinning the
+        // whole line here would make this test fail for whatever the far end's prompt happens
+        // to be that day. What `sh`'s setup owes a listener is a heading; that it is cut at the
+        // row boundary is 23.12's to fix and 23.14's to weigh.
+        let heading = session
+            .heading_of(command)
+            .expect("the block was started")
+            .expect("and headed");
+        assert!(
+            "echo acter-under-sh".starts_with(&heading) && !heading.is_empty(),
+            "the heading is the submitted line, or as much of it as the row held: {heading:?}"
+        );
+
+        let failing = session.submit("(exit 7)");
+        session
+            .until_said(WSL_PATIENCE, |said| said.matches("$").count() >= 2)
+            .await;
+        assert_eq!(
+            session.failure_of(failing),
+            None,
+            "and no verdict is forged for a shell that has nowhere to compute one"
+        );
+    }
+
+    /// **What a listener hears when a command does not exist**, in `sh` and in bash, because
+    /// a shell that gives headings and swallows what a command printed would be worse than one
+    /// that gives neither.
+    ///
+    /// Reported by the user on 2026-08-29, driving the real window against `docker-desktop`:
+    /// "if I type an invalid command, no message". Nothing in this suite covered it —
+    /// `a_distribution_running_sh_is_set_up_as_far_as_its_prompt_reaches` asserts what `echo`
+    /// prints, which goes to stdout, and an error goes to stderr and is written by the shell
+    /// itself rather than by a child. This is that gap, and the output is the point, so run
+    /// with `--nocapture`.
+    #[tokio::test]
+    #[ignore = "spawns a real shell and needs the docker-desktop distribution"]
+    async fn a_command_that_does_not_exist_still_says_so_in_sh() {
+        if !has(SH_DISTRIBUTION) {
+            println!("skipped: this machine has no {SH_DISTRIBUTION}");
+            return;
+        }
+
+        let shell = ThisMachine::new().login_shell(Some(SH_DISTRIBUTION));
+        let adapter = Wsl::in_distribution(WSL, SH_DISTRIBUTION, shell.as_deref());
+        let session = RealSession::adapted(&adapter, PacingConfig::default().integration_grace);
+        let line = acter_shells::setup_for(Some("sh"))
+            .expect("sh has a measured setup")
+            .line;
+        session.set_up(&line).await;
+
+        let command = session.submit("acter-no-such-command");
+        // Long enough for the shell to have answered and for the next prompt to have been
+        // drawn, rather than waiting on a needle that may never arrive.
+        tokio::time::sleep(Duration::from_secs(5)).await;
+
+        println!("--- what sh said about a command that does not exist ---");
+        for event in session.events.0.lock().expect("recorder poisoned").iter() {
+            println!("  {event:?}");
+        }
+        println!("--- heading: {:?} ---", session.heading_of(command));
+
+        assert!(
+            session.rendered().contains("not found"),
+            "a listener is told the command does not exist: {:?}",
+            session.rendered()
+        );
+    }
+
+    /// **The same, with a line long enough to cross the margin busybox thinks it has** — which
+    /// is 23.14's sixteen phantom columns met by a user typing rather than by Acter setting up.
+    ///
+    /// The short case above is 21 characters after a 30-column prompt: 30 + 16 + 21 is 67, so
+    /// busybox never believes it wrapped and everything works. This one is 59 characters, which
+    /// it does believe wrapped. The output is the point, so run with `--nocapture`.
+    ///
+    /// **What it measured, 2026-08-29.** The shell's own message survives and is read aloud,
+    /// which is what this asserts and what makes the session usable. Two things around it do
+    /// not. The **heading is truncated at the phantom margin** — the block is headed
+    /// `acter-no-such-command-0123456789a`, thirty-three characters of a fifty-nine character
+    /// command, because that is where busybox believed the row ended. And the **tail of the
+    /// echo is read aloud as output**, ahead of the message: a listener hears
+    /// `123456789b123456789c123456` and then the error.
+    ///
+    /// So 23.14 is not only about a cursor landing oddly while typing. It reaches the heading a
+    /// listener navigates by and the text they are read, for any command long enough — which
+    /// against this distribution's own prompt is about thirty-four characters.
+    #[tokio::test]
+    #[ignore = "spawns a real shell and needs the docker-desktop distribution"]
+    async fn a_long_command_that_does_not_exist_still_says_so_in_sh() {
+        if !has(SH_DISTRIBUTION) {
+            println!("skipped: this machine has no {SH_DISTRIBUTION}");
+            return;
+        }
+
+        let shell = ThisMachine::new().login_shell(Some(SH_DISTRIBUTION));
+        let adapter = Wsl::in_distribution(WSL, SH_DISTRIBUTION, shell.as_deref());
+        let session = RealSession::adapted(&adapter, PacingConfig::default().integration_grace);
+        let line = acter_shells::setup_for(Some("sh"))
+            .expect("sh has a measured setup")
+            .line;
+        session.set_up(&line).await;
+
+        // **Forty-two characters, which fit the row on the day the brackets were measured and
+        // do not fit it on a day this distribution draws a longer prompt.** How much of a
+        // heading survives is the far end's prompt width, and that is not this test's to fix or
+        // to depend on — so what is asserted below is that a heading arrives and is the line as
+        // far as it went, and the length is printed rather than pinned.
+        let fits = "acter-no-such-command-0123456789a123456789";
+        let inside = session.submit(fits);
+        session.wsl_until(inside, "not found").await;
+
+        // **Fifty-nine, which genuinely wraps**: this distribution's prompt is 31 columns, so
+        // 31 + 59 passes 80 whatever anyone believes about the markers.
+        let long = "acter-no-such-command-0123456789a123456789b123456789c123456";
+        let command = session.submit(long);
+        tokio::time::sleep(Duration::from_secs(5)).await;
+
+        println!("--- what sh said about a long command that does not exist ---");
+        for event in session.events.0.lock().expect("recorder poisoned").iter() {
+            println!("  {event:?}");
+        }
+        println!(
+            "--- heading, fits in the row: {:?} ---",
+            session.heading_of(inside)
+        );
+        println!(
+            "--- heading, genuinely wraps: {:?} ---",
+            session.heading_of(command)
+        );
+
+        let heading = session
+            .heading_of(inside)
+            .expect("the block was started")
+            .expect("and headed");
+        println!(
+            "--- of {} characters, {} survived ---",
+            fits.len(),
+            heading.len()
+        );
+        assert!(
+            fits.starts_with(&heading) && !heading.is_empty(),
+            "the heading is the line as far as the row held it: {heading:?}"
+        );
+        assert!(
+            session.rendered().contains("not found"),
+            "a listener is told the command does not exist: {:?}",
+            session.rendered()
+        );
+    }
+
+    /// **What a refused `sh` session actually loses**, measured because the answer was
+    /// asserted and the user was right to doubt it.
+    ///
+    /// Asked on 2026-08-29: "not even unintegrated sessions lost their headings". They do not.
+    /// A user's block is headed from the submit ack in the frontend (spec B6.1, decision 1),
+    /// and the pump names it from the far end's *echo* rather than from any marker — which is
+    /// the mechanism B6.1 built precisely so that a session with no markers still correlates.
+    /// So "you lose the headings" was wrong, and this is the measurement that says what is
+    /// really lost instead.
+    ///
+    /// The same two commands as the two cases above, against the same distribution, with the
+    /// setup refused exactly as cancelling the dialog refuses it — `ShellFacts::declined`, the
+    /// one the connect service builds for that answer. Run with `--nocapture`.
+    #[tokio::test]
+    #[ignore = "spawns a real shell and needs the docker-desktop distribution"]
+    async fn a_refused_sh_session_still_heads_every_command() {
+        if !has(SH_DISTRIBUTION) {
+            println!("skipped: this machine has no {SH_DISTRIBUTION}");
+            return;
+        }
+
+        let shell = ThisMachine::new().login_shell(Some(SH_DISTRIBUTION));
+        let adapter = Wsl::in_distribution(WSL, SH_DISTRIBUTION, shell.as_deref());
+        let session = RealSession::launched(
+            &adapter.launch(),
+            ShellFacts::of(&adapter).declined(),
+            PacingConfig::default().integration_grace,
+        );
+
+        // **Wait for the far end to have drawn its prompt before submitting anything**, which
+        // the set-up path gets for free from `set_up`. B4.9 suppresses the echo by holding the
+        // row a submission is *pending on*, and that row is the prompt row — so a line
+        // submitted before the shell has drawn one has no pending row, no hold, and its echo
+        // is published as ordinary output. Without this wait the two sessions are not being
+        // compared on the same terms, and the comparison is the whole point of the test.
+        session
+            .until_said(WSL_PATIENCE, |said| said.contains('#'))
+            .await;
+
+        let short = session.submit("lsa");
+        session.wsl_until(short, "not found").await;
+        let long = session.submit("acter-no-such-command-0123456789a123456789b123456789c123456");
+        tokio::time::sleep(Duration::from_secs(5)).await;
+
+        println!("--- what a refused sh session said ---");
+        for event in session.events.0.lock().expect("recorder poisoned").iter() {
+            println!("  {event:?}");
+        }
+        println!("--- short heading: {:?} ---", session.heading_of(short));
+        println!("--- long heading:  {:?} ---", session.heading_of(long));
+
+        assert_eq!(
+            session.heading_of(short),
+            Some(Some("lsa".to_owned())),
+            "a refused session still heads a command with the line that was submitted"
+        );
+        assert_eq!(
+            session.heading_of(long),
+            Some(Some(
+                "acter-no-such-command-0123456789a123456789b123456789c123456".to_owned()
+            )),
+            "and heads a wrapped one in full, where the set-up session truncates it"
+        );
+        assert!(
+            session.rendered().contains("not found"),
+            "and still reads the shell's own message aloud: {:?}",
+            session.rendered()
+        );
+        // **B4.9 suppresses the echo here too, and that is the whole point of this test.**
+        // Asked by the user on 2026-08-29 — "on an unintegrated session we do filter echo back
+        // by comparing the next line to the heading, don't we?" — and yes: the pending row is
+        // held and matched against the submitted line whether or not any marker ever arrives.
+        // An earlier version of this test submitted before the shell had drawn its prompt, so
+        // there was no pending row, and the echo it published was an artifact of the test
+        // rather than a property of a refused session. This assertion is what stops that
+        // happening again.
+        assert!(
+            !session.rendered().contains("# lsa"),
+            "the echo of the user's own line is not read back to them: {:?}",
+            session.rendered()
+        );
+    }
+
+    /// The same question put to bash, which is the control: if bash says it and `sh` does not,
+    /// what differs is the marker claim rather than the product.
+    #[tokio::test]
+    #[ignore = "spawns a real shell and needs a WSL distribution installed"]
+    async fn a_command_that_does_not_exist_still_says_so_in_bash() {
+        if !wsl_is_available() {
+            println!("skipped: this machine has no WSL distribution");
+            return;
+        }
+
+        let session = RealSession::wsl().await;
+        let command = session.submit("acter-no-such-command");
+        tokio::time::sleep(Duration::from_secs(5)).await;
+
+        println!("--- what bash said about a command that does not exist ---");
+        for event in session.events.0.lock().expect("recorder poisoned").iter() {
+            println!("  {event:?}");
+        }
+        println!("--- heading: {:?} ---", session.heading_of(command));
+
+        assert!(
+            session.rendered().contains("not found"),
+            "a listener is told the command does not exist: {:?}",
+            session.rendered()
+        );
+    }
+
+    /// **The distribution's own files are untouched**, which is the property B5.3 decision 2
+    /// fought for and this entry gives back rather than trading away: nothing is written into
+    /// the distribution, no snippet, no dotfile, nothing left behind on a machine the user has
+    /// to live in after Acter closes.
+    #[tokio::test]
+    #[ignore = "spawns a real shell and needs a WSL distribution installed"]
+    async fn setting_a_session_up_writes_nothing_into_the_distribution() {
+        if !wsl_is_available() {
+            println!("skipped: this machine has no WSL distribution");
+            return;
+        }
+
+        let session = RealSession::wsl().await;
+        let command = session.submit("ls -a ~ | md5sum; echo acter-hashed");
+        let output = session.wsl_until(command, "acter-hashed").await;
+
+        let untouched = std::process::Command::new(WSL)
+            .args(["--", "sh", "-c", "ls -a ~ | md5sum"])
+            .output()
+            .expect("wsl answers");
+        let expected = String::from_utf8_lossy(&untouched.stdout)
+            .split_whitespace()
+            .next()
+            .expect("md5sum prints a hash")
+            .to_owned();
+
+        assert!(
+            output.contains(&expected),
+            "the home directory an Acter session sees is the one a plain wsl.exe sees: \
+             {output:?} does not contain {expected:?}"
+        );
     }
 }

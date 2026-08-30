@@ -1,13 +1,22 @@
 //! Port (driven): everything one attempt to connect may have to ask the person in front of
 //! the window, before there is a session to ask it in.
 //!
-//! **It is [`SshQuestions`] plus the one question that is not about a far end.** B9
+//! **It is [`SshQuestions`] plus the two questions that are not about a far end.** B9
 //! established the shape — a question goes out on the conversation's channel and the
 //! connection parks until an answer comes back — for two things a server can stop on: a host
 //! key nobody has seen, and a password nobody has typed. B5.7 adds a third, and it is asked
 //! about this machine rather than about the other one: the file that is about to be started
 //! did not verify, and starting it is a decision only the user can make (spec B5.7,
 //! decision 6).
+//!
+//! **B9.5 adds a fourth, and it is the first that is not a warning.** The connection has
+//! succeeded, the far end has said what shell it runs, and Acter is about to run one command
+//! inside the session so that a listener gets a heading for each command and is told when one
+//! fails. The command is shown before it runs, verbatim (spec B9.5, decision 9). It arrives
+//! on this seam for the reason the other two do — it is asked after the connection succeeds
+//! and before anything is sent, which is exactly the window this port exists for — and it
+//! inherits both properties the other two established: refusing is a decision rather than a
+//! failure, and nothing runs that nobody said yes to.
 //!
 //! **A supertrait rather than a fourth method on `SshQuestions`.** The SSH transport is
 //! handed an asker and must not be handed a question it can never ask: what it needs is the
@@ -20,7 +29,7 @@
 //! own, never an invoke, which Tauri runs on the main thread and which would deadlock the
 //! answer it is waiting for.
 
-use crate::{SshQuestions, Verdict};
+use crate::{SessionSetup, ShellMarkers, SshQuestions, Verdict};
 
 /// The questions an attempt to connect asks, of which SSH's two are the first.
 pub trait ConnectQuestions: SshQuestions {
@@ -33,6 +42,95 @@ pub trait ConnectQuestions: SshQuestions {
     /// than after. The safe answer is the one that does nothing, for the reason
     /// [`SshQuestions::host_key`] refuses by default.
     fn unverified(&self, question: ProgramQuestion) -> ProgramAnswer;
+
+    /// The session is up, this is what it runs, and this is the command Acter would run
+    /// inside it.
+    ///
+    /// **Asked once per shell per person** (spec B9.5, decision 10), which is what
+    /// [`Explained`](crate::Explained) remembers; and asked at all only because the Connect
+    /// dialog's checkbox said so, which is what [`SetUp`](crate::SetUp) carries. The two are
+    /// not the same thing and storing them together is the mistake this shape avoids.
+    ///
+    /// **Unlike the other three, the default here is to go ahead.** A host key and an
+    /// unverified file are security decisions where the safe answer is the one that does
+    /// nothing; this is Acter offering to tell a listener more about their own session, and
+    /// the thing it defends against is surprise rather than harm. What makes "on by default"
+    /// honest is that the command is disclosed before it runs and left in the buffer and in
+    /// the shell's history afterwards.
+    fn set_up_session(&self, question: SetupQuestion) -> SetupAnswer;
+}
+
+/// What a person is told before Acter runs anything in their session.
+///
+/// **Every field here becomes speech, and the words are the domain's** — the same rule
+/// [`ProgramQuestion`] follows. What a listener is entitled to hear is decided once, here,
+/// and a dialog renders it rather than composing it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SetupQuestion {
+    /// What the far end said it runs, as the probe read it: `bash`, `sh`, `zsh`.
+    pub shell: String,
+    /// The setup that would run, which carries both the command and how far the markers it
+    /// earns reach.
+    pub setup: SessionSetup,
+}
+
+impl SetupQuestion {
+    /// What was detected, said plainly and with a subject.
+    ///
+    /// **The dialog names the shell it detected**, which is why the probe stays ahead of it
+    /// (spec B9.5, decision 14). A dialog that said "this session" and nothing more would be
+    /// asking somebody to authorise a command against a far end it would not name.
+    pub fn detected(&self) -> String {
+        format!("Acter has detected that this session runs {}.", self.shell)
+    }
+
+    /// What the person gets for saying yes, in their words rather than this project's.
+    ///
+    /// **Not "shell integration"** — A13 removed that phrase from everything a listener hears
+    /// because it is vocabulary a user does not have. What they get is a heading for each
+    /// command and being told when one fails, and for a shell that reaches only the prompt
+    /// boundaries the second half is missing and is said to be missing (spec B9.5,
+    /// decision 8). Saying "partly" is the whole reason the per-shell answer is a
+    /// [`ShellMarkers`] rather than a yes.
+    pub fn offer(&self) -> String {
+        let gained = match self.setup.markers {
+            ShellMarkers::Full => {
+                "You get a heading for each command, and you are told when a command fails."
+            }
+            ShellMarkers::PromptAndCommandLine => {
+                "You get a heading for each command. Acter cannot yet tell you when a command \
+                 fails in this shell."
+            }
+        };
+        format!("Acter can set it up so it tells you more about what you run. {gained}")
+    }
+
+    /// The command, verbatim, for a field it can be read out of character by character.
+    pub fn command(&self) -> &str {
+        &self.setup.line
+    }
+}
+
+/// What refusing costs, which is A13's shipped sentence with what still works in front of it.
+///
+/// **It is the register test rather than a placeholder** (spec B9.5, decision 9). If the
+/// refusal reads in the same voice as the help topic F1 opens, the dialog is in the user's
+/// words; if it does not, something in this dialog is speaking this project's.
+pub const IF_YOU_CANCEL: &str = "If you cancel, the session still works. You will hear what \
+                                 commands print here, but not whether they worked.";
+
+/// What the person decided about setting this session up.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SetupAnswer {
+    /// Run it.
+    SetUp {
+        /// Whether they ticked "do not show this dialog again", which is remembered for this
+        /// shell and for no other.
+        remember: bool,
+    },
+    /// Do not, this session. The session still works and says what it will and will not tell
+    /// them; the Connect dialog's checkbox is what refuses durably (decision 9).
+    Skip,
 }
 
 /// What a person is asked about a file that would not verify, in the order it has to be
@@ -67,15 +165,24 @@ pub enum ProgramAnswer {
     DoNotStart,
 }
 
-/// Nobody to ask, so nothing unverified is started.
+/// Nobody to ask, so nothing unverified is started and nothing is run inside a session.
 ///
 /// The same refusal [`Unasked`](crate::Unasked) makes about a host key, and for the same
 /// reason: a launch that names a profile from the environment has no window to put a
 /// question in, and starting a file nobody could be asked about is the "accept everything"
 /// mode Acter does not have.
+///
+/// **The setup question refuses for a reason that survives its friendlier subject** (spec
+/// B9.5, decision 9): the checkbox authorises and the dialog discloses, and a launch from the
+/// environment has neither. Setting a session up behind nobody would be running a command in
+/// somebody's shell that nothing ever showed them.
 impl ConnectQuestions for crate::Unasked {
     fn unverified(&self, _question: ProgramQuestion) -> ProgramAnswer {
         ProgramAnswer::DoNotStart
+    }
+
+    fn set_up_session(&self, _question: SetupQuestion) -> SetupAnswer {
+        SetupAnswer::Skip
     }
 }
 
@@ -99,5 +206,84 @@ mod tests {
         });
 
         assert_eq!(answer, ProgramAnswer::DoNotStart);
+    }
+
+    fn bash() -> SetupQuestion {
+        SetupQuestion {
+            shell: "bash".to_owned(),
+            setup: SessionSetup {
+                line: "__acter_status=$?".to_owned(),
+                markers: ShellMarkers::Full,
+            },
+        }
+    }
+
+    /// **The checkbox authorises and the dialog discloses, and a launch from the environment
+    /// has neither** (spec B9.5, decision 9). So nothing is run, even though nothing here is
+    /// dangerous: what would be missing is the disclosure, not the safety.
+    #[test]
+    fn with_nobody_to_ask_no_session_is_set_up() {
+        assert_eq!(Unasked.set_up_session(bash()), SetupAnswer::Skip);
+    }
+
+    /// The dialog names the shell it detected, which is why the probe stays ahead of it.
+    #[test]
+    fn the_question_names_the_shell_that_was_detected() {
+        assert_eq!(
+            bash().detected(),
+            "Acter has detected that this session runs bash."
+        );
+    }
+
+    /// **What a listener gets, in their words** — and none of the phrase A13 removed.
+    #[test]
+    fn a_shell_that_marks_everything_offers_headings_and_failures() {
+        let offer = bash().offer();
+
+        assert!(offer.contains("a heading for each command"), "{offer}");
+        assert!(offer.contains("told when a command fails"), "{offer}");
+        assert!(
+            !offer.contains("shell integration"),
+            "the phrase A13 removed is not said to a listener: {offer}"
+        );
+    }
+
+    /// **The sentence has to be able to say "partly"** (spec B9.5, decision 8). POSIX `sh`
+    /// reaches the prompt boundaries and no further, and a dialog that promised failures
+    /// there would be promising something the setup cannot deliver.
+    #[test]
+    fn a_shell_that_marks_only_its_prompt_says_what_it_cannot_do() {
+        let question = SetupQuestion {
+            shell: "sh".to_owned(),
+            setup: SessionSetup {
+                line: "PS1=...".to_owned(),
+                markers: ShellMarkers::PromptAndCommandLine,
+            },
+        };
+        let offer = question.offer();
+
+        assert!(offer.contains("a heading for each command"), "{offer}");
+        assert!(
+            offer.contains("cannot yet tell you when a command fails"),
+            "{offer}"
+        );
+    }
+
+    /// The command is shown verbatim, because that is the disclosure the whole dialog is
+    /// (spec B9.5, decision 3).
+    #[test]
+    fn the_command_is_carried_exactly_as_it_would_run() {
+        assert_eq!(bash().command(), "__acter_status=$?");
+    }
+
+    /// **The register test, pinned** (spec B9.5, decision 9): the closing line is A13's
+    /// shipped sentence, so the refusal reads in the same voice as the help topic F1 opens.
+    #[test]
+    fn the_refusal_says_what_still_works_before_what_does_not() {
+        assert!(IF_YOU_CANCEL.starts_with("If you cancel, the session still works."));
+        assert!(
+            IF_YOU_CANCEL
+                .ends_with("You will hear what commands print here, but not whether they worked.")
+        );
     }
 }

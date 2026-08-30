@@ -223,7 +223,12 @@ impl Pipeline {
                 integration_grace: GRACE,
                 ..PacingConfig::default()
             },
-            ShellFacts { markers, eof: None },
+            ShellFacts {
+                markers,
+                eof: None,
+                setup: None,
+                discards_line: None,
+            },
         );
         session.attach_session(SESSION, Arc::clone(&events) as Arc<dyn EventSink>);
 

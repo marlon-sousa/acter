@@ -17,6 +17,7 @@ import type {
   Connectable,
   Connected,
   ProfileId,
+  SetUp,
 } from '../protocol';
 
 /**
@@ -53,8 +54,13 @@ export interface ConnectApi {
    * **Rejects with a whole spoken sentence** when it cannot be started, and the session
    * that was running is untouched — still running, still attached. The caller says the
    * sentence and carries on.
+   *
+   * `setUp` is the Connect dialog's checkbox: whether this connection may run one command
+   * inside the session once it is established, so a listener gets a heading for each command
+   * and is told when one fails (spec B9.5, decision 9). It travels with the attempt rather
+   * than being stored, because there is no profile store to keep it in until B8.
    */
-  use(id: ProfileId, listener?: ConnectListener): Promise<Connected>;
+  use(id: ProfileId, setUp: SetUp, listener?: ConnectListener): Promise<Connected>;
   /** Which far end this window is on, or `null` for a window connected to nothing. */
   connected(): Promise<Connected | null>;
 }

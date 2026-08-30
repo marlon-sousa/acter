@@ -19,6 +19,7 @@ import type {
   ProfileId,
   SessionEvent,
   SessionId,
+  SetUp,
   SubmitAck,
 } from '../protocol';
 
@@ -54,7 +55,11 @@ export class TauriConnect implements ConnectApi {
     return invoke<Connectable[]>('connectable');
   }
 
-  use(id: ProfileId, listener: ConnectListener = {}): Promise<Connected> {
+  use(
+    id: ProfileId,
+    setUp: SetUp,
+    listener: ConnectListener = {},
+  ): Promise<Connected> {
     return new Promise<Connected>((resolve, reject) => {
       const steps = new Channel<ConnectStep>();
       // Held so the terminal step can tell the backend to forget this attempt, and so a
@@ -103,7 +108,11 @@ export class TauriConnect implements ConnectApi {
         }
       };
 
-      void invoke<AttemptId>('use_profile', { profile: id, steps }).then((started) => {
+      void invoke<AttemptId>('use_profile', {
+        profile: id,
+        setUp,
+        steps,
+      }).then((started) => {
         // The id is needed before any answer can be sent, and a question can in principle
         // arrive before this resolves — so the step handler sets it too, and whichever
         // arrives first wins. They are the same value.

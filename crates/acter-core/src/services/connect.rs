@@ -36,8 +36,8 @@ use std::sync::{Arc, Mutex};
 use crate::{
     Chosen, ConnectApi, ConnectQuestions, Connectable, Connected, Connection, ConnectionKind,
     EventSink, InstalledShells, KeyAck, KeyPress, ProfileId, ProgramAnswer, ProgramQuestion,
-    SessionApi, SessionFactory, SessionId, ShellInstall, Signatures, SshQuestions, Started,
-    SubmitAck, Variant, catalogue,
+    SessionApi, SessionFactory, SessionId, SetUp, ShellInstall, Signatures, Started, SubmitAck,
+    Variant, catalogue,
 };
 
 /// The port every SSH server listens on unless somebody moved it, which is what the form
@@ -77,6 +77,9 @@ struct Live {
     /// What was said about this far end at connection, kept so a window asking what it is
     /// connected to gets the same answer it was given when it connected.
     note: Option<String>,
+    /// Whether that note already said this session cannot report how a command went, kept for
+    /// the same reason the note is: a window asking again gets the same answer.
+    limit_explained: bool,
     session: Arc<dyn SessionApi>,
 }
 
@@ -499,15 +502,21 @@ impl ConnectApi for ConnectService {
     fn use_profile(
         &self,
         id: &ProfileId,
+        set_up: SetUp,
         questions: &Arc<dyn ConnectQuestions>,
     ) -> Result<Connected, String> {
         let chosen = self.chosen(id)?;
         let label = id.label();
         let agreed = self.verified(&chosen, &label, questions)?;
-        // The SSH half of the same asker, because a far end that has to ask a person
-        // something reaches them through the conversation this attempt already has.
-        let far_end = Arc::clone(questions) as Arc<dyn SshQuestions>;
-        let Started { session, note } = self.factory.open(&chosen, &far_end)?;
+        // **Every question, rather than the SSH half, since B9.5.** The setup question is
+        // asked after the connection succeeds and before the setup line is sent, and that
+        // window is inside the factory's call rather than in front of it: the far end has to
+        // have said what shell it runs before a dialog can name it.
+        let Started {
+            session,
+            note,
+            limit_explained,
+        } = self.factory.open(&chosen, set_up, questions)?;
 
         // **At most one of the two is ever present**: a note from the far end belongs to
         // SSH, which is not a file on this machine, and a note about a signature belongs to
@@ -521,6 +530,7 @@ impl ConnectApi for ConnectService {
                 id: next,
                 label: label.clone(),
                 note: note.clone(),
+                limit_explained,
                 session,
             })
         };
@@ -530,6 +540,7 @@ impl ConnectApi for ConnectService {
             session: next,
             label,
             note,
+            limit_explained,
         })
     }
 
@@ -539,6 +550,7 @@ impl ConnectApi for ConnectService {
             session: live.id,
             label: live.label.clone(),
             note: live.note.clone(),
+            limit_explained: live.limit_explained,
         })
     }
 }
@@ -621,7 +633,8 @@ mod tests {
 
     use crate::{
         CommandId, Fault, HostKeyAnswer, HostKeyQuestion, NoDistributions, PasswordQuestion,
-        PathStanding, Provenance, Secret, SessionEvent, Signer, Verdict,
+        PathStanding, Provenance, Secret, SessionEvent, SetupAnswer, SetupQuestion, Signer,
+        SshQuestions, Verdict,
     };
 
     use super::*;
@@ -690,6 +703,9 @@ mod tests {
         last: Mutex<Option<Arc<FakeSession>>>,
         /// A profile the factory refuses, with the sentence it refuses it in.
         refuses: Mutex<Option<(ProfileId, String)>>,
+        /// What the Connect dialog's checkbox said on each attempt, so a test can assert that
+        /// the answer reached the thing that acts on it (spec B9.5, decision 9).
+        set_up: Mutex<Vec<SetUp>>,
     }
 
     impl FakeFactory {
@@ -704,8 +720,10 @@ mod tests {
         fn open(
             &self,
             chosen: &Chosen,
-            _questions: &Arc<dyn SshQuestions>,
+            set_up: SetUp,
+            _questions: &Arc<dyn ConnectQuestions>,
         ) -> Result<Started, String> {
+            self.set_up.lock().unwrap().push(set_up);
             if let Some((refused, why)) = self.refuses.lock().unwrap().as_ref()
                 && *refused == chosen.profile
             {
@@ -717,6 +735,7 @@ mod tests {
             Ok(Started {
                 session: session as Arc<dyn SessionApi>,
                 note: None,
+                limit_explained: false,
             })
         }
     }
@@ -859,6 +878,9 @@ mod tests {
         fn unverified(&self, _question: ProgramQuestion) -> ProgramAnswer {
             ProgramAnswer::Start
         }
+        fn set_up_session(&self, _question: SetupQuestion) -> SetupAnswer {
+            SetupAnswer::Skip
+        }
     }
 
     /// The one question this entry asks, remembered so a test can read it back.
@@ -881,6 +903,9 @@ mod tests {
         fn unverified(&self, question: ProgramQuestion) -> ProgramAnswer {
             self.asked.lock().unwrap().push(question);
             ProgramAnswer::DoNotStart
+        }
+        fn set_up_session(&self, _question: SetupQuestion) -> SetupAnswer {
+            SetupAnswer::Skip
         }
     }
 
@@ -979,7 +1004,7 @@ mod tests {
                 "account",
             ),
         ] {
-            let Err(why) = service.use_profile(&profile, &unasked()) else {
+            let Err(why) = service.use_profile(&profile, SetUp::Yes, &unasked()) else {
                 panic!("an unfilled form does not connect");
             };
             assert!(why.contains(expected), "it says what is missing: {why}");
@@ -1233,7 +1258,9 @@ mod tests {
             kind: ConnectionKind::Cmd,
         };
 
-        let connected = service.use_profile(&id, &unasked()).expect("cmd starts");
+        let connected = service
+            .use_profile(&id, SetUp::Yes, &unasked())
+            .expect("cmd starts");
 
         assert_eq!(connected.label, "Command Prompt");
         assert_eq!(service.connected(), Some(connected.clone()));
@@ -1266,6 +1293,7 @@ mod tests {
                 &ProfileId::Shell {
                     kind: ConnectionKind::Cmd,
                 },
+                SetUp::Yes,
                 &unasked(),
             )
             .expect("cmd starts");
@@ -1276,6 +1304,7 @@ mod tests {
                 &ProfileId::Distribution {
                     name: "Ubuntu".to_owned(),
                 },
+                SetUp::Yes,
                 &unasked(),
             )
             .expect("Ubuntu starts");
@@ -1303,6 +1332,7 @@ mod tests {
                 &ProfileId::Shell {
                     kind: ConnectionKind::Cmd,
                 },
+                SetUp::Yes,
                 &unasked(),
             )
             .expect("cmd starts");
@@ -1311,6 +1341,7 @@ mod tests {
                 &ProfileId::Shell {
                     kind: ConnectionKind::WindowsPowerShell,
                 },
+                SetUp::Yes,
                 &unasked(),
             )
             .expect("PowerShell starts");
@@ -1348,12 +1379,13 @@ mod tests {
                 &ProfileId::Shell {
                     kind: ConnectionKind::Cmd,
                 },
+                SetUp::Yes,
                 &unasked(),
             )
             .expect("cmd starts");
 
         let why = service
-            .use_profile(&refused, &unasked())
+            .use_profile(&refused, SetUp::Yes, &unasked())
             .expect_err("this one does not");
 
         assert_eq!(
@@ -1384,6 +1416,7 @@ mod tests {
                 &ProfileId::Shell {
                     kind: ConnectionKind::PowerShellSeven,
                 },
+                SetUp::Yes,
                 &unasked(),
             )
             .expect_err("PowerShell 7 is not installed");
@@ -1406,6 +1439,7 @@ mod tests {
                 &ProfileId::Distribution {
                     name: "Ubuntu".to_owned(),
                 },
+                SetUp::Yes,
                 &unasked(),
             )
             .expect_err("there is no WSL to start it in");
@@ -1430,6 +1464,7 @@ mod tests {
                 &ProfileId::Shell {
                     kind: ConnectionKind::Cmd,
                 },
+                SetUp::Yes,
                 &unasked(),
             )
             .expect("cmd starts");
@@ -1463,6 +1498,7 @@ mod tests {
                 &ProfileId::Shell {
                     kind: ConnectionKind::Cmd,
                 },
+                SetUp::Yes,
                 &unasked(),
             )
             .expect("cmd starts");
@@ -1471,6 +1507,7 @@ mod tests {
                 &ProfileId::Shell {
                     kind: ConnectionKind::WindowsPowerShell,
                 },
+                SetUp::Yes,
                 &unasked(),
             )
             .expect("PowerShell starts");
@@ -1502,6 +1539,7 @@ mod tests {
                 &ProfileId::Shell {
                     kind: ConnectionKind::Cmd,
                 },
+                SetUp::Yes,
                 &unasked(),
             )
             .expect("cmd starts");
@@ -1600,6 +1638,7 @@ mod tests {
                 &ProfileId::Shell {
                     kind: ConnectionKind::Cmd,
                 },
+                SetUp::Yes,
                 &questions,
             )
             .expect_err("saying nothing starts nothing");
@@ -1642,6 +1681,7 @@ mod tests {
                 &ProfileId::Shell {
                     kind: ConnectionKind::Cmd,
                 },
+                SetUp::Yes,
                 &questions,
             )
             .expect("saying so starts it");
@@ -1669,6 +1709,7 @@ mod tests {
                 &ProfileId::Shell {
                     kind: ConnectionKind::Cmd,
                 },
+                SetUp::Yes,
                 &unasked(),
             )
             .expect("cmd starts");
@@ -1697,6 +1738,7 @@ mod tests {
                 &ProfileId::Shell {
                     kind: ConnectionKind::Cmd,
                 },
+                SetUp::Yes,
                 &(Arc::clone(&asking) as Arc<dyn ConnectQuestions>),
             )
             .expect("a file this machine trusts starts");
@@ -1867,7 +1909,7 @@ mod tests {
         };
 
         let connected = service
-            .use_profile(&chosen, &unasked())
+            .use_profile(&chosen, SetUp::Yes, &unasked())
             .expect("the chosen install starts");
 
         assert_eq!(connected.label, r"PowerShell 7 (C:\tools\pwsh)");

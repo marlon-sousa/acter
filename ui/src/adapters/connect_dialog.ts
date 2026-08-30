@@ -21,7 +21,7 @@
 import { keepTabInside } from './dialog_tab';
 import type { AnnouncerView } from '../ports/announcer_view';
 import type { ConnectApi } from '../ports/connect_api';
-import type { Connectable, ProfileId } from '../protocol';
+import type { Connectable, ProfileId, SetUp } from '../protocol';
 
 /** What the panel says when the chosen kind needs nothing. */
 const NO_OPTIONS = 'no options';
@@ -127,8 +127,14 @@ export interface ConnectAction {
    * Start this profile. Resolves true when the window is on it now, false when it could
    * not be started — in which case the reason has already been announced and this dialog
    * stays open (decision 4).
+   *
+   * `setUp` is the checkbox below the panel: whether this connection may run one command
+   * inside the session once it is established (spec B9.5, decision 9). It travels with the
+   * attempt rather than being stored, because there is no profile store to keep it in until
+   * B8 — which is also why it is read here, at the moment Connect is pressed, rather than
+   * remembered anywhere.
    */
-  (id: ProfileId): Promise<boolean>;
+  (id: ProfileId, setUp: SetUp): Promise<boolean>;
 }
 
 export class ConnectDialog {
@@ -545,7 +551,7 @@ export class ConnectDialog {
       return;
     }
     this.busy(true);
-    const started = await this.start(this.profile(row));
+    const started = await this.start(this.profile(row), this.setUp());
     this.busy(false);
     if (started) {
       // Closing puts focus back in the edit field; the far end the user is now on has
@@ -580,6 +586,20 @@ export class ConnectDialog {
     if (connecting) {
       this.kinds.focus();
     }
+  }
+
+  /**
+   * Whether this connection may set its session up, as the checkbox says right now.
+   *
+   * **Ticked by default, and unticking it is reachable without any dialog appearing** (spec
+   * B9.5, decision 9) — which is the whole reason this control is here rather than only
+   * inside the dialog that discloses the command. A missing checkbox reads as ticked, for the
+   * reason every default in this file does: the ordinary case is the one that has to work
+   * when something is not where it was expected.
+   */
+  private setUp(): SetUp {
+    const box = this.dialog.querySelector<HTMLInputElement>('#connect-set-up');
+    return box === null || box.checked ? 'Yes' : 'No';
   }
 
   private profile(row: Connectable): ProfileId {

@@ -7,9 +7,10 @@ mod driven;
 mod driving;
 
 pub use driven::{
-    Chosen, Clock, ConnectQuestions, ConnectSink, EventSink, HostKeyAnswer, HostKeyQuestion,
-    HostKeyState, InstalledShells, NoDistributions, PasswordQuestion, ProgramAnswer,
-    ProgramQuestion, Secret, SessionFactory, ShellAdapter, ShellFacts, ShellLaunch, Signatures,
-    SshQuestions, Started, TerminalEngine, Timer, Transport, TransportError, Unasked, Unchecked,
+    Chosen, Clock, ConnectQuestions, ConnectSink, EventSink, Explained, HostKeyAnswer,
+    HostKeyQuestion, HostKeyState, IF_YOU_CANCEL, InstalledShells, NeverExplained, NoDistributions,
+    PasswordQuestion, ProgramAnswer, ProgramQuestion, Secret, SessionFactory, SetupAnswer,
+    SetupQuestion, ShellAdapter, ShellFacts, ShellLaunch, Signatures, SshQuestions, Started,
+    TerminalEngine, Timer, Transport, TransportError, Unasked, Unchecked,
 };
 pub use driving::{ConnectApi, SessionApi};
