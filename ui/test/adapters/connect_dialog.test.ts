@@ -127,10 +127,23 @@ class FakeConnect implements ConnectApi {
   }
 }
 
+/**
+ * The announcer, and the two things this dialog asks of it: words, and the fact that a
+ * dialog has closed (spec 13.3).
+ *
+ * Both land in one list, so a test can assert the ORDER between them — which is the whole
+ * of the rule, since a baseline established after the sentence is a baseline for nothing.
+ */
 class FakeAnnouncer implements AnnouncerView {
   announcements: string[] = [];
+  /** Everything in the order it happened: announcements, and the wordless one. */
+  said: string[] = [];
   announce(text: string): void {
     this.announcements.push(text);
+    this.said.push(text);
+  }
+  documentReturned(): void {
+    this.said.push('document returned');
   }
 }
 
@@ -222,6 +235,7 @@ function make(): ConnectDialog {
     },
     connecting,
     help,
+    () => announcer.announce('connected'),
   );
 }
 
@@ -258,6 +272,18 @@ function selected(): string | undefined {
     document.querySelector<HTMLElement>('[role="option"][aria-selected="true"]')
       ?.textContent ?? undefined
   );
+}
+
+/**
+ * Let an attempt run all the way to its end.
+ *
+ * It is one await deeper than the attempt itself since 13.3: nothing is closed until the
+ * announcer says the words it was given have reached the reader.
+ */
+async function attemptEnds(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
 }
 
 function press(key: string): void {
@@ -423,7 +449,7 @@ describe('connecting (decision 4)', () => {
     await dialog.open();
 
     byId('connect-start').click();
-    await Promise.resolve();
+    await attemptEnds();
 
     expect(attempted).toEqual([{ profile: 'Shell', kind: 'Cmd' }]);
     expect(byId<HTMLDialogElement>('connect-dialog').open).toBe(false);
@@ -1083,6 +1109,44 @@ describe('the connecting dialog', () => {
     await Promise.resolve();
 
     expect(connecting.shown).toEqual([]);
+  });
+});
+
+/**
+ * **The far end is named after the dialogs are gone** (roadmap 13.3 and 23.13).
+ *
+ * Said any earlier, the sentence went into a live region that was about to be taken away —
+ * the connecting dialog's — or into the document's in the same millisecond that region came
+ * back, and a region that has just come back eats the first change made to it. Six times
+ * across five NVDA passes a listener heard the shell's prompt and never what they had
+ * connected to.
+ *
+ * So this dialog owns the moment, not the words: close, say the document is back, then let
+ * whoever owns the sentence say it.
+ */
+describe('naming the far end afterwards', () => {
+  it('closes, re-establishes the baseline, and only then says where the listener is', async () => {
+    await dialog.open();
+
+    press('Enter');
+    await attemptEnds();
+
+    expect(byId<HTMLDialogElement>('connect-dialog').open).toBe(false);
+    expect(connecting.hidden).toBe(1);
+    expect(announcer.said).toEqual(['document returned', 'connected']);
+  });
+
+  /** Nothing of the sort on a refusal: this dialog stays open, so the document has not come
+   * back and there is no connection to name. */
+  it('says nothing of the kind when the attempt is refused', async () => {
+    succeeds = false;
+    await dialog.open();
+
+    press('Enter');
+    await attemptEnds();
+
+    expect(byId<HTMLDialogElement>('connect-dialog').open).toBe(true);
+    expect(announcer.said).toEqual([]);
   });
 });
 

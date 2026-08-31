@@ -11,6 +11,7 @@ import { AnnouncerDom } from '../../src/adapters/announcer';
 // Must match the adapter constants; the tests advance past them.
 const CLEAR_AFTER_MS = 1500;
 const DRAIN_SPACING_MS = 250;
+const SPOKEN_MARGIN_MS = 100;
 
 function makeRegion(): HTMLElement {
   const region = document.createElement('div');
@@ -196,6 +197,134 @@ describe('AnnouncerDom', () => {
     vi.advanceTimersByTime(CLEAR_AFTER_MS);
     expect(region.childNodes).toHaveLength(0);
     expect(region.textContent).toBe('');
+  });
+});
+
+/**
+ * **A region that has just come back eats the first thing said into it** (roadmap 13.3 and
+ * 23.13).
+ *
+ * While a modal dialog is open the rest of the document is inert; when it closes the region
+ * returns to the accessibility tree with no history the reader can compare a change against,
+ * and the first change carrying text is lost. Measured across five NVDA passes as a sentence
+ * naming the far end that a listener never heard.
+ *
+ * So a caller that has just closed a dialog says so, and this adapter spends a wordless
+ * change on re-establishing the baseline.
+ */
+describe('coming back from a dialog', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    document.body.replaceChildren();
+  });
+
+  it('puts something in the region before the next announcement is made', () => {
+    const region = makeRegion();
+    const announcer = new AnnouncerDom(region, 0);
+
+    announcer.documentReturned();
+    announcer.announce('connected to Command Prompt');
+
+    idleDrainTurn();
+    expect(region.children).toHaveLength(1);
+
+    spacedDrainTurn();
+    expect(region.children).toHaveLength(2);
+    expect(region.children[1]?.textContent).toBe('connected to Command Prompt');
+  });
+
+  /** **And it is not an empty node**, which is the whole trick. An empty node is not a text
+   * change, so the reader has nothing to take and the announcement after it is still the
+   * first one — tried on the real sentence in the real order on 2026-08-30, and it failed. */
+  it('carries text, so the reader has a change to lose', () => {
+    const region = makeRegion();
+    const announcer = new AnnouncerDom(region, 0);
+
+    announcer.documentReturned();
+    idleDrainTurn();
+
+    expect(region.children[0]?.textContent).not.toBe('');
+  });
+
+  /** **And no words**, or a listener hears it. A full stop worked and was audible — the
+   * synthesizer said "ponto" before every connection — so what goes in is a zero-width
+   * space, which the same listener heard nothing of. */
+  it('says nothing a listener can hear', () => {
+    const region = makeRegion();
+    const announcer = new AnnouncerDom(region, 0);
+
+    announcer.documentReturned();
+    idleDrainTurn();
+
+    expect(region.children[0]?.textContent).toBe('\u200b');
+  });
+
+  /** It waits its turn like anything else, so the announcement behind it is not delayed by
+   * more than the gap that keeps the two out of one mutation batch. */
+  it('is one drain, not a special case', () => {
+    const region = makeRegion();
+    const announcer = new AnnouncerDom(region, 0);
+
+    announcer.documentReturned();
+    announcer.announce('connected to Command Prompt');
+    idleDrainTurn();
+
+    vi.advanceTimersByTime(DRAIN_SPACING_MS - 1);
+    expect(region.children).toHaveLength(1);
+    vi.advanceTimersByTime(1);
+    expect(region.children).toHaveLength(2);
+  });
+});
+
+/**
+ * **Each region is cleared on its own countdown** (roadmap 13.3).
+ *
+ * One timer could only ever clear one of them, and the drain that starts a countdown is not
+ * always the drain that ends it: an announcement into the document's region cancelled the
+ * one belonging to a dialog's, so the dialog kept its last words — and spoke them when it
+ * next opened. Measured 2026-08-30, where connecting to Command Prompt was greeted with
+ * "connected to WSL: Ubuntu, bash".
+ */
+describe('clearing more than one region', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    document.body.replaceChildren();
+  });
+
+  it('does not leave a dialog holding its last words when something else is said', () => {
+    const document_region = makeRegion();
+    const dialog = document.createElement('dialog');
+    dialog.setAttribute('open', '');
+    const inside = document.createElement('div');
+    inside.setAttribute('data-live-region', '');
+    dialog.append(inside);
+    document.body.append(dialog);
+    const announcer = new AnnouncerDom(document_region, 0);
+
+    // Said into the dialog, which is open.
+    announcer.announce('Starting Ubuntu.');
+    idleDrainTurn();
+    expect(inside.textContent).toBe('Starting Ubuntu.');
+
+    // The dialog closes, and something is said into the document a moment later — which is
+    // what used to cancel the dialog's countdown.
+    dialog.removeAttribute('open');
+    vi.advanceTimersByTime(DRAIN_SPACING_MS);
+    announcer.announce('C:\\Users\\marlo>');
+    idleDrainTurn();
+    expect(document_region.textContent).toBe('C:\\Users\\marlo>');
+
+    // Both are emptied, each on its own countdown, and the dialog has nothing left to say
+    // the next time it opens.
+    vi.advanceTimersByTime(CLEAR_AFTER_MS * 2);
+    expect(inside.textContent).toBe('');
+    expect(document_region.textContent).toBe('');
   });
 });
 

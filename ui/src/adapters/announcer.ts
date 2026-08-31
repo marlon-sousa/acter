@@ -33,6 +33,14 @@
 // panel, which is precisely the silent-change trap that announcement exists to prevent.
 // Any dialog that wants to be heard therefore carries `data-live-region`, and drains go
 // there while it is open.
+//
+// **A region that has just come back eats the first thing said into it.** When the dialog
+// above closes, its document returns to the accessibility tree with no history the reader can
+// compare a change against, and the first change carrying text is lost — which is how the
+// sentence naming the far end a connection reached went missing on six occasions across five
+// NVDA passes (roadmap 13.3 and 23.13). `documentReturned` is how a caller says the region
+// is back, so this adapter can spend a wordless change on re-establishing that baseline; see
+// SILENT_MARKER for what it is and why it is not empty.
 
 import type { AnnouncerView } from '../ports/announcer_view';
 
@@ -65,6 +73,22 @@ const CLEAR_AFTER_MS = 1500;
 // coarser than this gap: in the `burst` scenario the queue never reached depth 2.
 const DRAIN_SPACING_MS = 250;
 
+// What is put into the region to re-establish its baseline, so the announcement after it is
+// not the first change and is therefore not the one that is lost.
+//
+// **It has to carry text, and it has to say nothing.** Those pull against each other, and
+// both halves were measured on 2026-08-30 through the screen-reader bridge (NVDA 2026.1.1):
+//
+// - An EMPTY node does not work, because an empty node is not a text change at all: tried on
+//   the real sentence in the real order, the sentence was still lost. Do not revive it.
+// - A full stop works — ten connections out of ten spoke their sentence with one in front —
+//   and is AUDIBLE: in live capture the synthesizer said "ponto" before every connection,
+//   which is this machine's punctuation level doing exactly what it should.
+//
+// A zero-width space is the one that is both: five connections out of five spoke their
+// sentence, and the listener at the keyboard reported hearing nothing at all before it.
+const SILENT_MARKER = '\u200b';
+
 // How long the first announcement of a session waits before it is put into the region.
 //
 // **A live region changed while the page is still loading is not announced.** The reader is
@@ -85,7 +109,19 @@ export class AnnouncerDom implements AnnouncerView {
   private readonly queue: string[] = [];
   private drainScheduled = false;
   private lastDrainAt = Number.NEGATIVE_INFINITY;
-  private clearTimer: ReturnType<typeof setTimeout> | undefined;
+  /**
+   * The idle countdown for each region that has been written to, kept per region.
+   *
+   * **One timer could only ever clear one of them**, and the drain that started it is not
+   * always the drain that ends it: an announcement into the document's region cancelled the
+   * countdown belonging to a dialog's, so the dialog kept its last words for the rest of the
+   * session — and spoke them when it next opened. Measured 2026-08-30, where a connection to
+   * Command Prompt was greeted with "connected to WSL: Ubuntu, bash".
+   */
+  private readonly clearTimers = new Map<
+    HTMLElement,
+    ReturnType<typeof setTimeout>
+  >();
   /** The earliest moment anything may be put into the region. See STARTUP_HOLD_MS. */
   private readonly openAt: number;
 
@@ -105,6 +141,19 @@ export class AnnouncerDom implements AnnouncerView {
   announce(text: string): void {
     this.queue.push(text);
     this.scheduleDrain();
+  }
+
+  /**
+   * Spend a wordless change on the region, so the next announcement is not the first one
+   * after the document came back — and is therefore not the one that is lost.
+   *
+   * It goes through the queue like anything else, which is what makes it work: the drain
+   * spacing keeps it out of the next announcement's mutation batch, so the reader sees two
+   * changes rather than one. A caller that closes a dialog and then announces something needs
+   * no other knowledge than that it closed a dialog.
+   */
+  documentReturned(): void {
+    this.announce(SILENT_MARKER);
   }
 
   // The spacing is a gap BETWEEN announcements, not a delay before each one: an
@@ -165,14 +214,17 @@ export class AnnouncerDom implements AnnouncerView {
     region.append(line);
     this.lastDrainAt = Date.now();
 
-    // Restart the idle countdown on every drained announcement, so a burst accumulates
-    // and is cleared only once it has settled — never out from under its own latest
-    // entry. The region cleared is the one written to, not whichever is current when the
-    // timer fires: a dialog that closes in between must not leave its last words behind.
-    clearTimeout(this.clearTimer);
-    this.clearTimer = setTimeout(() => {
-      region.replaceChildren();
-    }, CLEAR_AFTER_MS);
+    // Restart the idle countdown for THIS region, so a burst accumulates and is cleared only
+    // once it has settled — never out from under its own latest entry, and never because
+    // something was said somewhere else (see clearTimers).
+    clearTimeout(this.clearTimers.get(region));
+    this.clearTimers.set(
+      region,
+      setTimeout(() => {
+        region.replaceChildren();
+        this.clearTimers.delete(region);
+      }, CLEAR_AFTER_MS),
+    );
 
     if (this.queue.length > 0) {
       this.scheduleDrain();

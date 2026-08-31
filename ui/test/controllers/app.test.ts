@@ -153,8 +153,13 @@ class FakeBuffer implements BufferView {
 
 class FakeAnnouncer implements AnnouncerView {
   announcements: string[] = [];
+  /** How many times a caller said a dialog had closed (spec 13.3). */
+  returns = 0;
   announce(text: string): void {
     this.announcements.push(text);
+  }
+  documentReturned(): void {
+    this.returns += 1;
   }
 }
 
@@ -344,6 +349,7 @@ describe('what the window says about its connection (spec A9)', () => {
     connect.note = 'bash, which Acter cannot set up yet.';
 
     await controller.connectTo(ubuntu);
+    controller.announceConnection();
 
     const said = 'connected to WSL: Ubuntu, bash, which Acter cannot set up yet.';
     expect(window.statuses).toContain(said);
@@ -509,6 +515,7 @@ describe('event rendering (decision 2)', () => {
       announce: () => {
         order.push('announce');
       },
+      documentReturned: () => {},
     };
     const controller = new AppController(
       backend,
@@ -1152,10 +1159,39 @@ describe('connecting to a profile (spec B7)', () => {
     const { backend, window, announcer, controller } = await makeApp();
 
     await controller.connectTo(ubuntu);
+    controller.announceConnection();
 
     expect(backend.attachedTo).toEqual([1, 2]);
     expect(window.titles).toEqual(['WSL: Ubuntu']);
     expect(announcer.announcements).toEqual([connectedMessage('WSL: Ubuntu')]);
+  });
+
+  /**
+   * **Connecting does not say where you are; `announceConnection` does** (spec 13.3).
+   *
+   * Said while the connect dialogs were still up, the sentence went into a live region that
+   * was about to be taken away — or into the document's in the same millisecond it came back
+   * — and either way it was never spoken. So the words stay here and the moment belongs to
+   * whoever closed the dialog.
+   */
+  it('says nothing at the moment it connects, and says it when asked', async () => {
+    const { announcer, controller } = await makeApp();
+
+    await controller.connectTo(ubuntu);
+    expect(announcer.announcements).toEqual([]);
+
+    expect(controller.announceConnection()).toBe(true);
+    expect(announcer.announcements).toEqual([connectedMessage('WSL: Ubuntu')]);
+  });
+
+  /** And there is nothing to say about a window connected to nothing. */
+  it('says nothing when there is no connection to name', async () => {
+    const connect = new FakeConnect();
+    connect.atStartup = null;
+    const { announcer, controller } = await makeApp(connect);
+
+    expect(controller.announceConnection()).toBe(false);
+    expect(announcer.announcements).toEqual([]);
   });
 
   /**
@@ -1172,6 +1208,7 @@ describe('connecting to a profile (spec B7)', () => {
     connect.note = 'zsh, which Acter cannot set up yet.';
 
     await controller.connectTo(ubuntu);
+    controller.announceConnection();
 
     expect(announcer.announcements).toEqual([
       'connected to WSL: Ubuntu, zsh, which Acter cannot set up yet.',
