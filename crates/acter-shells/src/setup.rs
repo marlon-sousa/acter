@@ -246,6 +246,93 @@ pub(crate) const SH: &str = concat!(
     "fi"
 );
 
+/// The zsh program, as one command line.
+///
+/// **Shorter than bash's, and every line it does not have is a measurement** (roadmap B5.8,
+/// measured 2026-08-31 against zsh 5.9 on Debian bookworm, interactive on a pseudoconsole
+/// through `script -qec`, one scenario directory per hostile `.zshrc`). zsh reaches the same
+/// [`ShellMarkers::Full`] bash does with no status variable, no captured hook and no guard
+/// against repeated firing, because it has three things bash does not.
+///
+/// **The verdict is a prompt escape, so no hook ordering can steal it.** `%?` is expanded by
+/// zsh every time it draws the prompt and carries the status of the command that just
+/// finished — the same trick [`SH`] plays with `$?`, except that zsh snapshots it *before*
+/// precmd hooks run. That is the whole of 23.11's fourth failure made unreachable rather than
+/// merely defended against: measured against a `.zshrc` whose own hook runs a command and
+/// returns success, `(exit 7)` still announced `D;7`. bash needed `__acter_status=$?` first in
+/// a sandwich to get the same answer; zsh needs nothing, and so nothing here can be prepended
+/// in front of.
+///
+/// **`preexec` is a real hook where bash has only a `DEBUG` trap**, and it fires exactly once
+/// per submitted line. Measured: `true | false`, `for i in 1 2 3; do true; done` and
+/// `true; (exit 7)` each produced one `C`. So there is no `__acter_seen` guard here, because
+/// there is nothing to guard against — bash's guard exists only because its trap fires per
+/// simple command.
+///
+/// **The hooks are arrays, so the user's own are appended to rather than captured.**
+/// `precmd_functions+=(...)` leaves every hook the user already had in place and runs ours
+/// last, which is exactly where a re-wrap belongs: after anything that rebuilt the prompt.
+/// bash's `PROMPT_COMMAND` is one string with two ends anybody can glue onto, which is what
+/// the sandwich exists to close; an array has no such seam.
+///
+/// # What was measured against it
+///
+/// Five `.zshrc` scenarios, each with the setup line submitted into a live session and one
+/// command that succeeds and one that exits 7, so a wrong verdict is visible rather than
+/// inferred. All five produced the full `A B C D` cycle with `D;0` and `D;7` in the right
+/// places: a plain prompt; a `precmd` **function** that runs a command; a `precmd` function
+/// that **rebuilds** `PROMPT` from scratch; a hook already in `precmd_functions` before the
+/// setup ran, so it runs first; and a `PROMPT_SUBST` prompt built from a command
+/// substitution.
+///
+/// **The re-wrap guard is what makes the rebuild cases work**, and it is bash's guard for
+/// bash's reason: it asks whether *this* prompt carries the marker rather than remembering a
+/// boolean, so a prompt rebuilt at any later moment costs one cycle instead of the session.
+///
+/// **The markers cost no columns, measured rather than assumed** (roadmap 23.14 is what makes
+/// this worth measuring). On an 80-column pseudoconsole with a prompt four columns wide, the
+/// echo of a typed line began a second row at exactly the same length marked and unmarked.
+/// zsh's `%{` and `%}` are honoured, which busybox's `PS1` has no equivalent of and dash would
+/// draw literally — the third shell, the third answer, and none of them guessable from the
+/// other two.
+///
+/// It prints its own `C` for [`BASH`]'s reason: without it the tracker never learns the block
+/// is open, so the `D` the very next prompt carries would be ignored and the session would
+/// report "running" from the moment it connected. It needs no `__acter_started` beside it,
+/// because the `D` lives in the prompt rather than in a hook and the first prompt after the
+/// setup therefore closes the setup itself — measured, `D;0`.
+///
+/// # What is not claimed
+///
+/// **A hook added *after* the setup runs is not re-wrapped by us**, because ours is already in
+/// the array and cannot move behind it. That is the same shape as somebody re-sourcing
+/// `~/.bashrc` under bash and it degrades the same honest way — markers stop, the grace period
+/// expires, the listener is told.
+///
+/// **Powerlevel10k's instant prompt is unmeasured.** It redraws through `zle` rather than
+/// through `precmd`, which is a different mechanism from any of the five above; it is recorded
+/// here so a session where it misbehaves is diagnosed rather than rediscovered.
+pub(crate) const ZSH: &str = concat!(
+    // Output starts here, for this command, said by the command itself. `print -n` rather
+    // than `printf`: it is zsh's own builtin and `$'...'` is zsh's own quoting, and a setup
+    // is written in the language of the shell it runs in (spec B9.5, decision 8).
+    r"print -n $'\e]133;C\a'; ",
+    // The two halves of the wrap, built once here rather than at every prompt. `%?` is left
+    // in the string for zsh to expand each time it draws — writing the status in at setup
+    // time would freeze this command's own status into the prompt forever.
+    r"__acter_pre=$'%{\e]133;D;%?\a\e]133;A\a%}'; ",
+    r"__acter_post=$'%{\e]133;B\a%}'; ",
+    r"__acter_output() { print -n $'\e]133;C\a' }; ",
+    // The guard is a test of the prompt's own contents, never a one-shot boolean, so a
+    // prompt rebuilt by a theme at any later moment is simply wrapped again next cycle.
+    r#"__acter_prompt() { [[ $PROMPT == *'133;A'* ]] || PROMPT="$__acter_pre$PROMPT$__acter_post" }; "#,
+    // `-ga` so a session that has neither array yet gets them, and one that has them keeps
+    // every hook already in them.
+    "typeset -ga precmd_functions preexec_functions; ",
+    "precmd_functions+=(__acter_prompt); ",
+    "preexec_functions+=(__acter_output)"
+);
+
 /// What Acter runs inside a session at this far end, by the name the far end gave.
 ///
 /// `None` is two situations and they are alike from here: a far end that answered nothing, and
@@ -255,10 +342,13 @@ pub(crate) const SH: &str = concat!(
 pub fn setup_for(shell: Option<&str>) -> Option<SessionSetup> {
     let (line, markers) = match shell? {
         "bash" => (BASH, ShellMarkers::Full),
+        "zsh" => (ZSH, ShellMarkers::Full),
         "sh" | "dash" => (SH, ShellMarkers::PromptCommandLineAndExitCode),
-        // Named and nothing more. `zsh` and `fish` both have prompt hooks — `precmd` and
-        // `fish_prompt` — and each becomes one small additive entry, measured the way bash's
-        // was. Guessing at one from the shape of bash's is exactly what B5.5 forbids.
+        // Named and nothing more. `fish` has a prompt hook of its own — `fish_prompt` — and
+        // becomes one small additive entry, measured the way bash's and zsh's were. Guessing
+        // at one from the shape of another is exactly what B5.5 forbids, and zsh is why:
+        // its line is not bash's with a substitution, it is shorter, and every line it drops
+        // was dropped because a measurement said it could be.
         _ => return None,
     };
     Some(SessionSetup {
@@ -308,6 +398,10 @@ mod tests {
         assert!(
             SH.starts_with(r"printf '\033]133;C\007'; "),
             "in every shell, for the same reason: {SH}"
+        );
+        assert!(
+            ZSH.starts_with(r"print -n $'\e]133;C\a'; "),
+            "in zsh's own spelling, and the same first statement: {ZSH}"
         );
     }
 
@@ -532,7 +626,7 @@ mod tests {
     /// user has to live in after Acter closes.
     #[test]
     fn no_setup_writes_anything_into_the_far_end() {
-        for line in [BASH, SH] {
+        for line in [BASH, ZSH, SH] {
             for forbidden in [">", ">>", "rcfile", "init-file", "source ", "tee ", "mkdir"] {
                 assert!(
                     !line.contains(forbidden),
@@ -548,6 +642,14 @@ mod tests {
         let bash = setup_for(Some("bash")).expect("bash has a measured setup");
         assert_eq!(bash.line, BASH);
         assert_eq!(bash.markers, ShellMarkers::Full);
+
+        let zsh = setup_for(Some("zsh")).expect("zsh has a measured setup");
+        assert_eq!(zsh.line, ZSH);
+        assert_eq!(
+            zsh.markers,
+            ShellMarkers::Full,
+            "zsh reaches the whole cycle bash does, by a shorter route (B5.8)"
+        );
 
         let sh = setup_for(Some("sh")).expect("sh has a measured setup");
         assert_eq!(sh.line, SH);
@@ -566,7 +668,7 @@ mod tests {
     /// change of mechanism intact.
     #[test]
     fn a_shell_nobody_measured_is_named_without_being_set_up() {
-        for named in ["zsh", "fish", "nu", "ksh", "Bash", "bash5", "csh"] {
+        for named in ["fish", "nu", "ksh", "Bash", "bash5", "csh"] {
             assert_eq!(
                 setup_for(Some(named)),
                 None,
@@ -585,9 +687,118 @@ mod tests {
     /// would be two commands, the second of which nobody authorised and nothing heads.
     #[test]
     fn every_setup_is_a_single_command_line() {
-        for line in [BASH, SH] {
+        for line in [BASH, ZSH, SH] {
             assert!(!line.contains('\n'), "a setup is one submission: {line}");
             assert!(!line.contains('\r'), "a setup is one submission: {line}");
+        }
+    }
+
+    /// The bytes matter more than the string does, and zsh's spelling is its own: `$'...'`
+    /// turns `\e` and `\a` into the real `ESC` and `BEL`, which is how a marker written here
+    /// becomes one a sniffer can read.
+    #[test]
+    fn every_marker_of_the_full_cycle_is_in_the_zsh_program() {
+        assert!(ZSH.contains(r"\e]133;A\a"), "the prompt region opens");
+        assert!(ZSH.contains(r"\e]133;B\a"), "the command line begins");
+        assert!(
+            ZSH.contains(r"\e]133;C\a"),
+            "output starts where preexec fires"
+        );
+        assert!(
+            ZSH.contains(r"\e]133;D;%?\a"),
+            "and the command ends with a code rather than without one: {ZSH}"
+        );
+    }
+
+    /// **23.11's fourth failure, made unreachable rather than defended against.** bash needed
+    /// `__acter_status=$?` as the first statement of a sandwich, because anything running
+    /// before it would hand us its own status and Acter would announce a success for a command
+    /// that exited 7. zsh expands `%?` itself when it draws the prompt, from a status it
+    /// snapshots before any hook runs — measured 2026-08-31 against a `.zshrc` whose own hook
+    /// runs a command and returns success, where `(exit 7)` still announced `D;7`.
+    ///
+    /// So the assertion is an absence: there is no status variable here to be stolen.
+    #[test]
+    fn the_zsh_verdict_is_a_prompt_escape_rather_than_a_captured_variable() {
+        assert!(
+            ZSH.contains("133;D;%?"),
+            "the shell fills the number in at every prompt: {ZSH}"
+        );
+        assert!(
+            !ZSH.contains("__acter_status"),
+            "nothing captures a status here, so nothing can capture the wrong one: {ZSH}"
+        );
+    }
+
+    /// **`preexec` fires once per submitted line, so there is nothing to guard.** Measured
+    /// 2026-08-31: `true | false`, `for i in 1 2 3; do true; done` and `true; (exit 7)` each
+    /// produced exactly one `C`. bash's `__acter_seen` exists only because a `DEBUG` trap fires
+    /// per simple command; carrying it here would be copying a defence against a defect this
+    /// shell does not have.
+    #[test]
+    fn the_zsh_program_carries_no_guard_bash_needed_and_zsh_does_not() {
+        assert!(
+            !ZSH.contains("__acter_seen"),
+            "preexec fires once a line, so nothing is deduplicated: {ZSH}"
+        );
+        assert!(
+            !ZSH.contains("__acter_started"),
+            "the D lives in the prompt, so the first prompt closes the setup itself: {ZSH}"
+        );
+    }
+
+    /// **The array is the seam bash's string does not have.** `precmd_functions+=(...)` keeps
+    /// every hook the user already had and runs ours last, which is where a re-wrap belongs.
+    /// An assignment here would delete a theme's hooks in front of somebody who cannot see
+    /// that they are gone.
+    #[test]
+    fn the_zsh_program_appends_to_the_hook_arrays_and_never_assigns_them() {
+        assert!(ZSH.contains("precmd_functions+=(__acter_prompt)"));
+        assert!(ZSH.contains("preexec_functions+=(__acter_output)"));
+        assert!(
+            !ZSH.contains("precmd_functions=("),
+            "an assignment drops the user's own hooks: {ZSH}"
+        );
+        assert!(
+            !ZSH.contains("preexec_functions=("),
+            "an assignment drops the user's own hooks: {ZSH}"
+        );
+        assert!(
+            ZSH.contains("typeset -ga precmd_functions preexec_functions"),
+            "and a session with neither array yet gets them: {ZSH}"
+        );
+    }
+
+    /// **The `CDCDC` failure in zsh's dialect, pinned.** The guard asks whether this prompt
+    /// carries the marker, so a prompt rebuilt by a theme at any later moment costs one cycle
+    /// rather than the session. Measured against two rebuild shapes — a `precmd` function that
+    /// reassigns `PROMPT`, and a hook already in the array doing the same — both kept the full
+    /// cycle.
+    #[test]
+    fn the_zsh_prompt_guard_tests_the_prompt_rather_than_remembering_a_boolean() {
+        assert!(
+            ZSH.contains("[[ $PROMPT == *'133;A'* ]]"),
+            "the guard asks whether this prompt carries the marker: {ZSH}"
+        );
+    }
+
+    /// The user's prompt is wrapped and kept, never rebuilt, and the markers around it are
+    /// declared non-printing. **Measured rather than assumed** (roadmap 23.14 is why): on an
+    /// 80-column pseudoconsole with a four-column prompt, the echo of a typed line began a
+    /// second row at exactly the same length marked and unmarked, so `%{` and `%}` are
+    /// honoured and the markers cost nothing. busybox needs `\[` for this and dash must not be
+    /// given it — three shells, three answers, none of them guessable from the others.
+    #[test]
+    fn the_users_own_zsh_prompt_is_kept_between_markers_declared_non_printing() {
+        assert!(
+            ZSH.contains(r#"PROMPT="$__acter_pre$PROMPT$__acter_post""#),
+            "the existing PROMPT sits between the two halves: {ZSH}"
+        );
+        for half in [r"$'%{\e]133;D;%?\a\e]133;A\a%}'", r"$'%{\e]133;B\a%}'"] {
+            assert!(
+                ZSH.contains(half),
+                "each half opens and closes zsh's non-printing brackets: {half}"
+            );
         }
     }
 }

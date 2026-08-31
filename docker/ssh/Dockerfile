@@ -24,11 +24,16 @@ FROM debian:bookworm-slim
 # measured against something that genuinely runs for a while (spec B9's definition of done:
 # "interrupt and resize cross the connection"), rather than against a command that has
 # finished before the signal arrives.
+#
+# **`zsh` is here for B5.8**, which measures a setup for it. A second real shell at the far
+# end is what turns "one mechanism for every shell" from a claim into a measurement: zsh's
+# setup is not bash's with a substitution, and only a far end that runs it can show that.
 RUN apt-get update \
     && apt-get install --no-install-recommends --yes \
         openssh-server \
         procps \
         iputils-ping \
+        zsh \
     && rm -rf /var/lib/apt/lists/*
 
 # sshd refuses to start without this directory, and the package does not always create it.
@@ -69,6 +74,32 @@ RUN useradd --create-home --shell /bin/bash "${SSH_USER}" \
 ARG DASH_USER=dashuser
 RUN useradd --create-home --shell /bin/dash "${DASH_USER}" \
     && echo "${DASH_USER}:${SSH_PASSWORD}" | chpasswd
+
+# **A third account whose login shell is zsh, and it is what B5.8 is measured against.**
+#
+# zsh is the second shell with a measured setup, and the reason it needed one is that its
+# setup is not bash's with a substitution: the verdict is a prompt escape the shell expands
+# for itself, the `C` comes from a real `preexec` hook rather than a `DEBUG` trap, and the
+# user's own hooks are appended to in an array rather than captured out of a string. None of
+# that is visible without a far end that actually runs it.
+#
+# **The `.zshrc` is here because of what happened without one, measured 2026-08-31.** An
+# account with no zsh startup files at all does not get a prompt: it gets
+# `zsh-newuser-install`, an interactive menu that reads a single keypress. Acter's setup line
+# went out into that menu, its leading `p` was consumed as the answer, the menu aborted, and
+# the remainder reached the shell as `rint -n ...` — `zsh: command not found`. The session
+# still ended up integrated, because everything after the first `;` ran, which is a piece of
+# luck and not a design. That case is real and belongs to a listener, so it is filed as a
+# roadmap entry rather than hidden; what it is not is *this* account's subject, and a rig
+# that meets a first-run wizard measures the wizard.
+#
+# So this account has the file every account that has ever run zsh has, and it does the one
+# thing Debian's own `zsh-newuser-install` offers to do for you.
+ARG ZSH_USER=zshuser
+RUN useradd --create-home --shell /bin/zsh "${ZSH_USER}" \
+    && echo "${ZSH_USER}:${SSH_PASSWORD}" | chpasswd \
+    && printf '%s\n' '# Left minimal on purpose: this account exists to run zsh, not a theme.' > "/home/${ZSH_USER}/.zshrc" \
+    && chown "${ZSH_USER}:${ZSH_USER}" "/home/${ZSH_USER}/.zshrc"
 
 # A public key baked in at build time, for testing key authentication without mounting
 # anything. Optional: left empty, only password authentication works.

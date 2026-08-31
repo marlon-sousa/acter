@@ -3013,6 +3013,82 @@ thing to pick up once the adapters land, not merely the next number.
     agreed in conversation rather than slipped into an implementation PR. So the measurement
     landed and the change did not.
 
+
+23.16. **Done** — B5.8, zsh is a shell Acter sets up. Spec:
+    [b5.8-zsh-is-a-shell-acter-sets-up.md](specs/b5.8-zsh-is-a-shell-acter-sets-up.md).
+    Done (PR #52, 2026-08-31). **Measured 2026-08-31** against zsh 5.9 on Debian bookworm,
+    interactive on a pseudoconsole through `script -qec` for the hostile-rcfile scenarios,
+    and over a real `sshd` in `docker/ssh` for everything that has to cross a connection.
+
+    **What a listener gets.** A zsh far end was named and left alone: no blocks, no headings,
+    no exit codes, and a sentence saying Acter could not set it up. It is now set up like
+    bash's — a heading per command, a verdict per command, and the grace period never fires.
+
+    **The finding worth keeping is how much shorter zsh's line is**, because every line it
+    does not have was dropped against a measurement rather than by taste. zsh reaches the same
+    `ShellMarkers::Full` with no status variable, no firing guard, no captured hook and no
+    started flag:
+
+    - **The verdict is `%?`, a prompt escape zsh expands for itself** from a status it
+      snapshots before hooks run. That makes 23.11's fourth failure — the one where Acter
+      announced a success for a command that exited 7 — unreachable rather than defended
+      against. Measured against a `.zshrc` whose own hook runs a command and returns success,
+      `(exit 7)` still announced `D;7`.
+    - **`preexec` is a real hook and fires once per submitted line.** `true | false`,
+      `for i in 1 2 3; do true; done` and `true; (exit 7)` each produced exactly one `C`.
+      bash's guard exists only because a `DEBUG` trap fires per simple command.
+    - **`precmd_functions` is an array**, so the user's hooks are appended to rather than
+      captured out of a string. There is no seam to prepend in front of, which is what bash's
+      sandwich exists to close.
+
+    All five `.zshrc` shapes measured produced the full cycle with `D;0` and `D;7` in the
+    right places: a plain prompt, a `precmd` function that runs a command, a `precmd` function
+    that rebuilds `PROMPT`, a hook already in the array so it runs first, and a `PROMPT_SUBST`
+    prompt built from a command substitution.
+
+    **The markers cost no columns**, measured because 23.14 is why that is worth measuring: on
+    an 80-column pseudoconsole with a four-column prompt, the echo of a typed line began a
+    second row at exactly the same length marked and unmarked. zsh honours `%{` and `%}`;
+    busybox has no equivalent and dash draws them literally. Three shells, three answers.
+
+    **`0x04` ends a zsh session over SSH**, asked rather than inherited from bash, because
+    B5.2 measured and disproved both obvious candidates for PowerShell.
+
+    **What it did not settle.** The WSL cell is routing rather than a measurement — the setup
+    is keyed by the shell's name, so a zsh distribution gets this line, but no zsh is installed
+    in any distribution on this machine and the same shell over a different transport is a
+    different cell of the matrix. Powerlevel10k's instant prompt redraws through `zle` rather
+    than `precmd` and is unmeasured. And a hook added *after* the setup runs is not re-wrapped,
+    which is the same shape as re-sourcing `~/.bashrc` under bash and degrades the same
+    honest way.
+
+23.17. A fresh zsh account meets an interactive wizard, and Acter's setup line answers it.
+    Spec: none yet → specify first. **Found 2026-08-31** in B5.8's own pass, against the SSH
+    rig before its zsh account had a `.zshrc`.
+
+    **What happens.** An account with no zsh startup files at all does not get a prompt. It
+    gets `zsh-newuser-install`, which draws a menu and waits on a single keypress: *"Type one
+    of the keys in parentheses"*. Acter's setup line went into that menu, its leading `p` was
+    taken as the answer, the menu aborted, and the remainder reached the shell as
+    `rint -n ...` — `zsh: command not found: rint`.
+
+    **It survived, and that is the part to be uncomfortable about.** Every statement after the
+    first `;` still ran, so the session ended up integrated anyway: the prompt was wrapped and
+    a command that exited 7 was reported correctly. Nothing about that was designed, and a
+    setup line that began with a different statement would have failed silently instead.
+
+    **What a listener meets is worse than what the code meets**, and it is the real subject:
+    the wizard's text is read as output, the session appears to be at a prompt when it is
+    inside a menu, and a line the user types is answering a question they were not told they
+    were being asked. This is the same shape as 23.7's "a session that is starting says
+    nothing while it starts", met from the other end.
+
+    **Not fixed in B5.8**, and deliberately: it is a property of a far end rather than of
+    zsh's setup, the fix is not "make the setup line survive losing a character", and the
+    honest options — recognise the wizard and say so, or wait for a prompt that never comes
+    and let the grace period speak — are a spec conversation rather than a patch. B5.8's rig
+    account was given the `.zshrc` every account that has ever run zsh has, so that entry
+    measures its own subject rather than this one.
 23.13. **Done** — the connection sentence is sometimes not announced. **Fixed in lane 1 as
     13.3** and closed by reference: it is one defect filed twice, and the fix is entirely
     frontend. Spec:
@@ -3336,6 +3412,34 @@ thing to pick up once the adapters land, not merely the next number.
     session's first prompt is not ordinary output and can be flushed when `PromptDrawn`
     fires rather than on its own clock.
 
+
+27.7. At a bash far end, nothing is read aloud when the session connects. Spec: none yet →
+    specify first. **Found 2026-08-31** while running the SSH rig suite for B5.8, and it is
+    **not that entry's** — it reproduces on `main` at 5531f2c with B5.8's changes stashed, so
+    it is recorded here rather than fixed there.
+
+    `ssh_rig.rs`'s `what_a_session_says_when_it_has_just_connected` asserts what 27.4 and B6.2
+    were about: that the far end's own banner and first prompt reach a listener rather than
+    being discarded. It fails. Six seconds after connecting as the rig's bash account, the
+    recorder holds the banner and the prompt as `Output`, a `PromptDrawn`, and **no `Announce`
+    of any kind** — so the text is in the buffer and nothing was said.
+
+    **The contrast is what makes it worth filing.** B5.8's accessibility pass, against the same
+    rig over the same transport but as the zsh account, heard the prompt announced: "connected
+    to SSH: zshuser at 127.0.0.1, port 2222, zsh", then "acter-ssh%". So this is not "an
+    SSH session says nothing at connect"; something about the bash case specifically ends with
+    the first prompt unspoken.
+
+    **The obvious suspect is 23.12's quieting, and it is a suspect rather than a diagnosis.**
+    B9.6 stopped Acter's own setup line being read aloud, and at this far end `sshd` prints
+    `Last login: ...` before the prompt, so the setup goes out on a line the far end drew and
+    the banner shares a block with Acter's own command. Whether the quieting is reaching past
+    the line it was aimed at, or whether the test has been asserting something B9.6 deliberately
+    changed and nobody updated, is exactly what the spec conversation has to settle — and the
+    answer decides whether anything is broken at all.
+
+    Reproduce with the rig up:
+    `cargo test -p acter-transports --test ssh_rig -- --ignored --nocapture --test-threads=1 what_a_session_says_when_it_has_just_connected`
 27.5. **Done** — the status region says the whole sentence, and the announcement is that
     same string, from one function. Fixed in B9's PR and measured with NVDA 2026.1.1 on
     2026-08-27: the region reads back exactly what was announced, once. A9 decision 2 is
