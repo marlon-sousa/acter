@@ -35,6 +35,19 @@ cannot set its own hostname, so the flag is the only place this can live.
 
 Then, from Windows: `ssh -p 2222 acter@127.0.0.1`, password `acter`.
 
+## The three accounts, and what each is for
+
+All three take the same password.
+
+- **`acter`** runs bash, with Debian's own default `.bashrc`. It is the account almost
+  every test here connects as.
+- **`dashuser`** runs dash, and is the control for the shell probe: dash never sets
+  `$SHELL` for itself, so a correct answer for this account can only have come from sshd.
+- **`zshuser`** runs zsh, and is what B5.8's setup is measured against — the first far end
+  in this rig set up by a line that is not bash's. It has a minimal `.zshrc`, because an
+  account with no zsh startup files at all meets `zsh-newuser-install` instead of a
+  prompt; the Dockerfile says what that did when it was met.
+
 The container prints its host-key fingerprints to `docker logs acter-ssh` when it starts,
 which is what a user would be shown by a colleague or a hosting provider — and what a
 listener has to be able to compare against when Acter asks them to accept an unknown key.

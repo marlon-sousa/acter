@@ -308,6 +308,20 @@ mod tests {
         );
     }
 
+    /// **And zsh's line reaches WSL for the same reason bash's does** (spec B9.5, decision 2):
+    /// the setup is keyed by the shell's name, not by the transport, so a distribution whose
+    /// account runs zsh is set up by the line B5.8 measured over SSH. Nothing here is a launch
+    /// argument, which is what makes one mechanism reach both.
+    #[test]
+    fn a_distribution_running_zsh_is_set_up_with_zshs_own_line() {
+        let setup = Wsl::in_distribution("wsl.exe", "Ubuntu 24.04", Some("zsh"))
+            .setup()
+            .expect("zsh has a measured setup since B5.8");
+
+        assert_eq!(setup.line, crate::setup::ZSH);
+        assert_eq!(setup.markers, ShellMarkers::Full);
+    }
+
     /// **What `sh`'s own line earns, and it is not bash's claim** (spec B9.5, decision 8, as
     /// roadmap 23.15 revised it). `sh` marks its prompt and reports a verdict and still says
     /// nothing about where output begins, and the session is told that before its first byte
@@ -324,12 +338,12 @@ mod tests {
         assert!(adapter.setup().is_some());
     }
 
-    /// **The case B5.5 exists for, unchanged by the new mechanism.** An account running zsh
+    /// **The case B5.5 exists for, unchanged by the new mechanism.** An account running fish
     /// is named and nothing is run in it — and the session still claims the full cycle, so
     /// the grace period is what tells the listener the truth.
     #[test]
     fn a_distribution_running_a_shell_nobody_measured_has_nothing_run_in_it() {
-        for named in ["zsh", "fish", "nu"] {
+        for named in ["fish", "nu", "ksh"] {
             let adapter = Wsl::in_distribution("wsl.exe", "Ubuntu 24.04", Some(named));
 
             assert_eq!(adapter.setup(), None, "{named} has no measured setup");
@@ -341,7 +355,7 @@ mod tests {
         }
     }
 
-    /// A distribution that would not answer is in the same position as one running zsh: the
+    /// A distribution that would not answer is in the same position as one running fish: the
     /// session starts and nothing is claimed about it.
     #[test]
     fn a_distribution_that_answered_nothing_has_nothing_run_in_it() {

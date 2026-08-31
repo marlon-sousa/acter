@@ -676,9 +676,10 @@ enum SetUpOutcome {
     /// It was POSIX `sh` until `sh` was measured to report exit codes after all, and `cmd.exe`
     /// — the one remaining shell that marks only its prompt — is injected at launch and never
     /// reaches this question. What it is waiting for is the next shell somebody measures whose
-    /// prompt is all it has: `zsh` and `fish` both have hooks, but a shell with neither is not
-    /// a hypothesis, it is where `sh` was believed to be a day ago. Deleting the state would
-    /// mean rebuilding it, and rebuilding the sentence a listener hears with it.
+    /// prompt is all it has: `fish` has a hook of its own, and zsh — measured in B5.8 — turned
+    /// out to reach the whole cycle. A shell with neither hook is not a hypothesis, it is where
+    /// `sh` was believed to be a day ago. Deleting the state would mean rebuilding it, and
+    /// rebuilding the sentence a listener hears with it.
     Partly,
     /// Nothing has been measured for this shell, so there was nothing to run.
     NothingWritten,
@@ -934,11 +935,11 @@ mod tests {
     /// it from five seconds of silence.
     #[test]
     fn a_shell_nobody_measured_is_named_and_said_to_be_one() {
-        let note = far_end_note(Some("zsh"), SetUpOutcome::NothingWritten);
+        let note = far_end_note(Some("fish"), SetUpOutcome::NothingWritten);
 
         assert_eq!(
             note.said.as_deref(),
-            Some("zsh, which Acter cannot set up yet.")
+            Some("fish, which Acter cannot set up yet.")
         );
         assert!(note.limit_explained);
     }
@@ -1297,8 +1298,8 @@ mod tests {
             let questions = Arc::clone(&asker) as Arc<dyn ConnectQuestions>;
 
             let (facts, outcome) = factory(Arc::new(Remembered::default())).agreed(
-                facts("zsh"),
-                Some("zsh"),
+                facts("fish"),
+                Some("fish"),
                 SetUp::Yes,
                 &questions,
             );
@@ -1307,8 +1308,8 @@ mod tests {
             assert_eq!(facts.setup, None);
             assert!(asker.asked.lock().unwrap().is_empty(), "nothing to show");
             assert_eq!(
-                far_end_note(Some("zsh"), outcome).said.as_deref(),
-                Some("zsh, which Acter cannot set up yet.")
+                far_end_note(Some("fish"), outcome).said.as_deref(),
+                Some("fish, which Acter cannot set up yet.")
             );
         }
 

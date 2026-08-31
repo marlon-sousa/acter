@@ -44,6 +44,10 @@ use tokio::time::{Instant, timeout};
 /// have come from sshd (see the Dockerfile).
 const DASH_USER: &str = "dashuser";
 
+/// The account whose login shell is zsh, which B5.8 measures its setup against: the first
+/// far end in this rig that is set up by a line that is not bash's.
+const ZSH_USER: &str = "zshuser";
+
 /// The rig, as `docker/ssh/README.md` runs it: loopback only, so nothing on any network
 /// this machine joins can reach it.
 const HOST: &str = "127.0.0.1";
@@ -777,6 +781,41 @@ async fn the_byte_that_ends_a_bash_session_over_ssh() {
     );
 }
 
+/// **And what ends a zsh session over this transport**, asked separately for the reason the
+/// bash test above exists: the byte that "obviously" ends a session is exactly what B5.2
+/// measured and disproved for PowerShell. The line discipline is the same one, so the answer
+/// was likely — and "likely" is what this project does not ship.
+///
+/// **Measured 2026-08-31** against `docker/ssh`'s `zshuser` account: `0x04` at an empty zsh
+/// prompt closes the channel and the session ends, so [`acter_shells::over_ssh`] may answer
+/// with it for zsh as it does for bash.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore]
+async fn the_byte_that_ends_a_zsh_session_over_ssh() {
+    let scratch = Scratch::new();
+    let mut session = Session::open_as(
+        ZSH_USER,
+        scratch.empty(),
+        Answers::accepting(),
+        acter_transports::probe_patience(),
+    )
+    .await
+    .expect("the rig connects as the zsh account");
+    session.submit(&spoken("ready"));
+    session.wait_for("ready").await;
+
+    session
+        .transport
+        .write(&[0x04])
+        .expect("the session is open");
+
+    assert!(
+        session.ended().await,
+        "0x04 at an empty zsh prompt ends the session: {:?}",
+        session.seen
+    );
+}
+
 // --- What a freshly connected session says, measured ------------------------------------
 
 /// A real clock, for the two tests that build the whole pipeline rather than watching bytes.
@@ -826,10 +865,17 @@ struct Pipeline {
 
 impl Pipeline {
     async fn connect(scratch: &Scratch) -> Self {
+        Self::connect_as(USER, scratch).await
+    }
+
+    /// The same pipeline against a different account, which since B5.8 means a different
+    /// shell: the rig's `zshuser` runs zsh, and everything from the probe to the setup line
+    /// to what a listener hears is chosen from the name that account's passwd entry gives.
+    async fn connect_as(user: &str, scratch: &Scratch) -> Self {
         let target = SshTarget {
             host: HOST.to_owned(),
             port: PORT,
-            user: USER.to_owned(),
+            user: user.to_owned(),
         };
         let transport = SshTransport::connect(
             &target,
@@ -1040,5 +1086,106 @@ async fn the_markers_a_session_sets_itself_up_with_cross_an_ssh_connection() {
     assert!(
         headed || rendered.contains("__acter_prompt"),
         "the disclosure has to be readable back, and it is in neither the heading nor the          buffer: {seen:?}"
+    );
+}
+
+/// **The same question for zsh, and the answer had to be measured separately** (roadmap
+/// B5.8). The setup is keyed by the shell's name, so the moment `zsh` has a line, an account
+/// whose passwd entry says `/bin/zsh` gets it — and everything downstream of that, the whole
+/// marker cycle included, comes from a program nobody has run through this product before.
+///
+/// **Why it is not bash's test with a different user.** zsh's line reaches the same
+/// `ShellMarkers::Full` by three different routes: the verdict is `%?`, a prompt escape the
+/// shell expands for itself rather than a status captured into a variable; the `C` comes from
+/// a real `preexec` hook rather than a `DEBUG` trap with a guard; and the user's own hooks are
+/// appended to in an array rather than captured out of a string. Any of the three could have
+/// crossed the lab and failed here, and this is what says they do not.
+///
+/// **Measured 2026-08-31** against `docker/ssh`'s `zshuser` account (Debian bookworm, zsh
+/// 5.9, OpenSSH 9.2) from Windows 11: the far end draws a marked prompt, and `(exit 7)` is
+/// announced as having failed with 7 — which needs the `D;7` zsh wrote from its own prompt
+/// expansion to have survived the trip.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore]
+async fn a_remote_zsh_sets_itself_up_and_says_how_a_command_went() {
+    let scratch = Scratch::new();
+    let pipeline = Pipeline::connect_as(ZSH_USER, &scratch).await;
+
+    pipeline
+        .wait_until("the far end to draw a marked prompt", |seen| {
+            seen.iter()
+                .any(|event| matches!(event, SessionEvent::PromptDrawn { .. }))
+        })
+        .await;
+
+    pipeline
+        .session
+        .submit_command(acter_core::SessionId(1), "(exit 7)");
+    pipeline
+        .wait_until("a verdict for a command that failed", |seen| {
+            seen.iter().any(|event| {
+                matches!(
+                    event,
+                    SessionEvent::Announce {
+                        announcement: Announcement::Failed {
+                            exit_code: ExitCode(7)
+                        },
+                        ..
+                    }
+                )
+            })
+        })
+        .await;
+    pipeline.print("what a remote zsh said once it had set itself up");
+
+    let seen = pipeline.recorder.events();
+    assert!(
+        !seen.contains(&SessionEvent::IntegrationUnavailable),
+        "a session that marks its boundaries never says it has none: {seen:?}"
+    );
+
+    // **Acter's own line is not read aloud here either** (roadmap 23.12), and zsh is a fresh
+    // chance to break it: the setup goes out on a line the far end drew rather than on one
+    // Acter did — `sshd` prints `Last login` before zsh has drawn anything.
+    let spoken: String = seen
+        .iter()
+        .filter_map(|event| match event {
+            SessionEvent::Announce {
+                announcement: Announcement::ReadAloud { text },
+                ..
+            } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        !spoken.contains("__acter_prompt"),
+        "Acter's own setup command was read to the listener: {spoken:?}"
+    );
+}
+
+/// **What the probe says about an account that runs zsh**, which is what chooses the setup.
+/// zsh sets `ZSH_VERSION`, so this account answers with a flavour as well as a name — and the
+/// name is what `over_ssh` keys the setup on.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore]
+async fn an_account_whose_shell_is_zsh_is_named_as_zsh() {
+    let scratch = Scratch::new();
+    let session = Session::open_as(
+        ZSH_USER,
+        scratch.empty(),
+        Answers::accepting(),
+        acter_transports::probe_patience(),
+    )
+    .await
+    .expect("the rig connects as the zsh account");
+
+    let far_end = session.transport.far_end();
+
+    assert_eq!(far_end.shell.as_deref(), Some("/bin/zsh"));
+    assert_eq!(far_end.name().as_deref(), Some("zsh"));
+    assert_eq!(
+        far_end.flavour.as_deref(),
+        Some("zsh"),
+        "zsh sets a version variable of its own, which is the certain evidence"
     );
 }

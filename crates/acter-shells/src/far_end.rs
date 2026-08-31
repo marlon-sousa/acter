@@ -9,10 +9,10 @@
 //! its input.
 //!
 //! **The identity may be guessed from the name; the setup may never be.** Knowing a far end
-//! is zsh licenses *saying so* and nothing else until a zsh setup has been measured the way
-//! B5.3 measured bash's. A shell with nothing measured for it claims `ShellMarkers::Full` —
-//! the same assumption [`Plain`](crate::Plain) makes, which is what lets the grace period flag
-//! the session as unintegrated rather than a marker being silently forged.
+//! is fish licenses *saying so* and nothing else until a fish setup has been measured the way
+//! B5.3 measured bash's and B5.8 measured zsh's. A shell with nothing measured for it claims
+//! `ShellMarkers::Full` — the same assumption [`Plain`](crate::Plain) makes, which is what lets
+//! the grace period flag the session as unintegrated rather than a marker being silently forged.
 //!
 //! **Since B9.5 an SSH far end can be set up, and it is set up by the same line WSL's is**
 //! (spec B9.5, decision 2). Nothing here is a launch argument — Acter controls none over SSH —
@@ -82,9 +82,15 @@ fn ends_with(name: &str) -> Option<Vec<u8>> {
         // Measured 2026-08-26 against docker/ssh: `0x04` at an empty prompt closes the
         // channel and the session ends.
         "bash" => Some(vec![EOT]),
-        // Everything else is named and nothing more. `dash`, `zsh` and `fish` are all
-        // *likely* to end on the same byte for the same reason bash does — the line
-        // discipline, not the shell — and "likely" is what this project does not ship.
+        // Measured 2026-08-31 against docker/ssh's `zshuser` account, the same way and for
+        // the same reason: the byte that "obviously" ends a session is what B5.2 measured
+        // and disproved for PowerShell, so zsh was asked rather than assumed to agree with
+        // bash. It does — `0x04` at an empty zsh prompt closes the channel (roadmap B5.8,
+        // `tests/ssh_rig.rs`, `the_byte_that_ends_a_zsh_session_over_ssh`).
+        "zsh" => Some(vec![EOT]),
+        // Everything else is named and nothing more. `dash` and `fish` are all *likely* to
+        // end on the same byte for the same reason bash and zsh do — the line discipline,
+        // not the shell — and "likely" is what this project does not ship.
         _ => None,
     }
 }
@@ -93,18 +99,23 @@ fn ends_with(name: &str) -> Option<Vec<u8>> {
 mod tests {
     use super::*;
 
-    /// The one shell measured over this transport, and the only one that may claim an
+    /// The shells measured over this transport, and the only ones that may claim an
     /// ending.
     #[test]
-    fn bash_ends_on_the_byte_that_was_measured() {
+    fn the_shells_that_were_measured_end_on_the_byte_that_was_measured() {
         assert_eq!(over_ssh(Some("bash")).eof, Some(vec![0x04]));
+        assert_eq!(
+            over_ssh(Some("zsh")).eof,
+            Some(vec![0x04]),
+            "measured in B5.8"
+        );
     }
 
     /// **Named, and nothing more.** A shell Acter can identify but has never measured gets
     /// a name for the sentence a listener hears and no claim about how to end it.
     #[test]
     fn a_shell_nobody_measured_is_named_without_being_claimed() {
-        for named in ["zsh", "fish", "dash", "sh"] {
+        for named in ["fish", "dash", "sh", "ksh"] {
             assert_eq!(
                 over_ssh(Some(named)).eof,
                 None,
@@ -125,7 +136,7 @@ mod tests {
     /// for boundaries nothing will ever send, and says nothing at all while it waits.
     #[test]
     fn a_far_end_nothing_is_run_in_is_assumed_to_mark_everything() {
-        for named in [Some("zsh"), Some("nushell"), None] {
+        for named in [Some("fish"), Some("nushell"), None] {
             let facts = over_ssh(named);
 
             assert_eq!(facts.setup, None, "{named:?} has no measured setup");
@@ -160,5 +171,19 @@ mod tests {
 
         assert!(facts.setup.is_some());
         assert_eq!(facts.markers, ShellMarkers::PromptCommandLineAndExitCode);
+    }
+
+    /// **And a remote zsh is set up with zsh's own line, which is not bash's** (roadmap B5.8).
+    /// The claim is the same — the whole cycle — and the program that earns it is shorter,
+    /// because zsh has a `preexec` hook, hook arrays, and a `%?` the shell expands itself.
+    #[test]
+    fn a_remote_zsh_is_set_up_with_the_line_measured_for_zsh() {
+        let facts = over_ssh(Some("zsh"));
+
+        assert_eq!(
+            facts.setup.as_ref().map(|setup| setup.line.as_str()),
+            Some(crate::setup::ZSH)
+        );
+        assert_eq!(facts.markers, ShellMarkers::Full);
     }
 }
