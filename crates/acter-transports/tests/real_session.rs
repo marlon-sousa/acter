@@ -1065,10 +1065,12 @@ fn zsh_setup() -> String {
 /// sets *that* up with zsh's own line, exactly as it would a distribution whose passwd entry
 /// said zsh.
 ///
-/// **What it therefore does not measure**, and the honesty matters more than the coverage: the
-/// discovery half. `login_shell` reading `zsh` out of a passwd entry is asserted in
-/// `acter-shells`' own tests; that a zsh distribution is *routed* to zsh's line is asserted in
-/// `wsl.rs`. This is the byte path and nothing else.
+/// **What it therefore does not measure is the discovery half**, and that is a division of
+/// labour rather than a gap: `login_shell` reading `zsh` out of a passwd entry is asserted in
+/// `acter-shells`, that a zsh distribution is routed to zsh's line is asserted in `wsl.rs`, and
+/// B5.8's accessibility pass drove the whole flow against a distribution whose login shell
+/// really was zsh. This is the byte path, and it is the half that can be asserted without
+/// depending on the login shell of whoever runs the suite.
 ///
 /// **Measured 2026-08-31**, zsh 5.9 on Ubuntu 24.04 under WSL.
 #[tokio::test(flavor = "multi_thread")]

@@ -3054,11 +3054,15 @@ thing to pick up once the adapters land, not merely the next number.
     **`0x04` ends a zsh session over SSH**, asked rather than inherited from bash, because
     B5.2 measured and disproved both obvious candidates for PowerShell.
 
-    **The WSL cell is measured too**, after zsh was installed in Ubuntu 24.04 for it: a real zsh
-    under a real `wsl.exe`, set up with the crate's own line, heads its blocks and announces
-    `Failed(ExitCode(7))`. The session gets there with `exec zsh` rather than by changing the
-    account's login shell, so what is measured is the byte path — whether zsh's markers survive
-    that pseudoconsole — and not the discovery half, which is a unit test's business.
+    **The WSL cell is measured too**, after zsh was installed in Ubuntu 24.04 for it, and it is
+    measured twice for two different reasons. The automated test reaches zsh with `exec zsh`,
+    because a test may not depend on the login shell of whoever runs it and `chsh` in a test
+    would edit a developer's own machine to make it pass: a real zsh under a real `wsl.exe`,
+    set up with the crate's own line, heads its blocks and announces `Failed(ExitCode(7))`.
+    The accessibility pass reaches it the way a user does — the account's login shell set to
+    zsh for the run and set back afterwards — and that is what closes the discovery half: the
+    probe read the passwd entry, named zsh, and Acter offered *zsh's* line in the disclosure
+    dialog rather than bash's. A listener heard "connected to WSL: Ubuntu, zsh".
 
     **What it did not settle.** Powerlevel10k's instant prompt redraws through `zle` rather
     than `precmd` and is unmeasured. And a hook added *after* the setup runs is not re-wrapped,
