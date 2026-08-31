@@ -3760,12 +3760,208 @@ scripted transport reduces the risk they carry; it does not remove it.
 cmd adapter, bash adapter (WSL), profiles + configuration screen, tabs/session
 manager UI, keybinding configurability — each its own short spec + PR.
 
+## Keyboard routing and the changed row — carved out of the phase 2 gate
+
+Three entries, agreed in conversation 2026-08-31 and recorded in DESIGN.md under "Edit
+field ownership", "A row that changed is an answer" and the keystroke map. They are
+grouped rather than filed into a lane because they cross both: 28 is frontend routing plus
+a domain rule, 29 is domain alone, 30 is a measurement before it is anything. Nothing here
+is gated on Convergence, but 28 is only worth running against a real far end, so B4 and B5
+in practice.
+
+**This is unfamiliar ground, and the entries say so rather than pretending otherwise.**
+Every rule in this section is about what a listener hears when a far end *redraws* a row.
+The project has no experience of that: the buffer has always been fed by text arriving,
+never by text changing under a key the user just pressed, and every pacing decision so far
+has treated a rewrite as churn to be ignored. Expect each of these to open with a session
+on the screen-reader bridge or on a real pseudoconsole, and expect at least one of them to
+change shape once it meets a real far end. An entry that turns out to have specified the
+wrong thing has still done its job if the measurement is written down — that is the same
+bargain 22.11 and 23.14 struck, and both paid.
+
+28. Far-end-line mode: the keyboard goes to the far end. Spec: none yet → specify first.
+    **Agreed 2026-08-31**, from the user's ask: up and down, Tab, and Ctrl plus any key
+    have to be able to reach the far end, and a session inside an `ssh`, a `wsl`, a
+    container or a REPL is unusable without them.
+
+    The whole of the reasoning is in DESIGN.md and is not repeated here. What this entry
+    builds is: the toggle and its binding (Ctrl+Shift+K) with an announcement that says what
+    the user gains and loses rather than naming a mode; an edit field that holds no text
+    while the mode is on; routing for every key that is not layer 1; and the cursor-row
+    diff that turns the far end's redraw into something spoken.
+
+    **Most of it already exists, which is the reason this is one entry and not a phase.**
+    The quiescence clock decides when a row has settled. The positional echo rule from B4.9
+    already knows that text appended to the cursor row after Acter wrote to it is the user's
+    own typing, and that rule generalises from a line to a character with no change. The grid
+    has been carried since B3 precisely so that a question like "what is on the cursor row"
+    has an answer. What is new is a comparison and a state.
+
+    **The one piece with a real trap in it is key encoding, and it does not belong in the
+    frontend.** An arrow key is not one byte sequence but two: `ESC [ A` normally, and
+    `ESC O A` when the far end has turned on application cursor keys (DECCKM), which is what
+    readline-driven shells and most TUIs do the moment they take the keyboard. A frontend
+    that hard-codes one of them works at a bare `cmd` prompt and sends garbage into `bash`,
+    and the failure is silent — the far end simply does something else. The grid already
+    tracks that mode because it emulates the terminal, so the mapping from a key to bytes
+    belongs beside the grid, in the domain, and the frontend sends a named key rather than a
+    byte string. Same question, same answer, for Home, End, delete, the function keys, and
+    for whether bracketed paste needs to be honoured when a user pastes into this mode.
+
+    **Measured 2026-08-31, and it is milder than that paragraph claims — the claim is
+    corrected rather than left standing.** `bash` inside WSL never sets DECCKM: `ESC [ ? 1 h`
+    appears nowhere in the stream, and readline answered `ESC [ A` and `ESC O A`
+    *identically*, because it binds both. So neither of the two shells measured can be got
+    wrong by choosing one encoding, and the silent-garbage failure this paragraph predicted
+    did not occur. What survives is the architectural half, and it survives on weaker
+    grounds: a full-screen program is still entitled to set the mode, the grid is still the
+    only thing that knows, and a frontend sending a named key rather than a byte string costs
+    nothing and cannot be wrong later. Build it that way because it is the right seam, not
+    because a measurement demanded it.
+
+    **What the same run did turn up is bracketed paste.** `bash` sets `ESC [ ? 2 0 0 4 h` at
+    every prompt and clears it on submission — so pasting into far-end-line mode has to wrap
+    the text in `ESC [ 2 0 0 ~` and `ESC [ 2 0 1 ~` or the far end will run each pasted line
+    as it arrives, which is a data-loss shape rather than a cosmetic one. The same sequence
+    is also evidence, and entry 29 uses it.
+
+    **Experiments to run before the spec is written**, in the order they answer things:
+
+    - Does the field need `role="application"` while the mode is on, and what does a reader
+      say when it lands on an edit field that is permanently empty? Both are probeable on
+      the bridge with a static page, ahead of any frontend work — the open question in
+      DESIGN.md carries the reasoning and the reason the earlier reversal may not apply.
+    - At a real `bash` over `ssh`: press up, and check that the recalled line is what gets
+      spoken, once, and that the prompt on the same row is not spoken with it. The row
+      contains both; what a listener wants is the line, and where the prompt ends is a
+      question this project has spent entries on already.
+    - Type three characters and press Tab, and check the completion is heard without the
+      three characters being read back.
+    - Ctrl+C, Ctrl+D and Ctrl+U at a far end that is not the shell Acter spawned, since the
+      first two are the reason 23.5 exists and the third is the "what do we say about an
+      empty row" string question.
+    **Three of those were run on 2026-08-31 and their results are already folded into
+    DESIGN.md**, so the spec starts from measured behaviour rather than from this list. In
+    summary: NVDA did not switch to focus mode at a plain empty edit field and the arrows
+    never reached the page, while the same field inside `role="application"` received up,
+    down, Tab and Ctrl combinations — but an `<input>` there makes NVDA say "blank" before
+    every single arrow, which is why the element is a real decision and not a detail. At a
+    real `bash`, the first up arrow *appends* the recalled line rather than rewriting the
+    row, so the speech rule cannot key on revisions; and the row must be spoken from the
+    prompt's anchor column, or the prompt is read aloud on every press. Tab's whole
+    contribution to the wire was the two bytes `o `, which is worth nothing spoken and is
+    the clearest argument for the anchor rule there is.
+
+    **What is still owed before the spec**: the element choice above, Ctrl+D at a far end
+    that is not the shell Acter spawned (23.5's subject), and what is said for a row that a
+    key emptied.
+
+    **Deliberately not in this entry**: any renderer, the alternate screen, and the
+    several-rows case, which is 30.
+
+29. A program that is waiting says so. Spec: none yet → specify first. **Agreed
+    2026-08-31**, and it is what makes 28 discoverable rather than a mode only its author
+    knows about.
+
+    The seam is this. A user types `gh pr create` in local-line mode, presses Enter, hears
+    some output, and then hears nothing, because the program is waiting for a keypress that
+    the edit field will never send. There is no event, no announcement, and a session that
+    has simply gone quiet — the failure shape DESIGN.md names as the one this product can
+    least afford. Nothing in 28 helps, because the user has no way to know that 28 is what
+    they need.
+
+    The signal needs no new machinery: output produced, then quiescence, with the command
+    not ended. It is the same clock the pacing policy already runs.
+
+    **Two candidate discriminators were measured on 2026-08-31, and one of them died.**
+    Cursor hiding is *not* evidence of waiting: `readline` brackets every one of its redraws
+    with `ESC [ ? 2 5 l` and `ESC [ ? 2 5 h`, so a shell editing a line looks exactly like a
+    widget drawing itself, and an idea that looked promising before it was tried is recorded
+    here so nobody tries it twice. Bracketed paste is more interesting and survives: `bash`
+    turns it on at every prompt, and `gh`'s selection prompt never touches it — so "settled,
+    and bracketed paste is off" is positive evidence that whatever holds the terminal is not
+    a shell waiting for a command line. That is a candidate, on two programs, and the spec
+    should widen the sample before it leans on it.
+
+    **The difficulty is false positives, and it is the whole entry.** A command that
+    *finished* also produces output and then goes quiet. Telling the two apart is exactly
+    the problem this project has met before from the other side: in an integrated session
+    the `D` marker says the command ended, and in an unintegrated one nothing does. So the
+    hint is cheap where markers reach and delicate where they do not, and the spec has to
+    say what it does in the unmarked case rather than quietly assuming the marked one.
+
+    **It depends on 22.8 and cannot be built before it.** In a real unintegrated session
+    `Pump::open` is never cleared, so "a command is running" is currently true forever, and
+    a hint gated on it would fire after every command in the session. 22.8 is what makes the
+    gate mean anything.
+
+    Two further constraints for the spec. It is said **once per command**, never repeated,
+    because a hint that nags is worse than one that is missed — the babble guard exists for
+    the same reason. And its wording is a plain sentence about what to do, not a diagnosis:
+    what the user needs to hear is that the program seems to be waiting for a keypress and
+    which key hands it the keyboard.
+
+30. A widget redraws several rows, and a text diff may not see it. Spec: none yet →
+    **measure first**, then specify. **Raised 2026-08-31 by the user, from the `gh` case.**
+
+    `gh` asks its questions with an inline prompt: a list of choices drawn as several rows,
+    with arrows moving a highlight through them. Two things about it matter and they point
+    in opposite directions. It is beyond the cursor-row rule 28 builds, because the answer to
+    an arrow is on a row the cursor is not on. And it is *not* a case Acter can route
+    automatically, because it never takes the alternate screen, so there is nothing to
+    detect — which is what the DESIGN open question now records.
+
+    **The measurement comes first because the answer decides whether there is an entry at
+    all.** On a real pseudoconsole, on the rig that measured the `less` case, capture the
+    bytes of a `gh` prompt and answer four things: does it take the alternate screen
+    (expected no, and if yes this belongs to phase 2 instead); is the selection drawn with a
+    marker character or only with colour or reverse video; how many rows change per arrow
+    press; and does it repaint the whole list or only the two rows that differ.
+
+    **The colour answer is the one that changes the design.** A marker character is visible
+    to a text diff and this entry stays small. A highlight drawn only in colour is invisible
+    to one: the row's text is identical before and after, so a text diff reports that nothing
+    happened and the user hears silence while arrowing. The grid carries attributes and could
+    answer it; the buffer is text and could not, so that path means attribute-aware diffing
+    and a decision about how a "selected" row is expressed to a screen reader at all. Do not
+    guess which case `gh` is — the library behind its prompts has changed over the tool's
+    life, and one sample is not a population, so measure a second prompt-driven CLI beside it.
+
+    **Measured 2026-08-31, on `gh repo create` at version 2.96.0, aborted at the first
+    prompt so nothing was created. Every answer came back favourable.** No alternate screen:
+    neither `ESC [ ? 1 0 4 9` nor `ESC [ ? 4 7` appears anywhere. The selection is drawn as a
+    `>` at the start of the row, with colour used as well as the marker rather than instead
+    of it — so a text comparison sees the selection move, and the attribute-aware path this
+    entry was afraid of is not needed. Each arrow rewrites exactly two rows, the one losing
+    the marker and the one gaining it. And the engine already reports precisely those two:
+    the prompt repaints its header row identically on every press and the engine emits
+    nothing for it, because it only reports lines whose text changed. Both encodings of the
+    arrow were accepted, and the selection wraps at both ends of the list.
+
+    **So the entry is now small and its shape is known**: consume the revisions the engine
+    already emits, and speak the row that gained the marker. What is still owed is the second
+    sample — one program is not a population, the library behind `gh`'s prompts has changed
+    over the tool's life, and a CLI that draws its highlight in colour alone would reopen
+    everything this measurement closed.
+
+    Once measured, the rule to specify is the fourth bucket from DESIGN.md: speak the row
+    that gained the selection, and never re-read the whole list on every arrow. A listener
+    arrowing through a list wants what a listbox gives them, which is one item at a time.
+
 ## Phase 2 gate — planning conversation, not code
 
 Interactive mode: grid renderer, keyboard routing, pass-through key, and the
 hardest open design question (interactive screen-reading strategy — see DESIGN.md
 open questions). Starts as a design session like the ones that produced DESIGN.md,
 with a heavyweight model; expect several rounds before the first spec.
+
+**Amended 2026-08-31.** Keyboard routing and the pass-through key have left this gate for
+the section above. They turned out to be a different switch from the renderer — who owns
+the line, rather than how the screen is presented — and they are the half that pays now,
+since they are what makes an `ssh`, a `wsl`, a container or a REPL usable. What is left
+here is the screen: a grid renderer, and how a full-screen program is read to someone who
+cannot see it. That is still a design conversation, and it is still the hardest question
+in the document.
 
 ## Principles — **Decided**
 

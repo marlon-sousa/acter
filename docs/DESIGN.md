@@ -38,6 +38,18 @@ escape hatch to full terminal emulation when a program needs it.
   app), Acter detects it and can announce that interactive mode is needed, or switch
   automatically (open question: announce vs auto-switch).
 
+### Far-end-line mode (added 2026-08-31, and it sits between the two)
+
+- The edit field holds no text, and every keystroke goes to the far end as it is typed:
+  arrows, Tab, Enter, and Ctrl plus any key. The results buffer is unchanged, so the
+  session is still conversational and still browsable with ordinary reading commands.
+- It exists because the far end past the shell Acter spawned — an `ssh`, a `wsl`, a
+  container, a REPL — has its own line editor, its own history and its own completion,
+  and those are the ones the user wants while they are there.
+- It is not interactive mode by another name. Interactive mode is about how the *screen*
+  is presented and needs a renderer; this is about who owns the *line* and needs none.
+  Detail under "Edit field ownership" below.
+
 ## GUI framework
 
 **Decided: Tauri 2.**
@@ -433,6 +445,14 @@ per-profile (muscle memory must not change between sessions).
    frontend and carried by no event, and it does not need detecting: browse mode does not
    deliver the key in the first place. So the rule has two owners, and only the second
    half is ours to enforce. Do not attempt to detect the reader's mode.
+
+   **Amended 2026-08-31.** All of layer 2 describes the edit field while Acter owns the
+   line. In far-end-line mode the field's native meaning *is* "send it": every key that
+   is not layer 1 goes to the far end, plain Ctrl+C included — which is the interrupt by
+   another road, the same `0x03` on the same wire, so the Decided rule above is honoured
+   rather than displaced. The selection half of the test is not weakened either, because
+   a field holding no text can hold no selection. Layer 3 is then what far-end-line mode
+   already does, and what interactive mode adds on top of it is the screen, not the keys.
 3. **Interactive mode passes everything that isn't layer 1 to the app**, including
    plain Ctrl+C (SIGINT via PTY), Alt combos (Meta keys), and Escape.
 
@@ -441,6 +461,14 @@ per-profile (muscle memory must not change between sessions).
 - **Ctrl+Shift+E** — toggle interactive / non-interactive mode. **Decided.** (Moved
   from plain Ctrl+E, which collided with readline/nano/emacs end-of-line; terminal
   apps cannot receive Ctrl+Shift combos, so the collision vanishes.)
+- **Ctrl+Shift+K** — hand the keyboard to the far end, and take it back: toggles
+  far-end-line mode. **Decided 2026-08-31**; the letter is the one arbitrary part of it.
+  It is a second binding rather than a reuse of Ctrl+Shift+E because the amendment under
+  "Edit field ownership" split what used to be one switch into two independent ones, and
+  this is the half that needs no renderer. The toggle is announced, and the announcement
+  says what the user gains and loses rather than naming a mode: keys now go to the
+  program, and history and completion are the program's; or keys now go to Acter, and
+  history and completion are back. Ctrl+Shift+S reports which one is on.
 - **Ctrl+Shift+Space** — pass-through: send the next keystroke literally to the app.
 - **Ctrl+Shift+C** — copy the entire last response to the clipboard (no selection
   needed).
@@ -483,6 +511,14 @@ because phase 1 bakes in three guardrails that make phase 2 purely additive:
 Phase 2 then adds only: keyboard routing switch in the frontend (edit field vs
 passthrough), a grid renderer, and the interactive-mode screen reading strategy.
 
+**Amended 2026-08-31: that list is two independent switches, not one bundle**, and only
+one of them needs phase 2. *Who owns the line* is keyboard routing, and it ships as
+far-end-line mode with no renderer at all. *How the screen is presented* is the grid
+renderer and the screen-reading strategy, and stays behind the phase 2 gate. Separating
+them makes `ssh`, `wsl`, containers and REPLs usable — with the far end's own history and
+completion — long before anything full-screen exists, and it is why the roadmap now
+carries those entries outside that gate.
+
 ## Edit field ownership (non-interactive mode) — **Decided**
 
 **The edit field is 100% local; the terminal never updates it.** The shell sees no
@@ -502,6 +538,62 @@ Every line-editing affordance is provided locally instead:
 **Invariant:** the terminal updates only the results buffer; the user updates only
 the edit field. No third case. (Interactive mode has no edit field, so the question
 does not arise there.)
+
+**Amended 2026-08-31: the line has two possible owners, and the user chooses — Decided.**
+The section above is right about what may never happen and wrong about how many states
+there are. Everything it claims is true of the shell Acter spawned and false of everything
+past it. Inside an `ssh`, a `wsl`, a container or a REPL the far end has its own line
+editor, its own history and its own completion, and those are the ones the user actually
+wants: Acter's history holds lines typed at every far end this profile ever reached, and
+Acter's completion completes this machine's paths. Substituting locally is right where
+Acter is the shell's client and wrong the moment something else is. It is the same fault
+line as marker injection — past the first far end, Acter is blind — reached from the
+keyboard instead of from the output.
+
+So there are two states, named for who owns the line being edited:
+
+- **Local line** — everything described above, and the default in every session. The field
+  owns the line, up and down are Acter's history, Tab is Acter's completion, and nothing
+  crosses until Enter.
+- **Far-end line** — the field owns nothing and holds no text. Every keystroke that is not
+  layer 1 goes to the far end as it is typed: arrows, Tab, Enter, and Ctrl plus any key.
+  What the user hears in reply comes from the row the far end redrew, under "A row that
+  changed is an answer" below.
+
+**Why the choice cannot be made key by key, which is what makes this a state rather than a
+setting.** The obvious shape — pass up, down and Tab, keep the rest local — does not
+survive contact. Those keys act on *a* line buffer, and in that shape there are two. A user
+who types `car` into the field and presses Tab asks the far end to complete a line the far
+end has never seen. A user who presses up recalls a line into the far end's buffer while
+the field still holds its own, and the next Enter sends ours on top of theirs. That is a
+corrupted command line, not a rough edge. Any key that edits a line must reach whichever
+side owns the line, so ownership moves whole or not at all.
+
+**The invariant survives, for the reason it was written.** What it forbids is a field that
+renders remote state — asynchronous echo and a remotely-owned caret that no screen reader
+can track. A far-end-line field renders nothing whatsoever: it holds no text, and it is a
+place to aim keys rather than a place text lives. The mirroring rejected wholesale above
+stays rejected, because this is not that.
+
+**Never inferred — Decided.** The state is toggled by the user and by nothing else. There
+is no fact to infer it from: the far ends that need it announce nothing, which is the
+substance of the open question about programs that need keystrokes without ever entering
+the alternate screen. And a state that changed itself would change what a key does between
+one session and the next, which is the reason keybindings are global rather than
+per-profile.
+
+**What it costs, told to the user once rather than left to be discovered.** No local
+history and no local completion while it is on; the far end's answer instead. Nothing is
+submitted, so nothing opens a command block, nothing earns a heading, and nothing enters
+Acter's history — that falls out of the existing exclusion rule rather than needing a new
+one, but a user who runs a whole `ssh` session this way ends with an Acter history holding
+none of it. And a slow far end is felt on every character, which is what the far end owning
+the line means, and why the toggle has to be cheap to reach in both directions.
+
+**Layer 1 is untouched in either state.** Ctrl+Shift is always Acter's, so the way back is
+always pressable. Ctrl+Shift+Space still sends one literal keystroke without changing
+state, which is the right tool for a pager or a bare `[y/N]` — neither of those edits a
+line, so neither needs ownership to move.
 
 Consequences:
 - **Mid-command prompts** ("Y/n" confirmations): prompt text arrives as output of
@@ -717,6 +809,108 @@ Also decided earlier and unchanged:
 - The frontend caps rendered lines per block (last N lines) for never-ending output;
   full scrollback is retained backend-side in the terminal grid.
 
+## A row that changed is an answer — **Decided**
+
+(Agreed in conversation 2026-08-31, with far-end-line mode above.) Once keystrokes reach
+the far end, the far end's reply is not text it appends but a row it redraws. Up does not
+emit a line; it repaints the row the cursor is on with a different one. Tab does not emit
+a line; it extends it. So everything Acter can say about such a key comes from comparing
+that row before and after — the differ this project has so far chosen not to build. It is
+not avoidable once keys pass, and it is far smaller than the thing that was avoided.
+
+**The same rewrite is churn or an answer depending on whether the user caused it**, and
+Acter knows which without a heuristic: a keystroke arrived either as an Enter-submission
+or as a pass-through, and that is a fact rather than an inference. A spinner repainting on
+its own stays churn and stays unspoken, exactly as the identified-lines decision says. A
+row that changes within the settling window after a key Acter sent is the answer to that
+key, and is spoken.
+
+Three bounds keep it small, and all three already exist:
+
+- **Only after a key Acter sent.** Nothing is diffed continuously, and no timer runs while
+  the user is not pressing anything.
+- **Only when it settles**, on the quiescence clock the pacing policy already computes.
+- **Only the cursor row**, which is where the whole of line editing happens.
+
+The rule is then: *after a passed key that is not a printable character, if the cursor
+row's content changed once it settles, speak the row.* Up gives `cargo test --all`. `car`
+then Tab gives `cargo`. Ctrl+U gives an empty row, and what to say about that is a string
+question rather than a mechanism one.
+
+**Measured 2026-08-31, against `bash` inside WSL through a real pseudoconsole, and the
+measurement corrects the rule in two places.**
+
+*First, "speak the row" is wrong and would read the prompt aloud on every press.* What
+comes back on the wire when the recalled line changes is `ESC [ 4 ; 35 H` followed by the
+few characters that differ — readline repaints from the column the line starts at, and the
+row the engine then reports is `"marlon@splyt:/mnt/c/Users/marlo$ exit"`, prompt included.
+What a listener wants is `exit`. The rule is therefore **the row from the anchor column
+onward**, where the anchor is the column the cursor sat at when the far end finished
+drawing its prompt — which is not a new concept but the same anchor B4.9 already takes at
+the instant of submission, used for a second purpose.
+
+*Second, and this one would have shipped broken:* the first up arrow at a fresh prompt
+produces **no rewrite at all**. The row is `…$ ` and readline simply writes the recalled
+line after it, so the engine reports an *append*, not a revision. Only the second and
+later presses rewrite, because only then is there something to overwrite. A rule keyed on
+"a line was rewritten" would therefore be silent on the commonest press of the commonest
+key. The comparison is against the row's content, and both kinds of change count.
+
+With those two corrections the measured behaviour is exactly what is wanted: up gives
+`echo acter-history-one`, up again gives `exit`, Ctrl+U gives an empty row, and typing
+`ech` then Tab gives `echo` — where Tab's own contribution on the wire was the two bytes
+`o ` and would have been meaningless spoken on its own.
+
+**Printable characters need no diff at all.** The reader speaks them as they are typed, and
+the far end's echo of them is suppressed by the positional rule already built for submitted
+lines: text appended to the cursor row after Acter wrote to it is the echo. That rule
+generalises from a line to a character unchanged, which is why this costs one comparison
+rather than one subsystem.
+
+**And there is no differ, which the measurement settled rather than argued.** The engine
+has emitted identified lines with `Appended` and `Rewritten` revisions since B3, and it
+already suppresses a repaint that changed nothing: a `gh` prompt redrawing four rows after
+an arrow produced exactly two items, for the two rows whose *text* differed. So what this
+section calls a diff is a policy over events that already exist, and the machinery whose
+absence made "build a differ" sound expensive turns out to have been built for another
+reason three entries ago. What was missing was never the comparison. It was permission to
+speak the result.
+
+**Structure is untouched by any of it.** A keystroke driving a running program earns
+neither a heading nor an echo line, and whatever it produces appends to the block already
+open. Twenty presses of `space` through a diff must not produce twenty headings called
+"space". That was already this document's answer to the open question below; it is now
+Decided, and it is a decision Acter makes without a heuristic because the category of a
+keystroke is known rather than guessed.
+
+**What the rule does not cover is a repaint of several rows** — the shape of a `gh`
+selection prompt, and of every widget that draws a list and moves a highlight through it.
+The axis that matters turns out not to be "the cursor row versus the whole grid" but **how
+many rows changed** after a key Acter sent:
+
+- none changed: say nothing;
+- rows appended below: ordinary output, which autoread already handles;
+- the cursor row alone: line editing, as above;
+- a few rows in place: a widget whose selection moved, and the row that gained the
+  selection is what a listener needs;
+- most of the screen: a full repaint, which belongs to interactive mode and its renderer.
+
+One mechanism with a threshold, not five mechanisms. Only the first three are specified.
+The fourth is an experiment before it is a rule, because whether a text diff can see a
+selection move at all depends on whether the highlight is drawn with a marker character or
+only with colour — the grid carries attributes and the buffer does not — and that is
+measured rather than assumed (roadmap entry 30).
+
+**Measured 2026-08-31, and the fourth bucket survives.** `gh repo create`'s selection
+prompt draws its highlight as a `>` in the text of the row, with colour *as well as* rather
+than *instead of*, so a text comparison sees the selection move. It takes no alternate
+screen, as expected. Each arrow changes exactly two rows — the one that lost the marker and
+the one that gained it — and the engine reports both as revisions of stable line ids, while
+the header row it repaints identically each time produces nothing. So the rule to write is
+"speak the row that gained the marker", and the attribute-aware path the colour case would
+have forced is not needed for this program. One program is not a population, and entry 30
+keeps that caveat.
+
 ## Open questions
 
 - Browse-cursor stability under in-place updates (raised 2026-08-17 with the
@@ -748,6 +942,15 @@ Also decided earlier and unchanged:
   it knows whether a keystroke arrived as an Enter-submission or as a pass-through, so the
   category is a fact rather than an inference, and nothing here should be timing-dependent.
 
+  **Answered 2026-08-31, in two halves, and one of them was already written here.** A
+  keystroke can be sent without leaving the conversational view in two ways: one at a time
+  with Ctrl+Shift+Space, which is what a pager's `space` and a bare `[y/N]` want since
+  neither edits a line; and for as long as the user wants with far-end-line mode
+  (Ctrl+Shift+K), which is what a far end's own line editor wants. The paragraph above
+  about structure was right and is now Decided under "A row that changed is an answer".
+  What was missing, and is the substance of the amendment, is that the sticky form cannot
+  be built key by key — see "Edit field ownership".
+
 - **A program can need keystrokes without ever entering the alternate screen, so
   alt-screen detection is not sufficient to know that interactive mode is needed** (raised
   2026-08-22 by the `git diff` case, and measured rather than argued). The Vision section
@@ -765,6 +968,44 @@ Also decided earlier and unchanged:
   screen at all — a command that has produced output and then gone silent without ending
   is the observable shape, and it is the same quiescence signal the pacing policy already
   computes.
+
+  **Sharpened 2026-08-31 by the `gh` case, and the population is larger than pagers.** An
+  inline selection prompt — `gh pr create` asking a question, arrows moving a highlight — is
+  the same shape as `less -X`: it wants raw keys, it never takes the alternate screen, and
+  it announces nothing. Setting `PAGER` removes the pagers and does nothing for this, so the
+  case is permanent rather than transitional. The consequence for the design is that "this
+  is an interactive program" is not a category Acter can compute, which is exactly why
+  far-end-line mode is toggled by the user and never inferred. What is left to build is not
+  detection but a *hint*: the quiescence signal named above, said once, so a user whose
+  session has gone quiet is told the program appears to be waiting and how to hand it the
+  keyboard. Roadmap entry 29 — and its difficulty is false positives, since a command that
+  finished also goes quiet, not the signal itself.
+- **Does a field holding no text still have to be an application?** (Raised 2026-08-31
+  with far-end-line mode.) Arrows reach a web frontend only in focus mode, and Acter does
+  not detect the reader's mode, by decision. `role="application"` was tried at the command
+  line and reverted the same day, because it removed browse mode from the one place a
+  listener uses it deliberately — turning focus mode off at the edit field and arrowing up
+  to hear the tail of the last command. That reason is about a field with text in it. A
+  far-end-line field has none, so there is nothing there to browse and the reversal's ground
+  does not obviously hold. Whether the field becomes an application while the mode is on,
+  and what a reader says when it lands on an edit field that is permanently empty, are both
+  measurable on the bridge before any frontend work exists.
+
+  **Measured 2026-08-31 on NVDA 2026.1.1 through the bridge, standing in as an ordinary
+  user, and it answers the first half and complicates the second.** On a plain empty edit
+  field NVDA announced it cleanly as name and role — "Plain command line, edit", with no
+  "blank" — and then **did not switch to focus mode**, so the up arrow moved the browse
+  cursor to the previous heading and the page never saw the key at all. The same field
+  inside a `role="application"` region received up, down, Tab and Ctrl combinations, every
+  one of them. So the mode does need the region, and the earlier reversal's ground does not
+  hold where there is no text to browse.
+
+  What it complicates is the element. An `<input>` inside that region makes NVDA say
+  "blank" *before every arrow press*, because the caret moved in an empty text field — so
+  the listener would hear "blank" ahead of whatever Acter says, on every keystroke, forever.
+  The answer is likely that the key sink should not be a text input at all but a focusable
+  element with no text in it, inside the application region. That is entry 28's to settle,
+  and it is now a choice between two known behaviours rather than an open question.
 - Interactive-mode screen reading strategy: how the buffer/grid is exposed to the
   screen reader while a full-screen app runs (review cursor? live row announcements?).
 - Non-visual tab/session navigation UX (switch keys, announcing which session is
