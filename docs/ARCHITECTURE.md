@@ -183,6 +183,35 @@ Consequences and guardrails:
   notification need (e.g. OS-level toasts for background-tab activity) would earn its
   own port then, not now.
 
+### Platform divergence — **Decided**
+
+Acter runs on more than one operating system, and the rule for how that divergence is
+expressed is a rule about **size**, agreed in conversation 2026-08-31:
+
+- A **conditional line** is fine. `#[cfg(windows)]` on one import or one statement costs a
+  reader nothing.
+- A **conditional function** is fine. `container.rs`'s `signatures()` is the precedent: two
+  small functions with the same signature, one gate each, and the choice made where the
+  composition root already names concrete types.
+- A **conditional module** is the signal to extract. When a whole file would be gated, the
+  per-OS thing has become an adapter: give it its own module implementing the port the
+  domain already has, and let one gated function at the composition root pick between them.
+
+**And prefer no gate at all where the answer is a value.** Which connection kinds an
+operating system offers is a compile-time constant, not I/O, so it is a **policy taking the
+OS name** — `offered(std::env::consts::OS)` — rather than a `#[cfg]`-selected constant.
+Every platform's answer then compiles on every platform and is asserted by tests that run
+everywhere, which is what a `#[cfg]`-gated constant destroys: before this rule, the
+catalogue's macOS behaviour could only be tested on a Mac and its Windows behaviour only on
+Windows, so neither was tested on the machine that changed it.
+
+**A port is still not free.** ARCHITECTURE's existing guardrail holds: pure logic gets no
+trait wrapper just for ceremony. A constant list of kinds is a value passed to a
+constructor, the way `ConnectService` already takes its scripted profile names. What earns
+a port is per-OS *I/O* — reading `/etc/shells`, asking who signed a file — and those ports
+(`InstalledShells`, `Signatures`) already exist, so an operating system joins by adding an
+adapter rather than by growing a seam.
+
 ### Reference layout
 
 acter-core/src (the domain crate — the crate is the domain, so no domain/ wrapper):

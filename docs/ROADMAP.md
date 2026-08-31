@@ -3743,6 +3743,94 @@ thing to pick up once the adapters land, not merely the next number.
     say the session is integrated until a marker has actually arrived — which the grace period
     already does for free, and which is why this entry can be small without being optimistic.
 
+## Status board — lane 3: macOS (**opened 2026-08-31**; may run parallel to lanes 1 and 2)
+
+**Why a lane and not four entries in lane 2.** Lane 2 is the domain, and none of this is:
+what an operating system offers, who signed a file on it, and where its menus live are four
+adapter questions that happen to share a platform. They are ordered strictly among
+themselves and block nothing in the other two lanes, which is the definition this board
+already uses for a lane.
+
+**What macOS is, as a product decision — Decided.** Two kinds and no more: a shell on this
+Mac, and SSH. cmd, PowerShell and WSL are Windows things and are absent from the catalogue
+entirely rather than offered as unavailable — `WSL (not available)` on a Mac, with
+instructions to install Windows, is the absurdity the catalogue policy was written to avoid.
+
+**What was measured before the lane was opened, 2026-08-31**, on macOS 15.0, rustc 1.98.0,
+`x86_64-apple-darwin`. The architecture held: `portable-pty`, `russh`, `alacritty_terminal`
+and every domain crate compile for Darwin untouched. Four things did not, and they are the
+whole of entry 28:
+
+- `cargo check --workspace --all-targets` fails once, on an ungated
+  `acter_shells::WindowsTrust` import in `crates/acter-transports/tests/real_session.rs`.
+- `acter-app` does not compile at all: `generate_context!()` panics with `failed to open
+  icon .../icons/icon.png`. The directory holds `icon.ico` and nothing else, and Tauri wants
+  a PNG off Windows.
+- Three of `acter-core`'s 298 unit tests fail. Two assert on `C:\`-shaped paths in
+  `shell_install.rs`; the third, `the_list_asks_the_machine_again_on_every_call`, fails
+  because the catalogue is empty off Windows so the list never asks the machine anything.
+- `container.rs`'s `profiles_directory()` falls back to `%APPDATA%` and then to `"."`, so a
+  macOS Acter would write its `known_hosts` and its explained-shells record into whatever
+  directory it happened to be launched from.
+
+28. **M1, Acter runs on macOS, and SSH is what it offers.** Spec: none yet → the
+    implementing PR carries it. The four repairs above, plus the catalogue seam and one
+    kind.
+
+    **SSH needs no new adapter and that is the point of putting it first.** `russh` is
+    portable, `KnownHosts` reads paths, and `users_known_hosts()` already falls back to
+    `HOME`. So the smallest honest macOS build is one that connects somewhere real, which
+    makes everything after it judgeable against a green suite and a working window.
+
+    **The catalogue stops being `#[cfg]`-selected** and becomes a policy over the OS name,
+    per ARCHITECTURE's platform-divergence rule. That is what repairs the third failing test
+    rather than deleting it, and it is what lets a Windows machine run the macOS assertions
+    and a Mac run the Windows ones — which neither could do before.
+
+    Also here: a macOS CI job, so the lane cannot regress silently.
+
+29. **M2, the Terminal row — the shells this Mac has, and who signed them.** Spec: none yet
+    → specify first. **The signature check is folded in rather than following** (decided
+    2026-08-31, with the user): the moment a local row exists, every connection through it
+    raises `Unchecked`'s "this build cannot check signatures" dialog, and shipping that even
+    briefly trains a listener to dismiss the one dialog in this product that is about
+    security.
+
+    One row, called Terminal, with the shells this Mac has as its **variants** in the
+    dialog's panel — the shape A11 gave PowerShell's editions and A8 gave WSL's
+    distributions. Read from `/etc/shells`, with the account's own login shell first and
+    marked as the default, so Enter on the row with nothing picked starts what a Terminal.app
+    window would have started.
+
+    **Two adapters, extracted rather than gated.** `InstalledShells` and `Signatures` are the
+    ports and they already exist; what joins is a macOS implementation of each, chosen by one
+    gated function in `container.rs` beside `signatures()`. `InstalledShells`' shape is the
+    open question for the spec: `wsl_distributions()` is meaningless on a Mac, and a port
+    with a method every second implementer must refuse is a port that has outgrown its name.
+
+    **It carries a measurement obligation and the obligation is the entry.** `setup_for`
+    already has measured `ZSH`, `BASH` and `SH` programs — every one of them measured against
+    *Linux* shells. macOS ships **bash 3.2.57 from 2007**, held there by its GPLv2 licence,
+    and zsh 5.9. B5.5's rule is that the identity may be guessed from the name and the setup
+    may never be, and B5.8 is what it looks like honoured: zsh's line is not bash's with a
+    substitution, and every line it drops was dropped because a measurement said it could be.
+    So each program is re-measured here against the shell macOS actually ships, or it does
+    not ship.
+
+30. **M3, the menu bar macOS actually has.** Spec: none yet → specify first. DESIGN has said
+    since A7 that on macOS a menu belongs in the system bar and not in the window; today
+    `main.ts` honours the second half of that and not the first, so a macOS build has the
+    document menu bar removed and nothing in its place. A native menu, VoiceOver-verified.
+
+    **What it costs is the thing A7 counted as a win**: the in-document menu is drivable by
+    WebDriver end to end, and a native one is not. So the E2E suite's menu coverage stays
+    Windows-only and this entry's checklist is where the macOS menu is judged.
+
+31. **M4, bundling, signing and notarising Acter itself.** Spec: none yet → specify first.
+    `bundle.active` is `false` and the identifier is `dev.marlonsousa.acter`. Distribution
+    is outside the App Store, so this is Developer ID signing plus notarisation, and it is
+    last deliberately: it is about handing Acter to somebody else, not about Acter working.
+
 ## Convergence (requires B4, B5 and B6 all Done)
 
 Spec: none yet → specify when unblocked. The container swaps the scripted fake

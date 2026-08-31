@@ -1,7 +1,7 @@
 # Acter — Design Document
 
 Acter is an accessibility-first terminal for screen reader users. Rust, self-contained,
-Windows first (Linux/Mac later), GUI via an HTML frontend.
+Windows first, macOS second (see the macOS section below), GUI via an HTML frontend.
 
 Status: planning. Decisions are marked **Decided**; everything else is open.
 
@@ -341,6 +341,31 @@ installed WSL distribution — joined with the connections the user has saved. T
 fake sessions join the list in debug builds, which is what the profiles section promised:
 the fake is a permanent, selectable session kind rather than a launch-time environment
 variable.
+
+### What macOS offers is a Terminal and SSH — **Decided 2026-08-31**
+
+**Two kinds and no more.** A shell on this Mac, called Terminal, and SSH. cmd, PowerShell
+and WSL are Windows things: they are absent from a macOS catalogue entirely rather than
+listed as unavailable, because `WSL (not available)` on a Mac — with instructions to install
+Windows — is precisely the absurdity the not-available label exists to avoid on the platform
+where it means something.
+
+**Terminal is one row with the shells as its variants**, the shape PowerShell's editions and
+WSL's distributions already have. The panel lists what `/etc/shells` names, with the
+account's own login shell first and marked as the default, so Enter on the row with nothing
+picked starts the shell a Terminal.app window would have started. One row, however many
+shells a Mac happens to have — a listener arrowing the kinds meets "Terminal" once.
+
+**SSH is the same SSH.** Acter speaks the protocol itself rather than running `ssh`, which
+was decided for accessibility reasons in B9 and pays a second time here: the kind that is
+hardest to port is the one that needed no porting at all.
+
+**The signature check comes with the Terminal row rather than after it.** Off Windows the
+`Signatures` port falls back to an implementation that vouches for nothing, which is the
+right refusal and the wrong experience if it ships alone: every local connection would raise
+a security dialog, including for a `/bin/zsh` that Apple signed, and a dialog that always
+fires is a dialog a listener learns to dismiss. So macOS gets its own answer to "who signed
+this file" in the same entry that gives it a file to start.
 
 ### Acter starts unconnected, and `--profile` is the only switch — **Decided**
 
