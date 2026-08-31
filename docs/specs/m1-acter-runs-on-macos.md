@@ -192,11 +192,16 @@ entry starts from a measurement.
 
 ## Accessibility checklist for the PR body
 
-**VoiceOver on macOS 15, and none of it is agent-observable yet**: there is no screen-reader
-bridge configured on this machine, so every item below is the human's to run and check. The
-bridge is being set up after this PR is opened; if it is connected in time, the items that are
-speech-only become agent-observable and will be recorded with the reader version and capture
-mode, as CLAUDE.md requires.
+**Every item was agent-observed**, driven through the screen-readers bridge as the `user`
+persona: focus, Tab, the arrows, and VoiceOver's own reading and find commands — nothing that
+reaches past focus. VoiceOver on macOS 15.0.0, bridge 0.1.0, silent capture, 2026-08-31,
+against a debug build with `--features custom-protocol`. Nothing here needed a sense nobody
+used: every item is speech, and speech is what the bridge captures. The observations are
+written inline on each item in the PR body, as CLAUDE.md requires.
+
+**This machine's VoiceOver speaks Portuguese**, so each observation compares structure — role,
+state, order, whether a thing was announced at all — and never text, which is the rule the
+reader's own guidance imposes. Acter's own strings are quoted as they came.
 
 - The window opens and VoiceOver announces it as Acter, not connected.
 - VO-arrowing the unconnected window reaches the Connect button and its state is spoken.
@@ -206,6 +211,13 @@ mode, as CLAUDE.md requires.
   their label.
 - The set-up checkbox is announced with its state.
 - Escape closes the dialog and focus returns somewhere a listener can hear.
+
+**Two false alarms cost a run each, and are recorded so nobody rediscovers them.** A binary
+built without `--features custom-protocol` serves `devUrl`, so with no Vite server the web area
+is empty and *nothing* is reachable — and `cargo test` rebuilds the binary without the feature,
+so a test run between building and launching silently replaces what you meant to drive. And a
+window's `AXFocused` is always false on this platform: `AXMain` is the attribute that says
+whether it has keys. Neither was a defect in Acter.
 
 ## What implementing it did not settle
 
