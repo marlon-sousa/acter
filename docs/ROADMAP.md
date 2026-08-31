@@ -387,33 +387,41 @@ the answer to "what should we do now?".
     named sentence is the only one said, the generic `IntegrationUnavailable` being suppressed
     when the note already carried it — so such a listener heard neither.
 
-    **Both suspicions this entry was filed with were wrong**, and measuring them was the whole
-    of the work. Driven through the screen-readers bridge on 2026-08-30 (NVDA 2026.1.1, silent
-    capture, `user` persona) against a real Command Prompt, with the debug binary's embedded
-    WebDriver recording the DOM on the same wall clock: the text reaches `#announcer` correctly
-    every time, in the document, not inert, nothing over it, and stays about two seconds — so the
-    region is not going away. And the reader is not busy: it emits other utterances 60 to 200 ms
-    later and speaks the shell prompt appended to that same region half a second afterwards, 21
-    to 27 ms after that insertion.
+    **Both suspicions this entry was filed with were wrong**, and measuring them was most of the
+    work (NVDA 2026.1.1, `user` persona, through the screen-readers bridge, with the debug
+    binary's embedded WebDriver recording the DOM on the same wall clock). The text reaches
+    `#announcer` correctly every time and stays about two seconds, so the region is not going
+    away; and the reader is not busy, since it speaks other things 60 to 200 ms later and the
+    shell's prompt 21 to 27 ms after that insertion.
 
-    **What is lost is the first live-region change carrying text after the region returns to the
-    accessibility tree.** Acter closed both connect dialogs and drained the sentence in the same
-    millisecond, so it arrived exactly as the document was re-admitted, with no earlier state for
-    the reader to compare it against. Two probes fix that: a marker inserted one millisecond
-    after the swallowed sentence *was* spoken, so this is not "wait longer"; and letting a
-    harmless empty node go first, to re-establish the baseline, failed on the real string in the
-    real order — an empty node is not a text change, and the idea is recorded as dead rather than
-    left to be tried again.
+    **What is lost is the first live-region change carrying text after the region's document
+    returns to the accessibility tree.** A modal makes the rest of the document inert, and when
+    it closes the region comes back with no earlier state for the reader to diff a change
+    against. Two probes fix that: a marker inserted one millisecond after the swallowed sentence
+    *was* spoken, so this is not "wait longer"; and an **empty** node first failed on the real
+    string in the real order, because an empty node is not a text change at all.
 
-    **So the fix is an order, and a measured margin.** The announcer can be asked whether it
-    still owes anything (`settled`), and nothing takes a live region away until it answers.
-    Fifteen bisection trials: at a zero margin the line was heard in 2 of 4, and from 17 ms
-    upwards in 11 of 11, across 17, 30, 47, 66, 123 and 262 ms plus a three-second control, so the
-    landed margin is 100 ms. The risk was measured and cleared in the same session — a marker put
-    into the connecting dialog's region 90 ms before it closed was spoken 7 ms *after* the region
-    left the tree, so removing a region does not retract what the reader has taken. It is now
-    ARCHITECTURE's dialog rule 13, because any dialog that announces and then closes has this
-    waiting in it.
+    **The first fix attempt was measured and rejected**, which is why the entry took two passes.
+    A margin was bisected — one line into the Connect dialog's region, then close: heard in 2 of
+    4 at zero margin and 11 of 11 from 17 ms up — and the Connect dialog was made to hold both
+    dialogs open until the announcer said the words had been taken. Against the real application
+    that was heard in **0 of 3**, because it made the sentence land deterministically in the
+    connecting dialog's region, which is then taken away; and that region *kept* the text, so
+    the next connection opened with the previous far end's sentence — "connecting to Command
+    Prompt", then "connected to WSL: Ubuntu, bash". A defect of its own, and the cause is that
+    the announcer kept one clear timer for every region, so a drain into the document's
+    cancelled the countdown belonging to the dialog's.
+
+    **What landed is an order and a baseline.** The sentence is said after both dialogs close —
+    heard in 4 of 5 on its own — and the announcer is told the document is back, so it spends a
+    wordless change on re-establishing the baseline before the sentence goes out: **10 of 10**,
+    across three first connections of freshly launched windows, six later ones, and a WSL:
+    Ubuntu through the setup dialog. The marker has to carry text and say nothing, and both
+    halves are measured: a full stop works and is audible — in live capture the synthesizer said
+    "ponto" before every connection — while a zero-width space was heard in 5 of 5 with the
+    listener at the keyboard reporting nothing at all. Each region also gets its own clear
+    countdown now. It is ARCHITECTURE's dialog rule 13, because any dialog that closes onto an
+    announcement has this waiting in it.
 
 13.4. **Done** — A10, the window has two faces, and the connected one is the terminal
     window. Spec:
@@ -3023,8 +3031,10 @@ thing to pick up once the adapters land, not merely the next number.
     **The cause guessed at here was wrong, and 13.3 measured it.** Neither the emptying of the
     region nor a busy reader is what happens: the region still holds the sentence two seconds
     later, and the reader speaks other things 60 to 200 ms afterwards. What is lost is the first
-    live-region change carrying text after the region returns to the accessibility tree, which is
-    exactly what closing both connect dialogs in the same millisecond as the drain produces.
+    live-region change carrying text after the region's document returns to the accessibility
+    tree — which the sentence always was, because it was said while the connect dialogs were
+    closing. It is said after they close now, behind a wordless change that re-establishes the
+    reader's baseline.
 
     It matters more than a missed utterance usually would, because it is the *first* thing a
     listener hears about a session and because A13 decided what it says. B9.5's checklist item

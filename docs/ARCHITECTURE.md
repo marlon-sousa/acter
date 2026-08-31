@@ -502,23 +502,20 @@ user may or may not have changed. Removing the role to solve something else is a
 regression: it drops every window back to browse mode, so arrows move a virtual cursor
 instead of a caret and prose becomes reachable that should not be.
 
-**13. A dialog is not closed while the announcer still owes it words.** A modal makes the
-rest of the document inert, so a dialog that wants to be heard carries its own live region and
-announcements drain into it — and closing that dialog takes the region out of the accessibility
-tree. Words the reader has not taken yet go with it, and worse: a live region's **first text
-change after its document returns to the tree** is not announced at all, because there is no
-earlier state to compare it against. So a sentence drained in the same millisecond a dialog
-closes is lost twice over. The dialog awaits `AnnouncerView.settled()` before it hides or
-closes anything.
+**13. An announcement caused by closing a dialog is made after it has closed, and the
+region is given something to lose first.** A modal makes the rest of the document inert, so
+when it closes the live region returns to the accessibility tree with no earlier state the
+reader can compare a change against — and the first change carrying text is discarded. A
+dialog therefore closes, calls `AnnouncerView.documentReturned()`, and only then lets the
+sentence be said.
 
-Measured 2026-08-30 (NVDA 2026.1.1, silent capture, `user` persona, and the debug binary's
-WebDriver recording the DOM on the same clock): the sentence naming the far end a connection
-reached was not spoken on six occasions across five passes, while reaching `#announcer`
-correctly every time and staying there two seconds. At a zero margin it was heard in 2 of 4
-trials; from 17 ms upwards, in 11 of 11. Taking the region away afterwards is safe — a marker
-put in 90 ms before its dialog closed was spoken 7 ms *after* the region left the tree — so
-what the rule buys is the margin, not the region's survival. Spec:
-[13.3-the-connection-sentence-is-heard.md](specs/13.3-the-connection-sentence-is-heard.md).
+Measured 2026-08-30 (NVDA 2026.1.1, `user` persona, through the screen-readers bridge): the
+sentence naming the far end a connection reached went unspoken on six occasions across five
+passes, always as the first thing said after the connect dialogs closed. Said after they
+close it was heard in 4 of 5; with a wordless change in front of it, in 10 of 10. Two dead
+ends are recorded in the announcer rather than left to be rediscovered — an empty node is not
+a text change and does not work, and a full stop works but is audible ("ponto", in live
+capture, before every connection).
 
 **Where these are enforced.** Rules 1, 2, 9 and 13 are behaviour and belong in the dialog
 adapter, tested in `ui/test/adapters/`; rule 3 is the service's, tested in `acter-core`;

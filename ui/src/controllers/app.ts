@@ -267,7 +267,27 @@ export class AppController {
       return false;
     }
     await this.show(connected);
-    this.announcer.announce(connectedMessage(connected.label, connected.note));
+    return true;
+  }
+
+  /**
+   * Say what this window is connected to.
+   *
+   * **Separate from `connectTo` since 13.3**, so it can be said once the connect dialogs
+   * have closed and focus has landed in the edit field. Announced any earlier it went into a
+   * live region that was about to be taken away, or into one that had just come back, and
+   * either way a listener heard the shell's prompt and never what they had connected to.
+   *
+   * The words stay here with every other announced string; what moved is the moment. Answers
+   * whether there was anything to say.
+   */
+  announceConnection(): boolean {
+    if (this.connection === null) {
+      return false;
+    }
+    this.announcer.announce(
+      connectedMessage(this.connection.label, this.connection.note),
+    );
     return true;
   }
 

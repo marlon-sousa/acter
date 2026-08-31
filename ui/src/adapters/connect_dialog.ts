@@ -180,6 +180,10 @@ export class ConnectDialog {
     private readonly connecting: { show(label: string): void; hide(): void },
     // And what the Help button beside the set-up checkbox opens, at the section about it.
     private readonly help: HelpView,
+    // What names the far end the listener is now on, called after this dialog has closed and
+    // focus has gone back to the edit field (roadmap 13.3). The words are the controller's;
+    // when they are said is this dialog's, because only it knows when it is out of the way.
+    private readonly sayConnected: () => void = () => {},
   ) {
     // Escape is the platform's, and so is closing; where focus belongs afterwards is not,
     // because what opened this was a menu that no longer exists (spec A7, decision 3).
@@ -581,25 +585,20 @@ export class ConnectDialog {
     this.connecting.show(this.chosenLabel(row));
     this.busy(true);
     const started = await this.start(this.profile(row), this.setUp());
-    // **Nothing is taken away while the announcer still owes it words** (roadmap 13.3 and
-    // 23.13, fixed 2026-08-30). The sentence naming the far end is announced by whoever
-    // connects, and it drains into the innermost open dialog's live region — this one's.
-    // Closing on the spot took that region away in the same millisecond the sentence
-    // reached it, and a live region's first text change after its document returns to the
-    // accessibility tree is not announced at all: on six occasions across five NVDA passes
-    // a listener was told the shell's prompt and never what they had connected to.
-    //
-    // So the attempt is not over when it answers, it is over when what it said has been
-    // taken. The whole queue rather than this one sentence, because a progress line still
-    // pending would otherwise drain into a region that had just left the tree, which is
-    // this defect again in different words.
-    await this.announcer.settled();
     this.busy(false);
     this.connecting.hide();
     if (started) {
-      // Closing puts focus back in the edit field; the far end the user is now on has
-      // already been announced by whoever connected.
+      // Closing puts focus back in the edit field.
       this.dialog.close();
+      // **And only now is the far end named** (roadmap 13.3 and 23.13, fixed 2026-08-30).
+      // The sentence describes the window the listener is now in rather than the dialog they
+      // have left, and saying it while these dialogs were still up was how it went missing:
+      // it drained into a dialog's live region that was taken away underneath it, or into the
+      // document's in the same millisecond that region came back. Both are lost, and the
+      // second is why the order alone is not enough — a region that has just returned eats
+      // the first change made to it, so the announcer is told to spend a wordless one first.
+      this.announcer.documentReturned();
+      this.sayConnected();
       return;
     }
     // **Back to the list, not left on whatever was pressed** — reported by the user on

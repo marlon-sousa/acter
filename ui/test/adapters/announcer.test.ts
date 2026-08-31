@@ -201,15 +201,18 @@ describe('AnnouncerDom', () => {
 });
 
 /**
- * **What `settled` answers: may the region be taken away yet** (roadmap 13.3 and 23.13).
+ * **A region that has just come back eats the first thing said into it** (roadmap 13.3 and
+ * 23.13).
  *
- * A live region's first text change after its document returns to the accessibility tree is
- * not announced, and Acter used to close both connect dialogs and drain the connection
- * sentence in the same millisecond. So a caller that is about to take a region away — a
- * dialog closing — asks first, and what it waits for is the reader having taken the words,
- * not having spoken them.
+ * While a modal dialog is open the rest of the document is inert; when it closes the region
+ * returns to the accessibility tree with no history the reader can compare a change against,
+ * and the first change carrying text is lost. Measured across five NVDA passes as a sentence
+ * naming the far end that a listener never heard.
+ *
+ * So a caller that has just closed a dialog says so, and this adapter spends a wordless
+ * change on re-establishing the baseline.
  */
-describe('settling', () => {
+describe('coming back from a dialog', () => {
   beforeEach(() => {
     vi.useFakeTimers();
   });
@@ -218,98 +221,110 @@ describe('settling', () => {
     document.body.replaceChildren();
   });
 
-  /** Whether the promise has resolved, without awaiting it — which is the only way to assert
-   * that it has *not*. */
-  function watch(promise: Promise<void>): { done: boolean } {
-    const state = { done: false };
-    void promise.then(() => {
-      state.done = true;
-    });
-    return state;
-  }
-
-  it('is settled at once when nothing was ever announced', async () => {
-    const announcer = new AnnouncerDom(makeRegion(), 0);
-
-    const settled = watch(announcer.settled());
-    await vi.advanceTimersByTimeAsync(0);
-
-    expect(settled.done).toBe(true);
-  });
-
-  it('waits for an announcement that has not been drained yet', async () => {
+  it('puts something in the region before the next announcement is made', () => {
     const region = makeRegion();
     const announcer = new AnnouncerDom(region, 0);
 
+    announcer.documentReturned();
     announcer.announce('connected to Command Prompt');
-    const settled = watch(announcer.settled());
 
-    // Drained, so the words are in the region — and that is not yet the question being
-    // asked. Nothing has taken them.
-    await vi.advanceTimersByTimeAsync(0);
-    expect(region.textContent).toBe('connected to Command Prompt');
-    expect(settled.done).toBe(false);
+    idleDrainTurn();
+    expect(region.children).toHaveLength(1);
 
-    // Still not, right up to the margin.
-    await vi.advanceTimersByTimeAsync(SPOKEN_MARGIN_MS - 1);
-    expect(settled.done).toBe(false);
-
-    await vi.advanceTimersByTimeAsync(1);
-    expect(settled.done).toBe(true);
+    spacedDrainTurn();
+    expect(region.children).toHaveLength(2);
+    expect(region.children[1]?.textContent).toBe('connected to Command Prompt');
   });
 
-  /** The hold on the session's first words is a wait like any other: a caller that asked
-   * before it elapsed is still waiting after it. */
-  it('waits out the startup hold as well', async () => {
-    const announcer = new AnnouncerDom(makeRegion(), 1_000);
+  /** **And it is not an empty node**, which is the whole trick. An empty node is not a text
+   * change, so the reader has nothing to take and the announcement after it is still the
+   * first one — tried on the real sentence in the real order on 2026-08-30, and it failed. */
+  it('carries text, so the reader has a change to lose', () => {
+    const region = makeRegion();
+    const announcer = new AnnouncerDom(region, 0);
 
-    announcer.announce('connected to Command Prompt');
-    const settled = watch(announcer.settled());
+    announcer.documentReturned();
+    idleDrainTurn();
 
-    await vi.advanceTimersByTimeAsync(999 + SPOKEN_MARGIN_MS);
-    expect(settled.done).toBe(false);
-
-    await vi.advanceTimersByTimeAsync(1);
-    expect(settled.done).toBe(true);
+    expect(region.children[0]?.textContent).not.toBe('');
   });
 
-  /** **The promise is about the queue when it resolves, not when it was asked for.** A
-   * progress sentence arriving while a caller waits is one more thing the region is owed,
-   * and closing on the older answer would drain it into a region that had just gone. */
-  it('waits for an announcement that arrives while it is being waited on', async () => {
-    const announcer = new AnnouncerDom(makeRegion(), 0);
+  /** **And no words**, or a listener hears it. A full stop worked and was audible — the
+   * synthesizer said "ponto" before every connection — so what goes in is a zero-width
+   * space, which the same listener heard nothing of. */
+  it('says nothing a listener can hear', () => {
+    const region = makeRegion();
+    const announcer = new AnnouncerDom(region, 0);
 
+    announcer.documentReturned();
+    idleDrainTurn();
+
+    expect(region.children[0]?.textContent).toBe('\u200b');
+  });
+
+  /** It waits its turn like anything else, so the announcement behind it is not delayed by
+   * more than the gap that keeps the two out of one mutation batch. */
+  it('is one drain, not a special case', () => {
+    const region = makeRegion();
+    const announcer = new AnnouncerDom(region, 0);
+
+    announcer.documentReturned();
+    announcer.announce('connected to Command Prompt');
+    idleDrainTurn();
+
+    vi.advanceTimersByTime(DRAIN_SPACING_MS - 1);
+    expect(region.children).toHaveLength(1);
+    vi.advanceTimersByTime(1);
+    expect(region.children).toHaveLength(2);
+  });
+});
+
+/**
+ * **Each region is cleared on its own countdown** (roadmap 13.3).
+ *
+ * One timer could only ever clear one of them, and the drain that starts a countdown is not
+ * always the drain that ends it: an announcement into the document's region cancelled the
+ * one belonging to a dialog's, so the dialog kept its last words — and spoke them when it
+ * next opened. Measured 2026-08-30, where connecting to Command Prompt was greeted with
+ * "connected to WSL: Ubuntu, bash".
+ */
+describe('clearing more than one region', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    document.body.replaceChildren();
+  });
+
+  it('does not leave a dialog holding its last words when something else is said', () => {
+    const document_region = makeRegion();
+    const dialog = document.createElement('dialog');
+    dialog.setAttribute('open', '');
+    const inside = document.createElement('div');
+    inside.setAttribute('data-live-region', '');
+    dialog.append(inside);
+    document.body.append(dialog);
+    const announcer = new AnnouncerDom(document_region, 0);
+
+    // Said into the dialog, which is open.
     announcer.announce('Starting Ubuntu.');
-    const settled = watch(announcer.settled());
-    await vi.advanceTimersByTimeAsync(0);
+    idleDrainTurn();
+    expect(inside.textContent).toBe('Starting Ubuntu.');
 
-    announcer.announce('connected to WSL: Ubuntu, bash');
-    await vi.advanceTimersByTimeAsync(SPOKEN_MARGIN_MS);
-    expect(settled.done).toBe(false);
+    // The dialog closes, and something is said into the document a moment later — which is
+    // what used to cancel the dialog's countdown.
+    dialog.removeAttribute('open');
+    vi.advanceTimersByTime(DRAIN_SPACING_MS);
+    announcer.announce('C:\\Users\\marlo>');
+    idleDrainTurn();
+    expect(document_region.textContent).toBe('C:\\Users\\marlo>');
 
-    // The second is held out of the first one's mutation batch, so it only reaches the region
-    // a gap after the first did — and its own margin runs from its own drain.
-    await vi.advanceTimersByTimeAsync(DRAIN_SPACING_MS - SPOKEN_MARGIN_MS);
-    expect(settled.done).toBe(false);
-
-    await vi.advanceTimersByTimeAsync(SPOKEN_MARGIN_MS);
-    expect(settled.done).toBe(true);
-  });
-
-  /** A burst is one wait, not one per item: everybody asking is released together once the
-   * last of them has had its margin. */
-  it('releases every caller together', async () => {
-    const announcer = new AnnouncerDom(makeRegion(), 0);
-
-    announcer.announce('first');
-    announcer.announce('second');
-    const one = watch(announcer.settled());
-    const two = watch(announcer.settled());
-
-    await vi.advanceTimersByTimeAsync(DRAIN_SPACING_MS + SPOKEN_MARGIN_MS);
-
-    expect(one.done).toBe(true);
-    expect(two.done).toBe(true);
+    // Both are emptied, each on its own countdown, and the dialog has nothing left to say
+    // the next time it opens.
+    vi.advanceTimersByTime(CLEAR_AFTER_MS * 2);
+    expect(inside.textContent).toBe('');
+    expect(document_region.textContent).toBe('');
   });
 });
 

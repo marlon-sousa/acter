@@ -34,14 +34,13 @@
 // Any dialog that wants to be heard therefore carries `data-live-region`, and drains go
 // there while it is open.
 //
-// **And nothing may take that region away while this adapter still owes it words.** A live
-// region's first text change after its document returns to the accessibility tree is not
-// announced: the reader has no earlier state to compare it against. Acter used to close both
-// connect dialogs and drain the connection sentence in the same millisecond, so the sentence
-// naming the far end arrived exactly as the document was re-admitted, and a listener was told
-// nothing about what they had connected to (roadmap 13.3 and 23.13, six observations across
-// five NVDA passes). `settled` is how a caller waits for what it announced before tearing
-// anything down; see SPOKEN_MARGIN_MS for what the margin is and what was measured.
+// **A region that has just come back eats the first thing said into it.** When the dialog
+// above closes, its document returns to the accessibility tree with no history the reader can
+// compare a change against, and the first change carrying text is lost — which is how the
+// sentence naming the far end a connection reached went missing on six occasions across five
+// NVDA passes (roadmap 13.3 and 23.13). `documentReturned` is how a caller says the region
+// is back, so this adapter can spend a wordless change on re-establishing that baseline; see
+// SILENT_MARKER for what it is and why it is not empty.
 
 import type { AnnouncerView } from '../ports/announcer_view';
 
@@ -74,27 +73,21 @@ const CLEAR_AFTER_MS = 1500;
 // coarser than this gap: in the `burst` scenario the queue never reached depth 2.
 const DRAIN_SPACING_MS = 250;
 
-// How long text must sit in the live region before the region may be taken away.
+// What is put into the region to re-establish its baseline, so the announcement after it is
+// not the first change and is therefore not the one that is lost.
 //
-// **The reader takes a change some time after the change happens**, and until it has, the
-// words belong to a region that a closing dialog is about to remove from the accessibility
-// tree. This is the margin `settled` waits out, and it is measured rather than chosen.
+// **It has to carry text, and it has to say nothing.** Those pull against each other, and
+// both halves were measured on 2026-08-30 through the screen-reader bridge (NVDA 2026.1.1):
 //
-// Fifteen trials through the screen-reader bridge on 2026-08-30 (NVDA 2026.1.1, silent
-// capture, `user` persona), each opening the Connect dialog for real, putting one line in its
-// live region, waiting a set margin and then closing the dialog: at zero margin (1 to 2 ms
-// actual) the line was heard in 2 of 4 trials — which is exactly the intermittency the NVDA
-// passes recorded — and from 17 ms upwards it was heard in 11 of 11, across 17, 30, 47, 66,
-// 123 and 262 ms plus a three-second control. So the threshold is somewhere below 17 ms, and
-// the value below is about six times the highest it can be.
+// - An EMPTY node does not work, because an empty node is not a text change at all: tried on
+//   the real sentence in the real order, the sentence was still lost. Do not revive it.
+// - A full stop works — ten connections out of ten spoke their sentence with one in front —
+//   and is AUDIBLE: in live capture the synthesizer said "ponto" before every connection,
+//   which is this machine's punctuation level doing exactly what it should.
 //
-// It is generous because it is cheap: it is paid once per connection, at the end of a wait
-// measured in seconds, and what it buys is the one sentence telling a listener where they now
-// are. Unlike DRAIN_SPACING_MS this is not about mutations merging — a region leaving the tree
-// does not retract what the reader has already taken, which was measured in the same session:
-// a marker put into the connecting dialog's region 90 ms before that dialog closed was spoken
-// 7 ms AFTER the region left the tree.
-const SPOKEN_MARGIN_MS = 100;
+// A zero-width space is the one that is both: five connections out of five spoke their
+// sentence, and the listener at the keyboard reported hearing nothing at all before it.
+const SILENT_MARKER = '\u200b';
 
 // How long the first announcement of a session waits before it is put into the region.
 //
@@ -116,10 +109,19 @@ export class AnnouncerDom implements AnnouncerView {
   private readonly queue: string[] = [];
   private drainScheduled = false;
   private lastDrainAt = Number.NEGATIVE_INFINITY;
-  private clearTimer: ReturnType<typeof setTimeout> | undefined;
-  /** Callers awaiting `settled`, released together once nothing is owed. */
-  private readonly waiting: (() => void)[] = [];
-  private settleTimer: ReturnType<typeof setTimeout> | undefined;
+  /**
+   * The idle countdown for each region that has been written to, kept per region.
+   *
+   * **One timer could only ever clear one of them**, and the drain that started it is not
+   * always the drain that ends it: an announcement into the document's region cancelled the
+   * countdown belonging to a dialog's, so the dialog kept its last words for the rest of the
+   * session — and spoke them when it next opened. Measured 2026-08-30, where a connection to
+   * Command Prompt was greeted with "connected to WSL: Ubuntu, bash".
+   */
+  private readonly clearTimers = new Map<
+    HTMLElement,
+    ReturnType<typeof setTimeout>
+  >();
   /** The earliest moment anything may be put into the region. See STARTUP_HOLD_MS. */
   private readonly openAt: number;
 
@@ -132,7 +134,6 @@ export class AnnouncerDom implements AnnouncerView {
   constructor(
     private readonly region: HTMLElement,
     startupHold: number = STARTUP_HOLD_MS,
-    private readonly spokenMargin: number = SPOKEN_MARGIN_MS,
   ) {
     this.openAt = Date.now() + startupHold;
   }
@@ -143,53 +144,16 @@ export class AnnouncerDom implements AnnouncerView {
   }
 
   /**
-   * Resolves once everything announced so far has reached the reader — the port's contract,
-   * and the answer to "may I close the dialog this was spoken into".
+   * Spend a wordless change on the region, so the next announcement is not the first one
+   * after the document came back — and is therefore not the one that is lost.
    *
-   * Nothing owed means three things at once: the queue is empty, no drain is pending, and the
-   * last drain is far enough behind that the reader has taken it. An announcement arriving
-   * while somebody waits pushes all three back, because the promise describes the queue when
-   * it resolves rather than when it was asked for.
+   * It goes through the queue like anything else, which is what makes it work: the drain
+   * spacing keeps it out of the next announcement's mutation batch, so the reader sees two
+   * changes rather than one. A caller that closes a dialog and then announces something needs
+   * no other knowledge than that it closed a dialog.
    */
-  settled(): Promise<void> {
-    if (this.owesNothing()) {
-      return Promise.resolve();
-    }
-    return new Promise((resolve) => {
-      this.waiting.push(resolve);
-    });
-  }
-
-  private owesNothing(): boolean {
-    return (
-      this.queue.length === 0 &&
-      !this.drainScheduled &&
-      Date.now() - this.lastDrainAt >= this.spokenMargin
-    );
-  }
-
-  /**
-   * Release whoever is waiting, once the last drained announcement has had its margin.
-   *
-   * Called from the drain rather than from `settled`, so a waiter never polls: the only
-   * moments anything can become owed or stop being owed are an announcement arriving and an
-   * announcement draining, and the drain is the one that ends the wait.
-   */
-  private scheduleSettle(): void {
-    clearTimeout(this.settleTimer);
-    // Not the last one: whichever drain is last will schedule this for itself.
-    if (this.queue.length > 0 || this.drainScheduled) {
-      return;
-    }
-    this.settleTimer = setTimeout(() => {
-      // Something was announced in the meantime, so the margin belongs to it now.
-      if (!this.owesNothing()) {
-        return;
-      }
-      for (const resolve of this.waiting.splice(0)) {
-        resolve();
-      }
-    }, this.spokenMargin);
+  documentReturned(): void {
+    this.announce(SILENT_MARKER);
   }
 
   // The spacing is a gap BETWEEN announcements, not a delay before each one: an
@@ -250,18 +214,20 @@ export class AnnouncerDom implements AnnouncerView {
     region.append(line);
     this.lastDrainAt = Date.now();
 
-    // Restart the idle countdown on every drained announcement, so a burst accumulates
-    // and is cleared only once it has settled — never out from under its own latest
-    // entry. The region cleared is the one written to, not whichever is current when the
-    // timer fires: a dialog that closes in between must not leave its last words behind.
-    clearTimeout(this.clearTimer);
-    this.clearTimer = setTimeout(() => {
-      region.replaceChildren();
-    }, CLEAR_AFTER_MS);
+    // Restart the idle countdown for THIS region, so a burst accumulates and is cleared only
+    // once it has settled — never out from under its own latest entry, and never because
+    // something was said somewhere else (see clearTimers).
+    clearTimeout(this.clearTimers.get(region));
+    this.clearTimers.set(
+      region,
+      setTimeout(() => {
+        region.replaceChildren();
+        this.clearTimers.delete(region);
+      }, CLEAR_AFTER_MS),
+    );
 
     if (this.queue.length > 0) {
       this.scheduleDrain();
     }
-    this.scheduleSettle();
   }
 }

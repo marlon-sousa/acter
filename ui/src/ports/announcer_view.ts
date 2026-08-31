@@ -5,25 +5,26 @@
 // rather than merged into one mutation batch (A5.2). Callers must render the text into
 // the buffer before announcing it — the deferred drain preserves that order.
 //
-// settled() answers the other half of that deferral: whether anything is still owed. It
-// exists because a caller can take the live region away — a dialog closing is a region
-// leaving the accessibility tree — and words the reader has not taken yet go with it
-// (spec 13.3).
+// documentReturned() is the other half of that, and it exists because of what a modal
+// dialog does to a live region: while one is open the rest of the document is inert, and
+// when it closes the region comes back with no history the reader can compare against.
+// The first thing said into it is then lost (spec 13.3).
 
 export interface AnnouncerView {
   announce(text: string): void;
 
   /**
-   * Resolves once everything announced so far has reached the reader.
+   * Say that a modal dialog has closed, so what is announced next can be heard.
    *
-   * **Taken, not spoken.** The reader copies a live region's text into its own speech
-   * queue when the change reaches it and utters it whenever it gets there — measured
-   * 2026-08-30, where a marker put into a dialog's region was spoken 7 ms *after* that
-   * region left the accessibility tree. So this resolving means the words are safe from
-   * whatever the caller is about to do, not that the listener has heard them yet.
+   * **A live region that has just returned to the accessibility tree eats the first text
+   * change made to it.** Measured 2026-08-30 through the screen-reader bridge: the sentence
+   * naming the far end a connection reached went missing on six occasions across five NVDA
+   * passes, and it was always the first thing said after the connect dialogs closed. Given
+   * something else to lose first, it was heard in every one of ten connections.
    *
-   * Anything announced while a caller is awaiting this is waited for too: the promise is
-   * about the queue's state when it resolves, not when it was asked for.
+   * So this queues a change that carries text but no words — a baseline for the reader to
+   * compare the next one against. Whoever closes a dialog calls it; it is not the closing
+   * that needs announcing, it is the announcement after it that needs to survive.
    */
-  settled(): Promise<void>;
+  documentReturned(): void;
 }

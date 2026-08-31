@@ -156,6 +156,7 @@ const connectDialog = new ConnectDialog(
   windowChrome,
   connectingDialog,
   helpDialog,
+  () => void controller.announceConnection(),
 );
 // One handler, both buttons: the two windows are exclusive, so a listener never meets both,
 // and the action they run is the same one the menu item runs (spec A10).
