@@ -493,14 +493,30 @@ fn environment() -> Vec<(String, PathBuf)> {
 mod tests {
     use super::*;
 
+    /// A Windows path, spelled with the separators of the platform running this test.
+    ///
+    /// **The literals below are Windows' directory *names*, which is what these tests are
+    /// about; the backslashes between them are Windows' *spelling*, which is not** (M1).
+    /// `Path` splits on the host's separator, so `C:\Program Files\WindowsApps\...` is a single
+    /// component off Windows — and [`provenance`] walking one component found no `WindowsApps`
+    /// and answered `Indeterminable`. Three tests failed that way and a fourth passed while
+    /// asserting nothing, which is worse. Joining the parts gives every platform a real path
+    /// and every platform the same rule to check.
+    fn at(parts: &[&str]) -> PathBuf {
+        parts.iter().collect()
+    }
+
     /// **The measured shape of a Store install** (2026-08-27): `pwsh` resolves to a package
     /// directory under `WindowsApps`, and what tells it from another install is the package
     /// family rather than anything in the file.
     #[test]
     fn a_file_under_a_store_package_is_named_by_its_package_family() {
-        let provenance = provenance(Path::new(
-            r"C:\Program Files\WindowsApps\Microsoft.PowerShell_7.6.5.0_x64__8wekyb3d8bbwe\pwsh.exe",
-        ));
+        let provenance = provenance(&at(&[
+            "Program Files",
+            WINDOWS_APPS,
+            "Microsoft.PowerShell_7.6.5.0_x64__8wekyb3d8bbwe",
+            "pwsh.exe",
+        ]));
 
         assert_eq!(
             provenance,
@@ -515,9 +531,12 @@ mod tests {
     /// read differently or two entries would sound identical.
     #[test]
     fn a_preview_package_says_so() {
-        let provenance = provenance(Path::new(
-            r"C:\Program Files\WindowsApps\Microsoft.PowerShellPreview_7.7.0.0_x64__8wekyb3d8bbwe\pwsh.exe",
-        ));
+        let provenance = provenance(&at(&[
+            "Program Files",
+            WINDOWS_APPS,
+            "Microsoft.PowerShellPreview_7.7.0.0_x64__8wekyb3d8bbwe",
+            "pwsh.exe",
+        ]));
 
         assert_eq!(
             provenance,
@@ -534,14 +553,14 @@ mod tests {
     #[test]
     fn an_msi_install_is_named_by_the_directory_it_was_installed_into() {
         assert_eq!(
-            provenance(Path::new(r"C:\Program Files\PowerShell\7\pwsh.exe")),
+            provenance(&at(&["Program Files", POWERSHELL, "7", "pwsh.exe"])),
             Provenance::Directory {
                 version: "7".to_owned(),
                 preview: false,
             }
         );
         assert_eq!(
-            provenance(Path::new(r"C:\Program Files\PowerShell\7-preview\pwsh.exe")),
+            provenance(&at(&["Program Files", POWERSHELL, "7-preview", "pwsh.exe"])),
             Provenance::Directory {
                 version: "7-preview".to_owned(),
                 preview: true,
@@ -554,17 +573,25 @@ mod tests {
     #[test]
     fn a_file_somewhere_that_says_nothing_is_reported_as_saying_nothing() {
         for anywhere in [
-            r"C:\Users\someone\.dotnet\tools\pwsh.exe",
-            r"C:\Users\someone\scoop\shims\pwsh.exe",
-            r"C:\tools\pwsh\pwsh.exe",
+            at(&["Users", "someone", ".dotnet", "tools", "pwsh.exe"]),
+            at(&["Users", "someone", "scoop", "shims", "pwsh.exe"]),
+            at(&["tools", "pwsh", "pwsh.exe"]),
             // Under the PowerShell directory but not *in* a versioned one, so the name beside
             // it is not a version and must not be read as one.
-            r"C:\Program Files\PowerShell\7\Modules\Something\pwsh.exe",
+            at(&[
+                "Program Files",
+                POWERSHELL,
+                "7",
+                "Modules",
+                "Something",
+                "pwsh.exe",
+            ]),
         ] {
             assert_eq!(
-                provenance(Path::new(anywhere)),
+                provenance(&anywhere),
                 Provenance::Indeterminable,
-                "{anywhere} says nothing about itself"
+                "{} says nothing about itself",
+                anywhere.display()
             );
         }
     }

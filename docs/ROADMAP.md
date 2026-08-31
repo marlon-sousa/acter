@@ -3758,8 +3758,10 @@ instructions to install Windows, is the absurdity the catalogue policy was writt
 
 **What was measured before the lane was opened, 2026-08-31**, on macOS 15.0, rustc 1.98.0,
 `x86_64-apple-darwin`. The architecture held: `portable-pty`, `russh`, `alacritty_terminal`
-and every domain crate compile for Darwin untouched. Four things did not, and they are the
-whole of entry 28:
+and every domain crate compile for Darwin untouched. Four things did not, and they are most
+of entry 28 — **two more appeared once the second was fixed and `acter-app` compiled far
+enough to run its own tests**, which is recorded here rather than smoothed over: a survey
+that stops at the first thing that will not build has not surveyed anything past it.
 
 - `cargo check --workspace --all-targets` fails once, on an ungated
   `acter_shells::WindowsTrust` import in `crates/acter-transports/tests/real_session.rs`.
@@ -3773,9 +3775,18 @@ whole of entry 28:
   macOS Acter would write its `known_hosts` and its explained-shells record into whatever
   directory it happened to be launched from.
 
-28. **M1, Acter runs on macOS, and SSH is what it offers.** Spec: none yet → the
-    implementing PR carries it. The four repairs above, plus the catalogue seam and one
-    kind.
+And the two that only became visible afterwards:
+
+- **Nine `acter-app` router tests fail** with `connectable not allowed. Plugin not found`. The
+  mock invoke names a literal `http://tauri.localhost`, which is *Windows'* local origin; macOS
+  serves `tauri://localhost`, so every invoke looks remote and Tauri's ACL refuses it.
+- **Four `acter-shells` tests fail and a fifth passes vacuously**, all parsing Windows path
+  shapes with `Path`. The vacuous one is the one worth naming: a single unparsed component is
+  `Indeterminable` for the wrong reason, so it was green on macOS while asserting nothing.
+
+32. **Done** — M1, Acter runs on macOS, and SSH is what it offers. Spec:
+    [m1-acter-runs-on-macos.md](specs/m1-acter-runs-on-macos.md). The six repairs above, plus
+    the catalogue seam and one kind.
 
     **SSH needs no new adapter and that is the point of putting it first.** `russh` is
     portable, `KnownHosts` reads paths, and `users_known_hosts()` already falls back to
@@ -3789,7 +3800,7 @@ whole of entry 28:
 
     Also here: a macOS CI job, so the lane cannot regress silently.
 
-29. **M2, the Terminal row — the shells this Mac has, and who signed them.** Spec: none yet
+33. **M2, the Terminal row — the shells this Mac has, and who signed them.** Spec: none yet
     → specify first. **The signature check is folded in rather than following** (decided
     2026-08-31, with the user): the moment a local row exists, every connection through it
     raises `Unchecked`'s "this build cannot check signatures" dialog, and shipping that even
@@ -3817,7 +3828,7 @@ whole of entry 28:
     So each program is re-measured here against the shell macOS actually ships, or it does
     not ship.
 
-30. **M3, the menu bar macOS actually has.** Spec: none yet → specify first. DESIGN has said
+34. **M3, the menu bar macOS actually has.** Spec: none yet → specify first. DESIGN has said
     since A7 that on macOS a menu belongs in the system bar and not in the window; today
     `main.ts` honours the second half of that and not the first, so a macOS build has the
     document menu bar removed and nothing in its place. A native menu, VoiceOver-verified.
@@ -3826,7 +3837,7 @@ whole of entry 28:
     WebDriver end to end, and a native one is not. So the E2E suite's menu coverage stays
     Windows-only and this entry's checklist is where the macOS menu is judged.
 
-31. **M4, bundling, signing and notarising Acter itself.** Spec: none yet → specify first.
+35. **M4, bundling, signing and notarising Acter itself.** Spec: none yet → specify first.
     `bundle.active` is `false` and the identifier is `dev.marlonsousa.acter`. Distribution
     is outside the App Store, so this is Developer ID signing plus notarisation, and it is
     last deliberately: it is about handing Acter to somebody else, not about Acter working.

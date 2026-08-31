@@ -151,6 +151,21 @@ mod tests {
         }
     }
 
+    /// A path with directories in it, spelled the way the platform running this test spells
+    /// one.
+    ///
+    /// **`C:\tools\pwsh\pwsh.exe` is not a path off Windows — it is one filename.**
+    /// `Path::parent` finds no separator in it and answers the empty string, so two tests
+    /// below failed on macOS for a reason that had nothing to do with what they are about
+    /// (M1). What they *are* about — that an install can say where it lives, and that a
+    /// provenance with nothing else to offer says its directory — is true on every platform;
+    /// only the spelling of a directory belongs to Windows. So the separators here are the
+    /// platform's own and the expectation is built from the same pieces as the path.
+    fn under(directories: &[&str], file: &str) -> (PathBuf, String) {
+        let directory: PathBuf = directories.iter().collect();
+        (directory.join(file), directory.display().to_string())
+    }
+
     /// **The ordinary machine, and the reason A11's row count survives** (decision 9). One
     /// PowerShell 7 in the place PowerShell 7 goes has nothing to add to its own name.
     #[test]
@@ -183,11 +198,20 @@ mod tests {
                 preview: false,
             },
         );
-        let elsewhere = install(r"C:\tools\pwsh\pwsh.exe", Provenance::Indeterminable);
+        let (somewhere, directory) = under(&["tools", "pwsh"], "pwsh.exe");
+        let elsewhere = ShellInstall {
+            program: somewhere,
+            provenance: Provenance::Indeterminable,
+            standing: PathStanding::Absent,
+        };
 
         assert_eq!(preview.qualifier().as_deref(), Some("preview"));
         assert_eq!(store.qualifier().as_deref(), Some("Microsoft Store"));
-        assert_eq!(elsewhere.qualifier().as_deref(), Some(r"C:\tools\pwsh"));
+        assert_eq!(
+            elsewhere.qualifier().as_deref(),
+            Some(directory.as_str()),
+            "a provenance with nothing else to say says where it is"
+        );
     }
 
     /// Windows' own shells are not qualified by anything: there is exactly one `cmd.exe`,
@@ -202,11 +226,13 @@ mod tests {
     /// The last resort when two provenances say the same thing: where each one lives.
     #[test]
     fn an_install_can_always_say_which_directory_it_is_in() {
-        let installed = install(
-            r"C:\Program Files\PowerShell\7\pwsh.exe",
-            Provenance::Windows,
-        );
+        let (program, directory) = under(&["Program Files", "PowerShell", "7"], "pwsh.exe");
+        let installed = ShellInstall {
+            program,
+            provenance: Provenance::Windows,
+            standing: PathStanding::Absent,
+        };
 
-        assert_eq!(installed.directory(), r"C:\Program Files\PowerShell\7");
+        assert_eq!(installed.directory(), directory);
     }
 }

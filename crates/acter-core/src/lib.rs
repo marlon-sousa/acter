@@ -25,7 +25,7 @@ pub use entities::{
 // through that module rather than re-exported here. Nothing outside this crate used them.
 pub use policies::{
     BoundaryEvent, BoundaryTracker, Connection, Region, TextSize, catalogue, ended, intent_for,
-    measure,
+    measure, offered,
 };
 pub use ports::{
     Chosen, Clock, ConnectApi, ConnectQuestions, ConnectSink, EventSink, Explained, HostKeyAnswer,
