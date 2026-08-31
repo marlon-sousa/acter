@@ -945,6 +945,30 @@ impl RealSession {
             })
     }
 
+    /// Waits until `exec zsh` has taken effect, by asking the session what it is until zsh
+    /// answers.
+    ///
+    /// **There is nothing else to wait on**, which is the point: `exec` replaces the process,
+    /// so the command leaves no echo of its own to key on and the new shell's prompt is
+    /// whatever that machine's zsh draws. Asking is the only thing that does not depend on a
+    /// hostname or a theme — and asking twice costs nothing, because bash answers `none` and
+    /// zsh answers a version.
+    async fn became_zsh(&self) {
+        let deadline = Instant::now() + WSL_PATIENCE;
+        loop {
+            self.submit("echo acter-shell-is-${ZSH_VERSION:-none}");
+            tokio::time::sleep(SETTLE).await;
+            if self.rendered().contains("acter-shell-is-5") {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the session never became zsh. What it said was:\n{}",
+                self.rendered()
+            );
+        }
+    }
+
     /// Waits until `wanted` has reached `command_id`'s block, with WSL's patience.
     async fn wsl_until(&self, command_id: CommandId, wanted: &str) -> String {
         self.until(command_id, wanted, WSL_PATIENCE).await
@@ -1015,6 +1039,87 @@ async fn a_real_bash_under_wsl_marks_the_boundaries_of_the_command_it_ran() {
     );
 }
 
+/// zsh's setup line, read out of the crate for the reason [`bash_setup`] is: a line retyped
+/// into a test is a line nobody shipped.
+fn zsh_setup() -> String {
+    acter_shells::setup_for(Some("zsh"))
+        .expect("zsh has a measured setup since B5.8")
+        .line
+}
+
+/// **The WSL cell of the matrix for zsh, which B5.8 could not fill and this does.**
+///
+/// B5.8 measured zsh two ways: interactive on a pseudoconsole inside a Debian container, and
+/// over a real `sshd`. Neither is this one. The claim B9.5 decision 2 makes is that one
+/// mechanism serves every transport, and the standard this project holds itself to is that
+/// the same shell over a different transport is a **different cell and a different
+/// measurement** — which is why `Wsl::eof` still answers `None` for bash that SSH has a
+/// measured byte for. So the question here is narrow and real: do zsh's markers survive
+/// `wsl.exe`'s pseudoconsole and reach the tracker?
+///
+/// **How the session comes to be running zsh, and why it is not a launch this test arranged.**
+/// The account's login shell is bash, and nothing here changes that — `chsh` would edit the
+/// developer's own machine to make a test pass. Instead the session does what a person does
+/// when they want another shell: it runs `exec zsh`, which replaces the process, discards
+/// everything bash armed, and leaves a real zsh at the far end of the real client. Acter then
+/// sets *that* up with zsh's own line, exactly as it would a distribution whose passwd entry
+/// said zsh.
+///
+/// **What it therefore does not measure**, and the honesty matters more than the coverage: the
+/// discovery half. `login_shell` reading `zsh` out of a passwd entry is asserted in
+/// `acter-shells`' own tests; that a zsh distribution is *routed* to zsh's line is asserted in
+/// `wsl.rs`. This is the byte path and nothing else.
+///
+/// **Measured 2026-08-31**, zsh 5.9 on Ubuntu 24.04 under WSL.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "spawns a real shell and needs a WSL distribution with zsh installed"]
+async fn a_real_zsh_under_wsl_marks_the_boundaries_of_the_command_it_ran() {
+    if !wsl_is_available() {
+        println!("skipped: this machine has no WSL distribution");
+        return;
+    }
+
+    let session = RealSession::wsl().await;
+
+    // The process is replaced, so everything bash armed goes with it. What is left is a zsh
+    // that has never heard of Acter, which is the far end this test is about.
+    session.submit("exec zsh");
+    session.became_zsh().await;
+
+    let line = zsh_setup();
+    let setting_up = session.submit(&line);
+    session
+        .until_said(WSL_PATIENCE, |_| session.ended(setting_up))
+        .await;
+
+    let ran = session.submit("echo acter-under-wsl-zsh");
+    let output = session.wsl_until(ran, "acter-under-wsl-zsh").await;
+
+    assert_eq!(
+        session.heading_of(ran),
+        Some(Some("echo acter-under-wsl-zsh".to_owned())),
+        "the block is named by the line zsh echoed between B and C"
+    );
+    assert!(
+        session.ended(ran),
+        "a shell that emits D closes its own block rather than leaving it open until the \
+         next prompt: {output:?}"
+    );
+
+    // The verdict is the half that could only have come from the far end: `%?` expanded by
+    // zsh, through wsl.exe's pseudoconsole, into a `D;7` the tracker read.
+    let failed = session.submit("(exit 7)");
+    session
+        .until_said(WSL_PATIENCE, |_| session.failure_of(failed).is_some())
+        .await;
+
+    assert_eq!(
+        session.failure_of(failed),
+        Some(ExitCode(7)),
+        "zsh's own verdict crossed WSL: {}",
+        session.rendered()
+    );
+}
 /// **B5.5, against a real distribution**: the client is asked what shell the account runs,
 /// and it answers with a name rather than a path, a guess or nothing.
 ///

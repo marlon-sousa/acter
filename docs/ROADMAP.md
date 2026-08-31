@@ -3054,10 +3054,13 @@ thing to pick up once the adapters land, not merely the next number.
     **`0x04` ends a zsh session over SSH**, asked rather than inherited from bash, because
     B5.2 measured and disproved both obvious candidates for PowerShell.
 
-    **What it did not settle.** The WSL cell is routing rather than a measurement — the setup
-    is keyed by the shell's name, so a zsh distribution gets this line, but no zsh is installed
-    in any distribution on this machine and the same shell over a different transport is a
-    different cell of the matrix. Powerlevel10k's instant prompt redraws through `zle` rather
+    **The WSL cell is measured too**, after zsh was installed in Ubuntu 24.04 for it: a real zsh
+    under a real `wsl.exe`, set up with the crate's own line, heads its blocks and announces
+    `Failed(ExitCode(7))`. The session gets there with `exec zsh` rather than by changing the
+    account's login shell, so what is measured is the byte path — whether zsh's markers survive
+    that pseudoconsole — and not the discovery half, which is a unit test's business.
+
+    **What it did not settle.** Powerlevel10k's instant prompt redraws through `zle` rather
     than `precmd` and is unmeasured. And a hook added *after* the setup runs is not re-wrapped,
     which is the same shape as re-sourcing `~/.bashrc` under bash and degrades the same
     honest way.
