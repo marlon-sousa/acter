@@ -29,11 +29,13 @@ use acter_core::{
 };
 #[cfg(target_os = "macos")]
 use acter_shells::AppleTrust;
+#[cfg(not(windows))]
+use acter_shells::UnixMachine;
 #[cfg(windows)]
 use acter_shells::WindowsMachine;
 #[cfg(windows)]
 use acter_shells::WindowsTrust;
-use acter_shells::{Plain, UnixMachine, UnixShell, Wsl, adapter_for, is_wsl};
+use acter_shells::{Plain, UnixShell, Wsl, adapter_for, is_wsl};
 use acter_term::AlacrittyEngine;
 use acter_transports::{
     Chunking, FakeShell, KnownHosts, LocalPty, ScriptedTransport, SessionTranscript, SshTarget,
