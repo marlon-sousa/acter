@@ -1647,6 +1647,7 @@ mod replacing_a_session {
 
     use acter_core::{
         Chosen, ConnectApi, ConnectQuestions, ConnectService, ProfileId, SessionFactory, Unchecked,
+        offered,
     };
 
     use super::*;
@@ -1740,6 +1741,7 @@ mod replacing_a_session {
             // Nothing to check: the profiles below name files that do not exist yet, so
             // they resolve to nothing and no verification is asked for (spec B5.7).
             Arc::new(Unchecked),
+            offered("windows").to_vec(),
             Vec::new(),
         );
 
@@ -1802,12 +1804,19 @@ mod replacing_a_session {
 /// because everything else in this suite either hands the factory a path of its own or
 /// answers about signatures from a fake. `#[ignore]`d because it starts a shell, which is
 /// this file's rule.
+// **Windows only, because its subject is** — `WindowsTrust` is the Windows adapter behind the
+// `Signatures` port, and what these tests assert is that Windows' own catalog database
+// vouches for the shell Windows ships. There is nothing here to extract to another platform:
+// macOS answers the same port with an adapter of its own, and that adapter's tests are its
+// own (roadmap 33). Before M1 this gate was missing and the import below broke every
+// non-Windows `cargo check --all-targets`.
+#[cfg(windows)]
 mod what_this_machine_actually_has {
     use std::path::Path;
 
     use acter_core::{
         Chosen, ConnectApi, ConnectQuestions, ConnectService, ConnectionKind, ProfileId,
-        SessionFactory,
+        SessionFactory, offered,
     };
     use acter_shells::{WindowsTrust, adapter_for};
 
@@ -1872,6 +1881,7 @@ mod what_this_machine_actually_has {
             Arc::new(WhateverWasChosen),
             Arc::new(ThisMachine::new()),
             Arc::new(WindowsTrust::new()),
+            offered("windows").to_vec(),
             Vec::new(),
         );
 
@@ -1902,6 +1912,7 @@ mod what_this_machine_actually_has {
             Arc::new(WhateverWasChosen),
             Arc::new(ThisMachine::new()),
             Arc::new(WindowsTrust::new()),
+            offered("windows").to_vec(),
             Vec::new(),
         );
 

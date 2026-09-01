@@ -64,6 +64,18 @@ pub struct ConnectService {
     /// composition root passes them, and passes none at all in a release build, so the gate
     /// is where the construction is.
     scripted: Vec<String>,
+    /// The connection kinds this operating system offers, in the order a listener meets
+    /// them.
+    ///
+    /// **Supplied rather than known**, for [`Self::scripted`]'s reason one platform later
+    /// (M1). The list itself is `offered`'s, a policy over the operating system's name; what
+    /// the composition root does is read which operating system this is, because reading the
+    /// environment is the composition root's privilege and not a service's.
+    ///
+    /// It also buys the tests below their platform independence: a fake machine can be asked
+    /// for the Windows list on a Mac and the macOS list on Windows, where the `#[cfg]`
+    /// -selected constant this replaces made half of connecting unassertable on either.
+    kinds: Vec<ConnectionKind>,
     /// Which session is live, or `None` for a window connected to nothing.
     current: Mutex<Option<Live>>,
     /// The session-id counter. Starts at 1, so 0 never names a session.
@@ -89,12 +101,14 @@ impl ConnectService {
         factory: Arc<dyn SessionFactory>,
         machine: Arc<dyn InstalledShells>,
         signatures: Arc<dyn Signatures>,
+        kinds: Vec<ConnectionKind>,
         scripted: Vec<String>,
     ) -> Self {
         Self {
             factory,
             machine,
             signatures,
+            kinds,
             scripted,
             current: Mutex::new(None),
             next: AtomicU32::new(1),
@@ -435,7 +449,7 @@ impl ConnectApi for ConnectService {
     /// The scripted sessions go last, after everything real, because they are a developer's
     /// tools and a user arrowing this list should meet their own shells first.
     fn connectable(&self) -> Vec<Connectable> {
-        let mut listed: Vec<Connectable> = catalogue(|kind| match kind {
+        let mut listed: Vec<Connectable> = catalogue(&self.kinds, |kind| match kind {
             ConnectionKind::Wsl => self.machine.wsl_distributions().is_ok(),
             // A kind that comes in editions is available when any of them is: a machine with
             // PowerShell 7 and no Windows PowerShell still has PowerShell.
@@ -638,6 +652,12 @@ mod tests {
     };
 
     use super::*;
+    // **Windows' kinds, named rather than inherited from the build** (M1). Every fake in
+    // this module is a Windows machine — cmd in `system32`, two PowerShell editions, WSL
+    // distributions — so the list asked for is the one those fakes are answers to, and it
+    // is asked for on whichever platform this suite happens to be running on. Eleven tests
+    // below used to be `#[cfg(windows)]` for want of exactly this line.
+    use crate::offered;
 
     /// Nobody to ask, for every test here whose subject is not the asking.
     fn unasked() -> Arc<dyn ConnectQuestions> {
@@ -926,6 +946,11 @@ mod tests {
             Arc::clone(&factory) as Arc<dyn SessionFactory>,
             Arc::new(machine),
             Arc::clone(&signatures) as Arc<dyn Signatures>,
+            // **Windows' kinds, named rather than inherited from the build** (M1). Every
+            // fake below is a Windows machine — cmd in `system32`, two PowerShell editions,
+            // WSL distributions — so this asks for the list those fakes are answers to,
+            // and it asks for it on whichever platform the suite happens to be running on.
+            offered("windows").to_vec(),
             scripted.iter().map(|name| (*name).to_owned()).collect(),
         );
         (Arc::new(service), factory, signatures)
@@ -951,7 +976,6 @@ mod tests {
     /// speaks the protocol itself. The row connects to nothing until the dialog's form has
     /// been filled in, which is what makes it the one kind that is a form rather than a
     /// choice (spec A8, decision 1).
-    #[cfg(windows)]
     #[test]
     fn ssh_is_always_offered_and_carries_no_machine_of_its_own() {
         let (service, _) = service(FakeMachine::without_wsl(NoDistributions::NotInstalled), &[]);
@@ -1015,7 +1039,6 @@ mod tests {
     /// **One row for WSL rather than one per distribution** since A8: the dialog has a
     /// panel to put them in, so a listener arrows the kinds and meets "WSL" once however
     /// many distributions this machine has.
-    #[cfg(windows)]
     #[test]
     fn the_list_is_every_kind_this_machine_has_with_the_scripted_ones_last() {
         let (service, _) = service(FakeMachine::complete(), &["builtin", "unmarked"]);
@@ -1039,7 +1062,6 @@ mod tests {
     /// The distributions are what the dialog's panel holds, named without repeating the
     /// kind — and each one carries the id that starts it, so choosing one in the panel is
     /// as complete an answer as choosing a row.
-    #[cfg(windows)]
     #[test]
     fn wsl_carries_its_distributions_as_the_variants_the_panel_lists() {
         let (service, _) = service(FakeMachine::complete(), &[]);
@@ -1079,7 +1101,6 @@ mod tests {
     /// than a row now, and a machine without it must still be told it exists — listing only
     /// what is installed teaches a listener that Acter does not support the thing they have
     /// read about.
-    #[cfg(windows)]
     #[test]
     fn an_edition_this_machine_lacks_is_still_listed_and_explains_itself() {
         let (service, _) = service(FakeMachine::without("pwsh.exe"), &[]);
@@ -1117,7 +1138,6 @@ mod tests {
 
     /// A machine with neither edition has the kind, unavailable, saying so in its name — the
     /// row-level rule, unchanged.
-    #[cfg(windows)]
     #[test]
     fn a_kind_whose_every_edition_is_missing_is_listed_as_unavailable() {
         let mut machine = FakeMachine::complete();
@@ -1144,7 +1164,6 @@ mod tests {
     /// The three ways WSL can be absent reach the list as three different sentences, which
     /// is more than the catalogue's single generic one could say. A user who has never
     /// installed WSL and one whose WSL is broken must not be read the same thing.
-    #[cfg(windows)]
     #[test]
     fn wsl_that_cannot_answer_is_one_row_carrying_wsls_own_reason() {
         for reason in [
@@ -1211,6 +1230,7 @@ mod tests {
             Arc::new(FakeFactory::default()),
             Arc::clone(&machine) as Arc<dyn InstalledShells>,
             Arc::new(FakeSignatures::default()),
+            offered("windows").to_vec(),
             Vec::new(),
         );
 
@@ -1372,6 +1392,7 @@ mod tests {
             Arc::clone(&factory) as Arc<dyn SessionFactory>,
             Arc::new(FakeMachine::complete()),
             Arc::new(FakeSignatures::default()),
+            offered("windows").to_vec(),
             Vec::new(),
         );
         let working = service
@@ -1584,7 +1605,6 @@ mod tests {
     /// entry that failed the last time somebody tried to start it says so in its **name** —
     /// the way A11's missing edition does, because a greyed-out entry that looks different
     /// and reads the same is the failure this product exists to avoid.
-    #[cfg(windows)]
     #[test]
     fn an_entry_that_already_failed_to_verify_says_so_in_its_name() {
         let signatures = Arc::new(FakeSignatures::default());
@@ -1755,7 +1775,6 @@ mod tests {
 
     /// **Decision 9.** Two PowerShell 7 installs are two entries a listener can tell apart
     /// without opening either, and each carries the file that is it.
-    #[cfg(windows)]
     #[test]
     fn two_installs_of_one_edition_are_told_apart_by_where_they_came_from() {
         let machine = FakeMachine::complete().with(
@@ -1814,7 +1833,6 @@ mod tests {
 
     /// **The other half of decision 9, and the one most machines are.** One install of an
     /// edition is named exactly as it was before this entry existed: A11's panel, unchanged.
-    #[cfg(windows)]
     #[test]
     fn a_machine_with_one_powershell_seven_reads_as_it_did_before() {
         let (service, _) = service(FakeMachine::complete(), &[]);
@@ -1838,19 +1856,25 @@ mod tests {
     /// **An install that says nothing about itself is not guessed at** (decision 3). Where it
     /// came from is unknowable, so what tells it from the other one is the only fact there
     /// is: the directory it lives in.
-    #[cfg(windows)]
+    ///
+    /// **The directories are spelled by the platform running this, not written out** (M1).
+    /// `C:\tools\pwsh\pwsh.exe` is one filename off Windows rather than a path — `Path::parent`
+    /// finds no separator in it — so a literal expectation here would assert Windows' spelling
+    /// rather than the rule, which holds wherever an install says nothing about itself.
     #[test]
     fn an_install_that_says_nothing_is_told_apart_by_where_it_is() {
+        let dotnet: PathBuf = ["Users", "someone", ".dotnet", "tools"].iter().collect();
+        let tools: PathBuf = ["tools", "pwsh"].iter().collect();
         let machine = FakeMachine::complete().with(
             "pwsh.exe",
             vec![
                 install(
-                    r"C:\Users\someone\.dotnet\tools\pwsh.exe",
+                    &dotnet.join("pwsh.exe").display().to_string(),
                     Provenance::Indeterminable,
                     PathStanding::First,
                 ),
                 install(
-                    r"C:\tools\pwsh\pwsh.exe",
+                    &tools.join("pwsh.exe").display().to_string(),
                     Provenance::Indeterminable,
                     PathStanding::Named,
                 ),
@@ -1871,16 +1895,15 @@ mod tests {
                 .map(|variant| variant.label.as_str())
                 .collect::<Vec<_>>(),
             [
-                "Windows PowerShell",
-                r"PowerShell 7 (C:\Users\someone\.dotnet\tools)",
-                r"PowerShell 7 (C:\tools\pwsh)",
+                "Windows PowerShell".to_owned(),
+                format!("PowerShell 7 ({})", dotnet.display()),
+                format!("PowerShell 7 ({})", tools.display()),
             ]
         );
     }
 
     /// Choosing an install starts *that* install, rather than whatever the name would have
     /// resolved to a second time — the same rule as decision 1, seen from the panel.
-    #[cfg(windows)]
     #[test]
     fn choosing_one_of_two_installs_starts_that_one() {
         let machine = FakeMachine::complete().with(

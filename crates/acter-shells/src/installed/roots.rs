@@ -296,7 +296,10 @@ mod tests {
     fn a_name_with_no_extension_still_names_a_file() {
         assert_eq!(file_name("pwsh"), "pwsh.exe");
         assert_eq!(file_name("pwsh.exe"), "pwsh.exe");
-        assert_eq!(file_name(r"C:\tools\pwsh\pwsh.exe"), "pwsh.exe");
+        // **Joined rather than written out** (M1): `Path` splits on the host's separator, so a
+        // backslash path is one filename off Windows and this asserted the whole string.
+        let full: PathBuf = ["tools", "pwsh", "pwsh.exe"].iter().collect();
+        assert_eq!(file_name(&full.display().to_string()), "pwsh.exe");
     }
 
     /// **Only two programs have anywhere else to be looked for**, and saying so is the honest

@@ -16,6 +16,8 @@
 //! it through the same action a menu would.
 
 use std::env;
+use std::env::consts;
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -23,7 +25,7 @@ use acter_core::{
     Chosen, Clock, ConnectApi, ConnectQuestions, ConnectService, Explained, InstalledShells,
     PacingConfig, ProfileId, SessionApi, SessionFactory, SessionService, SetUp, SetupAnswer,
     SetupQuestion, ShellAdapter, ShellFacts, ShellLaunch, Signatures, SshQuestions, Started,
-    Transport, Unasked,
+    Transport, Unasked, offered,
 };
 #[cfg(windows)]
 use acter_shells::WindowsTrust;
@@ -208,6 +210,26 @@ pub(crate) fn state() -> ConnectService {
         Arc::new(Shells::new()),
         Arc::new(ThisMachine::new()),
         signatures(),
+        offered(consts::OS).to_vec(),
+        scripted_profiles(),
+    )
+}
+
+/// The connect service, as a named platform would build it — the shape a test that is about
+/// the list itself wants.
+///
+/// **`state()` is this with the operating system it was compiled for**, which is the one
+/// place in the product where "which platform is this" is read. Nothing else needs the seam;
+/// the tests below do, because a list is the thing about connecting that differs by platform
+/// and asserting it only on the machine that happens to run CI is how M1's third failure got
+/// in (spec M1, decision 1).
+#[cfg(test)]
+fn state_on(os: &str) -> ConnectService {
+    ConnectService::new(
+        Arc::new(Shells::new()),
+        Arc::new(ThisMachine::new()),
+        signatures(),
+        offered(os).to_vec(),
         scripted_profiles(),
     )
 }
@@ -778,11 +800,58 @@ fn acter_known_hosts() -> PathBuf {
 
 /// The directory Acter keeps its own records in, until B8 has a profile store to keep them
 /// beside.
+///
+/// **`ACTER_PROFILES_DIR` first, always** — it is what points development, the suites and the
+/// NVDA fixture at a directory made for them, and it must win over whatever the machine would
+/// otherwise choose (spec B8, decision 2).
+///
+/// **Otherwise the place this operating system keeps an application's data.** Until M1 the
+/// only such place was `%APPDATA%`, with the current working directory as the last resort —
+/// which off Windows was not a last resort but the *only* answer, so a macOS Acter would have
+/// written its `known_hosts` and its record of explained shells into whatever directory it
+/// happened to be launched from. Two users, two shells, two different files, and none of them
+/// where anybody would look.
 fn profiles_directory() -> PathBuf {
     env::var_os(PROFILES_DIR)
         .map(PathBuf::from)
-        .or_else(|| env::var_os("APPDATA").map(|appdata| PathBuf::from(appdata).join("acter")))
+        .or_else(|| records_directory(consts::OS, env::var_os("APPDATA"), env::var_os("HOME")))
+        // A platform nobody has chosen a directory for, which is every platform this does not
+        // build for. It keeps the behaviour that shipped rather than inventing one: the
+        // records go beside the binary's working directory, and an operating system joins by
+        // being named above rather than by falling somewhere plausible.
         .unwrap_or_else(|| PathBuf::from("."))
+}
+
+/// Where this operating system keeps an application's own data, given what its environment
+/// said.
+///
+/// **A conditional expression rather than a conditional module**, per ARCHITECTURE's
+/// platform-divergence rule: the answer is one path per platform, so it needs no adapter — but
+/// it does need to be *testable*, and reading the environment inside a `#[cfg]` is what makes
+/// a wrong answer invisible until somebody runs the product on that platform. So the two
+/// variables are read at the edge above and this is pure.
+///
+/// `None` for an operating system with no answer here, which the caller turns into the
+/// working directory.
+fn records_directory(
+    os: &str,
+    appdata: Option<OsString>,
+    home: Option<OsString>,
+) -> Option<PathBuf> {
+    match os {
+        "windows" => appdata.map(|appdata| PathBuf::from(appdata).join("acter")),
+        // Where macOS puts an application's own data, and where a Mac user would look for it.
+        // `~/Library/Application Support` rather than a dotfile in the home directory: the
+        // dotfile convention is Unix's, and this is the one Finder, Time Machine and every
+        // native application agree on.
+        "macos" => home.map(|home| {
+            PathBuf::from(home)
+                .join("Library")
+                .join("Application Support")
+                .join("acter")
+        }),
+        _ => None,
+    }
 }
 
 /// Where the record of explained shells is kept, under the same directory Acter's own
@@ -872,6 +941,100 @@ mod tests {
     use acter_core::ShellMarkers;
 
     use super::*;
+
+    /// **What the window offers is the platform's list, wired through the real service** — a
+    /// composition-root assertion rather than a policy one, because `offered` being right and
+    /// `state()` actually passing it are two different claims and only the second one is what
+    /// a user gets (M1).
+    ///
+    /// **Asked for both platforms from whichever one this runs on**, which is the whole point
+    /// of the list being a value: before M1 this could not have been written at all.
+    #[test]
+    fn the_window_offers_the_kinds_this_operating_system_has() {
+        let windows = state_on("windows").connectable();
+        let macos = state_on("macos").connectable();
+
+        assert!(
+            windows
+                .iter()
+                .any(|row| row.label.starts_with("Command Prompt")),
+            "a Windows window offers the shell Windows always has"
+        );
+        assert!(
+            !macos
+                .iter()
+                .any(|row| row.label.starts_with("Command Prompt") || row.label.starts_with("WSL")),
+            "and a Mac is not offered Windows shells, not even as unavailable"
+        );
+        for (os, listed) in [("windows", &windows), ("macos", &macos)] {
+            assert!(
+                listed.iter().any(|row| row.label == "SSH"),
+                "{os} can reach a far end that is not on this machine"
+            );
+        }
+    }
+
+    /// **And the build's own answer is one of them**, which is the line `state()` differs from
+    /// [`state_on`] by. A composition root that read the platform and then passed a different
+    /// list would pass every test above and ship the wrong window.
+    #[test]
+    fn the_build_offers_what_its_own_operating_system_offers() {
+        let wired: Vec<_> = state()
+            .connectable()
+            .into_iter()
+            .map(|row| row.label)
+            .collect();
+        let named: Vec<_> = state_on(consts::OS)
+            .connectable()
+            .into_iter()
+            .map(|row| row.label)
+            .collect();
+
+        assert_eq!(wired, named, "{} gets its own list", consts::OS);
+    }
+
+    /// **Where Acter keeps its own records, per operating system** — the `known_hosts` it
+    /// writes and the shells it has explained.
+    ///
+    /// **It is a test because the answer used to be silently wrong** (M1). Off Windows there
+    /// was no branch at all, so the fallback fired and a macOS Acter wrote its records into
+    /// whatever directory it was launched from: two launches, two directories, and a host key
+    /// verified once and unknown the next time.
+    #[test]
+    fn each_operating_system_keeps_acters_records_where_that_system_keeps_them() {
+        let appdata = || Some(OsString::from(r"C:\Users\someone\AppData\Roaming"));
+        let home = || Some(OsString::from("/Users/someone"));
+
+        assert_eq!(
+            records_directory("windows", appdata(), home()),
+            Some(PathBuf::from(r"C:\Users\someone\AppData\Roaming").join("acter")),
+            "Windows keeps it under the roaming profile"
+        );
+        assert_eq!(
+            records_directory("macos", appdata(), home()),
+            Some(
+                PathBuf::from("/Users/someone")
+                    .join("Library")
+                    .join("Application Support")
+                    .join("acter")
+            ),
+            "macOS keeps it where Finder and Time Machine expect it, not in a dotfile"
+        );
+        assert_eq!(
+            records_directory("linux", appdata(), home()),
+            None,
+            "and an operating system nobody has chosen a directory for says so"
+        );
+    }
+
+    /// The machine that has neither variable — a service account, a stripped environment —
+    /// gets no directory rather than a path built from an empty string.
+    #[test]
+    fn a_machine_that_says_nothing_about_itself_is_not_given_a_directory() {
+        for os in ["windows", "macos"] {
+            assert_eq!(records_directory(os, None, None), None, "{os}");
+        }
+    }
 
     /// **The release gate, asserted rather than assumed.** What a build offers and what it
     /// can construct are the same decision, so this pins both halves against the build it
