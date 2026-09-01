@@ -389,9 +389,31 @@ the mode is the reader's own state, invisible to a web frontend, and must not be
 Whether that answer survives on a reader whose two halves can be toggled apart is unknown:
 nobody has driven the real window under either combination yet.
 
-**So it is not decided, and it is not this entry's to decide.** It has a roadmap entry of
-its own after M3, where the measurements can be taken against a macOS build that has a
-buffer and an edit field to be in the wrong mode for.
+**Split apart, the tension goes away — measured 2026-09-01 by the user on their own
+machine, in the real window.** With `SCRCUserDefaultsIndependentSingleLetterQuickNavEnabled`
+set to true, VoiceOver stopped while it is written, arrow-key Quick Nav turned **off** and
+single-key Quick Nav left **on**: the letters still jump by heading, button and link, and the
+arrows reach the application again, so the results buffer can be navigated *and* a command
+can be typed. Neither is given up for the other.
+
+### So macOS is a configuration Acter recommends, not a mode Acter detects — **Decided
+2026-09-01**
+
+**The Windows rule survives untouched**: Acter detects no reader mode, on any platform, and
+nothing here asks VoiceOver anything. What macOS needs that Windows did not is a *sentence in
+the help*, because the default state of this reader — the two toggles travelling together —
+forces a listener to choose between reading the buffer and typing into the field, and a user
+who has not met that preference will experience the choice as Acter being broken.
+
+**So the macOS help says how to set the reader up**, in the same register the rest of the help
+is written in: what to turn off, what to leave on, and what each buys. That is the deliverable
+of the roadmap entry below, and it is why that entry is about help text rather than about
+code that watches for a mode.
+
+**What is still unmeasured**: whether the arrows reaching the application is uniform, or
+whether some contexts still take them; and what a listener hears when they land in the edit
+field with the letters live, since typing `h` there must insert an `h` rather than jump. Both
+are the entry's to measure, and both are about the words the help will use.
 
 ### Acter starts unconnected, and `--profile` is the only switch — **Decided**
 
