@@ -59,9 +59,14 @@ impl ShellInstall {
 /// costs a process; B5.3 already refused to pay that, and that refusal stands.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Provenance {
-    /// Windows itself: the file is in the system directory, where it cannot be uninstalled
-    /// and where nothing else may be written without administrator rights.
-    Windows,
+    /// The operating system's own: the file is where the system keeps the programs it
+    /// ships, which cannot be uninstalled and cannot be written to without administrator
+    /// rights.
+    ///
+    /// **Called `Windows` until M2, and it was never a Windows fact.** `C:\Windows\system32`
+    /// and `/bin` are the same claim about a file — this came with the machine, and no
+    /// ordinary user put it there — and a Mac's `/bin/zsh` is as much this as `cmd.exe` is.
+    System,
     /// A versioned install directory — `%ProgramFiles%\PowerShell\7` and its twins. The
     /// version is the directory's own name, which is where Windows Terminal reads it from
     /// too, and never from the file.
@@ -104,7 +109,7 @@ impl Provenance {
     /// `PowerShell 7 (Microsoft Store)`, `PowerShell 7 (C:\tools\pwsh)`.
     pub fn qualifier(&self, program: &Path) -> Option<String> {
         match self {
-            Self::Windows => None,
+            Self::System => None,
             Self::Directory { preview: true, .. } => Some("preview".to_owned()),
             Self::Directory { .. } | Self::Registry { .. } => None,
             Self::Store { preview: true, .. } => Some("Microsoft Store preview".to_owned()),
@@ -218,7 +223,7 @@ mod tests {
     /// and saying where it is would be noise on every machine in the world.
     #[test]
     fn the_shell_windows_ships_is_not_qualified_at_all() {
-        let cmd = install(r"C:\Windows\system32\cmd.exe", Provenance::Windows);
+        let cmd = install(r"C:\Windows\system32\cmd.exe", Provenance::System);
 
         assert_eq!(cmd.qualifier(), None);
     }
@@ -229,7 +234,7 @@ mod tests {
         let (program, directory) = under(&["Program Files", "PowerShell", "7"], "pwsh.exe");
         let installed = ShellInstall {
             program,
-            provenance: Provenance::Windows,
+            provenance: Provenance::System,
             standing: PathStanding::Absent,
         };
 

@@ -11,7 +11,7 @@
 //! **The one adapter whose variants are discovered rather than known.** `Cmd` is the same
 //! shell on every Windows machine; which distributions exist is the same answer on no two
 //! machines at all, so *that* question is I/O and lives behind
-//! [`InstalledShells`](acter_core::InstalledShells) rather than here. This module knows only
+//! [`ThisComputer`](acter_core::ThisComputer) rather than here. This module knows only
 //! how to start one once its name is in hand.
 //!
 //! **Since B5.5, which shell it starts is discovered too**, because `wsl.exe` runs whatever
@@ -54,7 +54,7 @@ pub struct Wsl {
     /// is read off a running `wsl.exe` at the moment a user opens the connect list.
     distribution: Option<String>,
     /// What that distribution's account actually runs, as
-    /// [`InstalledShells::login_shell`](acter_core::InstalledShells::login_shell) answered,
+    /// [`ThisComputer::login_shell`](acter_core::ThisComputer::login_shell) answered,
     /// and `None` when nothing answered.
     ///
     /// **Carried rather than assumed, since B5.5.** Before that the field did not exist and

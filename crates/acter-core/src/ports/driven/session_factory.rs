@@ -22,7 +22,7 @@ use crate::{ConnectQuestions, ProfileId, SessionApi, SetUp};
 /// handing the factory only the name would let Windows resolve it a second time — so the
 /// check would have been made against one file and the spawn made against another. The
 /// connect service resolves once, through
-/// [`InstalledShells::installs`](crate::InstalledShells::installs), and the path travels
+/// [`ThisComputer::installs`](crate::ThisComputer::installs), and the path travels
 /// here.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Chosen {

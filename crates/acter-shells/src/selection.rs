@@ -7,7 +7,7 @@
 //! tests of its own.
 //!
 //! **Finding out which shells a machine has is not this** — that is I/O, it lives behind
-//! `InstalledShells`, and it arrived in B5.3 with the adapter that needs it. A program name
+//! `ThisComputer`, and it arrived in B5.3 with the adapter that needs it. A program name
 //! is all this function has, which is why `wsl.exe` selects a session in whatever
 //! distribution WSL calls the default: naming one is the connect list's business, and the
 //! connect list builds that adapter directly rather than through here.

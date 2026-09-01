@@ -345,6 +345,20 @@ export type ConnectionKind =
 /**  Bash inside a WSL distribution. */
 "Wsl" | 
 /**
+ *  A shell on this Mac, with the shells `/etc/shells` names as its variants.
+ * 
+ *  **Called Terminal because that is what a Mac calls it** (DESIGN, decided
+ *  2026-08-31). "Shell" is what the thing is; "Terminal" is what somebody who has used
+ *  this computer has already opened, and the row is offering to be that.
+ * 
+ *  **Not a program on this machine either, for a different reason from
+ *  [`Self::Ssh`]'s.** SSH names nothing because Acter speaks the protocol itself; this
+ *  names nothing because *which* program it is is the account's own business, read from
+ *  the passwd entry at the moment the list is built (spec M2, decision 2). One row,
+ *  however many shells this Mac has.
+ */
+"Terminal" | 
+/**
  *  A far end that is not on this machine, reached over SSH.
  * 
  *  **The one kind that is not a program on this computer**, and the only one whose row

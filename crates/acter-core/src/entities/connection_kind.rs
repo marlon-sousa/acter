@@ -36,6 +36,18 @@ pub enum ConnectionKind {
     PowerShellSeven,
     /// Bash inside a WSL distribution.
     Wsl,
+    /// A shell on this Mac, with the shells `/etc/shells` names as its variants.
+    ///
+    /// **Called Terminal because that is what a Mac calls it** (DESIGN, decided
+    /// 2026-08-31). "Shell" is what the thing is; "Terminal" is what somebody who has used
+    /// this computer has already opened, and the row is offering to be that.
+    ///
+    /// **Not a program on this machine either, for a different reason from
+    /// [`Self::Ssh`]'s.** SSH names nothing because Acter speaks the protocol itself; this
+    /// names nothing because *which* program it is is the account's own business, read from
+    /// the passwd entry at the moment the list is built (spec M2, decision 2). One row,
+    /// however many shells this Mac has.
+    Terminal,
     /// A far end that is not on this machine, reached over SSH.
     ///
     /// **The one kind that is not a program on this computer**, and the only one whose row
@@ -57,6 +69,7 @@ impl ConnectionKind {
             Self::WindowsPowerShell => "Windows PowerShell",
             Self::PowerShellSeven => "PowerShell 7",
             Self::Wsl => "WSL",
+            Self::Terminal => "Terminal",
             Self::Ssh => "SSH",
         }
     }
@@ -66,7 +79,7 @@ impl ConnectionKind {
     ///
     /// **A name rather than a path**, resolved by the same `PATH` rules Windows itself
     /// applies, so a machine that has moved its PowerShell is still answered correctly
-    /// ([`InstalledShells::is_available`](crate::InstalledShells::is_available)).
+    /// ([`ThisComputer::installs`](crate::ThisComputer::installs)).
     ///
     /// **This is the one shell fact the domain does hold, and it is deliberate.** B5.1 moved
     /// *how* a shell is started behind `ShellAdapter` and B7's factory keeps it there; what
@@ -77,7 +90,7 @@ impl ConnectionKind {
     ///
     /// WSL answers with the client rather than with a distribution: which distributions
     /// exist is discovery, and lives behind
-    /// [`InstalledShells`](crate::InstalledShells).
+    /// [`ThisComputer`](crate::ThisComputer).
     pub fn program(self) -> &'static str {
         match self {
             Self::Cmd => "cmd.exe",
@@ -91,6 +104,11 @@ impl ConnectionKind {
             // protocol itself (spec B9, decision 1). It is answered with the empty string
             // rather than with a lie about a program, and `catalogue` never asks.
             Self::Wsl => "wsl.exe",
+            // **Nothing static to name**, which it shares with SSH and for its own reason:
+            // what a Terminal row starts is whichever shell this account logs in to, which
+            // is read from the machine rather than compiled in. `catalogue` never asks, and
+            // `login_shells` answers instead.
+            Self::Terminal => "",
             Self::Ssh => "",
         }
     }
@@ -147,6 +165,16 @@ impl ConnectionKind {
                  running wsl --install from an administrator Command Prompt, then restart \
                  the computer when it asks."
             }
+            // A Mac with no shell an account may log in to is broken rather than
+            // unsupported, which is `cmd`'s situation with a different file. So it names
+            // the file to look at and the command that repairs it, rather than assuming an
+            // absence is impossible.
+            Self::Terminal => {
+                "This Mac lists no shells an account can log in to. That list is the file \
+                 /etc/shells, and a macOS install always has one, so this usually means the \
+                 file has been emptied or replaced. Run cat /etc/shells in any terminal to \
+                 see what it holds."
+            }
             // It cannot go missing: Acter speaks SSH itself rather than running a program
             // that might not be installed (spec B9, decision 1). The sentence exists because
             // every kind answers, and a kind with nothing to say is a hole somebody fills
@@ -164,12 +192,13 @@ impl ConnectionKind {
 mod tests {
     use super::*;
 
-    const EVERY_KIND: [ConnectionKind; 6] = [
+    const EVERY_KIND: [ConnectionKind; 7] = [
         ConnectionKind::Cmd,
         ConnectionKind::PowerShell,
         ConnectionKind::WindowsPowerShell,
         ConnectionKind::PowerShellSeven,
         ConnectionKind::Wsl,
+        ConnectionKind::Terminal,
         ConnectionKind::Ssh,
     ];
 
@@ -239,8 +268,11 @@ mod tests {
     fn every_kind_names_an_executable_except_the_one_that_is_not_a_program() {
         for kind in EVERY_KIND {
             let program = kind.program();
-            if kind == ConnectionKind::Ssh {
-                assert!(program.is_empty(), "SSH is not a program on this machine");
+            if matches!(kind, ConnectionKind::Ssh | ConnectionKind::Terminal) {
+                assert!(
+                    program.is_empty(),
+                    "{kind:?} names no program compiled into Acter"
+                );
                 continue;
             }
             assert!(
@@ -281,7 +313,11 @@ mod tests {
     /// the connect list: only a kind with editions gets a panel.
     #[test]
     fn a_kind_that_is_one_thing_has_no_editions() {
-        for kind in [ConnectionKind::Cmd, ConnectionKind::Wsl] {
+        for kind in [
+            ConnectionKind::Cmd,
+            ConnectionKind::Wsl,
+            ConnectionKind::Terminal,
+        ] {
             assert!(kind.editions().is_empty(), "{kind:?} is one thing");
         }
     }

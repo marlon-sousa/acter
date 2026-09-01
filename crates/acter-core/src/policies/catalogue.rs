@@ -2,7 +2,7 @@
 //! order, and how an entry reads when this machine cannot start it.
 //!
 //! **A pure function from what the machine has to what the listener hears.** Finding out
-//! whether PowerShell 7 is installed is I/O and belongs behind `InstalledShells` with B7;
+//! whether PowerShell 7 is installed is I/O and belongs behind `ThisComputer` with B7;
 //! this decides what to *do* with that answer, which is why every rule here is testable
 //! without a machine that happens to be missing something (spec B5.4, decision 6).
 //!
@@ -74,18 +74,21 @@ const ON_WINDOWS: &[ConnectionKind] = &[
     ConnectionKind::Ssh,
 ];
 
-/// What macOS offers.
+/// What macOS offers: a shell on this Mac, and a machine that is not this one.
 ///
-/// **SSH and nothing else yet, and that is the whole of M1.** Acter speaks SSH itself rather
-/// than running a client (spec B9, decision 1), so the kind that would have been hardest to
-/// port is the one that needed no porting at all — which is why the first macOS build is one
-/// that can already connect somewhere real.
+/// **Terminal first, for the reason cmd comes first on Windows** — a listener arrowing the
+/// list meets their own machine before a form to fill in. It arrived with M2; M1 shipped
+/// this list with SSH alone, because Acter speaks SSH itself rather than running a client
+/// (spec B9, decision 1), so the kind that would have been hardest to port needed no porting
+/// at all.
 ///
-/// A shell on this Mac is a row of its own and arrives with M2, ahead of SSH for the reason
-/// cmd comes before it on Windows: a listener arrowing the list meets their own machine
-/// first. cmd, PowerShell and WSL are absent rather than unavailable — a Mac told to install
+/// **The shells this Mac has are not here**, any more than PowerShell's editions or WSL's
+/// distributions are: they are *variants* of Terminal, chosen in the dialog's panel (DESIGN,
+/// decided 2026-08-31). A listener meets two kinds however many shells `/etc/shells` names.
+///
+/// cmd, PowerShell and WSL are absent rather than unavailable — a Mac told to install
 /// Windows is the absurdity [`NOT_AVAILABLE`] exists to avoid where it means something.
-const ON_MACOS: &[ConnectionKind] = &[ConnectionKind::Ssh];
+const ON_MACOS: &[ConnectionKind] = &[ConnectionKind::Terminal, ConnectionKind::Ssh];
 
 /// The kinds this operating system offers, in the order a listener meets them.
 ///
@@ -278,8 +281,8 @@ mod tests {
         );
         assert_eq!(
             offered("macos"),
-            [ConnectionKind::Ssh],
-            "macOS offers SSH, and a shell of its own arrives with M2"
+            [ConnectionKind::Terminal, ConnectionKind::Ssh],
+            "macOS offers a shell on this Mac, then a machine that is not this one"
         );
     }
 

@@ -17,7 +17,7 @@
 //! so this runs as its own invocation whose output the terminal buffer never sees.
 //!
 //! Pure: bytes in, a name out, no process. The invocation itself lives in
-//! [`installed`](crate::installed), which is the one module in this crate that starts one,
+//! [`windows_machine`](crate::windows_machine), which is the one module in this crate that starts one,
 //! and this is what lets the reading be tested against captured bytes rather than against
 //! whatever distributions this particular computer happens to have (spec B5.3, decision 4,
 //! applied again).

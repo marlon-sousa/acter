@@ -209,7 +209,7 @@ Windows, so neither was tested on the machine that changed it.
 trait wrapper just for ceremony. A constant list of kinds is a value passed to a
 constructor, the way `ConnectService` already takes its scripted profile names. What earns
 a port is per-OS *I/O* — reading `/etc/shells`, asking who signed a file — and those ports
-(`InstalledShells`, `Signatures`) already exist, so an operating system joins by adding an
+(`ThisComputer`, `Signatures`) already exist, so an operating system joins by adding an
 adapter rather than by growing a seam.
 
 ### Reference layout

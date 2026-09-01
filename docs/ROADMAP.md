@@ -3800,33 +3800,27 @@ And the two that only became visible afterwards:
 
     Also here: a macOS CI job, so the lane cannot regress silently.
 
-33. **M2, the Terminal row — the shells this Mac has, and who signed them.** Spec: none yet
-    → specify first. **The signature check is folded in rather than following** (decided
-    2026-08-31, with the user): the moment a local row exists, every connection through it
-    raises `Unchecked`'s "this build cannot check signatures" dialog, and shipping that even
-    briefly trains a listener to dismiss the one dialog in this product that is about
-    security.
+33. **Done** — M2, the Terminal row: the shells this Mac has, and who signed them. Spec:
+    [m2-the-terminal-row.md](specs/m2-the-terminal-row.md). One row called Terminal, the
+    shells `/etc/shells` names as its variants with the account's own first and marked, and
+    macOS's own answer to "who signed this file" in the same PR — because a local row shipped
+    without one would raise a security dialog on every connection to a `/bin/zsh` Apple
+    signed, and a dialog that always fires is a dialog a listener learns to dismiss.
 
-    One row, called Terminal, with the shells this Mac has as its **variants** in the
-    dialog's panel — the shape A11 gave PowerShell's editions and A8 gave WSL's
-    distributions. Read from `/etc/shells`, with the account's own login shell first and
-    marked as the default, so Enter on the row with nothing picked starts what a Terminal.app
-    window would have started.
+    **The port was renamed rather than split.** `InstalledShells` is `ThisComputer`: a Mac
+    answering `wsl_distributions` with `NotInstalled` states a fact rather than refusing a
+    method, `login_shells` is POSIX and Linux will answer it unchanged, and the split these
+    questions have was never per platform. Two adapters behind it, two behind `Signatures`,
+    and one gated function each in `container.rs`.
 
-    **Two adapters, extracted rather than gated.** `InstalledShells` and `Signatures` are the
-    ports and they already exist; what joins is a macOS implementation of each, chosen by one
-    gated function in `container.rs` beside `signatures()`. `InstalledShells`' shape is the
-    open question for the spec: `wsl_distributions()` is meaningless on a Mac, and a port
-    with a method every second implementer must refuse is a port that has outgrown its name.
-
-    **It carries a measurement obligation and the obligation is the entry.** `setup_for`
-    already has measured `ZSH`, `BASH` and `SH` programs — every one of them measured against
-    *Linux* shells. macOS ships **bash 3.2.57 from 2007**, held there by its GPLv2 licence,
-    and zsh 5.9. B5.5's rule is that the identity may be guessed from the name and the setup
-    may never be, and B5.8 is what it looks like honoured: zsh's line is not bash's with a
-    substitution, and every line it drops was dropped because a measurement said it could be.
-    So each program is re-measured here against the shell macOS actually ships, or it does
-    not ship.
+    **The measurement obligation was the entry, and it found something.** bash 3.2.57 and zsh
+    5.9 ship unchanged — every hostile-rcfile scenario B5.8 and 23.11 measured on Linux was
+    re-run against the shells macOS actually ships, and all of them passed. `/bin/sh` did not:
+    it is bash 3.2.57 in POSIX mode, so it has readline and honours `\[`, sets no
+    `BB_ASH_VERSION`, took the dash branch and cost **sixteen columns** — the exact number
+    B9.6 measured for busybox, on the platform where the fix already existed. The branch now
+    asks about `$BASH_VERSION` too, which is a fix to shared code that reaches SSH far ends as
+    well.
 
 34. **M3, the menu bar macOS actually has.** Spec: none yet → specify first. DESIGN has said
     since A7 that on macOS a menu belongs in the system bar and not in the window; today

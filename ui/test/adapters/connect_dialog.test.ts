@@ -86,6 +86,33 @@ function missing(): Connectable {
   };
 }
 
+/**
+ * A Mac's Terminal row as M2 shapes it: one kind, the shells `/etc/shells` names as its
+ * variants, the account's own first and marked.
+ */
+function terminal(): Connectable {
+  return {
+    id: { profile: 'Install', kind: 'Terminal', program: '/bin/zsh', provenance: 'zsh' },
+    label: 'Terminal',
+    available: true,
+    instructions: null,
+    variants: [
+      {
+        id: { profile: 'Install', kind: 'Terminal', program: '/bin/zsh', provenance: 'zsh' },
+        label: 'zsh (default)',
+        available: true,
+        instructions: null,
+      },
+      {
+        id: { profile: 'Install', kind: 'Terminal', program: '/bin/bash', provenance: 'bash' },
+        label: 'bash',
+        available: true,
+        instructions: null,
+      },
+    ],
+  };
+}
+
 /** PowerShell as A11 shapes it: one kind, its editions as variants, one of them missing. */
 function powershell(): Connectable {
   return {
@@ -398,6 +425,22 @@ describe('the panel (decision 2)', () => {
     press('ArrowDown');
 
     expect(announcer.announcements).toEqual(['not available']);
+  });
+
+  /**
+   * **A Mac's variants are shells, not editions** (spec M2). The noun is read off the kind,
+   * and calling `/bin/zsh` an edition would name it after a Windows product a listener has
+   * never met.
+   */
+  it('counts the shells on a Mac as shells', () => {
+    expect(panelSummary(terminal())).toBe('2 shells');
+  });
+
+  it('counts one shell without pluralising it', () => {
+    const one = terminal();
+    one.variants = one.variants.slice(0, 1);
+
+    expect(panelSummary(one)).toBe('1 shell');
   });
 
   it('counts one distribution without pluralising it', () => {

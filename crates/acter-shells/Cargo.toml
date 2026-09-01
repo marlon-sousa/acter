@@ -40,5 +40,36 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_SystemServices",
 ] }
 
+# **The account's own login shell comes from its passwd entry**, which is `getpwuid_r` and
+# nothing else: `$SHELL` is what started *this* process and is inherited, edited and wrong as
+# often as it is right. `libc` is the raw declarations, the same choice `windows-sys` is on
+# the other side of this file, and one function is used from it (spec M2, decision 3).
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+# **Who signed a file, on macOS.** `objc2-security` is the Security framework's own
+# declarations — `SecStaticCode` verifies, `SecRequirement` asks whether Apple is the anchor,
+# and `SecCode`'s signing information names the leaf certificate. It reaches this tree
+# already, through Tauri, and it is declared here anyway: a crate this product calls directly
+# is a crate this product depends on, and a dependency that arrives only because somebody
+# else asked for it can leave the same way (spec M2, decision 5).
+#
+# The features are one per thing asked of the framework, `CSCommon` being the flags and
+# status codes the other three speak in.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-core-foundation = { version = "0.3", features = [
+    "CFArray",
+    "CFDictionary",
+    "CFString",
+    "CFURL",
+] }
+objc2-security = { version = "0.3", features = [
+    "CSCommon",
+    "SecCertificate",
+    "SecCode",
+    "SecRequirement",
+    "SecStaticCode",
+] }
+
 [lints]
 workspace = true

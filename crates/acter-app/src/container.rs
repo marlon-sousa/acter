@@ -22,14 +22,18 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use acter_core::{
-    Chosen, Clock, ConnectApi, ConnectQuestions, ConnectService, Explained, InstalledShells,
+    Chosen, Clock, ConnectApi, ConnectQuestions, ConnectService, ConnectionKind, Explained,
     PacingConfig, ProfileId, SessionApi, SessionFactory, SessionService, SetUp, SetupAnswer,
     SetupQuestion, ShellAdapter, ShellFacts, ShellLaunch, Signatures, SshQuestions, Started,
-    Transport, Unasked, offered,
+    ThisComputer, Transport, Unasked, offered,
 };
+#[cfg(target_os = "macos")]
+use acter_shells::AppleTrust;
+#[cfg(windows)]
+use acter_shells::WindowsMachine;
 #[cfg(windows)]
 use acter_shells::WindowsTrust;
-use acter_shells::{Plain, ThisMachine, Wsl, adapter_for, is_wsl};
+use acter_shells::{Plain, UnixMachine, UnixShell, Wsl, adapter_for, is_wsl};
 use acter_term::AlacrittyEngine;
 use acter_transports::{
     Chunking, FakeShell, KnownHosts, LocalPty, ScriptedTransport, SessionTranscript, SshTarget,
@@ -208,7 +212,7 @@ pub(crate) fn connected_state() -> AppState {
 pub(crate) fn state() -> ConnectService {
     ConnectService::new(
         Arc::new(Shells::new()),
-        Arc::new(ThisMachine::new()),
+        machine(),
         signatures(),
         offered(consts::OS).to_vec(),
         scripted_profiles(),
@@ -227,7 +231,7 @@ pub(crate) fn state() -> ConnectService {
 fn state_on(os: &str) -> ConnectService {
     ConnectService::new(
         Arc::new(Shells::new()),
-        Arc::new(ThisMachine::new()),
+        machine(),
         signatures(),
         offered(os).to_vec(),
         scripted_profiles(),
@@ -246,9 +250,43 @@ fn signatures() -> Arc<dyn Signatures> {
     Arc::new(WindowsTrust::new())
 }
 
-#[cfg(not(windows))]
+/// macOS has the Security framework, and M2 is where it arrives — in the same entry that
+/// gives this platform a local file to start, rather than in a later one.
+///
+/// **The order is the whole reason** (DESIGN, decided 2026-08-31). `Unchecked` vouches for
+/// nothing, which is the right refusal and the wrong thing to ship beside a Terminal row: a
+/// security dialog on every connection to a `/bin/zsh` Apple signed is a dialog a listener
+/// learns to dismiss, and it is the one dialog in this product that is about security.
+#[cfg(target_os = "macos")]
+fn signatures() -> Arc<dyn Signatures> {
+    Arc::new(AppleTrust::new())
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 fn signatures() -> Arc<dyn Signatures> {
     Arc::new(acter_core::Unchecked)
+}
+
+/// What this computer has, for the connect list and for the one question a connection asks
+/// it (spec M2, decision 1).
+///
+/// **The second gated function in this file, and it is the same shape as
+/// [`signatures`]** — which is ARCHITECTURE's platform-divergence rule taken at its word: a
+/// whole module that would have been `#[cfg]`-gated is an adapter, and the composition root
+/// is where one of two adapters is chosen.
+///
+/// **Off Windows is Unix rather than macOS.** `/etc/shells` and a passwd entry are POSIX, so
+/// a Linux build gets a correct answer from this arm rather than a stub — what it will not
+/// get until somebody does the work is a `Terminal` kind in its catalogue, which is
+/// `offered`'s answer and not this one's.
+#[cfg(windows)]
+fn machine() -> Arc<dyn ThisComputer> {
+    Arc::new(WindowsMachine::new())
+}
+
+#[cfg(not(windows))]
+fn machine() -> Arc<dyn ThisComputer> {
+    Arc::new(UnixMachine::new())
 }
 
 /// Which profile this launch asked for, or `None` for a window that starts unconnected.
@@ -305,7 +343,7 @@ struct Shells {
     /// holds nothing and caches nothing. It is here rather than passed in because this is
     /// the one branch that needs an answer before it can decide what to inject, and that
     /// decision has to be made before the client is started at all.
-    machine: Arc<dyn InstalledShells>,
+    machine: Arc<dyn ThisComputer>,
     /// Which shells this person has already had Acter's setup command explained to them for
     /// (spec B9.5, decision 10).
     ///
@@ -319,7 +357,7 @@ impl Shells {
     fn new() -> Self {
         Self {
             clock: Arc::new(SystemClock::new()),
-            machine: Arc::new(ThisMachine::new()),
+            machine: machine(),
             explained: Arc::new(ExplainedShells::new(explained_shells())),
         }
     }
@@ -546,6 +584,39 @@ impl Shells {
         })
     }
 
+    /// A shell on this Unix machine, started as a login shell.
+    ///
+    /// **It goes through [`Self::agreed`] where [`Self::local`] does not**, and that is the
+    /// difference the Terminal row is about: a local Windows shell is set up by what its
+    /// adapter injects, while this one is set up by a line sent into the session after it is
+    /// up — which is the mechanism B9.5 built for WSL and SSH, reaching a third transport
+    /// unchanged. So the same question is asked, the same checkbox authorises it, and the
+    /// same sentence is composed about what the session will be able to tell the listener.
+    fn unix_shell(
+        &self,
+        program: &str,
+        set_up: SetUp,
+        questions: &Arc<dyn ConnectQuestions>,
+    ) -> Result<Started, String> {
+        let adapter = UnixShell::new(program);
+        let pty = self.pty(&adapter.launch())?;
+        let shell = Path::new(program)
+            .file_name()
+            .map(|file| file.to_string_lossy().into_owned());
+        let (facts, outcome) = self.agreed(
+            ShellFacts::of(&adapter),
+            shell.as_deref(),
+            set_up,
+            questions,
+        );
+        let note = far_end_note(shell.as_deref(), outcome);
+        Ok(Started {
+            session: self.session_with(Box::new(pty), facts),
+            note: note.said,
+            limit_explained: note.limit_explained,
+        })
+    }
+
     /// A real shell on a pseudoconsole.
     ///
     /// The adapter and the far end are one decision, which is why they travel together:
@@ -617,6 +688,23 @@ impl Shells {
         let program = program.as_deref();
         match &chosen.profile {
             ProfileId::Ssh { host, port, user } => self.ssh(host, *port, user, set_up, questions),
+            // **A Terminal profile names a file rather than a kind**, and what starts it is
+            // the adapter that knows a Unix login shell: `-l`, a setup keyed by the file's
+            // own name, and an ending somebody measured (spec M2, decision 4). `adapter_for`
+            // would answer `Plain` here — a shell started as it stands, with nothing run
+            // inside it — which is the state this row exists to be better than.
+            ProfileId::Shell {
+                kind: ConnectionKind::Terminal,
+            }
+            | ProfileId::Install {
+                kind: ConnectionKind::Terminal,
+                ..
+            } => {
+                let program = program.ok_or_else(|| {
+                    "Acter could not work out which shell to start on this Mac.".to_owned()
+                })?;
+                self.unix_shell(program, set_up, questions)
+            }
             // The composition root names no shell since B5.1: which shell this is, what it
             // is started with and what it can mark are one object's answers, and the same
             // object answers them for the suites that measure a real one. **Which shell it
@@ -1339,7 +1427,7 @@ mod tests {
         fn factory(explained: Arc<dyn Explained>) -> Shells {
             Shells {
                 clock: Arc::new(SystemClock::new()),
-                machine: Arc::new(ThisMachine::new()),
+                machine: machine(),
                 explained,
             }
         }

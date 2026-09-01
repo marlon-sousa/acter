@@ -120,7 +120,8 @@ function worthSaying(row: Connectable): boolean {
  * is a distribution whichever kind carried it.
  */
 function noun(row: Connectable): string {
-  switch (row.variants[0]?.id.profile) {
+  const variant = row.variants[0]?.id;
+  switch (variant?.profile) {
     case 'Distribution':
       return 'distribution';
     // **Two shapes, one noun, since B5.7.** A variant that names a kind is an edition this
@@ -128,9 +129,14 @@ function noun(row: Connectable): string {
     // file the list already resolved (spec B5.7, decision 1). Both are editions to a
     // listener, and the panel would otherwise call them "options" on every machine that has
     // PowerShell at all.
+    //
+    // **Except on a Mac, where the same two shapes carry shells** (spec M2). A Terminal row's
+    // variants are `/bin/zsh` and its neighbours, and calling those editions would name them
+    // after a Windows product a listener has never met. The kind is what decides it, which is
+    // the fact this switch was already reading one level up.
     case 'Shell':
     case 'Install':
-      return 'edition';
+      return variant.kind === 'Terminal' ? 'shell' : 'edition';
     default:
       return 'option';
   }

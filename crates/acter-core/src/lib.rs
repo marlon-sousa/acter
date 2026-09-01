@@ -29,9 +29,9 @@ pub use policies::{
 };
 pub use ports::{
     Chosen, Clock, ConnectApi, ConnectQuestions, ConnectSink, EventSink, Explained, HostKeyAnswer,
-    HostKeyQuestion, HostKeyState, IF_YOU_SKIP, InstalledShells, NeverExplained, NoDistributions,
+    HostKeyQuestion, HostKeyState, IF_YOU_SKIP, LoginShell, NeverExplained, NoDistributions,
     PasswordQuestion, ProgramAnswer, ProgramQuestion, Secret, SessionApi, SessionFactory,
     SetupAnswer, SetupQuestion, ShellAdapter, ShellFacts, ShellLaunch, Signatures, SshQuestions,
-    Started, TerminalEngine, Timer, Transport, TransportError, Unasked, Unchecked,
+    Started, TerminalEngine, ThisComputer, Timer, Transport, TransportError, Unasked, Unchecked,
 };
 pub use services::{ConnectService, Conversation, SessionService};

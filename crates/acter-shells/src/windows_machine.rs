@@ -1,6 +1,11 @@
-//! Adapter: what this computer actually has, behind acter-core's `InstalledShells` port —
-//! the WSL distributions `wsl.exe` reports, every file a named program really resolves to,
+//! Adapter: what a *Windows* computer actually has, behind acter-core's `ThisComputer` port
+//! — the WSL distributions `wsl.exe` reports, every file a named program really resolves to,
 //! and which shell a distribution's own account runs.
+//!
+//! **One of two adapters behind that port since M2**, the other being
+//! [`unix_machine`](crate::unix_machine), with the composition root choosing. It is named
+//! for the platform it knows about rather than for "this machine", which is what it was
+//! called while it was the only one.
 //!
 //! **The only module in this crate that starts a process.** Everything else here is
 //! knowledge: what `cmd.exe` is started with is the same answer on every Windows machine,
@@ -46,7 +51,9 @@ use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use acter_core::{InstalledShells, NoDistributions, PathStanding, Provenance, ShellInstall};
+use acter_core::{
+    LoginShell, NoDistributions, PathStanding, Provenance, ShellInstall, ThisComputer,
+};
 use which::which_all;
 
 use crate::wsl::distributions::{decode_utf16le, distributions};
@@ -153,15 +160,15 @@ const POWERSHELL: &str = "PowerShell";
 /// open should see it in the next list they open, and a cache would make them restart the
 /// program to be told the truth.
 #[derive(Debug, Default)]
-pub struct ThisMachine;
+pub struct WindowsMachine;
 
-impl ThisMachine {
+impl WindowsMachine {
     pub fn new() -> Self {
         Self
     }
 }
 
-impl InstalledShells for ThisMachine {
+impl ThisComputer for WindowsMachine {
     /// **Three failures told apart, because they need three different sentences** (spec
     /// B5.3, decision 6). `wsl.exe` that will not start at all is a machine without the
     /// feature; `wsl.exe` that runs and refuses is a machine whose WSL is broken, and it
@@ -173,6 +180,14 @@ impl InstalledShells for ThisMachine {
     /// `There is no distribution with the supplied name.` on stdout, exit code 127, and an
     /// empty standard error. Reading only stderr would have produced a broken-WSL sentence
     /// with nothing after it.
+    /// **Nothing, and on Windows that is a fact rather than a refusal** (spec M2,
+    /// decision 1). `/etc/shells` is the list of shells an account may log in to, and
+    /// Windows has no such file and no such concept: a Windows account does not log in to a
+    /// shell. Nothing asks, either — the catalogue offers no `Terminal` kind here.
+    fn login_shells(&self) -> Vec<LoginShell> {
+        Vec::new()
+    }
+
     fn wsl_distributions(&self) -> Result<Vec<String>, NoDistributions> {
         let (program, flags) = LIST;
         let listed = Command::new(program)
@@ -411,7 +426,7 @@ fn provenance(program: &Path) -> Provenance {
         };
     }
     if in_windows(&parts) {
-        return Provenance::Windows;
+        return Provenance::System;
     }
     if let Some(at) = parts.iter().position(|part| part == POWERSHELL)
         && let Some(version) = parts.get(at + 1)
@@ -607,7 +622,7 @@ mod tests {
 
         assert_eq!(
             provenance(&system.join("system32").join("cmd.exe")),
-            Provenance::Windows
+            Provenance::System
         );
         assert_eq!(
             provenance(
@@ -617,7 +632,7 @@ mod tests {
                     .join("v1.0")
                     .join("powershell.exe")
             ),
-            Provenance::Windows,
+            Provenance::System,
             "case is not what tells a directory apart on this platform"
         );
     }
@@ -642,7 +657,7 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn the_shell_every_windows_machine_has_resolves_to_a_file_that_is_there() {
-        let machine = ThisMachine::new();
+        let machine = WindowsMachine::new();
 
         for named in ["cmd.exe", "cmd"] {
             let installs = machine.installs(named);
@@ -656,7 +671,7 @@ mod tests {
                 PathStanding::First,
                 "PATH names it, so it is what typing the name starts"
             );
-            assert_eq!(first.provenance, Provenance::Windows);
+            assert_eq!(first.provenance, Provenance::System);
         }
         assert!(
             machine
@@ -672,7 +687,7 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn one_file_found_twice_is_listed_once() {
-        let installs = ThisMachine::new().installs("cmd.exe");
+        let installs = WindowsMachine::new().installs("cmd.exe");
 
         let mut seen: Vec<String> = installs
             .iter()
@@ -695,7 +710,7 @@ mod tests {
             .join("system32")
             .join("cmd.exe");
 
-        let installs = ThisMachine::new().installs(&cmd.to_string_lossy());
+        let installs = WindowsMachine::new().installs(&cmd.to_string_lossy());
 
         assert_eq!(installs.len(), 1);
         assert!(
