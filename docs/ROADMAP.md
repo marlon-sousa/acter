@@ -3822,6 +3822,40 @@ And the two that only became visible afterwards:
     asks about `$BASH_VERSION` too, which is a fix to shared code that reaches SSH far ends as
     well.
 
+33.1. **VoiceOver is told nothing has keyboard focus, on every element of the macOS
+    window.** Spec: none yet → specify first. Found by the M2 checklist (VoiceOver, macOS
+    15.0, silent capture, 2026-09-01): `describe item with keyboard focus` answered "nothing
+    has keyboard focus" throughout — on the unconnected window, inside the Connect dialog, and
+    in the connected one — while the application's own `AXFocusedUIElement` was correct
+    every time, naming `bash (default)` in the shells panel. The window reports `AXMain` true
+    and `AXFocused` false.
+
+    **Not a reachability failure, and that is what makes it worth its own entry rather than a
+    blocker.** Every part of M2 was reached and driven with the VoiceOver cursor, which is how
+    an ordinary Mac user navigates — so the row, the panel and the session are usable today.
+    What is lost is everything that depends on the reader knowing where focus *is*: cursor
+    tracking cannot follow focus into a dialog, and A5's rule that focus lands somewhere
+    announced has no audible counterpart here.
+
+    **Measured on an unbundled debug binary launched from a terminal**, which is a real
+    confound: a Tauri window that is not inside a `.app` has a different activation story, and
+    M4 is what produces a bundled one. So the first step is to reproduce it against a bundle
+    before deciding whether the fault is Acter's, Tauri's or the launch.
+
+33.2. **The echo of a long submitted line may drop a character per wrapped row.** Spec: none
+    yet → specify first. Observed during the same checklist: the setup command Acter echoes
+    into the buffer read back with single characters missing at roughly 80-column intervals —
+    `__acter_hoo`, `retrn`, `intf`, `acterstatus`, `esc` — on a screen fixed at 80 columns.
+
+    **Recorded as an observation rather than a defect, deliberately.** It was heard through a
+    screen reader reading one very long static text, so the loss could be the buffer's, the
+    engine's, or the reader's rendering, and the three were not told apart before the session
+    ended. The first step is a reproduction with no reader in the path: submit a line longer
+    than the screen is wide and compare the buffer's text with the bytes that were sent.
+
+    If it is real it belongs to the engine or the echo rather than to macOS — nothing in this
+    lane touches either — and 22.13 is the nearest neighbour.
+
 34. **M3, the menu bar macOS actually has.** Spec: none yet → specify first. DESIGN has said
     since A7 that on macOS a menu belongs in the system bar and not in the window; today
     `main.ts` honours the second half of that and not the first, so a macOS build has the
