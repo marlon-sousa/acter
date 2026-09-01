@@ -367,6 +367,32 @@ a security dialog, including for a `/bin/zsh` that Apple signed, and a dialog th
 fires is a dialog a listener learns to dismiss. So macOS gets its own answer to "who signed
 this file" in the same entry that gives it a file to start.
 
+### macOS has no browse mode — it has Quick Nav, and Quick Nav is two toggles
+
+**Measured 2026-09-01, and recorded here because the product has no answer to it yet.**
+Every rule in this document about browse and focus mode is NVDA's, and VoiceOver's
+equivalent is not the same mechanism wearing a different name.
+
+**Quick Nav is two independent toggles.** Arrow-key Quick Nav makes the plain arrows move
+the VoiceOver cursor instead of reaching the application. Single-key Quick Nav makes `h`,
+`b` and `l` jump by element type. They normally travel together and are toggled by pressing
+Left Arrow and Right Arrow at the same time. A preference splits them —
+`SCRCUserDefaultsIndependentSingleLetterQuickNavEnabled`, in the VoiceOver group container's
+`com.apple.VoiceOver4/default.plist` — and with the split in force the letters navigate
+while the arrows still reach the application. Even with Quick Nav on, Up and Down inside a
+text field belong to that field.
+
+**Why this is Acter's problem and not trivia.** Quick Nav on is what lets a listener read
+the results buffer, and it is exactly what stops them typing a command. That is the same
+tension browse versus focus mode carries on Windows, where this document's answer is that
+the mode is the reader's own state, invisible to a web frontend, and must not be detected.
+Whether that answer survives on a reader whose two halves can be toggled apart is unknown:
+nobody has driven the real window under either combination yet.
+
+**So it is not decided, and it is not this entry's to decide.** It has a roadmap entry of
+its own after M3, where the measurements can be taken against a macOS build that has a
+buffer and an edit field to be in the wrong mode for.
+
 ### Acter starts unconnected, and `--profile` is the only switch — **Decided**
 
 Launched with no arguments, Acter opens a window with **no session**: nothing is spawned

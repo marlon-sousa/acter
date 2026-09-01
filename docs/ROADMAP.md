@@ -3837,6 +3837,22 @@ And the two that only became visible afterwards:
     WebDriver end to end, and a native one is not. So the E2E suite's menu coverage stays
     Windows-only and this entry's checklist is where the macOS menu is judged.
 
+34.1. **M3.5, the mode a macOS listener is in.** Spec: none yet → specify first. Every
+    rule this project has about reader modes is NVDA's browse and focus modes, and macOS
+    does not have them. Its equivalent is Quick Nav, and Quick Nav is **two independent
+    toggles** — arrows and single letters — which a preference can split apart (DESIGN,
+    measured 2026-09-01).
+
+    **Why it is an entry rather than a note.** Quick Nav on is what lets a listener read the
+    results buffer, and it is exactly what stops them typing a command. DESIGN's answer on
+    Windows is that the mode is the reader's own state, invisible to a web frontend, and must
+    not be detected — because browse mode does not deliver the key in the first place. Whether
+    that holds on a reader whose two halves toggle separately is unmeasured.
+
+    **After M3 deliberately.** It needs a macOS build with a menu, a buffer and an edit field
+    to be in the wrong mode for, and its evidence is a VoiceOver session against the real
+    window rather than a unit test.
+
 35. **M4, bundling, signing and notarising Acter itself.** Spec: none yet → specify first.
     `bundle.active` is `false` and the identifier is `dev.marlonsousa.acter`. Distribution
     is outside the App Store, so this is Developer ID signing plus notarisation, and it is
