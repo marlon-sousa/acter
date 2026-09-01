@@ -3865,21 +3865,27 @@ And the two that only became visible afterwards:
     WebDriver end to end, and a native one is not. So the E2E suite's menu coverage stays
     Windows-only and this entry's checklist is where the macOS menu is judged.
 
-34.1. **M3.5, the mode a macOS listener is in.** Spec: none yet → specify first. Every
-    rule this project has about reader modes is NVDA's browse and focus modes, and macOS
-    does not have them. Its equivalent is Quick Nav, and Quick Nav is **two independent
-    toggles** — arrows and single letters — which a preference can split apart (DESIGN,
-    measured 2026-09-01).
+34.1. **M3.5, the macOS help says how to set VoiceOver up.** Spec: none yet → specify
+    first. **The question is answered and what remains is the words** (DESIGN, decided
+    2026-09-01). Every rule this project has about reader modes is NVDA's browse and focus
+    modes; macOS's equivalent is Quick Nav, it is two toggles rather than one, and by default
+    they travel together — which forces a listener to choose between reading the results
+    buffer and typing a command.
 
-    **Why it is an entry rather than a note.** Quick Nav on is what lets a listener read the
-    results buffer, and it is exactly what stops them typing a command. DESIGN's answer on
-    Windows is that the mode is the reader's own state, invisible to a web frontend, and must
-    not be detected — because browse mode does not deliver the key in the first place. Whether
-    that holds on a reader whose two halves toggle separately is unmeasured.
+    **Measured in the real window on 2026-09-01, by the user:** with
+    `SCRCUserDefaultsIndependentSingleLetterQuickNavEnabled` true, arrow-key Quick Nav off and
+    single-key Quick Nav on, the letters still navigate by heading and the arrows reach the
+    application. Both work at once.
 
-    **After M3 deliberately.** It needs a macOS build with a menu, a buffer and an edit field
-    to be in the wrong mode for, and its evidence is a VoiceOver session against the real
-    window rather than a unit test.
+    **So the deliverable is a help topic, not code.** DESIGN's rule that Acter detects no
+    reader mode is untouched and this changes nothing about the frontend's behaviour: what
+    ships is a macOS section in the Help dialog saying what to turn off, what to leave on and
+    what each buys — rendered on macOS the way the menu-bar region is removed off Windows,
+    rather than shown to everybody.
+
+    **What the entry still has to measure**, because it decides the wording: whether the
+    arrows reach the application everywhere or only in some contexts, and what a listener
+    hears when they type a letter into the edit field with single-key Quick Nav live.
 
 35. **M4, bundling, signing and notarising Acter itself.** Spec: none yet → specify first.
     `bundle.active` is `false` and the identifier is `dev.marlonsousa.acter`. Distribution
