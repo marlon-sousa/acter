@@ -12,7 +12,7 @@
 
 import { $, browser, expect } from '@wdio/globals';
 
-import { submitCommand } from '../helpers';
+import { submitCommand, useActersLine } from '../helpers';
 
 interface Row {
   label: string;
@@ -120,6 +120,7 @@ describe('the Connect dialog', () => {
       timeout: 15_000,
       timeoutMsg: 'the Connect dialog would not close between tests',
     });
+    await useActersLine();
     await browser.execute(() => document.getElementById('command-input')?.focus());
   });
 
@@ -183,9 +184,12 @@ describe('the Connect dialog', () => {
         timeoutMsg: `the window never renamed itself; it says ${await windowTitle()}`,
       },
     );
-    await browser.waitUntil(async () => (await focusedId()) === 'command-input', {
+    // **On the program's line, not Acter's** (roadmap 28.7). A session hands the keys to
+    // the far end as soon as there is one, so this is where a listener lands: the field
+    // labelled "Command line" that the far end draws into, with Acter's `<input>` hidden.
+    await browser.waitUntil(async () => (await focusedId()) === 'far-end-input', {
       timeout: 15_000,
-      timeoutMsg: 'focus never returned to the edit field',
+      timeoutMsg: "focus never landed on the program's line after connecting",
     });
   });
 

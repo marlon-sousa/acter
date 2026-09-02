@@ -11,6 +11,7 @@
 // if the semantics regress rather than only if the markup moves.
 
 import { $, browser, expect } from '@wdio/globals';
+import { useActersLine } from '../helpers';
 
 /** Where focus actually is, as an id — the question every assertion here asks. */
 function focusedId(): Promise<string> {
@@ -74,6 +75,7 @@ before(async () => {
 
 describe('the menu bar', () => {
   beforeEach(async () => {
+    await useActersLine();
     // Every test starts from where the user lives.
     await browser.execute(() => document.getElementById('command-input')?.focus());
   });
@@ -275,9 +277,10 @@ describe('the Help dialog', () => {
     });
 
     await expect(shape.applications).toBe(0);
-    // Five since 2026-08-30, when the topic was rewritten whole: what Acter is, moving
-    // around the window, connecting, the two kinds of session, and the dialog that asks.
-    await expect(shape.headings).toBe(5);
+    // Six since 2026-09-02, when "Who gets your keys" was added (roadmap 28.7): what Acter
+    // is, moving around the window, who gets your keys, connecting, the two kinds of
+    // session, and the dialog that asks.
+    await expect(shape.headings).toBe(6);
     await expect(shape.describedBy).toBe('help-summary');
   });
 

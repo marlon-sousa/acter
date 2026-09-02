@@ -46,6 +46,8 @@ import {
   farEndLineOffMessage,
   noEndOfInputKeyMessage,
   sessionAlreadyEndedMessage,
+  keysGoToActerMessage,
+  keysGoToTheProgramMessage,
 } from '../../src/controllers/app';
 
 class FakeBackend implements BackendApi {
@@ -1010,22 +1012,20 @@ describe('event rendering (decision 2)', () => {
 // that the far end's row is handed to the field rather than announced. What NVDA then says
 // about that field is the measurement recorded in adapters/far_end_field.ts.
 describe('handing the line to the far end (28)', () => {
-  it('tells the backend, moves focus, and says what is gained and lost', async () => {
-    const { backend, farEndField, window, announcer, controller } = await makeApp();
-
-    await controller.toggleLineOwner();
+  // **A session starts with the program holding the keys** (roadmap 28.7). Nearly every far
+  // end has its own line editor, and its history, completion and bindings are what a
+  // terminal user reaches for — so starting on Acter's line began every session by taking
+  // those away. Acter's line is the retreat now, not the starting point.
+  it('hands the keys to the program as soon as there is a session', async () => {
+    const { backend, farEndField } = await makeApp();
 
     expect(backend.owners).toEqual(['FarEnd']);
     expect(farEndField.showing).toBe(true);
-    expect(farEndField.focused).toBe(true);
-    expect(window.localLines).toEqual([false]);
-    expect(announcer.announcements).toEqual([farEndLineOnMessage]);
   });
 
-  it('takes it back, and says that too', async () => {
+  it('takes it back, and says what is gained and lost', async () => {
     const { backend, editField, farEndField, window, announcer, controller } =
       await makeApp();
-    await controller.toggleLineOwner();
     announcer.announcements = [];
     window.localLines = [];
     editField.focused = false;
@@ -1039,18 +1039,53 @@ describe('handing the line to the far end (28)', () => {
     expect(announcer.announcements).toEqual([farEndLineOffMessage]);
   });
 
-  // Neither sentence names a mode. What changes for the person listening is whose history
-  // and whose completion they get, and "far-end-line mode" says nothing about that.
-  it('names what changes rather than naming a mode', () => {
+  it('hands them over again, and says that too', async () => {
+    const { backend, farEndField, window, announcer, controller } = await makeApp();
+    await controller.toggleLineOwner();
+    announcer.announcements = [];
+    window.localLines = [];
+    farEndField.focused = false;
+
+    await controller.toggleLineOwner();
+
+    expect(backend.owners).toEqual(['FarEnd', 'Local', 'FarEnd']);
+    expect(farEndField.showing).toBe(true);
+    expect(farEndField.focused).toBe(true);
+    expect(window.localLines).toEqual([false]);
+    expect(announcer.announcements).toEqual([farEndLineOnMessage]);
+  });
+
+  // **Neither sentence promises Acter a history or a completion**, because Acter has
+  // neither. They used to end "History and completion are back", which was a feature that
+  // does not exist being handed back to a listener — reported by the user 2026-09-02 and
+  // confirmed by searching for it. What is left is the name of the state and nothing else.
+  it('names the state without promising anything Acter does not have', () => {
     for (const said of [farEndLineOnMessage, farEndLineOffMessage]) {
       expect(said.toLowerCase()).not.toContain('mode');
-      expect(said.toLowerCase()).toContain('history');
-      expect(said.toLowerCase()).toContain('completion');
+      expect(said.toLowerCase()).not.toContain('history');
+      expect(said.toLowerCase()).not.toContain('completion');
+      expect(said.length).toBeLessThan(30);
     }
   });
 
   it('says which way it went', () => {
     expect(farEndLineOnMessage).not.toBe(farEndLineOffMessage);
+  });
+
+  // **The vocabulary an end user needs, and no more** (roadmap 28.7). What is said after
+  // connecting names the two parties already in every other sentence — Acter, and the
+  // program — and the key that swaps them. It teaches no mode name, and "far end" is the
+  // domain's word for whatever is on the other end of the transport: right in the code,
+  // meaningless to somebody who just wants to run a command.
+  it('names the two parties and the key, and teaches no jargon', () => {
+    for (const said of [keysGoToTheProgramMessage, keysGoToActerMessage]) {
+      expect(said).toContain('Ctrl+Shift+K');
+      expect(said.toLowerCase()).toContain('process keys');
+      expect(said.toLowerCase()).not.toContain('mode');
+      expect(said.toLowerCase()).not.toContain('far end');
+      expect(said.toLowerCase()).not.toContain('local');
+    }
+    expect(keysGoToTheProgramMessage).not.toBe(keysGoToActerMessage);
   });
 
   // Nothing to hand the keyboard to. The window answers in the words it has used since it
@@ -1135,11 +1170,12 @@ describe('handing the line to the far end (28)', () => {
   it('pastes into the far end only while the far end owns the line', async () => {
     const { backend, controller } = await makeApp();
 
-    await controller.pasteToFarEnd('ignored');
-    expect(backend.pasted).toEqual([]);
-
-    await controller.toggleLineOwner();
     await controller.pasteToFarEnd('cargo test --all');
+    expect(backend.pasted).toEqual(['cargo test --all']);
+
+    // Taken back by Acter, a paste is the platform's and never reaches the far end.
+    await controller.toggleLineOwner();
+    await controller.pasteToFarEnd('ignored');
 
     expect(backend.pasted).toEqual(['cargo test --all']);
   });
@@ -1150,7 +1186,6 @@ describe('handing the line to the far end (28)', () => {
   // read back, so it has to reach the buffer from whichever line is in front.
   it('F6 reaches the buffer from the far end line, and comes back to it', async () => {
     const { buffer, farEndField, editField, controller } = await makeApp();
-    await controller.toggleLineOwner();
     expect(farEndField.focused).toBe(true);
     buffer.focused = false;
     editField.focused = false;
@@ -1167,7 +1202,6 @@ describe('handing the line to the far end (28)', () => {
 
   it('Escape from the buffer returns to the far end line, not the hidden local one', async () => {
     const { buffer, farEndField, editField, controller } = await makeApp();
-    await controller.toggleLineOwner();
     farEndField.focused = false;
     editField.focused = false;
     buffer.focused = true;
@@ -1241,8 +1275,11 @@ describe('what Ctrl+D is answered with (23.5)', () => {
 });
 
 describe('focus flow', () => {
+  // Acter's own line, which a session reaches by taking the keys back from the program
+  // (roadmap 28.7 flipped the default, so these say so rather than assuming it).
   it('F6 toggles from edit field to buffer and back', async () => {
     const { editField, buffer, controller } = await makeApp();
+    await controller.toggleLineOwner();
 
     editField.focused = true;
     controller.toggleFocusArea();
@@ -1255,6 +1292,7 @@ describe('focus flow', () => {
 
   it('Escape returns to the edit field only when the buffer has focus', async () => {
     const { editField, buffer, controller } = await makeApp();
+    await controller.toggleLineOwner();
 
     editField.focused = false;
     buffer.focused = false;
@@ -1589,7 +1627,10 @@ describe('connecting to a profile (spec B7)', () => {
 
     expect(backend.attachedTo).toEqual([1, 2]);
     expect(window.titles).toEqual(['WSL: Ubuntu']);
-    expect(announcer.announcements).toEqual([connectedMessage('WSL: Ubuntu')]);
+    expect(announcer.announcements).toEqual([
+      connectedMessage('WSL: Ubuntu'),
+      keysGoToTheProgramMessage,
+    ]);
   });
 
   /**
@@ -1607,7 +1648,11 @@ describe('connecting to a profile (spec B7)', () => {
     expect(announcer.announcements).toEqual([]);
 
     expect(controller.announceConnection()).toBe(true);
-    expect(announcer.announcements).toEqual([connectedMessage('WSL: Ubuntu')]);
+    // Two sentences now: what connected, then who has the keys (roadmap 28.7).
+    expect(announcer.announcements).toEqual([
+      connectedMessage('WSL: Ubuntu'),
+      keysGoToTheProgramMessage,
+    ]);
   });
 
   /** And there is nothing to say about a window connected to nothing. */
@@ -1638,6 +1683,7 @@ describe('connecting to a profile (spec B7)', () => {
 
     expect(announcer.announcements).toEqual([
       'connected to WSL: Ubuntu, zsh, which Acter cannot set up yet.',
+      keysGoToTheProgramMessage,
     ]);
   });
 

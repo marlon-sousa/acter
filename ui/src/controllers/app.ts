@@ -145,10 +145,32 @@ export const unboundKeyMessage = 'that key does nothing here';
 //
 // It is the frontend's string, pinned here beside every other announced one, for the reason
 // they all are: the backend sends what happened and never the words.
-export const farEndLineOnMessage =
-  'The program gets your keys now. Its own history and completion — Acter\u2019s are off.';
-export const farEndLineOffMessage =
-  'Acter gets your keys again. History and completion are back.';
+// **Who processes your keys, in two words, and nothing else.**
+//
+// These said "The program gets your keys now. Its own history and completion — Acter's are
+// off." and "Acter gets your keys again. History and completion are back." The second half
+// of both was **not true**: Acter has no history and no completion of its own — searched
+// 2026-09-02, every match in the codebase is the *far end's* recall or these strings — so it
+// promised a feature back that never existed. Removed rather than reworded.
+//
+// What is left is the name of the state, which is all a listener pressing the key needs:
+// they know what they pressed, and the trade is in the help dialog where it can be re-read.
+export const farEndLineOnMessage = 'Remote process keys.';
+export const farEndLineOffMessage = 'Acter process keys.';
+
+// **Said after every connection, because otherwise there is no way to know** (roadmap 28.7).
+// Handing the keys over moves focus to a different field, and the reader announces the
+// sentence rather than the field it landed on — measured 2026-09-02, turning it *off*
+// announced "Command input edit" while turning it *on* announced nothing but the sentence.
+// So a listener could be on either line with nothing said about which, and the two lines
+// answer the same keys differently.
+//
+// **Once, at a connection, and never on focus.** Naming the fields differently would have
+// the reader say which line you are on every time focus lands there, which is the same fact
+// repeated after every F6, every Escape and every dialog — noise, not orientation.
+export const keysGoToTheProgramMessage =
+  'Remote process keys. Ctrl+Shift+K changes that.';
+export const keysGoToActerMessage = 'Acter process keys. Ctrl+Shift+K changes that.';
 
 // The two answers to `Ctrl+D` that only the frontend can voice, and the one it must not
 // (spec 28, decision 9; roadmap 23.5).
@@ -363,6 +385,13 @@ export class AppController {
     this.announcer.announce(
       connectedMessage(this.connection.label, this.connection.note),
     );
+    // Second, and deliberately after: the connection is the news, and who has the keys is
+    // what the listener needs before the next thing they press (roadmap 28.7).
+    this.announcer.announce(
+      this.lineOwner === 'FarEnd'
+        ? keysGoToTheProgramMessage
+        : keysGoToActerMessage,
+    );
     return true;
   }
 
@@ -382,9 +411,9 @@ export class AppController {
     // vocabulary A13 removed and B9.5 rewrote — so a reworded sentence silently changed what
     // a listener heard afterwards. The backend computes it beside the sentence now.
     this.noteSaidIntegrationIsMissing = connected?.limit_explained ?? false;
-    // A new far end owns nothing until the user says so. The state is per session, like
-    // everything else this method resets: a mode carried across a connection would change
-    // what a key does in a shell the user never chose it for.
+    // Reset to Acter's line first, so a window between sessions is never showing a field for
+    // a far end that is gone. Which one the *new* session starts on is decided below, once
+    // there is a session to tell.
     this.setLineOwner('Local', false);
     this.buffer.clear();
     this.openBlocks.clear();
@@ -410,6 +439,17 @@ export class AppController {
     // connecting, so the connection itself is what says this.
     this.connection = connected;
     this.window.status(connectedStatus(connected.label, connected.note));
+    // **The program gets the keys to start with** (roadmap 28.7, and DESIGN's "Edit field
+    // ownership" amended with it). Nearly every far end this product connects to has its own
+    // line editor, and its history, completion and bindings are what a terminal user reaches
+    // for -- so starting on Acter's line meant every session began by taking those away and
+    // waiting to be asked for them back. Acter's line is the deliberate retreat now: for a
+    // link too slow to answer a keystroke, or a program that shows nothing as you type.
+    //
+    // Done before the attach, so the far end owns the line from its first byte and the
+    // prompt it draws is anchored rather than arriving at a window that has not decided yet.
+    await this.backend.setLineOwner(connected.session, 'FarEnd');
+    this.setLineOwner('FarEnd', false);
     await this.backend.attachSession(connected.session, (event) => {
       this.handleEvent(event);
     });

@@ -43,6 +43,39 @@ export async function pressCtrlC(): Promise<void> {
   });
 }
 
+/**
+ * Give Acter's own line the keys, if the program has them (roadmap 28.7).
+ *
+ * `wdio.conf.ts` does this once for the whole suite and explains why. It is needed again
+ * here because **connecting hands them back**: the default is per session, so any spec that
+ * opens the Connect dialog and starts a new one lands on the program's line again, where
+ * Acter's `<input>` is hidden and cannot take focus.
+ */
+export async function useActersLine(): Promise<void> {
+  const showing = async (): Promise<boolean | undefined> =>
+    await browser.execute(
+      () => document.getElementById('far-end-line')?.hidden === false,
+    );
+  if ((await showing()) !== true) {
+    return;
+  }
+  await browser.execute(() => {
+    document.dispatchEvent(
+      new KeyboardEvent('keydown', {
+        key: 'K',
+        ctrlKey: true,
+        shiftKey: true,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+  });
+  await browser.waitUntil(async () => (await showing()) !== true, {
+    timeout: 15_000,
+    timeoutMsg: 'Ctrl+Shift+K did not bring the keys back to Acter',
+  });
+}
+
 /** The debug recorder's tape: what crossed the port, in arrival order (spec A3.2). */
 export function debugTape(): Promise<Array<{ kind: string; what: string }>> {
   return browser.execute(

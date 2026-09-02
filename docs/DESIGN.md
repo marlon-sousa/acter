@@ -578,7 +578,7 @@ per-profile (muscle memory must not change between sessions).
 - **Ctrl+Shift+E** — toggle interactive / non-interactive mode. **Decided.** (Moved
   from plain Ctrl+E, which collided with readline/nano/emacs end-of-line; terminal
   apps cannot receive Ctrl+Shift combos, so the collision vanishes.)
-- **Ctrl+Shift+K** — hand the keyboard to the far end, and take it back: toggles
+- **Ctrl+Shift+K** — hand the keys to the program, and take them back: toggles
   far-end-line mode. **Decided 2026-08-31**; the letter is the one arbitrary part of it.
   It is a second binding rather than a reuse of Ctrl+Shift+E because the amendment under
   "Edit field ownership" split what used to be one switch into two independent ones, and
@@ -754,6 +754,42 @@ completion and recall *on this machine*, and the original complaint that produce
 whole mode is that it holds lines typed at every far end the profile ever reached. Adding
 a session's worth of a remote box's commands to it makes that worse, not better. If this
 is revisited, the shape to revisit it as is history keyed to the far end, never one pool.
+
+**Amended 2026-09-02: a session starts with the program holding the keys, and the listener
+is told so — Decided.** This section was written when the local line was the only line, and
+its default outlived that: every session began on Acter's line, so every session began by
+taking away the far end's history, completion and bindings and waiting to be asked for them
+back. Nearly every far end this product connects to has a line editor, and its `readline` is
+what a terminal user reaches for. **So a new session hands the keys to the program, and
+Acter's line is the deliberate retreat** — for a link too slow to answer a keystroke inside
+the reader's caret-poll window, or a program that shows nothing while you type.
+
+**And the listener is told who has them, after every connection.** Handing the keys over
+moves focus to a different field, and the reader announces the sentence rather than the
+field it landed on: measured 2026-09-02, turning it *off* announced "Command input edit
+blank" while turning it *on* announced nothing but the sentence. A listener could be on
+either line with nothing said about which, and the two lines answer the same keys
+differently. One sentence at the one moment the answer is always news — a connection just
+started — closes that.
+
+**The words are "Acter process keys" and "remote process keys", and nothing else.** What a
+listener hears after connecting is *"Remote process keys. Ctrl+Shift+K changes that."*, and
+pressing the key answers with the name of the state alone. `LineOwner::FarEnd` stays the
+domain's name, because "far end" means "whatever is on the other end of the transport" and is
+exactly right in code and meaningless to somebody who just wants to run a command.
+
+**Two things these sentences deliberately do not do.** They do not promise Acter a history or
+a completion: they used to end "History and completion are back", and Acter has neither —
+searched 2026-09-02, every match in the codebase is the far end's own recall. A feature handed
+back that never existed is worse than silence. And the state is **not** re-announced when
+focus lands on a command line: naming the two fields differently would say the same fact after
+every F6, every Escape and every dialog, which is noise rather than orientation. The trade —
+what the remote process's line editing gives, and what Acter's gives up — is in the help
+dialog, where it can be re-read at the listener's own pace rather than heard once.
+
+**Still open, and deliberately: this is not remembered per connection.** A saved connection
+that always wants Acter's line has to be asked every time. Recorded as its own entry rather
+than guessed at here.
 
 **Amended 2026-09-02: the far-end line is an element of its own, and the reader speaks it —
 Decided.** The open question below asked whether a permanently empty field needs

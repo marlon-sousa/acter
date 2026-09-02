@@ -281,9 +281,9 @@
            reason (spec B9): it names what is here and how to move through it, and the
            sections stay where a heading key can find them. -->
       <p id="help-summary">
-        Five short sections: what Acter is, moving around the window, connecting to a shell,
-        sessions Acter has set up, and the dialog that asks. Use your reader's heading key to
-        move between them.
+        Six short sections: what Acter is, moving around the window, who gets your keys,
+        connecting to a shell, sessions Acter has set up, and the dialog that asks. Use your
+        reader's heading key to move between them.
       </p>
 
       <!-- Focusable so the dialog can land on it, and out of the tab order because it is a
@@ -313,6 +313,35 @@
         Ctrl+C, pressed in the command line, stops the command that is running. In the
         results area the same keys are your reader's own copy command, so they never reach
         the shell.
+      </p>
+
+      <!-- **Who gets your keys** (roadmap 28.7). Two things put this here rather than in a
+           sentence somewhere: it is the one piece of state that changes what every other key
+           does, and the announcement that tells you about it is one line long by design. The
+           trade belongs somewhere a listener can go back over at their own pace, which is
+           what this dialog is for.
+
+           No mode is named. The vocabulary is the two parties every other announcement here
+           already uses -- Acter, and the program -- because a name is one more thing to
+           learn and this needs none. -->
+      <h2>Who gets your keys</h2>
+      <p>
+        When you type, your keys are processed either by the program you are running or by
+        Acter. Ctrl+Shift+K changes which, and Acter says which it is each time you connect.
+      </p>
+      <p>
+        The remote process gets them to start with, so its own line editing works: up arrow
+        brings back what you ran before, Tab completes a name, and Ctrl+R searches its
+        history. Acter reads back the line it draws as you move through that line, so you
+        hear the recalled command, what a completion added, or the character you just moved
+        onto.
+      </p>
+      <p>
+        Acter processing them instead means nothing is sent until you press Enter. The line
+        is yours to write and re-read first, which is worth having over a connection too slow
+        to answer each keystroke, or in front of a program that shows nothing while you type.
+        What you give up is everything in the paragraph above: the program's history, its
+        completion and its own keys, none of which Acter has of its own.
       </p>
 
       <h2>Connecting to a shell</h2>

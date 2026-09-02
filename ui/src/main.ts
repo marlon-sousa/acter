@@ -52,6 +52,7 @@ const windowChrome = new WindowChrome({
   terminalWindow: byId('terminal-window'),
   form: byId('command-form'),
   editField,
+  farEndField,
   ended: byId('terminal-ended'),
   reconnectButton: byId('reconnect-button'),
   document,
