@@ -247,6 +247,21 @@ listener standing on a menu that has closed.
   E2E suite green.
 - The VoiceOver checklist in the PR body, each item marked agent-observed or human-verified.
 
+## What the VoiceOver run added, 2026-09-02
+
+Driving the checklist found the one thing neither the accessibility-tree reading nor the
+unit tests could: **an unbundled build has no menu bar as far as the system is concerned.**
+`go to menu bar` reached **Finder's** menu bar while Acter held the window and every
+keystroke, and System Events called acter-app frontmost at the same moment — macOS does not
+make a bare binary the *active* application. Wrapped in a minimal `.app`, the same build
+announced Acter, File, Edit, View, Window and Help immediately, and its application menu took
+the bundle's name.
+
+So this entry's value is real and **its delivery depends on M4**, which is now recorded on
+both entries. The same run closed roadmap 33.1: under the bundle, `describe item with
+keyboard focus` answered correctly everywhere, where the unbundled build had said "nothing
+has keyboard focus" throughout. One cause, two symptoms, and neither is Acter's.
+
 ## Accessibility checklist (PR body)
 
 One item per check, findings written inline on the unchecked item, naming the VoiceOver

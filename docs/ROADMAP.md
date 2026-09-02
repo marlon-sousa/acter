@@ -3831,25 +3831,23 @@ And the two that only became visible afterwards:
     asks about `$BASH_VERSION` too, which is a fix to shared code that reaches SSH far ends as
     well.
 
-33.1. **VoiceOver is told nothing has keyboard focus, on every element of the macOS
-    window.** Spec: none yet → specify first. Found by the M2 checklist (VoiceOver, macOS
-    15.0, silent capture, 2026-09-01): `describe item with keyboard focus` answered "nothing
-    has keyboard focus" throughout — on the unconnected window, inside the Connect dialog, and
-    in the connected one — while the application's own `AXFocusedUIElement` was correct
-    every time, naming `bash (default)` in the shells panel. The window reports `AXMain` true
-    and `AXFocused` false.
+33.1. **Answered, and it was the launch** — VoiceOver was told nothing has keyboard focus
+    because the binary was not in a bundle. **Measured 2026-09-02** (VoiceOver, macOS 15.0,
+    silent capture, `user` persona), driving M3's checklists against the same debug build
+    wrapped in a minimal `.app`: `describe item with keyboard focus` answered correctly
+    everywhere it was asked — the help topic's first heading, the Connect dialog's Terminal
+    row, the command line, the Results region — where the unbundled build had said "nothing
+    has keyboard focus" throughout.
 
-    **Not a reachability failure, and that is what makes it worth its own entry rather than a
-    blocker.** Every part of M2 was reached and driven with the VoiceOver cursor, which is how
-    an ordinary Mac user navigates — so the row, the panel and the session are usable today.
-    What is lost is everything that depends on the reader knowing where focus *is*: cursor
-    tracking cannot follow focus into a dialog, and A5's rule that focus lands somewhere
-    announced has no audible counterpart here.
+    **The mechanism showed itself in the same run.** Unbundled, the process never becomes
+    the *active* application: `go to menu bar` reached **Finder's** menu bar while Acter had
+    the window and the keystrokes, and System Events reported acter-app frontmost at the same
+    moment. An application macOS does not activate has no keyboard focus to report and no
+    menu bar on screen, which is one cause for both symptoms.
 
-    **Measured on an unbundled debug binary launched from a terminal**, which is a real
-    confound: a Tauri window that is not inside a `.app` has a different activation story, and
-    M4 is what produces a bundled one. So the first step is to reproduce it against a bundle
-    before deciding whether the fault is Acter's, Tauri's or the launch.
+    So nothing here is Acter's to fix, and the entry closes into **M4**: what must not happen
+    is a later measurement made against an unbundled build and read as a defect. A7's rule
+    that focus lands somewhere announced holds on macOS as soon as the application is one.
 
 33.2. **The echo of a long submitted line may drop a character per wrapped row.** Spec: none
     yet → specify first. Observed during the same checklist: the setup command Acter echoes
@@ -3892,6 +3890,22 @@ And the two that only became visible afterwards:
     so it reads "acter-app" and its Quit says the same until a bundle exists. And macOS
     localises the items it owns, which is why Acter writes only its own items' words: hard
     coding English would have replaced translations on the machine this is built on.
+
+    **And one that makes M4 a dependency rather than a nicety.** The checklist could not be
+    run against the unbundled binary at all: macOS never makes such a process the *active*
+    application, so `go to menu bar` reached Finder's menu bar while Acter held the window
+    and every keystroke. Wrapped in a minimal `.app` the same build announced its own six
+    menus immediately. **A menu bar this platform will not display is a menu bar nobody has**,
+    so shipping M3's value depends on M4 — and it is what closed 33.1 as well.
+
+    **The checklist itself**, driven with VoiceOver 2026-09-02 (macOS 15.0, silent capture,
+    `user` persona): the six menus announced by name; a menu opened in about a quarter of a
+    second, against the twenty to sixty-eight seconds A7 measured for a native menu on
+    Windows; File announced "Connect… Command k" and opened the dialog on the Terminal row;
+    Help announced "Acter Help Command barra" and landed on the topic's first heading; About
+    read name, version, copyright and licence; Cmd+K, Cmd+/, fn+F1 and fn+F6 all did what
+    they say; and Cmd+C copied the command line into the clipboard, which is what the Edit
+    menu is there for.
 
 34.1. **M3.5, the macOS help says how to set VoiceOver up.** Spec: none yet → specify
     first. **The question is answered and what remains is the words** (DESIGN, decided
