@@ -197,6 +197,51 @@ export const config: WebdriverIO.Config = {
     cfg.path = '/';
   },
 
+  // **This suite drives Acter's own line, so it says so** (roadmap 28.7). A session now
+  // starts with the program holding the keys, which is right for a listener and wrong for
+  // nine spec files that submit through Acter's form and assert focus on its `<input>` —
+  // that field is hidden while the program has them, and focusing a hidden element is a
+  // no-op.
+  //
+  // The hook asserts the default before undoing it, so it is also where a regression in the
+  // default would surface: if a session ever stops handing the keys over, this fails here
+  // rather than passing quietly everywhere.
+  before: async () => {
+    const browser = (globalThis as { browser: WebdriverIO.Browser }).browser;
+    await browser.waitUntil(
+      async () =>
+        await browser.execute(
+          () => document.getElementById('far-end-line')?.hidden === false,
+        ),
+      {
+        timeout: 30_000,
+        timeoutMsg:
+          'a session did not hand the keys to the program, which is the default since 28.7',
+      },
+    );
+    await browser.execute(() => {
+      document.dispatchEvent(
+        new KeyboardEvent('keydown', {
+          key: 'K',
+          ctrlKey: true,
+          shiftKey: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    });
+    await browser.waitUntil(
+      async () =>
+        await browser.execute(
+          () => document.getElementById('far-end-line')?.hidden === true,
+        ),
+      {
+        timeout: 15_000,
+        timeoutMsg: 'Ctrl+Shift+K did not bring the keys back to Acter',
+      },
+    );
+  },
+
   afterSession: async () => {
     app?.kill();
     app = undefined;

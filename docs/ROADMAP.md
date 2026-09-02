@@ -4456,6 +4456,58 @@ bargain 22.11 and 23.14 struck, and both paid.
     where it was left, the far end's own one-line record (`chose: Push an existing local
     repository`) and the returning prompt. No second heading.
 
+28.7. **You cannot tell who has your keys, and the default was backwards.** Spec: none yet →
+    the decisions are in DESIGN's "Edit field ownership", amended with this change. **Raised
+    2026-09-02 by the user**, after entry 28 merged and they drove it themselves.
+
+    **What a listener meets.** Handing the keys over moves focus to a different field, and
+    the reader announces the sentence rather than the field it landed on. Measured on NVDA
+    2026.1.1, silent capture: turning it **off** announced "Command input edição em branco" —
+    you hear where you landed — while turning it **on** announced nothing but the sentence.
+    `get_focus_info` showed focus really was on the far-end field, so the field is fine and
+    the announcement is what is missing. A listener can therefore be on either line with
+    nothing said about which, and the two lines answer the same keys quite differently: on
+    Acter's line, up arrow is Acter's history and `Tab` moves focus out of the window; on the
+    program's, they are the program's.
+
+    That is not hypothetical. It cost the user and this agent several exchanges arguing about
+    which line they had been on, and the agent's first theory was wrong twice over — first
+    blaming local-line mode, then finding that NVDA's own browse mode produces the identical
+    pair of symptoms, since there `up arrow` reads a document line and `Tab` moves focus.
+
+    **What was decided, in conversation, and what it changes.**
+
+    - **A session starts with the program holding the keys.** Nearly every far end has a line
+      editor, and its history, completion and bindings are what a terminal user reaches for;
+      starting on Acter's line began every session by taking those away. Acter's line is the
+      retreat now — a slow link, or a program that shows nothing while you type.
+    - **After every connection, one sentence says which it is and which key changes that**:
+      *"Remote process keys. Ctrl+Shift+K changes that."* It follows the connection sentence
+      rather than replacing it, and it is said **once** — not when focus lands on a command
+      line, which would repeat the same fact after every F6, Escape and dialog.
+    - **The vocabulary drops "far end" for the end user**, and the user chose it: the two
+      states are **"Acter process keys"** and **"remote process keys"**. `LineOwner::FarEnd`
+      stays the domain's word, because it is exactly right in code and means nothing to
+      somebody who just wants to run a command.
+    - **Two untrue words came out.** The toggle used to answer "Acter gets your keys again.
+      History and completion are back." **Acter has no history and no completion** — searched
+      2026-09-02, every match in the codebase is the far end's own recall or the string
+      itself — so it handed back a feature that never existed. Reported by the user, removed
+      rather than reworded.
+    - **The help dialog gains a section**, "Who gets your keys", carrying the trade — whose
+      history, whose completion, and when Acter's line is worth taking back. One sentence is
+      what you hear; the dialog is what you can re-read.
+
+28.8. **Who gets your keys is not remembered per connection.** Spec: none yet → deferred
+    deliberately. **Raised 2026-09-02 by the user in the same conversation as 28.7**, and
+    parked by them: "this will come later".
+
+    A saved connection that always wants Acter's line — a slow `ssh`, a far end with no line
+    editor — has to be told so every time it is opened. The state is per session by design
+    (a mode carried across connections would change what a key does in a shell the user never
+    chose it for), and what is missing is the *saved* half: a connection remembering the
+    answer it was given last time.
+
 29. A program that is waiting says so. Spec: none yet → specify first. **Agreed
     2026-08-31**, and it is what makes 28 discoverable rather than a mode only its author
     knows about.

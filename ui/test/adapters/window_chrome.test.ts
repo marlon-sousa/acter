@@ -18,6 +18,7 @@ let terminal: HTMLElement;
 let results: HTMLElement;
 let ended: HTMLElement;
 let input: HTMLElement;
+let farEndInput: HTMLElement;
 let connectButton: HTMLElement;
 let reconnectButton: HTMLElement;
 let chrome: WindowChrome;
@@ -38,6 +39,7 @@ beforeEach(() => {
     <div id="terminal-window" hidden>
       <div id="results" hidden></div>
       <form id="command-form"><input id="command-input" /></form>
+      <div id="far-end-line" hidden><span id="far-end-input" tabindex="0"></span></div>
       <div id="terminal-ended" hidden>
         <button id="reconnect-button">Connect</button>
       </div>
@@ -53,6 +55,7 @@ beforeEach(() => {
   results.tabIndex = -1;
   ended = byId('terminal-ended');
   input = byId('command-input');
+  farEndInput = byId('far-end-input');
   connectButton = byId('connect-button');
   reconnectButton = byId('reconnect-button');
   native = [];
@@ -67,6 +70,7 @@ beforeEach(() => {
       terminalWindow: terminal,
       form,
       editField: { focus: () => input.focus() },
+        farEndField: { focus: () => farEndInput.focus() },
       ended,
       reconnectButton,
       document,
@@ -81,6 +85,29 @@ describe('what the window is called', () => {
    * task switcher, and it is the one A9 shipped without: assigning `document.title` in a
    * Tauri window leaves the native title alone, which the user's NVDA reported on
    * 2026-08-25 while the document said something else. */
+  // **Focus lands on whichever command line is in front** (roadmap 28.7). A session hands
+  // the keys to the program, so the local form is hidden by default now — and this method is
+  // what the Connect dialog returns focus to when it closes. Asking the `<input>` alone
+  // focused a hidden element, which is a no-op, and left the listener on nothing at all
+  // after the commonest action there is. The same mistake as 28.3, in a second place.
+  it('lands on the program line while the local form is hidden', () => {
+    chrome.showTerminal(true);
+    chrome.showLocalLine(false);
+
+    chrome.focus();
+
+    expect(document.activeElement).toBe(farEndInput);
+  });
+
+  it("lands on Acter's line when that is the one showing", () => {
+    chrome.showTerminal(true);
+    chrome.showLocalLine(true);
+
+    chrome.focus();
+
+    expect(document.activeElement).toBe(input);
+  });
+
   it('names the far end in the native title, the document and the heading', () => {
     chrome.connectedTo('PowerShell');
 
@@ -306,6 +333,7 @@ describe('the startup hold', () => {
         terminalWindow: terminal,
         form,
         editField: { focus: () => input.focus() },
+        farEndField: { focus: () => farEndInput.focus() },
         ended,
         reconnectButton,
         document,

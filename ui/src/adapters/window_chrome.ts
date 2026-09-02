@@ -59,8 +59,10 @@ export interface WindowElements {
   terminalWindow: HTMLElement;
   /** The edit field's form: the terminal window's half that takes input. */
   form: HTMLElement;
-  /** Where focus belongs while a session is live. */
+  /** Where focus belongs while a session is live and Acter has the keys. */
   editField: { focus(): void };
+  /** And where it belongs while the program has them (roadmap 28.7). */
+  farEndField: { focus(): void };
   /** What the terminal window shows in place of the form once its session has ended. */
   ended: HTMLElement;
   /** And that block's own Connect button. */
@@ -122,9 +124,17 @@ export class WindowChrome implements WindowView {
     if (this.elements.terminalWindow.hidden) {
       return this.elements.connectButton;
     }
-    return this.elements.ended.hidden
-      ? this.elements.editField
-      : this.elements.reconnectButton;
+    if (!this.elements.ended.hidden) {
+      return this.elements.reconnectButton;
+    }
+    // **Whichever command line is in front** (roadmap 28.7), which is the same lesson 28.3
+    // taught about F6: asking the `<input>` alone focuses a hidden element, which is a
+    // no-op, and leaves the listener wherever they were — after the Connect dialog closes,
+    // that is nowhere at all. A session hands the keys to the program, so the local form is
+    // the hidden one by default now and this was reached on the commonest path there is.
+    return this.elements.form.hidden
+      ? this.elements.farEndField
+      : this.elements.editField;
   }
 
   connectedTo(name: string | null): void {
