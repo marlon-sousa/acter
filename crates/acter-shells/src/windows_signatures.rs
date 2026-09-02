@@ -19,7 +19,7 @@
 //! spawn (decision 1) — it is what stops the check being paid for twice for no reason.
 //!
 //! **A workspace test run reaches this module, and that is deliberate.** Unlike
-//! [`installed`](crate::installed), verifying a signature spawns no process and opens no
+//! [`windows_machine`](crate::windows_machine), verifying a signature spawns no process and opens no
 //! session: it reads a file, this machine's catalogs and this machine's certificate stores,
 //! and with `WTD_CACHE_ONLY_URL_RETRIEVAL` it reaches no network. So the tests here can ask
 //! the real Windows about real files — including the one every Windows machine has.
@@ -118,9 +118,9 @@ mod tests {
     use std::fs::{File, read, write};
     use std::io::Write;
 
-    use acter_core::{Fault, InstalledShells, Signer};
+    use acter_core::{Fault, Signer, ThisComputer};
 
-    use crate::ThisMachine;
+    use crate::WindowsMachine;
 
     use super::*;
 
@@ -163,7 +163,7 @@ mod tests {
     /// on what is installed; every other test in this file builds what it needs.
     #[test]
     fn powershell_seven_is_trusted_and_signed_by_microsoft_wherever_it_came_from() {
-        let installs = ThisMachine::new().installs("pwsh.exe");
+        let installs = WindowsMachine::new().installs("pwsh.exe");
         if installs.is_empty() {
             eprintln!("no PowerShell 7 on this machine, so there is nothing to verify");
             return;

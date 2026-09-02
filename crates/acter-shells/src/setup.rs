@@ -228,10 +228,30 @@ pub(crate) const BASH: &str = concat!(
 /// brackets and must not be given them; busybox needs them and honours them; and both answer to
 /// the name `sh`, which is why the name cannot decide it.
 ///
-/// **`BB_ASH_VERSION` decides it, at runtime, inside the line itself.** Measured the same day:
-/// busybox ash sets it (`1.37.0` on `docker-desktop`), dash leaves it empty. So the setup asks
-/// the shell which one it is and wraps accordingly — one line, one round trip, and no guess
-/// from a name that two different shells share.
+/// **`BB_ASH_VERSION` decided it until M2, at runtime, inside the line itself.** Measured
+/// 2026-08-29: busybox ash sets it (`1.37.0` on `docker-desktop`), dash leaves it empty. So
+/// the setup asks the shell which one it is and wraps accordingly — one line, one round trip,
+/// and no guess from a name that two different shells share.
+///
+/// # And two shells were not enough, which macOS is what proved
+///
+/// **`/bin/sh` on macOS is bash 3.2.57 in POSIX mode**, and it therefore has readline,
+/// honours `\[` and `\]`, and sets no `BB_ASH_VERSION` — so it took the dash branch and paid
+/// busybox's price. Measured 2026-09-01 on an 80-column pseudoconsole with a prompt four
+/// columns wide: unmarked, the line editor began a second row at 76 characters; marked, at
+/// **60**. Sixteen bytes, sixteen columns, exactly the number B9.6 measured for busybox — on
+/// the platform where the fix already existed and was not reached.
+///
+/// **So the test asks about `$BASH_VERSION` too**, measured the same day: with it, macOS `sh`
+/// goes back to wrapping at 76 and draws its prompt byte-for-byte as it does unmarked, and
+/// dash 0.5.12 is untouched — it sets neither variable, takes the same branch it took before,
+/// and still draws no literal brackets.
+///
+/// **The question the test asks is what changed, not the number of shells it names.** It used
+/// to mean "is this busybox"; it now means "does this shell have a line editor that honours
+/// the non-printing brackets", and two shells answer yes to that for two unrelated reasons.
+/// A shell that answers yes and is neither is a shell nobody has measured, which is the state
+/// this whole file is built to keep honest.
 ///
 /// It prints its own `C` for [`BASH`]'s reason: without it the tracker never learns the block
 /// is open, and it only closes a block it knows about — so the `D` the very next prompt
@@ -239,7 +259,7 @@ pub(crate) const BASH: &str = concat!(
 /// connected.
 pub(crate) const SH: &str = concat!(
     "printf '\\033]133;C\\007'; ",
-    "if [ -n \"$BB_ASH_VERSION\" ]; then ",
+    "if [ -n \"$BB_ASH_VERSION\" ] || [ -n \"$BASH_VERSION\" ]; then ",
     "PS1=\"\\[$(printf '\\033]133;D;')\\$?$(printf '\\007\\033]133;A\\007')\\]$PS1\\[$(printf '\\033]133;B\\007')\\]\"; ",
     "else ",
     "PS1=\"$(printf '\\033]133;D;')\\$?$(printf '\\007\\033]133;A\\007')$PS1$(printf '\\033]133;B\\007')\"; ",
@@ -548,16 +568,36 @@ mod tests {
     }
 
     /// **The shell is asked which it is rather than guessed at from its name**, because
-    /// `/bin/sh` is busybox on one distribution and dash on the next and the probe answers
-    /// `sh` for both. Measured 2026-08-29: busybox ash sets `BB_ASH_VERSION` (`1.37.0` on
-    /// `docker-desktop`), dash leaves it empty.
+    /// `/bin/sh` is busybox on one distribution, dash on the next and bash 3.2.57 on every
+    /// Mac, and the probe answers `sh` for all three. Measured 2026-08-29: busybox ash sets
+    /// `BB_ASH_VERSION` (`1.37.0` on `docker-desktop`), dash leaves it empty. Measured
+    /// 2026-09-01: macOS `sh` sets `BASH_VERSION` and has readline, so it belongs on the
+    /// bracketed branch and cost sixteen columns until it was put there (M2, decision 7).
     #[test]
     fn the_sh_program_asks_the_shell_which_shell_it_is() {
         assert!(
-            SH.contains(r#"if [ -n "$BB_ASH_VERSION" ]; then "#),
-            "one round trip, no guess from a shared name: {SH}"
+            SH.contains(r#"if [ -n "$BB_ASH_VERSION" ] || [ -n "$BASH_VERSION" ]; then "#),
+            "one round trip, no guess from a name three shells share: {SH}"
         );
         assert!(SH.ends_with("fi"), "and the branch is closed: {SH}");
+    }
+
+    /// **What the test is asking has to stay one question**: does this shell have a line
+    /// editor that honours the non-printing brackets? Two shells answer yes for unrelated
+    /// reasons, and a third that answered yes and was neither would be a shell nobody
+    /// measured — so the branch is a test of variables those shells set, never of a name.
+    #[test]
+    fn the_branch_asks_what_the_shell_is_rather_than_what_it_is_called() {
+        assert!(
+            !SH.contains("$0"),
+            "the name a shell was started under decides nothing here: {SH}"
+        );
+        for variable in ["BB_ASH_VERSION", "BASH_VERSION"] {
+            assert!(
+                SH.contains(&format!("${variable}")),
+                "{variable} is what a shell that needs the brackets sets: {SH}"
+            );
+        }
     }
 
     /// `sh` marks where the prompt begins, where the command line does, and how the last

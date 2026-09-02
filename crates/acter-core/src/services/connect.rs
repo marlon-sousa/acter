@@ -2,7 +2,7 @@
 //! different one.
 //!
 //! It coordinates three things for one named use case: the catalogue policy, which decides
-//! what belongs in a connect list and in what order; [`InstalledShells`], which answers
+//! what belongs in a connect list and in what order; [`ThisComputer`], which answers
 //! what this particular machine has; and [`SessionFactory`], which turns a chosen profile
 //! into a running session. It names no adapter, so the whole of connecting — what is
 //! offered, what replacing means, what happens when it fails — is tested with a fake
@@ -29,14 +29,14 @@
 //! absent `Option`, and the two things a user can do to an empty window are answered
 //! directly: a submitted line is refused, and a keystroke has nothing to act on.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crate::{
     Chosen, ConnectApi, ConnectQuestions, Connectable, Connected, Connection, ConnectionKind,
-    EventSink, InstalledShells, KeyAck, KeyPress, ProfileId, ProgramAnswer, ProgramQuestion,
-    SessionApi, SessionFactory, SessionId, SetUp, ShellInstall, Signatures, Started, SubmitAck,
+    EventSink, KeyAck, KeyPress, ProfileId, ProgramAnswer, ProgramQuestion, SessionApi,
+    SessionFactory, SessionId, SetUp, ShellInstall, Signatures, Started, SubmitAck, ThisComputer,
     Variant, catalogue,
 };
 
@@ -47,7 +47,7 @@ const DEFAULT_SSH_PORT: u16 = 22;
 /// The one session, and everything needed to replace it.
 pub struct ConnectService {
     factory: Arc<dyn SessionFactory>,
-    machine: Arc<dyn InstalledShells>,
+    machine: Arc<dyn ThisComputer>,
     /// Who signed the files this machine would start.
     ///
     /// **Asked on the connection and not when the list is drawn** (spec B5.7, decision 7).
@@ -99,7 +99,7 @@ impl ConnectService {
     /// A window connected to nothing, which is what an ordinary launch now opens.
     pub fn new(
         factory: Arc<dyn SessionFactory>,
-        machine: Arc<dyn InstalledShells>,
+        machine: Arc<dyn ThisComputer>,
         signatures: Arc<dyn Signatures>,
         kinds: Vec<ConnectionKind>,
         scripted: Vec<String>,
@@ -179,6 +179,21 @@ impl ConnectService {
                     .map(|install| install.program)
                     .ok_or_else(|| kind.instructions().to_owned())?,
             ),
+            // **The account's own shell, resolved here for the reason WSL's client is**:
+            // the row's id already carries it, and this arm is what answers a profile that
+            // named the kind alone — `--profile` on the command line, or a saved one from
+            // B8. A machine that lists none is refused with the kind's own sentence.
+            ProfileId::Shell {
+                kind: kind @ ConnectionKind::Terminal,
+            } => {
+                let offered = self.machine.login_shells();
+                let chosen = offered
+                    .iter()
+                    .find(|shell| shell.default)
+                    .or_else(|| offered.first())
+                    .ok_or_else(|| kind.instructions().to_owned())?;
+                Some(chosen.install.program.clone())
+            }
             ProfileId::Shell { kind } => Some(self.found(*kind)?),
             // **Already resolved, by the list that offered it.** Resolving it again here
             // would be the second resolution this entry exists to remove.
@@ -345,7 +360,7 @@ impl ConnectService {
             }
             for (id, install) in tell_apart(*edition, &installs).into_iter().zip(&installs) {
                 variants.push(Variant {
-                    label: self.named(&id, install),
+                    label: self.named(id.label(), &install.program),
                     id,
                     available: true,
                     instructions: None,
@@ -368,6 +383,68 @@ impl ConnectService {
         }
     }
 
+    /// The connect list's Terminal row: one row for the kind, carrying the shells
+    /// `/etc/shells` names as its variants, the account's own first and marked as the
+    /// default (spec M2, decision 2).
+    ///
+    /// **The shape A11 gave PowerShell and A8 gave WSL, on the platform they were designed
+    /// for without being designed for it.** A listener arrowing the kinds meets "Terminal"
+    /// once, however many shells this Mac happens to have — which on a stock macOS install
+    /// is seven, and seven rows for one idea is exactly what the variants panel exists to
+    /// prevent.
+    ///
+    /// **Its id is the default variant's, so Enter with nothing chosen starts what a
+    /// Terminal.app window would have started.** That is the whole reason the account's
+    /// login shell is read at all: a row that started the first line of `/etc/shells` would
+    /// start `/bin/bash` for a zsh user, and say nothing about having done so.
+    ///
+    /// **Every variant is available, for the reason a WSL distribution is**: a shell that is
+    /// not there cannot be listed by the file that lists what is there. What a variant can
+    /// carry is a verdict somebody already paid for, exactly as a PowerShell install does.
+    fn terminal_row(&self, row: &Connection) -> Connectable {
+        let shells = self.machine.login_shells();
+        let variants: Vec<Variant> = shells
+            .iter()
+            .map(|shell| {
+                let mut label = shell.name();
+                if shell.default {
+                    label.push_str(DEFAULT);
+                }
+                Variant {
+                    label: self.named(label, shell.program()),
+                    id: ProfileId::Install {
+                        kind: ConnectionKind::Terminal,
+                        program: shell.program().display().to_string(),
+                        // **The shell's own name, which is what tells one variant from
+                        // another here** — `Provenance`'s job on Windows, done by the file
+                        // name on a machine where every one of these lives in the same
+                        // directory and differs only by what it is.
+                        provenance: Some(shell.name()),
+                    },
+                    available: true,
+                    instructions: None,
+                }
+            })
+            .collect();
+
+        let default = shells
+            .iter()
+            .position(|shell| shell.default)
+            .unwrap_or_default();
+        Connectable {
+            id: variants.get(default).map_or(
+                ProfileId::Shell {
+                    kind: ConnectionKind::Terminal,
+                },
+                |variant| variant.id.clone(),
+            ),
+            label: row.label.clone(),
+            available: !variants.is_empty(),
+            instructions: row.instructions().map(ToOwned::to_owned),
+            variants,
+        }
+    }
+
     /// What an entry is called, with a verdict already paid for carried in its **name**.
     ///
     /// **This is how decisions 6 and 7 fit together.** Nothing is verified to draw the list,
@@ -375,9 +452,12 @@ impl ConnectService {
     /// failed to verify the last time somebody tried carries that, the way A11's missing
     /// edition carries its own absence — because a greyed-out entry that looks different and
     /// reads the same is the failure this product exists to avoid.
-    fn named(&self, id: &ProfileId, install: &ShellInstall) -> String {
-        let label = id.label();
-        match self.signatures.known(&install.program) {
+    /// **The label is passed in rather than taken from the id, since M2.** A PowerShell
+    /// variant is called what its profile is called; a Terminal variant is called `zsh`,
+    /// which is the shell's own name and not the profile's — so the caller decides what is
+    /// being qualified and this decides only whether a verdict qualifies it.
+    fn named(&self, label: String, program: &Path) -> String {
+        match self.signatures.known(program) {
             Some(verdict) if !verdict.settled() => format!("{label}{NOT_VERIFIED}"),
             _ => label,
         }
@@ -429,6 +509,11 @@ fn tell_apart(edition: ConnectionKind, installs: &[ShellInstall]) -> Vec<Profile
 /// looks different and reads the same is the failure this product exists to avoid.
 const NOT_AVAILABLE: &str = " (not available)";
 
+/// What marks the shell this account itself logs in to, in its **name** for
+/// [`NOT_AVAILABLE`]'s reason: a variant that is chosen for you when you press Enter has to
+/// say so out loud, because nothing about the order of a list is audible.
+const DEFAULT: &str = " (default)";
+
 /// The same, for an entry that is installed and did not verify when somebody last tried to
 /// start it (spec B5.7, decision 6). **It is not a filter**: the entry keeps its place in
 /// the list, and choosing it asks a question rather than refusing.
@@ -462,12 +547,17 @@ impl ConnectApi for ConnectService {
             // for — and looking for one found nothing and offered every user
             // "SSH (not available)", which is the opposite of true.
             ConnectionKind::Ssh => true,
+            // **Asked of the file that lists them rather than of `PATH`**, because what a
+            // Terminal row offers is the shells an account may log *in* to, which is
+            // `/etc/shells`' answer and nobody else's (spec M2, decision 3).
+            ConnectionKind::Terminal => !self.machine.login_shells().is_empty(),
             other => !self.machine.installs(other.program()).is_empty(),
         })
         .iter()
         .map(|row| match row.kind {
             ConnectionKind::Wsl => self.wsl_row(row),
             ConnectionKind::PowerShell => self.powershell_row(row),
+            ConnectionKind::Terminal => self.terminal_row(row),
             ConnectionKind::Ssh => Connectable {
                 // **The row itself connects to nothing**, and that is the difference
                 // between a kind you choose and a kind you fill in: what to connect to is
@@ -582,7 +672,7 @@ impl ConnectService {
                     provenance: None,
                 };
                 Connectable {
-                    label: self.named(&id, &install),
+                    label: self.named(id.label(), &install.program),
                     id,
                     available: true,
                     instructions: None,
@@ -646,9 +736,9 @@ mod tests {
     use std::sync::atomic::AtomicUsize;
 
     use crate::{
-        CommandId, Fault, HostKeyAnswer, HostKeyQuestion, NoDistributions, PasswordQuestion,
-        PathStanding, Provenance, Secret, SessionEvent, SetupAnswer, SetupQuestion, Signer,
-        SshQuestions, Verdict,
+        CommandId, Fault, HostKeyAnswer, HostKeyQuestion, LoginShell, NoDistributions,
+        PasswordQuestion, PathStanding, Provenance, Secret, SessionEvent, SetupAnswer,
+        SetupQuestion, Signer, SshQuestions, Verdict,
     };
 
     use super::*;
@@ -764,6 +854,10 @@ mod tests {
     struct FakeMachine {
         programs: Vec<&'static str>,
         distributions: Result<Vec<String>, NoDistributions>,
+        /// The shells an account here may log in to, the default named separately — empty
+        /// for the Windows machine every other test in this module is about.
+        shells: Vec<&'static str>,
+        mine: Option<&'static str>,
         /// Installs spelled out by a test, for the machine that has more than one of
         /// something — which is the case the ordinary one cannot express.
         extra: HashMap<&'static str, Vec<ShellInstall>>,
@@ -775,7 +869,39 @@ mod tests {
             Self {
                 programs: vec!["cmd.exe", "powershell.exe", "pwsh.exe", "wsl.exe"],
                 distributions: Ok(vec!["Ubuntu".to_owned(), "Debian".to_owned()]),
+                shells: Vec::new(),
+                mine: None,
                 extra: HashMap::new(),
+            }
+        }
+
+        /// A Mac: no Windows programs at all, seven shells, and an account that logs in to
+        /// one of them.
+        fn a_mac() -> Self {
+            Self {
+                programs: Vec::new(),
+                distributions: Err(NoDistributions::NotInstalled),
+                shells: vec![
+                    "/bin/bash",
+                    "/bin/csh",
+                    "/bin/dash",
+                    "/bin/ksh",
+                    "/bin/sh",
+                    "/bin/tcsh",
+                    "/bin/zsh",
+                ],
+                mine: Some("/bin/zsh"),
+                extra: HashMap::new(),
+            }
+        }
+
+        /// The same Mac with nothing an account can log in to, which is the one way a
+        /// Terminal row can be unavailable.
+        fn a_mac_with_no_shells() -> Self {
+            Self {
+                shells: Vec::new(),
+                mine: None,
+                ..Self::a_mac()
             }
         }
 
@@ -799,9 +925,31 @@ mod tests {
         }
     }
 
-    impl InstalledShells for FakeMachine {
+    impl ThisComputer for FakeMachine {
         fn wsl_distributions(&self) -> Result<Vec<String>, NoDistributions> {
             self.distributions.clone()
+        }
+
+        /// The account's own shell first, as the adapter answers, so the service is tested
+        /// against the order it will really be handed.
+        fn login_shells(&self) -> Vec<LoginShell> {
+            let mine = self.mine;
+            let ordered = mine.into_iter().chain(
+                self.shells
+                    .iter()
+                    .copied()
+                    .filter(|shell| Some(*shell) != mine),
+            );
+            ordered
+                .map(|shell| LoginShell {
+                    default: Some(shell) == mine,
+                    install: ShellInstall {
+                        program: PathBuf::from(shell),
+                        provenance: Provenance::System,
+                        standing: PathStanding::Absent,
+                    },
+                })
+                .collect()
         }
 
         /// One install per program this machine has, in the place Windows keeps it — plus
@@ -815,7 +963,7 @@ mod tests {
             }
             vec![ShellInstall {
                 program: PathBuf::from(format!(r"C:\Windows\system32\{program}")),
-                provenance: Provenance::Windows,
+                provenance: Provenance::System,
                 standing: PathStanding::First,
             }]
         }
@@ -954,6 +1102,38 @@ mod tests {
             scripted.iter().map(|name| (*name).to_owned()).collect(),
         );
         (Arc::new(service), factory, signatures)
+    }
+
+    /// The same, for a Mac — **the platform named rather than inherited from the build**,
+    /// for `signed`'s reason (M1): the fake below is a Mac, so this asks for the list a Mac
+    /// is offered, and it asks for it on whichever machine the suite happens to run on.
+    fn on_a_mac(
+        machine: FakeMachine,
+        signatures: Arc<FakeSignatures>,
+    ) -> (Arc<ConnectService>, Arc<FakeFactory>, Arc<FakeSignatures>) {
+        let factory = Arc::new(FakeFactory::default());
+        let service = ConnectService::new(
+            Arc::clone(&factory) as Arc<dyn SessionFactory>,
+            Arc::new(machine),
+            Arc::clone(&signatures) as Arc<dyn Signatures>,
+            offered("macos").to_vec(),
+            Vec::new(),
+        );
+        (Arc::new(service), factory, signatures)
+    }
+
+    /// One row of a list, by kind.
+    fn row(listed: &[Connectable], kind: ConnectionKind) -> Connectable {
+        listed
+            .iter()
+            .find(|row| match &row.id {
+                ProfileId::Shell { kind: named } => *named == kind,
+                ProfileId::Install { kind: named, .. } => *named == kind,
+                ProfileId::Ssh { .. } => kind == ConnectionKind::Ssh,
+                _ => false,
+            })
+            .expect("the kind is listed")
+            .clone()
     }
 
     /// One install, spelled out by a test.
@@ -1204,12 +1384,252 @@ mod tests {
         );
     }
 
+    /// **The acceptance criterion of M2, spelled out.** A Mac meets two rows, the first is
+    /// Terminal, and its panel holds the shells this machine has with the account's own
+    /// first and marked.
+    #[test]
+    fn a_mac_is_offered_a_terminal_row_carrying_its_own_shells() {
+        let (service, _, _) = on_a_mac(FakeMachine::a_mac(), Arc::new(FakeSignatures::default()));
+
+        let listed = service.connectable();
+
+        assert_eq!(
+            listed
+                .iter()
+                .map(|row| row.label.clone())
+                .collect::<Vec<_>>(),
+            ["Terminal", "SSH"],
+            "two kinds, in the order a listener meets them"
+        );
+        let terminal = row(&listed, ConnectionKind::Terminal);
+        assert!(terminal.available);
+        assert_eq!(
+            terminal
+                .variants
+                .iter()
+                .map(|variant| variant.label.clone())
+                .collect::<Vec<_>>(),
+            ["zsh (default)", "bash", "csh", "dash", "ksh", "sh", "tcsh",],
+            "the account's own shell first and saying so, then the file's own order"
+        );
+    }
+
+    /// **Enter on the row with nothing chosen starts what a Terminal.app window would have
+    /// started** (spec M2, decision 2), which is the whole reason the account's login shell
+    /// is read at all rather than the first line of the file being taken.
+    #[test]
+    fn the_row_itself_starts_the_shell_this_account_logs_in_to() {
+        let (service, _, _) = on_a_mac(FakeMachine::a_mac(), Arc::new(FakeSignatures::default()));
+
+        let terminal = row(&service.connectable(), ConnectionKind::Terminal);
+
+        assert_eq!(
+            terminal.id,
+            ProfileId::Install {
+                kind: ConnectionKind::Terminal,
+                program: "/bin/zsh".to_owned(),
+                provenance: Some("zsh".to_owned()),
+            },
+            "the row is the default variant, not the first entry in the file"
+        );
+        assert_eq!(
+            terminal.id, terminal.variants[0].id,
+            "and it is the variant that says it is the default"
+        );
+    }
+
+    /// **A shell is a variant and never a row** (spec A11, and DESIGN's macOS section). A
+    /// listener arrowing the kinds meets Terminal once, however many shells this Mac has —
+    /// which on a stock install is seven.
+    #[test]
+    fn a_shell_on_this_mac_is_never_a_row_of_its_own() {
+        let (service, _, _) = on_a_mac(FakeMachine::a_mac(), Arc::new(FakeSignatures::default()));
+
+        let listed = service.connectable();
+
+        assert_eq!(listed.len(), 2, "seven shells did not become seven rows");
+        assert_eq!(row(&listed, ConnectionKind::Terminal).variants.len(), 7);
+    }
+
+    /// **What a Mac is never offered.** cmd, PowerShell and WSL are absent rather than
+    /// unavailable: a Mac read instructions to install Windows is the absurdity the
+    /// not-available label exists to avoid where it means something.
+    #[test]
+    fn a_mac_is_not_offered_windows_shells_as_missing_ones() {
+        let (service, _, _) = on_a_mac(FakeMachine::a_mac(), Arc::new(FakeSignatures::default()));
+
+        let listed = service.connectable();
+
+        for absent in [
+            ConnectionKind::Cmd,
+            ConnectionKind::PowerShell,
+            ConnectionKind::Wsl,
+        ] {
+            assert!(
+                !listed.iter().any(|listed| match &listed.id {
+                    ProfileId::Shell { kind } | ProfileId::Install { kind, .. } => *kind == absent,
+                    _ => false,
+                }),
+                "{absent:?} is not something a Mac can be missing"
+            );
+        }
+    }
+
+    /// The one way a Terminal row can be unavailable, and it says what to look at rather
+    /// than going quiet — the same shape a missing WSL has.
+    #[test]
+    fn a_mac_with_nothing_to_log_in_to_says_so_and_keeps_its_row() {
+        let (service, _, _) = on_a_mac(
+            FakeMachine::a_mac_with_no_shells(),
+            Arc::new(FakeSignatures::default()),
+        );
+
+        let listed = service.connectable();
+        let terminal = row(&listed, ConnectionKind::Terminal);
+
+        assert_eq!(listed.len(), 2, "the list is the same length either way");
+        assert!(!terminal.available);
+        assert!(terminal.variants.is_empty(), "nothing to enumerate");
+        assert!(
+            terminal
+                .instructions
+                .expect("an unavailable row explains itself")
+                .contains("/etc/shells"),
+            "and names the file to look at"
+        );
+    }
+
+    /// **A verdict already paid for is carried in the variant's name**, exactly as a
+    /// PowerShell install carries one (spec B5.7, decision 6) — and the shell's own name
+    /// survives in front of it, because that is what a listener is choosing between.
+    #[test]
+    fn a_shell_that_did_not_verify_last_time_says_so_in_its_name() {
+        let signatures = Arc::new(FakeSignatures::default());
+        signatures.cached.lock().unwrap().push((
+            PathBuf::from("/bin/bash"),
+            Verdict::Untrusted {
+                fault: Fault::AdHoc,
+            },
+        ));
+        let (service, _, _) = on_a_mac(FakeMachine::a_mac(), signatures);
+
+        let terminal = row(&service.connectable(), ConnectionKind::Terminal);
+
+        assert!(
+            terminal
+                .variants
+                .iter()
+                .any(|variant| variant.label == "bash (not verified)"),
+            "the shell is named, then what is known about it: {:?}",
+            terminal
+                .variants
+                .iter()
+                .map(|variant| variant.label.clone())
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            terminal.variants.iter().all(|variant| variant.available),
+            "and it is not a filter: the shell is still there to choose"
+        );
+    }
+
+    /// **Nothing is verified to draw the list** (decision 7), on this platform as on the
+    /// other: the panel is built in front of a listener who is waiting.
+    #[test]
+    fn drawing_a_macs_list_verifies_nothing() {
+        let signatures = Arc::new(FakeSignatures::default());
+        let (service, _, signatures) = on_a_mac(FakeMachine::a_mac(), signatures);
+
+        service.connectable();
+
+        assert!(
+            signatures.verified.lock().unwrap().is_empty(),
+            "a list that stalls on seven signature checks is a list that stalls"
+        );
+    }
+
+    /// **The file the list resolved is the file that is started** (spec B5.7, decision 1),
+    /// which on a Mac is what makes the verdict about anything: a row that named `zsh` and
+    /// let something else resolve it later would be checking one file and starting another.
+    #[test]
+    fn choosing_a_shell_starts_the_file_the_panel_named() {
+        let (service, factory, _) =
+            on_a_mac(FakeMachine::a_mac(), Arc::new(FakeSignatures::default()));
+        let terminal = row(&service.connectable(), ConnectionKind::Terminal);
+        let bash = terminal
+            .variants
+            .iter()
+            .find(|variant| variant.label == "bash")
+            .expect("bash is offered")
+            .clone();
+
+        service
+            .use_profile(&bash.id, SetUp::Yes, &unasked())
+            .expect("a shell this Mac has starts");
+
+        assert_eq!(
+            factory.opened.lock().unwrap()[0].program,
+            Some(PathBuf::from("/bin/bash")),
+            "the file, not the name"
+        );
+    }
+
+    /// And the kind on its own — what `--profile` and B8's saved profiles will carry —
+    /// resolves to the account's own shell rather than to nothing.
+    #[test]
+    fn a_profile_naming_the_kind_alone_starts_the_accounts_own_shell() {
+        let (service, factory, _) =
+            on_a_mac(FakeMachine::a_mac(), Arc::new(FakeSignatures::default()));
+
+        service
+            .use_profile(
+                &ProfileId::Shell {
+                    kind: ConnectionKind::Terminal,
+                },
+                SetUp::Yes,
+                &unasked(),
+            )
+            .expect("the account's own shell starts");
+
+        assert_eq!(
+            factory.opened.lock().unwrap()[0].program,
+            Some(PathBuf::from("/bin/zsh"))
+        );
+    }
+
+    /// **A Mac with nothing to log in to refuses with the kind's own sentence**, rather than
+    /// with whatever a failed spawn happened to say — which is `chosen`'s rule, applied to
+    /// the one kind that can be empty here.
+    #[test]
+    fn a_mac_with_no_shells_refuses_with_the_sentence_the_list_would_have_read() {
+        let (service, factory, _) = on_a_mac(
+            FakeMachine::a_mac_with_no_shells(),
+            Arc::new(FakeSignatures::default()),
+        );
+
+        let refused = service
+            .use_profile(
+                &ProfileId::Shell {
+                    kind: ConnectionKind::Terminal,
+                },
+                SetUp::Yes,
+                &unasked(),
+            )
+            .expect_err("there is nothing to start");
+
+        assert!(refused.contains("/etc/shells"), "{refused}");
+        assert!(
+            factory.opened.lock().unwrap().is_empty(),
+            "and nothing was started"
+        );
+    }
+
     /// The list is asked of the machine every time, because a distribution installed while
     /// Acter is open must appear without a restart (decision 6).
     #[test]
     fn the_list_asks_the_machine_again_on_every_call() {
         struct Counting(AtomicUsize);
-        impl InstalledShells for Counting {
+        impl ThisComputer for Counting {
             fn wsl_distributions(&self) -> Result<Vec<String>, NoDistributions> {
                 self.0.fetch_add(1, Ordering::SeqCst);
                 Err(NoDistributions::NotInstalled)
@@ -1217,9 +1637,13 @@ mod tests {
             fn installs(&self, program: &str) -> Vec<ShellInstall> {
                 vec![install(
                     &format!(r"C:\Windows\system32\{program}"),
-                    Provenance::Windows,
+                    Provenance::System,
                     PathStanding::First,
                 )]
+            }
+            fn login_shells(&self) -> Vec<LoginShell> {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                Vec::new()
             }
             fn login_shell(&self, _distribution: Option<&str>) -> Option<String> {
                 unreachable!("building the list never asks a distribution what it runs")
@@ -1228,7 +1652,7 @@ mod tests {
         let machine = Arc::new(Counting(AtomicUsize::new(0)));
         let service = ConnectService::new(
             Arc::new(FakeFactory::default()),
-            Arc::clone(&machine) as Arc<dyn InstalledShells>,
+            Arc::clone(&machine) as Arc<dyn ThisComputer>,
             Arc::new(FakeSignatures::default()),
             offered("windows").to_vec(),
             Vec::new(),
@@ -1765,7 +2189,7 @@ mod tests {
 
         assert_eq!(
             connected.note.as_deref(),
-            Some("signed by Contoso Corporation rather than by Microsoft")
+            Some("signed by Contoso Corporation")
         );
         assert!(
             asking.asked.lock().unwrap().is_empty(),

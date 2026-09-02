@@ -1,7 +1,7 @@
 //! Port (driven): who signed a file, and whether this computer trusts the answer.
 //!
 //! **The second port about the machine rather than about a session**, after
-//! [`InstalledShells`](crate::InstalledShells) — and the one place in the product where
+//! [`ThisComputer`](crate::ThisComputer) — and the one place in the product where
 //! being wrong is a security answer. It is a port for ARCHITECTURE's classifying question
 //! answered three times over: verifying a signature reads the filesystem, reads this
 //! machine's certificate stores, and can reach the network for a revocation list.
@@ -25,7 +25,7 @@ use crate::Verdict;
 
 /// What signed the files this machine would start.
 ///
-/// `Send + Sync` for [`InstalledShells`](crate::InstalledShells)' reason: the composition
+/// `Send + Sync` for [`ThisComputer`](crate::ThisComputer)'s reason: the composition
 /// root hands one to code running on another task. `&self` throughout because a caller asks
 /// a question — an implementer that caches is free to, and decision 7 says it should.
 pub trait Signatures: Send + Sync {

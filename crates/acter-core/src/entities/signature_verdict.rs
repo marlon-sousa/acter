@@ -1,6 +1,11 @@
 //! Entity/value: what verifying a file's signature found, and the sentence a listener hears
 //! about it.
 //!
+//! **It stopped saying "Windows" with M2.** Every sentence here opened with the name of one
+//! operating system, and macOS reads them too — so what a listener is told is now "this
+//! computer", which is true wherever there is a computer to trust something (spec M2,
+//! decision 6).
+//!
 //! **Three outcomes rather than two, and the third is the one that matters** (spec B5.7,
 //! decision 4). Trusted and untrusted are the obvious pair; unverifiable is what an
 //! execution alias that cannot be opened produces, what a revocation answer that never comes
@@ -19,10 +24,10 @@
 //! rather than after. It is not a sandbox, and it says nothing about what a correctly signed
 //! program then does.
 
-/// What Windows said about a file, in the form a listener is told it.
+/// What this computer said about a file, in the form a listener is told it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Verdict {
-    /// Windows verified the signature and trusts the chain behind it.
+    /// This computer verified the signature and trusts the chain behind it.
     Trusted {
         /// Who signed it — **a second question and a different call** (decision 5), because
         /// "trusted and signed by Microsoft" and "trusted and signed by somebody else" are
@@ -30,14 +35,14 @@ pub enum Verdict {
         /// on a machine with a corporate root.
         signer: Signer,
     },
-    /// Windows verified the signature and will not trust it.
+    /// This computer verified the signature and will not trust it.
     Untrusted {
         /// Which of the ways it can be untrusted this was, because they need different
         /// sentences: a file nobody signed and a file somebody changed after signing are
         /// not the same news.
         fault: Fault,
     },
-    /// Windows could not answer, so neither can Acter.
+    /// This computer could not answer, so neither can Acter.
     Unverifiable {
         /// Why not, as a whole clause. It is read aloud after the sentence it belongs to,
         /// so it is a sentence of its own rather than a code.
@@ -51,6 +56,15 @@ pub enum Signer {
     /// Microsoft — every shell Windows ships, through its catalog, and PowerShell 7 through
     /// its own embedded signature.
     Microsoft,
+    /// Apple — every shell macOS ships, whose leaf certificate is Apple's own "Software
+    /// Signing" and whose chain reaches the Apple Root CA (spec M2, decision 6, measured
+    /// 2026-09-01 against all seven entries in this Mac's `/etc/shells`).
+    ///
+    /// **The vendor of the operating system is a variant rather than a name**, for
+    /// [`Self::Microsoft`]'s reason: "trusted, and the company that made this computer signed
+    /// it" is a different sentence from "trusted, and somebody else did", and a verdict that
+    /// could not tell them apart would announce something on every ordinary connection.
+    Apple,
     /// Somebody else this machine's trust store accepts: a corporate re-signed build, a
     /// vendor, a root an administrator installed.
     Other {
@@ -59,12 +73,37 @@ pub enum Signer {
     },
 }
 
-/// The ways Windows can verify a signature and refuse it.
+impl Signer {
+    /// What this signer is called in a sentence, for the two that are an operating system's
+    /// own vendor.
+    ///
+    /// [`Self::Other`] answers with its own name, which is the certificate subject as the
+    /// platform renders it.
+    pub fn vendor(&self) -> &str {
+        match self {
+            Self::Microsoft => "Microsoft",
+            Self::Apple => "Apple",
+            Self::Other { name } => name,
+        }
+    }
+}
+
+/// The ways this computer can verify a signature and refuse it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Fault {
     /// Nothing signed this file: no embedded signature, and no catalog on this machine
     /// claims its hash.
     NotSigned,
+    /// The file signed itself: there is a signature, it records the file's own hashes, and
+    /// there is no certificate and therefore nobody behind it.
+    ///
+    /// **A fourth way of being untrusted, added by M2, because macOS makes it ordinary.**
+    /// Apple silicon requires every executable to carry at least an ad-hoc signature, so
+    /// this is what a locally built or Homebrew-installed shell has — common, legitimate, and
+    /// not the same news as "nothing signed this". Telling a listener nothing had signed it
+    /// would be false about the half that is true: the file has not been altered since it was
+    /// built. What is missing is who built it.
+    AdHoc,
     /// The file does not hash to what the signature says it should, so it is not the file
     /// whoever signed it produced.
     Tampered,
@@ -103,8 +142,8 @@ impl Verdict {
     pub fn signer(&self) -> Option<String> {
         match self {
             Self::Trusted {
-                signer: Signer::Microsoft,
-            } => Some("Microsoft".to_owned()),
+                signer: signer @ (Signer::Microsoft | Signer::Apple),
+            } => Some(signer.vendor().to_owned()),
             Self::Trusted {
                 signer: Signer::Other { name },
             } => Some(name.clone()),
@@ -115,7 +154,7 @@ impl Verdict {
                     | Fault::Expired { signer },
             } => signer.clone(),
             Self::Untrusted {
-                fault: Fault::NotSigned | Fault::Tampered,
+                fault: Fault::NotSigned | Fault::AdHoc | Fault::Tampered,
             }
             | Self::Unverifiable { .. } => None,
         }
@@ -128,21 +167,33 @@ impl Verdict {
     pub fn said(&self) -> String {
         match self {
             Self::Trusted {
-                signer: Signer::Microsoft,
-            } => "Windows trusts this file's signature, and Microsoft signed it. There is \
-                  nothing to decide before starting it."
-                .to_owned(),
+                signer: signer @ (Signer::Microsoft | Signer::Apple),
+            } => format!(
+                "This computer trusts this file's signature, and {} signed it. There is \
+                 nothing to decide before starting it.",
+                signer.vendor()
+            ),
+            // **No "rather than" clause, since M2.** It used to read "rather than by
+            // Microsoft", which is a contrast a Mac cannot draw and which said nothing the
+            // first half had not: what the listener needs is who did sign it.
             Self::Trusted {
                 signer: Signer::Other { name },
             } => format!(
-                "Windows trusts this file's signature, and it was signed by {name} rather \
-                 than by Microsoft. Start it if that is who you expect to have built it."
+                "This computer trusts this file's signature, and it was signed by {name}. \
+                 Start it if that is who you expect to have built it."
             ),
             Self::Untrusted {
                 fault: Fault::NotSigned,
             } => "Nothing has signed this file, so there is no record of who built it or \
                   whether it has been changed since. Start it only if you know how it got \
                   there."
+                .to_owned(),
+            Self::Untrusted {
+                fault: Fault::AdHoc,
+            } => "This file signed itself, so it has not been altered since it was built and \
+                  there is no record of who built it. That is what a program compiled on this \
+                  computer, or installed by a package manager, normally looks like. Start it \
+                  only if you know how it got there."
                 .to_owned(),
             Self::Untrusted {
                 fault: Fault::Tampered,
@@ -181,20 +232,25 @@ impl Verdict {
 
     /// The clause said once, at connection, about a file that was started anyway.
     ///
-    /// **`None` for a file Microsoft signed, because a verdict nobody needs to act on is not
-    /// an announcement** (spec B5.7, accessibility checklist). Connecting to a normally
-    /// installed shell says exactly what it says today.
+    /// **`None` for a file the operating system's own vendor signed, because a verdict
+    /// nobody needs to act on is not an announcement** (spec B5.7, accessibility checklist).
+    /// Connecting to a normally installed shell says exactly what it says today — and that
+    /// is what M2 had to be true of on a Mac, where every shell in `/etc/shells` is signed by
+    /// Apple and a note on each would be a sentence at every connection.
     pub fn note(&self) -> Option<String> {
         match self {
             Self::Trusted {
-                signer: Signer::Microsoft,
+                signer: Signer::Microsoft | Signer::Apple,
             } => None,
             Self::Trusted {
                 signer: Signer::Other { name },
-            } => Some(format!("signed by {name} rather than by Microsoft")),
+            } => Some(format!("signed by {name}")),
             Self::Untrusted {
                 fault: Fault::NotSigned,
             } => Some("started although nothing has signed it".to_owned()),
+            Self::Untrusted {
+                fault: Fault::AdHoc,
+            } => Some("started although nothing records who built it".to_owned()),
             Self::Untrusted {
                 fault: Fault::Tampered,
             } => Some("started although it has been changed since it was signed".to_owned()),
@@ -240,12 +296,18 @@ mod tests {
                 signer: Signer::Microsoft,
             },
             Verdict::Trusted {
+                signer: Signer::Apple,
+            },
+            Verdict::Trusted {
                 signer: Signer::Other {
                     name: "Contoso Corporation".to_owned(),
                 },
             },
             Verdict::Untrusted {
                 fault: Fault::NotSigned,
+            },
+            Verdict::Untrusted {
+                fault: Fault::AdHoc,
             },
             Verdict::Untrusted {
                 fault: Fault::Tampered,
@@ -354,7 +416,14 @@ mod tests {
     #[test]
     fn everything_a_user_had_to_agree_to_is_said_when_it_starts() {
         for verdict in every_verdict() {
-            if verdict.settled() && verdict.signer().as_deref() == Some("Microsoft") {
+            // The two vendors of an operating system this product runs on: a shell they
+            // signed is the ordinary case, and the test above is what pins its silence.
+            if verdict.settled()
+                && matches!(
+                    verdict.signer().as_deref(),
+                    Some("Microsoft") | Some("Apple")
+                )
+            {
                 continue;
             }
             let note = verdict

@@ -1,6 +1,6 @@
 //! Port (driven): what this particular computer actually has — which WSL distributions
-//! exist, which files a named program actually resolves to, and which shell a distribution's
-//! own account runs.
+//! exist, which shells an account here may log in to, which files a named program actually
+//! resolves to, and which shell a far end's own account runs.
 //!
 //! **The first port about the machine rather than about a session.** Every other driven
 //! port is a seam in something already running; this one is asked before anything is
@@ -14,13 +14,35 @@
 //! shell a distribution runs is the same kind of question about the same machine, asked of
 //! the same client (spec B5.5, decision 2).
 //!
-//! **One of the three is not asked while the list is built.** `login_shell` runs per
-//! connection, because asking per row would start one `wsl.exe` for every distribution every
-//! time the connect dialog opens.
+//! # It was called `ThisComputer` until M2, and the name is what had outgrown itself
+//!
+//! A Mac cannot answer [`wsl_distributions`](ThisComputer::wsl_distributions) and a Windows
+//! machine cannot answer [`login_shells`](ThisComputer::login_shells), and a port whose
+//! implementers each decline a method looks like a port that should have been split. It is
+//! not, and the reason is what each of those answers actually *is* (spec M2, decision 1).
+//!
+//! **A platform that lacks one of these states a fact rather than refusing one.** There is
+//! no Windows Subsystem for Linux on a Mac, so `NotInstalled` is true there in the plainest
+//! sense; there is no `/etc/shells` on Windows, so an empty list is true there. Neither is
+//! ever *asked*, because the catalogue offers no `Wsl` kind on macOS and no `Terminal` kind
+//! on Windows — but an implementer forced to write a body writes a true one, which is not
+//! what a refusal means.
+//!
+//! **And the split these questions really have is not per platform.** `installs` is asked
+//! everywhere; `login_shells` is POSIX rather than Apple's, so Linux will answer it with the
+//! same file and the same code; and only `wsl_distributions` belongs to one operating
+//! system. Splitting by platform would have put a Unix question in a macOS port and then
+//! moved it again the day Linux arrived.
+//!
+//! **One of these is not asked while the list is built.** `login_shell` runs per connection,
+//! because asking per row would start one `wsl.exe` for every distribution every time the
+//! connect dialog opens.
 //!
 //! Distinct from [`ShellAdapter`](crate::ShellAdapter), which is knowledge: what `cmd.exe`
 //! is started with is the same answer on every machine in the world, and which
 //! distributions are installed is the same answer on no two machines at all.
+
+use std::path::PathBuf;
 
 use thiserror::Error;
 
@@ -32,7 +54,7 @@ use crate::ShellInstall;
 /// hands one to code running on another task. `&self` throughout because a caller asks a
 /// question rather than driving a machine — an implementer that caches is free to, and one
 /// that shells out on every call is free to as well.
-pub trait InstalledShells: Send + Sync {
+pub trait ThisComputer: Send + Sync {
     /// Which WSL distributions this machine has, in the order WSL reports them.
     ///
     /// **Everything installed is listed**, `docker-desktop` and the other service
@@ -41,6 +63,30 @@ pub trait InstalledShells: Send + Sync {
     /// for, and a user who wants a shell in that distribution is entitled to it (spec
     /// B5.3, decision 5).
     fn wsl_distributions(&self) -> Result<Vec<String>, NoDistributions>;
+
+    /// Every shell an account on this computer may log in to, the account's own first.
+    ///
+    /// **`/etc/shells` is the list, and it is the list a Mac itself uses** (spec M2,
+    /// decision 3): it is what `chpass` will accept, what Terminal.app's preferences offer,
+    /// and therefore the set of shells a user of this machine already believes they have.
+    /// Enumerating `/bin` instead would offer programs nobody chose, and reading the
+    /// account's own shell alone would hide the six others this Mac ships.
+    ///
+    /// **Files rather than names, for [`installs`](Self::installs)' reason.** Every entry is
+    /// an absolute path already, so there is nothing to resolve and nothing to resolve
+    /// *twice* — the file listed is the file verified and the file started (spec B5.7,
+    /// decision 1).
+    ///
+    /// **The account's own shell is first and says so.** Enter on the row with nothing
+    /// chosen has to start what a Terminal.app window would have started, and a listener
+    /// arrowing the panel meets their own shell before six they have never used.
+    ///
+    /// **An empty list is one situation rather than three**, which is what makes this
+    /// different from [`wsl_distributions`](Self::wsl_distributions). WSL can be absent,
+    /// broken or empty and those are three different sentences; a Unix machine with no shell
+    /// an account may log in to is a machine that is broken in one way, and the kind's own
+    /// instructions are what say so.
+    fn login_shells(&self) -> Vec<LoginShell>;
 
     /// Every install of this program this machine has, most preferred first.
     ///
@@ -93,6 +139,41 @@ pub trait InstalledShells: Send + Sync {
     /// connect list is built would mean one `wsl.exe` for every distribution every time the
     /// dialog opens, which is worse in the very place a listener is already waiting.
     fn login_shell(&self, distribution: Option<&str>) -> Option<String>;
+}
+
+/// One shell an account on this computer may log in to.
+///
+/// **The default is a fact carried per entry rather than an index into the order.** The
+/// order is `/etc/shells`' own with the account's shell moved to the front, and a list that
+/// says "the first one is special" is a list that lies the moment anything sorts or filters
+/// it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoginShell {
+    /// The file this entry is, found once and started as found.
+    pub install: ShellInstall,
+    /// Whether this is the shell the account itself logs in to — the one a Terminal.app
+    /// window would have started.
+    pub default: bool,
+}
+
+impl LoginShell {
+    /// What this shell is called: the file's own name, which is what a user of this machine
+    /// calls it and what [`setup_for`](crate::SessionSetup) is keyed by.
+    ///
+    /// The full path is not the name. `/bin/zsh` read aloud is four sounds a listener has to
+    /// assemble before hearing the one that identifies it, and the panel's job is to be
+    /// arrowed quickly.
+    pub fn name(&self) -> String {
+        self.install
+            .program
+            .file_name()
+            .map_or_else(String::new, |file| file.to_string_lossy().into_owned())
+    }
+
+    /// The file itself, which is what gets verified and what gets started.
+    pub fn program(&self) -> &PathBuf {
+        &self.install.program
+    }
 }
 
 /// Why there is no WSL entry to offer.

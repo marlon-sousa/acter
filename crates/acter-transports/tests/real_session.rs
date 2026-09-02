@@ -16,7 +16,7 @@
 //! The nested case additionally needs Docker, and says so and returns rather than failing
 //! when it is absent — a machine without Docker has not discovered a defect. The WSL group
 //! at the end of this file skips the same way and for the same reason, asking the
-//! `InstalledShells` port whether there is a distribution rather than whether `wsl.exe`
+//! `ThisComputer` port whether there is a distribution rather than whether `wsl.exe`
 //! exists: every Windows 11 install ships that binary, and a client with nothing behind it
 //! would hang waiting for a prompt that never comes instead of skipping.
 
@@ -24,11 +24,11 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use acter_core::{
-    Announcement, Clock, CommandId, ConnectionState, EventSink, ExitCode, InstalledShells, Key,
-    KeyAck, KeyPress, PacingConfig, SessionApi, SessionEvent, SessionId, SessionService, SetUp,
-    ShellAdapter, ShellFacts, ShellLaunch, ShellMarkers, Started, SubmitAck, Timer, Unasked,
+    Announcement, Clock, CommandId, ConnectionState, EventSink, ExitCode, Key, KeyAck, KeyPress,
+    PacingConfig, SessionApi, SessionEvent, SessionId, SessionService, SetUp, ShellAdapter,
+    ShellFacts, ShellLaunch, ShellMarkers, Started, SubmitAck, ThisComputer, Timer, Unasked,
 };
-use acter_shells::{ThisMachine, Wsl};
+use acter_shells::{WindowsMachine, Wsl};
 use acter_term::AlacrittyEngine;
 use acter_transports::LocalPty;
 use tokio::sync::oneshot;
@@ -862,7 +862,7 @@ impl RealSession {
     /// any of that would be measuring a race no user can be in — and it measured one, which
     /// is how the ordering below came to be asserted at all.
     async fn wsl() -> Self {
-        let adapter = Wsl::new(WSL, ThisMachine::new().login_shell(None).as_deref());
+        let adapter = Wsl::new(WSL, WindowsMachine::new().login_shell(None).as_deref());
         // **Every fact from the one object, setup included** (spec B9.5). Since nothing is
         // armed at launch, what makes a WSL session mark its boundaries is the line the
         // service sends into it once the far end speaks — so a suite that took only the
@@ -983,7 +983,7 @@ impl RealSession {
 /// `PATH`": every Windows 11 install ships that binary, and a machine with the client and
 /// no distribution would hang on a prompt that never comes rather than skip.
 fn wsl_is_available() -> bool {
-    ThisMachine::new().wsl_distributions().is_ok()
+    WindowsMachine::new().wsl_distributions().is_ok()
 }
 
 /// **The whole of B5.3 in one session**: a real bash, in a real distribution, reached
@@ -1140,7 +1140,7 @@ async fn a_real_distribution_says_what_shell_it_runs() {
         return;
     }
 
-    let said = ThisMachine::new()
+    let said = WindowsMachine::new()
         .login_shell(None)
         .expect("a distribution that starts answers what its account runs");
 
@@ -1737,7 +1737,7 @@ mod replacing_a_session {
         let second = marker();
         let service = ConnectService::new(
             Arc::new(LockingShells),
-            Arc::new(ThisMachine::new()),
+            Arc::new(WindowsMachine::new()),
             // Nothing to check: the profiles below name files that do not exist yet, so
             // they resolve to nothing and no verification is asked for (spec B5.7).
             Arc::new(Unchecked),
@@ -1879,7 +1879,7 @@ mod what_this_machine_actually_has {
     async fn connecting_to_the_shell_windows_ships_verifies_it_and_says_nothing_new() {
         let service = ConnectService::new(
             Arc::new(WhateverWasChosen),
-            Arc::new(ThisMachine::new()),
+            Arc::new(WindowsMachine::new()),
             Arc::new(WindowsTrust::new()),
             offered("windows").to_vec(),
             Vec::new(),
@@ -1910,7 +1910,7 @@ mod what_this_machine_actually_has {
     async fn the_row_the_list_offers_names_the_file_that_gets_started() {
         let service = ConnectService::new(
             Arc::new(WhateverWasChosen),
-            Arc::new(ThisMachine::new()),
+            Arc::new(WindowsMachine::new()),
             Arc::new(WindowsTrust::new()),
             offered("windows").to_vec(),
             Vec::new(),
@@ -1963,7 +1963,7 @@ mod the_session_is_set_up_after_it_is_established {
     /// discovered nothing, so these skip and say so — the rule the Docker cases already
     /// follow.
     fn has(distribution: &str) -> bool {
-        ThisMachine::new()
+        WindowsMachine::new()
             .wsl_distributions()
             .is_ok_and(|installed| installed.iter().any(|named| named == distribution))
     }
@@ -2291,7 +2291,7 @@ mod the_session_is_set_up_after_it_is_established {
             return;
         }
 
-        let shell = ThisMachine::new().login_shell(Some(SH_DISTRIBUTION));
+        let shell = WindowsMachine::new().login_shell(Some(SH_DISTRIBUTION));
         assert_eq!(
             shell.as_deref(),
             Some("sh"),
@@ -2379,7 +2379,7 @@ mod the_session_is_set_up_after_it_is_established {
             return;
         }
 
-        let shell = ThisMachine::new().login_shell(Some(SH_DISTRIBUTION));
+        let shell = WindowsMachine::new().login_shell(Some(SH_DISTRIBUTION));
         let adapter = Wsl::in_distribution(WSL, SH_DISTRIBUTION, shell.as_deref());
         let session = RealSession::adapted(&adapter, PacingConfig::default().integration_grace);
         let line = acter_shells::setup_for(Some("sh"))
@@ -2431,7 +2431,7 @@ mod the_session_is_set_up_after_it_is_established {
             return;
         }
 
-        let shell = ThisMachine::new().login_shell(Some(SH_DISTRIBUTION));
+        let shell = WindowsMachine::new().login_shell(Some(SH_DISTRIBUTION));
         let adapter = Wsl::in_distribution(WSL, SH_DISTRIBUTION, shell.as_deref());
         let session = RealSession::adapted(&adapter, PacingConfig::default().integration_grace);
         let line = acter_shells::setup_for(Some("sh"))
@@ -2508,7 +2508,7 @@ mod the_session_is_set_up_after_it_is_established {
             return;
         }
 
-        let shell = ThisMachine::new().login_shell(Some(SH_DISTRIBUTION));
+        let shell = WindowsMachine::new().login_shell(Some(SH_DISTRIBUTION));
         let adapter = Wsl::in_distribution(WSL, SH_DISTRIBUTION, shell.as_deref());
         let session = RealSession::launched(
             &adapter.launch(),
