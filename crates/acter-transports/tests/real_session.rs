@@ -1607,12 +1607,20 @@ async fn ctrl_d_ends_a_real_powershell_session() {
 ///
 /// `cmd.exe` stands in for that here only because it is the other shell this suite can
 /// start; what is under test is the honest answer, not cmd (spec B5.2, decision 5).
+///
+/// **The answer became `Unsupported` in spec 28**, and this test asserted `NothingToActOn`
+/// until then. The two were one variant doing two jobs: "there is nothing here to act on",
+/// which is what a session with no open block says, and "this shell has no such key", which
+/// is a fact about the shell and not about the moment. A listener needs them apart, because
+/// only the second has anything to say — the frontend turns it into "This shell has no key
+/// for end of input. Type exit and press Enter." (spec 28, decision 9), while the first is
+/// deliberately silent.
 #[tokio::test]
 #[ignore = "spawns a real shell"]
 async fn ctrl_d_in_a_shell_with_no_measured_answer_does_nothing() {
     let session = RealSession::marked();
 
-    assert_eq!(session.ctrl_d(), KeyAck::NothingToActOn);
+    assert_eq!(session.ctrl_d(), KeyAck::Unsupported);
 
     let after = session.submit("echo acter-still-here");
     let output = session.until(after, "acter-still-here", PATIENCE).await;
@@ -2114,6 +2122,13 @@ mod the_session_is_set_up_after_it_is_established {
 
     /// **Ctrl+C and Ctrl+D immediately after connecting behave as they do with nothing
     /// running**, which is only true because the setup's block closed.
+    ///
+    /// It is also where the two answers spec 28 split apart sit side by side, at a real
+    /// shell. `Ctrl+C` with nothing running is `NothingToActOn` — a fact about this moment,
+    /// and silent, because a listener is never told they stopped a command nobody ran.
+    /// `Ctrl+D` here is `Unsupported` — a fact about bash under WSL, which has no measured
+    /// end-of-input byte, and it does speak, because the user needs to know the key will
+    /// never work in this session rather than that it did nothing just now.
     #[tokio::test]
     #[ignore = "spawns a real shell and needs a WSL distribution installed"]
     async fn a_session_that_has_just_connected_has_nothing_to_stop() {
@@ -2139,7 +2154,7 @@ mod the_session_is_set_up_after_it_is_established {
         );
         assert_eq!(
             session.ctrl_d(),
-            KeyAck::NothingToActOn,
+            KeyAck::Unsupported,
             "and bash under WSL still has no measured end-of-input byte (roadmap 23.8)"
         );
     }
