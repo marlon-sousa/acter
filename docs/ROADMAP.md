@@ -3865,14 +3865,33 @@ And the two that only became visible afterwards:
     If it is real it belongs to the engine or the echo rather than to macOS — nothing in this
     lane touches either — and 22.13 is the nearest neighbour.
 
-34. **M3, the menu bar macOS actually has.** Spec: none yet → specify first. DESIGN has said
-    since A7 that on macOS a menu belongs in the system bar and not in the window; today
-    `main.ts` honours the second half of that and not the first, so a macOS build has the
-    document menu bar removed and nothing in its place. A native menu, VoiceOver-verified.
+34. **Done** — M3, the menu bar macOS actually has. Spec:
+    [m3-the-menu-bar-macos-has.md](specs/m3-the-menu-bar-macos-has.md). DESIGN has said since
+    A7 that on macOS a menu belongs in the system bar and not in the window; `main.ts`
+    honoured the second half of that and nothing honoured the first.
+
+    **"Nothing in its place" was wrong, and the measurement is the entry's first finding.**
+    Tauri installs a default macOS menu whenever the builder was given none, so a Mac had a
+    menu bar already — with an **empty Help submenu**, with **Connect in no menu at all**, and
+    with every window command the platform expects. What this entry replaced was that menu
+    rather than an absence.
+
+    **The layout is a value and the platform is an argument**, the shape `offered` has used
+    for the connect list since M1: `system_menu(os)` answers with six submenus on macOS and
+    with nothing on Windows and Linux, and the composition root attaches a native menu only
+    when something was asked for — so the platform where a native menu freezes NVDA for tens
+    of seconds cannot acquire one by an edit. Choosing an item Acter owns emits a `MenuAction`
+    the frontend switches over exhaustively, into the same actions the document menu bar runs.
 
     **What it costs is the thing A7 counted as a win**: the in-document menu is drivable by
     WebDriver end to end, and a native one is not. So the E2E suite's menu coverage stays
     Windows-only and this entry's checklist is where the macOS menu is judged.
+
+    **Two facts this left for M4.** The application menu is named by the *process*, not by
+    anything Acter can set — proved by renaming the submenu and watching the bar not change —
+    so it reads "acter-app" and its Quit says the same until a bundle exists. And macOS
+    localises the items it owns, which is why Acter writes only its own items' words: hard
+    coding English would have replaced translations on the machine this is built on.
 
 34.1. **M3.5, the macOS help says how to set VoiceOver up.** Spec: none yet → specify
     first. **The question is answered and what remains is the words** (DESIGN, decided
@@ -3900,6 +3919,13 @@ And the two that only became visible afterwards:
     `bundle.active` is `false` and the identifier is `dev.marlonsousa.acter`. Distribution
     is outside the App Store, so this is Developer ID signing plus notarisation, and it is
     last deliberately: it is about handing Acter to somebody else, not about Acter working.
+
+    **It also fixes two things M3 measured and refused to work around.** The macOS
+    application menu and its Quit, Hide and About items are named by the *process*, so today
+    a listener hears "acter-app" where the product is called Acter; a bundle is what gives
+    the process the product's name, in every language macOS translates those items into. And
+    33.1 — VoiceOver told that nothing has keyboard focus — was measured on an unbundled
+    binary, which is a confound this entry removes before that one is judged.
 
 ## Convergence (requires B4, B5 and B6 all Done)
 

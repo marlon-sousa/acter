@@ -18,9 +18,16 @@ import { PasswordDialog } from './adapters/password_dialog';
 import { SetUpDialog } from './adapters/set_up_dialog';
 import { UnverifiedDialog } from './adapters/unverified_dialog';
 import { installMenuBar } from './adapters/menu_bar';
+import { applyPlatformText } from './adapters/platform_text';
+import { installSystemMenu } from './adapters/system_menu';
 import { WindowChrome } from './adapters/window_chrome';
 import { AppController } from './controllers/app';
-import { TauriBackend, TauriConnect, TauriShell } from './routers/tauri';
+import {
+  TauriBackend,
+  TauriConnect,
+  TauriShell,
+  TauriSystemMenu,
+} from './routers/tauri';
 import type { ConnectAnswer, ConnectQuestion } from './protocol';
 
 function byId<T extends HTMLElement>(id: string): T {
@@ -175,24 +182,34 @@ const aboutDialog = new AboutDialog(
   shell,
   windowChrome,
 );
+// What the menu items do, and the one list of them: the document menu bar on Windows and
+// the operating system's own menu bar on macOS are two ways into the same four actions, so
+// neither platform can drift from the other by an edit to one of them (spec M3, decision 5).
+const menuActions = {
+  connect: () => void connectDialog.open(),
+  exit: () => void shell.exit(),
+  help: () => helpDialog.open(),
+  about: () => void aboutDialog.open(),
+};
 // Windows only, and asked rather than assumed: a native menu bar is the right answer on
 // macOS, where menus live in the system bar, and this one exists because Windows is the
-// platform where a native menu freezes the screen reader (spec A7). Elsewhere the region
-// is removed outright rather than left hidden, so nothing empty is in the document.
+// platform where a native menu freezes the screen reader (spec A7). Elsewhere the region is
+// removed outright rather than left hidden, so nothing empty is in the document — which
+// since M3 is `data-platform`'s doing rather than a line of its own, because the help now
+// has sentences that belong to one platform for exactly the same reason.
 const menuBarRegion = byId('menu-bar-region');
 void shell.platform().then((os) => {
+  applyPlatformText(document, os);
   if (os !== 'windows') {
-    menuBarRegion.remove();
+    // The menu Acter did not draw. macOS builds it natively from what the backend decided,
+    // and what reaches the window is only the items that open a dialog; a platform with no
+    // native menu emits nothing, so this subscribes and never hears anything (spec M3).
+    installSystemMenu(new TauriSystemMenu(), menuActions, windowChrome);
     return;
   }
   installMenuBar(
     byId('menu-bar'),
-    {
-      connect: () => void connectDialog.open(),
-      exit: () => void shell.exit(),
-      help: () => helpDialog.open(),
-      about: () => void aboutDialog.open(),
-    },
+    menuActions,
     // Where the menu returns to is "whatever this window is showing" rather than the edit
     // field by name: since A10 there is not always one, and focusing a hidden input does
     // nothing at all — which left a listener stranded on the menu item they had just closed

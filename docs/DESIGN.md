@@ -305,7 +305,7 @@ widget, is stated as an application.
 **Windows only.** This exists because Windows is where a native menu freezes the reader. On
 macOS a menu belongs in the system bar and not in the window at all, and Linux is likely to
 want its own answer, so the backend answers which platform this is and the frontend removes
-the region entirely off Windows.
+the region entirely off Windows. What macOS gets instead is below.
 
 **What this buys back, unexpectedly**: the menu is now inside the webview, so WebDriver can
 drive it end to end. "Nothing in this project can test the menu" was written about the
@@ -317,6 +317,44 @@ Two menus, and no more until something earns one:
 - **Help** — About Acter. A menu holding one item rather than a top-level item that acts,
   because a menu bar entry that fires instead of opening is a surprise to anyone navigating
   by arrow keys.
+
+### On macOS the menu is the system's, and it has six — **Decided 2026-09-02**
+
+**Measured before it was decided** (spec M3): a Mac running Acter already had a menu bar,
+because Tauri installs a default one whenever the application sets none. Its Help submenu
+was **empty**, and **Connect was in no menu at all** — so the one control this product
+exists for was reachable only from the button in the unconnected window, and not at all
+once a session was running.
+
+**Six menus rather than the two Windows earned.** The rule that a menu must earn its place
+is a rule about what a listener has to arrow past, and macOS is a different room: the system
+augments a bar it recognises, so an application missing the entries every other application
+has is its own kind of surprise. Acter, File, Edit, View, Window and Help. **Edit is not
+decoration** — macOS routes a webview's own copy and paste through the menu bar, so a bar
+without it takes Cmd+C out of the command line.
+
+**Acter's own three items open Acter's own dialogs**: Connect (Cmd+K, the platform's
+"connect to server"), Acter Help (Cmd+/), and About Acter. Help is **not** the conventional
+Cmd+? because macOS reserves that for the search field it injects into every Help menu, and
+that binding wins — measured 2026-09-02, with the help never opening. The HTML dialogs rather than the
+native About panel, for the reason the next section gives — and because the native panel
+would say less than Acter's does.
+
+**Quit is the platform's**, with Cmd+Q, and it was measured to take the running shell with
+it. Closing the window was measured to end the process too, so `exit` still means what A7
+decided it means.
+
+**Acter writes only its own items' words.** macOS localises Quit, Hide, Cut and Paste into
+the account's language, and this project's own user runs a Portuguese system: passing
+English through would replace a translation with a string nobody asked for. The cost is that
+the application menu is named by the process until Acter is bundled — "acter-app", not
+"Acter" — which is M4's to fix rather than this decision's to work around.
+
+**Which keys exist is a platform fact, so what the help says about them is too.** F10 and
+Alt open the menu bar on Windows and nothing on macOS, where the menus are the system's;
+and on a Mac with factory settings F1 and F6 need `fn`. A sentence in the help that names a
+key belongs to one platform, and the frontend removes text marked for the others outright
+rather than hiding it, exactly as it already does with the menu-bar region.
 
 ### Dialogs are HTML modals in the window — **Decided**
 

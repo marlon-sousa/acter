@@ -37,7 +37,13 @@
          application and the keys belong to it. It wraps only the bar: the buffer and the
          edit field are still an ordinary document, where browse mode is exactly what a
          reader wants. -->
-    <div id="menu-bar-region" role="application" aria-label="Acter menu bar" hidden>
+    <div
+      id="menu-bar-region"
+      role="application"
+      aria-label="Acter menu bar"
+      data-platform="windows"
+      hidden
+    >
       <ul id="menu-bar" role="menubar" aria-label="Acter">
         <li role="none">
           <span
@@ -305,9 +311,20 @@
         The command line is where you type. F6 moves between it and the results area, and
         Escape brings you back to the command line from anywhere in the window.
       </p>
-      <p>
+      <!-- **The menu is in a different place on each platform, so this sentence is two**
+           (spec M3, decision 8). On Windows the menu bar is in the window and F10 is the way
+           in; on macOS it is the system's own menu bar at the top of the screen, which no key
+           of Acter's opens. `data-platform` removes the one that is not this machine's before
+           the window says anything, so a listener never meets an instruction for somebody
+           else's computer. -->
+      <p data-platform="windows">
         F1 opens this help. F10 opens the menu bar, and so does pressing and releasing Alt on
         its own.
+      </p>
+      <p data-platform="macos">
+        F1 opens this help, and so does Command and slash. Acter's menus are in the menu bar
+        at the top of the screen, with the rest of the Mac's menus: Connect is in the File
+        menu, and Command and K opens it from anywhere in the window.
       </p>
       <p>
         Ctrl+C, pressed in the command line, stops the command that is running. In the

@@ -3,11 +3,13 @@
 // Channel<SessionEvent> created for attachSession carries the session's event stream.
 
 import { Channel, invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 
 import type { AboutFacts, AppShell } from '../ports/app_shell';
 import type { BackendApi } from '../ports/backend_api';
 import type { ConnectApi, ConnectListener } from '../ports/connect_api';
+import type { SystemMenuEvents } from '../ports/system_menu';
 import type {
   AttemptId,
   Connectable,
@@ -17,6 +19,7 @@ import type {
   KeyAck,
   KeyPress,
   LineOwner,
+  MenuAction,
   ProfileId,
   SessionEvent,
   SessionId,
@@ -153,5 +156,18 @@ export class TauriShell implements AppShell {
   // spawned — with it.
   async exit(): Promise<void> {
     await getCurrentWindow().close();
+  }
+}
+
+// The operating system's menu bar, for the platform whose menu is not in the document
+// (spec M3). One event carries every item Acter owns, and the payload says which — so this
+// is one subscription rather than one per item, and adding an item changes nothing here.
+//
+// **The event name is the backend's** (`adapters/system_menu.rs`), and it is the only string
+// in this file that has to match something on the other side: the payload is the generated
+// `MenuAction`, so everything after this line is checked by the compiler.
+export class TauriSystemMenu implements SystemMenuEvents {
+  onChosen(chosen: (action: MenuAction) => void): void {
+    void listen<MenuAction>('acter://menu', (event) => chosen(event.payload));
   }
 }

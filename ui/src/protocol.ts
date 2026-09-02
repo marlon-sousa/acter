@@ -449,6 +449,15 @@ export type KeyPress = {
 	alt: boolean,
 };
 
+/**  What a menu item Acter answers itself asks for. */
+export type MenuAction = 
+/**  Open the Connect dialog — the same action the button and the Windows menu run. */
+"Connect" | 
+/**  Open the help topic, at its first section, exactly as F1 does. */
+"Help" | 
+/**  Open the About dialog. */
+"About";
+
 /**
  *  Identifies one line of output for as long as anything may still revise it.
  * 
