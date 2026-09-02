@@ -4058,6 +4058,84 @@ bargain 22.11 and 23.14 struck, and both paid.
     **Deliberately not in this entry**: any renderer, the alternate screen, and the
     several-rows case, which is 30.
 
+28.1. **The reader answers the key before the far end has.** Spec: none yet → this is a
+    design conversation before it is a spec, because the fix is a decision 28 already took
+    the other way. **Found 2026-09-02 in 28's own NVDA pass**, driving a real WSL `bash`
+    through the screen-readers bridge as the `user` persona, NVDA 2026.1.1, silent capture.
+
+    **What a listener meets.** In far-end-line mode, every key is answered with the state
+    *before* it. Two commands in history, then up arrow: NVDA said "em branco" — blank —
+    because the field was still empty at the instant of the press. Up arrow again: NVDA said
+    `echo acter-history-two`, the line the *previous* press had recalled, while the field by
+    then held `echo acter-history-one`. Home said "blank". Right arrow from the start of the
+    line said "e", "c", "c" — one behind, and repeating. Tab and Backspace said nothing at
+    all.
+
+    **The row and the caret Acter writes are correct**, which is what makes this a timing
+    defect rather than a content one: `nvda+uparrow` re-read the field on demand and got the
+    right line every time, and Tab's completion (`ech` to `echo `) and Backspace's single
+    character deletion were both exactly right in the field. What is wrong is only *when*.
+
+    **The cause is structural and was not foreseen.** NVDA answers a caret command
+    synchronously, reading the field as it stands at that instant; Acter writes the far end's
+    answer when the batch settles on the quiescence clock, half a second later. Decision 2's
+    element measurement was taken on a static page where the text and caret were already set
+    when the key was pressed, so it could not see this — and decision 6's "once the row
+    settles" is what puts the write on the other side of the reader's answer.
+
+    **It cannot be fixed by writing sooner**, and that is the part that makes this a design
+    conversation. The far end is remote: at the instant of the press there is nothing to
+    write, because nothing has come back. So the choices are real ones — suppress the
+    reader's own answer at press time and speak the row when it arrives (which is the live
+    region decision 3 deleted, reinstated for this path only); or keep the text box and
+    accept that it is re-read on demand rather than spoken on the press; or something that
+    keeps NVDA quiet at the keystroke without an application region. **Do not guess between
+    them**: this is the same class of question the element probe answered, and it should be
+    answered the same way, on the bridge, before a spec.
+
+    Blocks the four checklist items that failed in 28's PR body: up arrow, Tab completion,
+    left and right, and Backspace's spoken half.
+
+28.2. **The content rule never runs, so a `gh` prompt says nothing.** Spec: none yet →
+    small, and the diagnosis is complete. **Found 2026-09-02 in the same pass**, on a real
+    `gh repo create` aborted at its first prompt.
+
+    **What a listener meets.** Arrowing the selection produces silence. The field stays
+    empty and stays empty.
+
+    **The far end and the engine both did their part**, which is what makes this a plain
+    bug: the buffer afterwards holds the whole interaction as four rows — the question, the
+    three options with `>` on the one the arrow moved to, and the returning prompt — so the
+    row gained its marker, the engine reported it, and `policies::far_end_row` would have
+    picked it. It was never asked.
+
+    **Where.** `Pump::far_end_settled` branches on `self.far_end.anchor.is_none()` to
+    re-anchor instead of asking the policy. That condition was written for one case — the
+    settling right after Enter, where the anchor is deliberately cleared — and it also
+    catches the case the content rule exists for: a far end that hides its cursor has no
+    anchor at all, by 28's own amendment B, so step 2 is unreachable exactly where step 2 is
+    the answer. The two states need telling apart rather than sharing `None`.
+
+    Blocks the `gh` checklist item in 28's PR body. Fixing it does not by itself make the
+    prompt audible — 28.1 stands in front of it — so the two are worth doing together.
+
+28.3. **F6 cannot reach the results buffer while the far end owns the line.** Spec: none yet
+    → small. **Found 2026-09-02 in the same pass.**
+
+    **What a listener meets.** F6 in far-end-line mode does nothing: NVDA re-read the
+    far-end field and focus never moved. Review by heading is unreachable, which is the whole
+    of how this product is meant to be read back — and it is the same complaint the
+    2026-09-02 amendment under "Edit field ownership" made about headings, reached from the
+    other side.
+
+    **Where.** `AppController.toggleFocusArea` knows two areas and asks
+    `editField.isFocused()`; in this mode the edit field is hidden and unfocused, so the
+    toggle focuses a hidden `<input>`, which does nothing at all. It has to ask which line is
+    in front of the user and toggle between *that* field and the buffer.
+
+    Not blocking a checklist item, and worse than one that is: it is reachable in every
+    session that uses the mode.
+
 29. A program that is waiting says so. Spec: none yet → specify first. **Agreed
     2026-08-31**, and it is what makes 28 discoverable rather than a mode only its author
     knows about.
