@@ -4247,14 +4247,50 @@ bargain 22.11 and 23.14 struck, and both paid.
     is what carries Tab completion in a console. Acter's field is an ARIA text box: it has the
     first half and not the second.
 
-    **The choices, and none of them should be guessed at.** Give this path the web's
-    equivalent of `LiveText` — a live region carrying *only* what the reader would otherwise
-    not say. That is narrower than the region decision 3 deleted, and it would not
-    double-speak, because these are precisely the keys that produce no reader speech; the
-    risk is that the set is NVDA's and another reader draws the line elsewhere. Or accept the
-    silence: the completion is applied, and the next keystroke or `nvda+uparrow` reads it.
-    Or re-measure the element, since a role carrying an autocomplete contract announces
-    exactly this, which is a second element probe of the kind decision 2 was settled by.
+    **The element was re-measured, and the element is not the answer.** Probe
+    `ui/probes/element_probe.html`, run 2026-09-02 on NVDA 2026.1.1 through the bridge, silent
+    capture, `user` persona, in Edge — WebView2's own engine. Eight variants, each behaving
+    exactly as the far-end field does (every key prevented, text and caret written by script),
+    differing only in role, ARIA and how the completion is applied. `ech` then Tab in each:
+
+    - **A, `role="textbox"` as shipped: silent.** The probe reproduces the defect, so it is
+      faithful.
+    - **B, textbox plus `aria-autocomplete="inline"`: silent.** NVDA does see the attribute —
+      it announces "possui autocompletar" when focus lands — and still says nothing when the
+      text changes.
+    - **C, `role="combobox"` plus `aria-autocomplete="inline"`: silent**, and it makes the
+      field announce itself as "caixa de combinação recolhido multilinha editável abre lista"
+      — a collapsed combo box promising a list that does not exist. Worse on arrival and no
+      better on Tab.
+    - **D, `role="searchbox"`: silent.**
+
+    So **no role announces a programmatic content change**, and decision 2's element stands.
+    What does work is a mechanism layered on top of it, and two of them do:
+
+    - **E and H, the inline-autocomplete pattern**: leave what the completion added
+      *selected*, and NVDA announces it — **"o  selecionado"** — out of
+      `EditableText.detectPossibleSelectionChange`. H collapses the caret 120 ms later, so
+      nothing stale is left standing in a field whose contents are the far end's rather than
+      provisional, and the announcement still happens. No live region at all. It says what was
+      *added*, not the completed line, and it needs the change to be a pure append — a Tab
+      with several candidates rewrites the row and has no delta to select.
+    - **F, a live region fed only by the completion**: says **"echo"**, the whole row. Caret
+      keys are unaffected — Home said "e", right arrow "c", one utterance each, no
+      double-speak.
+
+    **And G measured why the always-on version is wrong**, which is decision 3 confirmed
+    rather than assumed: a live region fed on *every* answer says everything twice. Typing
+    `ech` gave "e", "c", **"ec"**; Backspace gave **"h"** from the reader and then **"ec"**
+    from the region. That is the noise decision 3 deleted, reproduced on demand.
+
+    **The recommendation is F**, and the decision is the user's because it puts back a live
+    region on one path. It says the completed line, which is what a listener needs — "o "
+    means nothing without the line it landed in — and it holds up when the far end rewrites
+    the whole row instead of appending, which is the case H cannot serve. Its cost is that
+    "which keys the reader will not speak for" is NVDA's list, so on another reader a key
+    could be said twice; that is one duplicate rather than silence, and Acter already knows
+    which key it sent, so the set is one table in the frontend rather than a guess. **H is
+    the fallback** if the project would rather ship no live region at all.
 
     Blocks the one checklist item still unchecked in 28's PR body.
 

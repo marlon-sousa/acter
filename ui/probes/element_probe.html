@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Acter far-end field: element probe for roadmap 28.4</title>
+<style>
+  body { font: 16px system-ui, sans-serif; margin: 2rem; max-width: 60rem; }
+  .field { border: 1px solid #666; padding: .4rem; min-height: 1.4em; white-space: pre; font-family: monospace; }
+  .row { margin-bottom: 1.6rem; }
+  .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+</style>
+</head>
+<body>
+<h1>Far-end field element probe</h1>
+<p>Every field below behaves exactly as Acter's far-end line does: every key is prevented,
+nothing is inserted locally, and the text and caret are written by script to stand for what a
+far end drew. They differ only in role and ARIA. Type <code>ech</code> then press Tab.</p>
+
+<div class="row">
+  <span id="lA" >A. textbox, as Acter ships it</span>
+  <div class="field" id="A" contenteditable="true" role="textbox" aria-multiline="false"
+       aria-labelledby="lA" tabindex="0" spellcheck="false"></div>
+</div>
+
+<div class="row">
+  <span id="lB">B. textbox plus aria-autocomplete inline</span>
+  <div class="field" id="B" contenteditable="true" role="textbox" aria-multiline="false"
+       aria-autocomplete="inline" aria-labelledby="lB" tabindex="0" spellcheck="false"></div>
+</div>
+
+<div class="row">
+  <span id="lC">C. combobox plus aria-autocomplete inline</span>
+  <div class="field" id="C" contenteditable="true" role="combobox" aria-expanded="false"
+       aria-autocomplete="inline" aria-labelledby="lC" tabindex="0" spellcheck="false"></div>
+</div>
+
+<div class="row">
+  <span id="lD">D. searchbox</span>
+  <div class="field" id="D" contenteditable="true" role="searchbox" aria-multiline="false"
+       aria-labelledby="lD" tabindex="0" spellcheck="false"></div>
+</div>
+
+<div class="row">
+  <span id="lE">E. textbox, completion selects what it added</span>
+  <div class="field" id="E" contenteditable="true" role="textbox" aria-multiline="false"
+       aria-labelledby="lE" tabindex="0" spellcheck="false"></div>
+</div>
+
+<div class="row">
+  <span id="lF">F. textbox plus a live region that only ever gets the completion</span>
+  <div class="field" id="F" contenteditable="true" role="textbox" aria-multiline="false"
+       aria-labelledby="lF" tabindex="0" spellcheck="false"></div>
+  <div class="sr" id="Flive" aria-live="polite" aria-atomic="true"></div>
+</div>
+
+<div class="row">
+  <span id="lG">G. textbox plus a live region fed on EVERY answer, not only the completion</span>
+  <div class="field" id="G" contenteditable="true" role="textbox" aria-multiline="false"
+       aria-labelledby="lG" tabindex="0" spellcheck="false"></div>
+  <div class="sr" id="Glive" aria-live="polite" aria-atomic="true"></div>
+</div>
+
+<div class="row">
+  <span id="lH">H. textbox, completion selects what it added and collapses the caret straight after</span>
+  <div class="field" id="H" contenteditable="true" role="textbox" aria-multiline="false"
+       aria-labelledby="lH" tabindex="0" spellcheck="false"></div>
+</div>
+
+<script>
+// What a far end would have drawn, given what has been typed. Tab completes `ech` to `echo `,
+// which is the exact case roadmap 28.4 is about.
+function completed(text) {
+  return text === 'ech' ? 'echo ' : text;
+}
+
+function place(field, start, end) {
+  const node = field.firstChild;
+  const range = document.createRange();
+  if (node === null) {
+    range.selectNodeContents(field);
+    range.collapse(true);
+  } else {
+    range.setStart(node, Math.min(start, node.length));
+    range.setEnd(node, Math.min(end, node.length));
+  }
+  const selection = window.getSelection();
+  selection.removeAllRanges();
+  selection.addRange(range);
+}
+
+function write(field, text, caret, selectFrom) {
+  field.textContent = text;
+  place(field, selectFrom === undefined ? caret : selectFrom, caret);
+}
+
+// G feeds its live region on every answer, which is the reader-agnostic design: it needs no
+// knowledge of which keys this particular reader speaks for. What it risks is saying
+// everything twice, and that is what this variant measures.
+function announce(id, text) {
+  const live = document.getElementById(id + 'live');
+  if (live !== null) {
+    live.textContent = text;
+  }
+}
+
+for (const id of ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']) {
+  const field = document.getElementById(id);
+  field.addEventListener('keydown', (event) => {
+    event.preventDefault();
+    const text = field.textContent;
+    if (id === 'G') {
+      // After the handler has run, so this is the row the far end ended up with -- which is
+      // what a live region fed on every answer would actually carry.
+      queueMicrotask(() => announce('G', field.textContent));
+    }
+    if (event.key === 'Tab') {
+      const after = completed(text);
+      if (id === 'E') {
+        // The inline-autocomplete pattern: what was added is left selected.
+        write(field, after, after.length, text.length);
+      } else if (id === 'H') {
+        // The same, but the selection is dropped a moment later, so nothing stale is left
+        // standing in a field whose contents are the far end's and not provisional.
+        write(field, after, after.length, text.length);
+        setTimeout(() => place(field, after.length, after.length), 120);
+      } else {
+        write(field, after, after.length);
+      }
+      if (id === 'F') {
+        announce('F', after);
+      }
+      return;
+    }
+    if (event.key === 'Backspace') {
+      write(field, text.slice(0, -1), Math.max(0, text.length - 1));
+      return;
+    }
+    if (event.key === 'Home') { place(field, 0, 0); return; }
+    if (event.key === 'End') { place(field, text.length, text.length); return; }
+    if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+      const at = window.getSelection().focusOffset;
+      const to = event.key === 'ArrowRight'
+        ? Math.min(text.length, at + 1)
+        : Math.max(0, at - 1);
+      place(field, to, to);
+      return;
+    }
+    if ([...event.key].length === 1) {
+      write(field, text + event.key, text.length + 1);
+    }
+  });
+  field.addEventListener('beforeinput', (event) => event.preventDefault());
+}
+</script>
+</body>
+</html>
