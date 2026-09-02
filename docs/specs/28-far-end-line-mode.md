@@ -528,6 +528,59 @@ the cursor hidden for the whole prompt, the option rows rewritten in place on ev
 no alternate screen, which is a different path. It creates nothing, so the item can be run to
 the end, which is what `gh repo create` never allowed.
 
+### K. The row handed to the field is padded out to the caret
+
+**Made 2026-09-02, for roadmap 28.9.** Deleting a trailing space said nothing at all, while
+every other character was announced as it went.
+
+`acter-term`'s extractor trims every row, because a grid row is padded with spaces to its
+full width and an untrimmed walk speaks eighty spaces after every line (decision 9 of the
+engine's own spec). That is right and stays. What it costs here is that `echo hi ` and
+`echo hi` are one string, so the field never held the space, nothing changed when it went,
+and the reader correctly said nothing about a field that did not change. Measured with
+`capture.rs` at a real `bash`: the space produced no line item, the backspace that removed
+it produced none either, and only the next backspace — which took the `i` — produced
+`Rewritten "...echo h"`.
+
+**The cursor is the evidence.** A caret beyond the end of the row means the cells between
+are spaces, so the row handed to the field is padded out to the caret. `echo hi ` then
+reaches the field with its space, and deleting it is a change the reader announces.
+
+Two details the measurement forced:
+
+- **The caret is no longer clamped to the text**; the text is widened to the caret instead.
+  Clamping was what made the space vanish.
+- **A caret that lands *inside* the row re-measures nothing.** The padding is a claim about
+  whitespace after the last character, and a cursor that moved into the line says nothing
+  about it — so `Home` in a padded line stays a caret move, and the listener keeps what they
+  had rather than hearing the whole row read back.
+
+It is in `policies::far_end_row` and not in the extractor, because the caret and the text
+are decided together there. The policy therefore takes one more input: the text the field is
+currently holding, whose trailing spaces are the padding it added last time.
+
+### L. A completion redraw is not a new prompt, and the candidate list was never lost
+
+**Made 2026-09-02, for roadmap 28.10.** Found at an integrated Ubuntu with the remote
+process holding the keys: typing `cd a`, the first Tab said nothing, the second repeated the
+prompt, and the list of matches was never read.
+
+**The prompt half is a rule of spec B5.6 and is amended there** (amendment A): a prompt
+drawn with no command between it and the last one is that prompt being repainted, and is not
+announced again. It reaches this mode because an integrated `PS1` is where Acter's markers
+live and `readline` re-emits the whole prompt string on every redraw.
+
+**The candidate half was a hypothesis, and this spec records that it was wrong.** The theory
+was that the marker traffic changed which region the list row was labelled with, so an
+integrated session's filter turned it away where an unintegrated one let it through. It was
+tested before any rule was written, from the batch `capture.rs` recorded at a real
+integrated `bash`, and disproved: the list arrives *before* the redraw's `PromptStart`, so
+the tracker is still where the last `B` left it, and amendment J's path publishes it. It
+reaches the transcript and it is read aloud, in the very batch the user described
+(`the_candidates_reach_the_transcript_and_are_read_aloud`). Nothing in the domain was
+dropping it. What stood in front of it was the prompt announcement, arriving first, over a
+listener editing a line — and that is what amendment A removes.
+
 ## Definition of done
 
 - Every named key becomes the measured bytes, with a unit test per row of the table and one

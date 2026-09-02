@@ -74,6 +74,16 @@ pub struct Keystroke<'a> {
     /// `None` when the far end was hiding it.
     pub was: Option<Caret>,
     pub now: Option<Caret>,
+    /// What the field is holding right now — the text this policy handed over last time.
+    ///
+    /// **It is the only record of the trailing spaces the grid has and the row text has
+    /// not** (roadmap 28.9). The extractor trims every row, correctly and for a documented
+    /// reason, so a row the far end drew as `echo hi ` reaches here as `echo hi`; the
+    /// padding this policy adds is therefore the whole difference between the two, and
+    /// `held` with its trailing spaces taken back off is the row as the extractor read it.
+    /// That inference is the same one `follow_cursor` already makes when it measures a
+    /// prompt off the front of a row.
+    pub held: &'a str,
 }
 
 /// What to put in front of the listener.
@@ -111,8 +121,17 @@ pub enum FarEndAnswer {
 ///    anywhere.
 /// 3. **Otherwise, if the cursor is visible and moved along the row it was on**, only the
 ///    caret moves. Left, right, Home and End rewrite nothing and are invisible to steps 1
-///    and 2 by construction.
+///    and 2 by construction — *unless* the cursor has moved across whitespace the extractor
+///    trimmed away, which is step 3's second half and roadmap 28.9.
 /// 4. **Otherwise nothing happened.**
+///
+/// **Every row this rule hands over is padded out to the caret** (roadmap 28.9). A caret
+/// beyond the end of the text is evidence in itself: the far end's cursor is a screen
+/// column, the grid under it holds spaces, and the row lost them on the way here because
+/// the extractor trims — so `echo hi ` and `echo hi` arrive as one string and deleting the
+/// space changes nothing a reader can announce. Padding puts the space back where the
+/// cursor says it is, which makes deleting it a change, and leaves the invariant the caret
+/// always wanted: a caret can never sit past the text it is given.
 pub fn far_end_row(keystroke: &Keystroke<'_>) -> FarEndAnswer {
     if let Some(anchor) = keystroke.anchor
         && let Some(change) = keystroke
@@ -122,7 +141,10 @@ pub fn far_end_row(keystroke: &Keystroke<'_>) -> FarEndAnswer {
     {
         let text = from_column(&change.after, anchor.column);
         let caret = caret_in(&text, anchor.column, keystroke.now);
-        return FarEndAnswer::Row { text, caret };
+        return FarEndAnswer::Row {
+            text: padded(text, caret),
+            caret,
+        };
     }
 
     if let Some(change) = keystroke.changed.iter().find(gained_content) {
@@ -138,8 +160,24 @@ pub fn far_end_row(keystroke: &Keystroke<'_>) -> FarEndAnswer {
     match (keystroke.was, keystroke.now) {
         (Some(was), Some(now)) if was.row == now.row && was.column != now.column => {
             let anchor = keystroke.anchor.map_or(0, |anchor| anchor.column);
-            FarEndAnswer::Caret {
-                caret: usize::from(now.column.saturating_sub(anchor)),
+            let caret = usize::from(now.column.saturating_sub(anchor));
+            // Nothing was redrawn, so the row is what the listener already has with this
+            // policy's own padding taken back off — and where the cursor came to rest is
+            // the only evidence about how much of it is still there (roadmap 28.9). A
+            // cursor at or past the row's end re-measures the padding, which is what tells
+            // a space typed at the end from a space deleted from it; a cursor that landed
+            // *inside* the row says nothing about the whitespace after it, and the line the
+            // listener holds is left exactly as it was.
+            let row = keystroke.held.trim_end();
+            let text = if caret >= row.chars().count() {
+                padded(row.to_owned(), caret)
+            } else {
+                keystroke.held.to_owned()
+            };
+            if text == keystroke.held {
+                FarEndAnswer::Caret { caret }
+            } else {
+                FarEndAnswer::Row { text, caret }
             }
         }
         _ => FarEndAnswer::Nothing,
@@ -171,15 +209,35 @@ fn from_column(row: &str, column: u16) -> String {
 
 /// Where the caret goes in the text a listener is about to be handed.
 ///
-/// Clamped to the text, and placed at its end when the far end is not showing a cursor:
-/// past the last character NVDA says "blank", which is the same word it says for a row a
-/// key emptied and is exactly right for both.
+/// Placed at the end of the text when the far end is not showing a cursor: past the last
+/// character NVDA says "blank", which is the same word it says for a row a key emptied and
+/// is exactly right for both.
+///
+/// **Not clamped, because the text is what gets adjusted** (roadmap 28.9). A cursor beyond
+/// the row's last character is where a listener's own caret belongs after they type a
+/// space, and clamping it back onto the text was what made that space vanish.
 fn caret_in(text: &str, anchor: u16, now: Option<Caret>) -> usize {
-    let length = text.chars().count();
     match now {
-        Some(caret) => usize::from(caret.column.saturating_sub(anchor)).min(length),
-        None => length,
+        Some(caret) => usize::from(caret.column.saturating_sub(anchor)),
+        None => text.chars().count(),
     }
+}
+
+/// The row padded with spaces out to the caret, and left alone when the caret is already
+/// in it.
+///
+/// The spaces are not invented: the cursor sits on a grid cell, every cell between the
+/// row's last character and that one holds a space, and the row arrived here without them
+/// only because the extractor trims (`extractor.rs`, decision 9 — an untrimmed walk speaks
+/// eighty spaces after every line). Trimming stays right for reading a transcript; what the
+/// field needs is the row as wide as the far end's own cursor.
+fn padded(text: String, caret: usize) -> String {
+    let length = text.chars().count();
+    let mut text = text;
+    if caret > length {
+        text.push_str(&" ".repeat(caret - length));
+    }
+    text
 }
 
 #[cfg(test)]
@@ -204,11 +262,24 @@ mod tests {
         was: Option<Caret>,
         now: Option<Caret>,
     ) -> Keystroke<'a> {
+        holding("", changed, anchor, was, now)
+    }
+
+    /// The same batch, with the field already holding a line — which is what the caret
+    /// steps read the row's trailing whitespace out of.
+    fn holding<'a>(
+        held: &'a str,
+        changed: &'a [RowChange],
+        anchor: Option<Anchor>,
+        was: Option<Caret>,
+        now: Option<Caret>,
+    ) -> Keystroke<'a> {
         Keystroke {
             changed,
             anchor,
             was,
             now,
+            held,
         }
     }
 
@@ -369,7 +440,7 @@ mod tests {
     /// them.
     #[test]
     fn a_cursor_that_moved_along_its_row_moves_the_caret_and_nothing_else() {
-        let answer = far_end_row(&keystroke(&[], anchored(7, 32), at(36, 3), at(35, 3)));
+        let answer = far_end_row(&holding("exit", &[], anchored(7, 32), at(36, 3), at(35, 3)));
         assert_eq!(answer, FarEndAnswer::Caret { caret: 3 });
     }
 
@@ -377,7 +448,7 @@ mod tests {
     /// has begins.
     #[test]
     fn the_caret_is_counted_from_the_anchor_column() {
-        let answer = far_end_row(&keystroke(&[], anchored(7, 32), at(32, 3), at(33, 3)));
+        let answer = far_end_row(&holding("exit", &[], anchored(7, 32), at(32, 3), at(33, 3)));
         assert_eq!(answer, FarEndAnswer::Caret { caret: 1 });
     }
 
@@ -459,20 +530,95 @@ mod tests {
         );
     }
 
-    /// A caret past the end of the text it is placed in is clamped to it, so a far end whose
-    /// cursor is beyond what the grid holds cannot put the caret nowhere.
+    /// **A caret past the end of the row means whitespace is there, and the row is padded
+    /// out to it** (roadmap 28.9). Tab completing a unique match in `readline` appends a
+    /// space, the grid holds it, the extractor trims it off, and the cursor is the only
+    /// thing left saying it was ever there.
+    ///
+    /// The caret still cannot end up past the text — it lands at its end, as it did when
+    /// this was a clamp — but the text is now as wide as the far end's own cursor, so what
+    /// the listener holds is the line the far end drew.
     #[test]
-    fn a_caret_past_the_text_lands_at_its_end() {
-        let changed = [change(7, "$ ", "$ ls")];
-        let answer = far_end_row(&keystroke(&changed, anchored(7, 2), at(2, 3), at(99, 3)));
+    fn a_caret_past_the_text_pads_the_row_out_to_it() {
+        let prompt = "marlon@splyt:~$ ";
+        let changed = [change(4, &format!("{prompt}ech"), &format!("{prompt}echo"))];
+        let answer = far_end_row(&holding(
+            "ech",
+            &changed,
+            anchored(4, 16),
+            at(19, 2),
+            at(21, 2),
+        ));
 
         assert_eq!(
             answer,
             FarEndAnswer::Row {
-                text: "ls".to_owned(),
-                caret: 2,
+                text: "echo ".to_owned(),
+                caret: 5,
             }
         );
+    }
+
+    /// **A space typed at the end of the line is a change the field can show.** Measured at
+    /// a real `bash` on 2026-09-02: typing the space after `echo hi` produced no line item
+    /// at all — the grid gained a space, the extractor trimmed it off again, and the only
+    /// evidence left is the cursor, which moved one column right.
+    #[test]
+    fn a_space_typed_at_the_end_reaches_the_field_as_a_space() {
+        let answer = far_end_row(&holding(
+            "echo hi",
+            &[],
+            anchored(7, 16),
+            at(23, 3),
+            at(24, 3),
+        ));
+
+        assert_eq!(
+            answer,
+            FarEndAnswer::Row {
+                text: "echo hi ".to_owned(),
+                caret: 8,
+            }
+        );
+    }
+
+    /// **And deleting it is a change too, which is the defect this rule was written for**
+    /// (roadmap 28.9). Backspace over a space produced no line item either, so with the row
+    /// alone nothing whatever distinguished the two states and the reader had nothing to
+    /// announce. The field losing its last character is a difference a reader speaks.
+    #[test]
+    fn deleting_a_trailing_space_shortens_the_line_the_listener_holds() {
+        let answer = far_end_row(&holding(
+            "echo hi ",
+            &[],
+            anchored(7, 16),
+            at(24, 3),
+            at(23, 3),
+        ));
+
+        assert_eq!(
+            answer,
+            FarEndAnswer::Row {
+                text: "echo hi".to_owned(),
+                caret: 7,
+            }
+        );
+    }
+
+    /// Moving the caret about inside the line is still only a caret move: padding is for a
+    /// cursor that has gone past the text, and a cursor inside it changes nothing the
+    /// listener is holding.
+    #[test]
+    fn a_caret_moving_inside_a_padded_line_still_rewrites_nothing() {
+        let answer = far_end_row(&holding(
+            "echo hi ",
+            &[],
+            anchored(7, 16),
+            at(24, 3),
+            at(20, 3),
+        ));
+
+        assert_eq!(answer, FarEndAnswer::Caret { caret: 4 });
     }
 
     /// Pure: the same batch always answers the same thing.

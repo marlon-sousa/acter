@@ -180,6 +180,7 @@ impl SessionService {
                 running: Arc::clone(&running),
                 integration: Integration::Pending,
                 drawing: None,
+                standing: None,
                 spoken: false,
                 setup,
                 self_talk: None,
@@ -470,6 +471,16 @@ struct Pump {
     /// this one. Two readers of the same bytes with different lifetimes is the shape B4.5
     /// warned about, so each keeps what it needs.
     drawing: Option<String>,
+    /// The prompt the listener already has, and `None` once something has happened that
+    /// makes the next one news (roadmap 28.10, amending spec B5.6 decision 3).
+    ///
+    /// **`readline` re-emits the whole prompt string on every redraw**, invisible parts
+    /// included — and an integrated session's `PS1` is where Acter's markers live, so every
+    /// Tab, every history recall and every `Ctrl+L` sends `A`, the prompt, and `B` again.
+    /// Measured 2026-09-02 at a real `bash` under WSL with the markers in `PS1`: two Tabs at
+    /// `cd a` produced a second `PromptStart` and the prompt was announced a second time,
+    /// over a line the user was in the middle of editing.
+    standing: Option<String>,
     /// Whether the far end has said anything yet.
     ///
     /// **What makes a session "connected" is the far end speaking**, not a process having
@@ -837,14 +848,24 @@ impl Pump {
                     self.integration = self.integration.markers_observed();
                     self.send(SessionInput::MarkersObserved);
                 }
-                BoundaryEvent::BlockStarted => self.block_started().await,
+                // A command has begun, so the prompt that comes back afterwards is a
+                // new one rather than a repaint of the one standing (roadmap 28.10).
+                BoundaryEvent::BlockStarted => {
+                    self.standing = None;
+                    self.block_started().await;
+                }
                 BoundaryEvent::Line {
                     region,
                     id,
                     text,
                     revision,
                 } => self.line(region, id, text, revision).await,
-                BoundaryEvent::BlockEnded { exit } => self.close(exit).await,
+                // And so is the one after a command that ended, which is the case a
+                // shell marking no `C` at all leaves.
+                BoundaryEvent::BlockEnded { exit } => {
+                    self.standing = None;
+                    self.close(exit).await;
+                }
                 BoundaryEvent::ScreenChanged(Screen::Alternate) => {
                     self.send(SessionInput::AltScreenEntered);
                 }
@@ -1070,6 +1091,7 @@ impl Pump {
             anchor: self.far_end.anchor,
             was: self.far_end.was,
             now: self.caret(),
+            held: &self.far_end.held,
         });
         match answer {
             FarEndAnswer::Row { text, caret } => self.far_end_line(Some(text), caret),
@@ -1504,15 +1526,33 @@ impl Pump {
     ///
     /// A prompt of nothing but whitespace is not read out: some shells draw across two rows
     /// and the first of them is blank.
+    ///
+    /// **And a prompt drawn with nothing having happened since the last one is that same
+    /// prompt being repainted** (roadmap 28.10, amending spec B5.6 decision 3). Spec B5.6
+    /// says every prompt is announced and not only the ones that changed, and that stands:
+    /// the prompt after a command is the ending a shell with no exit code has to offer, and
+    /// running `git status` twenty times says where you are twenty times. What this excludes
+    /// is not a repetition but a *repaint* — `readline` re-emitting the prompt string it
+    /// already drew, on a line the user is still editing, because their `PS1` is where the
+    /// markers live. Nothing ran between the two, and a listener who has not been anywhere
+    /// does not need telling where they are again.
+    ///
+    /// The two are told apart by what happened in between and never by the text: an ending
+    /// prompt is usually identical to the one before it, which is exactly why "announce it
+    /// when it differs" was rejected and stays rejected. A command starting or ending is
+    /// what clears [`Pump::standing`], and only a repaint reaches this with it still set.
     fn prompt_finished(&mut self) {
         if self.tracker.region() == Region::Prompt {
             return;
         }
-        if let Some(drawn) = self.drawing.take()
-            && !drawn.trim().is_empty()
-        {
-            self.send(SessionInput::PromptDrawn { text: drawn });
+        let Some(drawn) = self.drawing.take() else {
+            return;
+        };
+        if drawn.trim().is_empty() || self.standing.as_deref() == Some(drawn.as_str()) {
+            return;
         }
+        self.standing = Some(drawn.clone());
+        self.send(SessionInput::PromptDrawn { text: drawn });
     }
 
     async fn line(&mut self, region: Region, id: LineId, text: String, revision: LineRevision) {
@@ -4245,6 +4285,34 @@ mod tests {
             );
         }
 
+        /// **The same prompt after a command is still announced** (roadmap 28.10). This is
+        /// the half of decision 3 the redraw rule must not eat: a listener running
+        /// `git status` twenty times in one directory hears where they are twenty times,
+        /// because for a shell that reports no exit code the returning prompt is the only
+        /// ending they get, and the text being identical is what makes it *feel* like a
+        /// repetition rather than what makes it one. What was excluded is a prompt with no
+        /// command between it and the last, which is a repaint.
+        #[tokio::test]
+        async fn the_same_prompt_after_a_command_is_still_announced() {
+            let session = marked().await;
+            session.emit(prompt(1, PROMPT)).await;
+            let _ = session.submit("git status").await;
+            session
+                .emit(vec![marker(Osc133Marker::OutputStart), line(2, "clean")])
+                .await;
+            session
+                .emit(vec![marker(Osc133Marker::CommandEnd(Some(ExitCode(0))))])
+                .await;
+            session.emit(prompt(3, PROMPT)).await;
+            session.advance_to(1_000).await;
+
+            assert_eq!(
+                prompts(&session),
+                vec![PROMPT.to_owned(), PROMPT.to_owned()],
+                "a command ran, so the prompt coming back is news however it reads"
+            );
+        }
+
         /// It arrives after the block has closed, which is the order a listener needs:
         /// what happened, then where they are now. This falls out of the byte order — the
         /// shell draws its prompt after `D` — and is asserted so a later change cannot
@@ -4727,6 +4795,54 @@ mod tests {
                 session.far_end_lines().last(),
                 Some(&(Some("ls".to_owned()), 2)),
                 "the prompt stays behind and the command line is what is handed over"
+            );
+        }
+
+        /// **A trailing space reaches the field, and deleting it is something to hear**
+        /// (roadmap 28.9). Found by the user driving a real `bash`: backspace over a space
+        /// said nothing at all, while every other character was announced as it went.
+        ///
+        /// This is that session, byte for byte as `capture.rs` recorded it. Typing the
+        /// space after `ls` emits **no line item** — the grid gained a space and the
+        /// extractor trimmed it off again, which it is right to do — and the backspace that
+        /// takes the space away emits none either. Both moved the cursor, in opposite
+        /// directions, and that is the whole of the evidence. Without the padding the field
+        /// held `ls` throughout and the reader had no change to announce; with it the field
+        /// gains a character and then loses one.
+        #[tokio::test]
+        async fn a_trailing_space_is_in_the_field_and_deleting_it_is_a_change() {
+            let session = at_a_prompt().await;
+            session.owner(LineOwner::FarEnd).await;
+
+            let _ = session.press(named(Key::Char('l'))).await;
+            let _ = session.press(named(Key::Char('s'))).await;
+            session.emit(vec![line(1, "ls")]).await;
+            session.cursor_at(15, 0).await;
+            session.advance_to(4_000).await;
+
+            // The space: bytes on the wire, no line item, and the cursor one column
+            // further right.
+            let _ = session.press(named(Key::Char(' '))).await;
+            session.emit(vec![]).await;
+            session.cursor_at(16, 0).await;
+            session.advance_to(7_000).await;
+
+            assert_eq!(
+                session.far_end_lines().last(),
+                Some(&(Some("ls ".to_owned()), 3)),
+                "the cursor is past the row's last character, so the space is there"
+            );
+
+            // And the backspace that removes it: no line item either, cursor back one.
+            assert_eq!(session.press(named(Key::Backspace)).await, KeyAck::Applied);
+            session.emit(vec![]).await;
+            session.cursor_at(15, 0).await;
+            session.advance_to(10_000).await;
+
+            assert_eq!(
+                session.far_end_lines().last(),
+                Some(&(Some("ls".to_owned()), 2)),
+                "the line the listener holds is a character shorter, which is a change"
             );
         }
 
@@ -5394,6 +5510,153 @@ mod tests {
 
             assert_eq!(session.press(named(Key::Up)).await, KeyAck::Unbound);
             assert_eq!(session.written(), "");
+        }
+    }
+
+    /// **Completing a path at an integrated far end** (roadmap 28.10).
+    ///
+    /// Every batch here is what `capture.rs` recorded on 2026-09-02 at a real `bash` under
+    /// WSL, item for item, with Acter's own marker setup sourced into it so `PS1` carries
+    /// `A` and `B` — which is what an integrated session is. The measured sequence for
+    /// `cd a` in a directory holding `alpha/` and `axel/`: the first Tab sends a bell and
+    /// nothing else, and the second prints the candidates on a fresh row and then re-emits
+    /// the whole prompt string — markers included — while redrawing the command line under
+    /// it.
+    mod completing_at_an_integrated_far_end {
+        use super::*;
+
+        fn named(key: Key) -> KeyPress {
+            KeyPress {
+                key,
+                ctrl: false,
+                shift: false,
+                alt: false,
+            }
+        }
+
+        /// Everything the listener was read aloud, as one string.
+        fn spoken(session: &Session) -> String {
+            session
+                .announcements()
+                .into_iter()
+                .filter_map(|said| match said {
+                    Announcement::ReadAloud { text } => Some(text),
+                    _ => None,
+                })
+                .collect()
+        }
+
+        fn prompts(session: &Session) -> Vec<String> {
+            session
+                .events()
+                .into_iter()
+                .filter_map(|event| match event {
+                    SessionEvent::PromptDrawn { text } => Some(text),
+                    _ => None,
+                })
+                .collect()
+        }
+
+        /// An integrated `bash` at its prompt, with the far end holding the keys and `cd a`
+        /// typed onto the command line.
+        async fn about_to_complete() -> Session {
+            let session = Session::start().await;
+            session
+                .emit(vec![
+                    marker(Osc133Marker::PromptStart),
+                    line(1, "bash-5.2$"),
+                    marker(Osc133Marker::CommandStart),
+                ])
+                .await;
+            session.cursor_at(10, 0).await;
+            session.advance_to(1_000).await;
+            session.owner(LineOwner::FarEnd).await;
+
+            for key in ['c', 'd', ' ', 'a'] {
+                let _ = session.press(named(Key::Char(key))).await;
+            }
+            session.emit(vec![line(1, " cd a")]).await;
+            session.cursor_at(14, 0).await;
+            session.advance_to(2_000).await;
+            session
+        }
+
+        /// The two Tabs, as measured: a bell, then the listing and the redraw.
+        async fn two_tabs(session: &Session) {
+            let _ = session.press(named(Key::Tab)).await;
+            session.emit(vec![]).await;
+            session.advance_to(3_000).await;
+
+            let _ = session.press(named(Key::Tab)).await;
+            session
+                .emit(vec![
+                    line(2, "alpha/ axel/"),
+                    marker(Osc133Marker::PromptStart),
+                    line(3, "bash-5.2$"),
+                    marker(Osc133Marker::CommandStart),
+                    line(3, " cd a"),
+                ])
+                .await;
+            session.cursor_at(14, 2).await;
+            session.advance_to(4_000).await;
+            // A second tick, because the pump publishing on its own clock is what arms the
+            // actor's pacing: the batch settles here and what it published is read out
+            // there.
+            session.advance_to(4_600).await;
+        }
+
+        /// **The prompt is not announced again for a redraw** (roadmap 28.10). The user met
+        /// this as "the second Tab repeated the prompt": the whole `PS1` comes back on every
+        /// redraw, markers and all, so `PromptStart` arrives on every Tab and the prompt is
+        /// announced over a line they are in the middle of editing. Nothing ran between the
+        /// two prompts, so the second is the first being repainted.
+        #[tokio::test]
+        async fn a_completion_redraw_does_not_announce_the_prompt_again() {
+            let session = about_to_complete().await;
+            two_tabs(&session).await;
+
+            assert_eq!(
+                prompts(&session),
+                vec!["bash-5.2$".to_owned()],
+                "the prompt drawn once and repainted once is one prompt: {:?}",
+                session.events()
+            );
+        }
+
+        /// **And the candidates were never the thing that went missing.**
+        ///
+        /// 28.10 was raised with the list unread as well as the prompt repeated, and the
+        /// leading theory was that the marker traffic changed which region the list row was
+        /// labelled with, so an integrated session's filter — which wants only `Output` —
+        /// turned it away where an unintegrated one had let it through. **This test was
+        /// written to prove that and disproves it.** The list arrives before the redraw's
+        /// `PromptStart`, so the tracker is still where the last `B` left it; the filter
+        /// does turn it away, and 28.6's path for what the far end printed at its own prompt
+        /// then publishes it. It reaches the transcript and it is read aloud, in the very
+        /// batch the user described.
+        ///
+        /// What was left is what this module's other test removes: a prompt announcement
+        /// arriving first, over a listener who is editing a line.
+        #[tokio::test]
+        async fn the_candidates_reach_the_transcript_and_are_read_aloud() {
+            let session = about_to_complete().await;
+            two_tabs(&session).await;
+
+            assert!(
+                session.rendered().contains("alpha/ axel/"),
+                "the candidates are in the transcript: {:?}",
+                session.rendered()
+            );
+            assert!(
+                spoken(&session).contains("alpha/ axel/"),
+                "and they are read aloud on the ordinary pacing path: {:?}",
+                session.announcements()
+            );
+            assert_eq!(
+                session.far_end_lines().last(),
+                Some(&(Some("cd a".to_owned()), 4)),
+                "while the field still holds the line being edited"
+            );
         }
     }
 
