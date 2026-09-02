@@ -667,9 +667,24 @@ struct Due {
 #[derive(Debug, Default)]
 struct FarEndLine {
     owner: LineOwner,
-    /// The row the far end draws its command line on, and the column that line starts at,
-    /// or `None` between a submission and the far end drawing its next prompt.
+    /// The row the far end draws its command line on, and the column that line starts at.
+    ///
+    /// `None` in two quite different situations, which is what [`Self::awaiting_prompt`]
+    /// exists to tell apart — see it.
     anchor: Option<Anchor>,
+    /// Whether Acter has just submitted a line and is waiting to see where the far end
+    /// draws the next one.
+    ///
+    /// **It exists because "no anchor" meant two things and only one of them wanted the
+    /// same answer** (roadmap 28.2, found in 28's NVDA pass). A submission clears the
+    /// anchor deliberately, and the settling after it is where the new one is taken. But a
+    /// far end that hides its cursor has no anchor either — `gh` does, for the whole of a
+    /// selection prompt — and there the settling is a key's answer and belongs to
+    /// `far_end_row`, whose second step exists for exactly that case. Branching on the
+    /// `Option` alone sent both down the re-anchoring path, so arrowing a `gh` prompt put
+    /// nothing in front of the listener at all: the row gained its marker, the engine
+    /// reported it, and nothing ever asked the policy.
+    awaiting_prompt: bool,
     /// The rows that have changed since the key went out, each holding what stood on it
     /// then and what stands on it now.
     changed: Vec<RowChange>,
@@ -883,6 +898,7 @@ impl Pump {
         self.far_end.owner = owner;
         self.far_end.changed.clear();
         self.far_end.watching = false;
+        self.far_end.awaiting_prompt = false;
         self.far_end.was = None;
         match owner {
             LineOwner::FarEnd => self.anchor_here(),
@@ -930,8 +946,11 @@ impl Pump {
     async fn far_end_submitted(&mut self) {
         let line = self.row_from_anchor().trim().to_owned();
         // Stale from here: the far end is about to draw its next command line, and the
-        // settling after that is where the anchor is taken again.
+        // settling after that is where the anchor is taken again — which is what the flag
+        // says, so that a far end with no anchor for its own reasons is not mistaken for
+        // this (roadmap 28.2).
         self.far_end.anchor = None;
+        self.far_end.awaiting_prompt = true;
         if line.is_empty() {
             return;
         }
@@ -977,14 +996,16 @@ impl Pump {
             return;
         }
         let changed = std::mem::take(&mut self.far_end.changed);
-        // Not watching, or watching with no anchor to compare against — which is the
-        // settling right after Enter, where the far end has just drawn its next prompt.
-        if !self.far_end.watching || self.far_end.anchor.is_none() {
-            self.far_end.watching = false;
+        let watching = std::mem::take(&mut self.far_end.watching);
+        // The far end drew on its own — it finished a command and put its prompt back — or
+        // this is the settling after a submission, where it has just drawn the next command
+        // line. Either way what the settling means is a new anchor.
+        if !watching || std::mem::take(&mut self.far_end.awaiting_prompt) {
             self.anchor_here();
             return;
         }
-        self.far_end.watching = false;
+        // **And an anchor is not required to get here**, which is the whole of 28.2: a far
+        // end hiding its cursor has none, and the rule's second step is what answers for it.
         let answer = far_end_row(&Keystroke {
             changed: &changed,
             anchor: self.far_end.anchor,
@@ -4689,6 +4710,88 @@ mod tests {
                 session.far_end_lines().last(),
                 Some(&(Some("> Skip pushing the branch".to_owned()), 0)),
                 "one option per press, and not the one they just left"
+            );
+        }
+
+        /// **The regression 28.2 is, and the sequence that found it.** A user runs `gh` in
+        /// local-line mode, the widget hides the cursor and draws, and only then do they
+        /// hand the keyboard over — so there is no anchor at all, because one is never taken
+        /// from a cursor the far end is not showing.
+        ///
+        /// The settling after the arrow then has to reach the *second* step of the rule.
+        /// Branching on "no anchor" alone sent it back to re-anchoring instead, and the
+        /// listener heard nothing while the far end moved the selection under them
+        /// (observed on NVDA 2026.1.1, silent capture, at a real `gh repo create`).
+        #[tokio::test]
+        async fn a_widget_that_hides_its_cursor_still_gets_the_content_rule() {
+            let session = at_a_prompt().await;
+            // The widget takes the screen while Acter still owns the line.
+            session.hides_its_cursor().await;
+            session
+                .emit(vec![
+                    line(2, "> marlon-sousa/acter"),
+                    line(3, "  Skip pushing the branch"),
+                ])
+                .await;
+            session.advance_to(2_000).await;
+
+            // Only now is the keyboard handed over, so no anchor is ever taken.
+            session.owner(LineOwner::FarEnd).await;
+            assert_eq!(
+                session.far_end_lines(),
+                Vec::new(),
+                "nothing is anchored to a cursor the far end is not showing"
+            );
+
+            let _ = session.press(named(Key::Down)).await;
+            session
+                .emit(vec![
+                    rewritten(2, "  marlon-sousa/acter"),
+                    rewritten(3, "> Skip pushing the branch"),
+                ])
+                .await;
+            session.advance_to(4_000).await;
+
+            assert_eq!(
+                session.far_end_lines().last(),
+                Some(&(Some("> Skip pushing the branch".to_owned()), 0)),
+                "the row that gained content is the answer, anchor or no anchor"
+            );
+        }
+
+        /// The other half of the same distinction: a submission clears the anchor on
+        /// purpose, and the settling after it is where the next one is taken rather than an
+        /// answer to a key.
+        #[tokio::test]
+        async fn the_settling_after_a_submission_takes_the_next_anchor() {
+            let session = at_a_prompt().await;
+            session.owner(LineOwner::FarEnd).await;
+            let _ = session.press(named(Key::Char('l'))).await;
+            session.emit(vec![line(1, "ls")]).await;
+            session.cursor_at(15, 0).await;
+            session.advance_to(4_000).await;
+
+            let _ = session.press(named(Key::Enter)).await;
+            // The far end runs the line and draws its next prompt on a new row.
+            session.emit(vec![line(4, "user@host:~$ ")]).await;
+            session.cursor_at(13, 1).await;
+            session.advance_to(8_000).await;
+
+            assert_eq!(
+                session.far_end_lines().last(),
+                Some(&(Some(String::new()), 0)),
+                "the new command line is empty, and it is the one the field now holds"
+            );
+
+            // And the anchor really moved: recall on the new row answers from it.
+            let _ = session.press(named(Key::Up)).await;
+            session.emit(vec![rewritten(4, "user@host:~$ ls")]).await;
+            session.cursor_at(15, 1).await;
+            session.advance_to(12_000).await;
+
+            assert_eq!(
+                session.far_end_lines().last(),
+                Some(&(Some("ls".to_owned()), 2))
             );
         }
 

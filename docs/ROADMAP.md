@@ -4093,11 +4093,21 @@ bargain 22.11 and 23.14 struck, and both paid.
     them**: this is the same class of question the element probe answered, and it should be
     answered the same way, on the bridge, before a spec.
 
-    Blocks the four checklist items that failed in 28's PR body: up arrow, Tab completion,
-    left and right, and Backspace's spoken half.
+    Blocks the four checklist items that failed in 28's PR body — up arrow, Tab completion,
+    left and right, and Backspace's spoken half — and it is what keeps 28.2's item unchecked
+    now that 28.2 itself is fixed: the `gh` selection reaches the field one option per press
+    and is still not spoken on the press.
 
-28.2. **The content rule never runs, so a `gh` prompt says nothing.** Spec: none yet →
-    small, and the diagnosis is complete. **Found 2026-09-02 in the same pass**, on a real
+    **One smaller thing seen in the same pass, recorded here rather than as an entry of its
+    own**, because it may turn out to be the same clock: after `Ctrl+C` killed `gh`, the
+    field briefly held the whole prompt row — `marlon@splyt:/mnt/c/Users/marlo$` — because
+    the anchor was taken at a settling that landed part-way through the far end drawing its
+    prompt, so the anchor column was zero. No spurious heading came of it in that session,
+    and it was not chased further.
+
+28.2. **Done** — the content rule never ran, so a `gh` prompt said nothing. Spec:
+    [28-far-end-line-mode.md](specs/28-far-end-line-mode.md), decision 6. Fixed in 28's own
+    PR, in the commit after the pass that found it. **Found 2026-09-02**, on a real
     `gh repo create` aborted at its first prompt.
 
     **What a listener meets.** Arrowing the selection produces silence. The field stays
@@ -4116,11 +4126,24 @@ bargain 22.11 and 23.14 struck, and both paid.
     anchor at all, by 28's own amendment B, so step 2 is unreachable exactly where step 2 is
     the answer. The two states need telling apart rather than sharing `None`.
 
-    Blocks the `gh` checklist item in 28's PR body. Fixing it does not by itself make the
-    prompt audible — 28.1 stands in front of it — so the two are worth doing together.
+    **The fix** is an explicit `awaiting_prompt` flag on the pump's far-end state, so the two
+    meanings of "no anchor" stop sharing an `Option`: a submission sets it and the settling
+    after that consumes it, and everything else with no anchor goes to the policy, whose
+    second step is the answer. Pinned by
+    `a_widget_that_hides_its_cursor_still_gets_the_content_rule`, which reproduces the
+    sequence that found it — the widget takes the screen while Acter still owns the line, so
+    no anchor is ever taken — and fails against the code as it was.
 
-28.3. **F6 cannot reach the results buffer while the far end owns the line.** Spec: none yet
-    → small. **Found 2026-09-02 in the same pass.**
+    **Re-checked on the reader 2026-09-02**, NVDA 2026.1.1, silent capture, `user` persona,
+    at a real `gh repo create`: the field now holds `> Create a new repository on github.com
+    from a template repository` after one press and `> Push an existing local repository to
+    github.com` after the next, so the selection reaches the listener one option per press.
+    **It is still not *spoken* on the press** — 28.1 stands in front of it, and that item's
+    checklist box stays unchecked until 28.1 is answered.
+
+28.3. **Done** — F6 could not reach the results buffer while the far end owned the line.
+    Spec: [28-far-end-line-mode.md](specs/28-far-end-line-mode.md), decision 2. Fixed in 28's
+    own PR, in the commit after the pass that found it. **Found 2026-09-02.**
 
     **What a listener meets.** F6 in far-end-line mode does nothing: NVDA re-read the
     far-end field and focus never moved. Review by heading is unreachable, which is the whole
@@ -4133,8 +4156,16 @@ bargain 22.11 and 23.14 struck, and both paid.
     toggle focuses a hidden `<input>`, which does nothing at all. It has to ask which line is
     in front of the user and toggle between *that* field and the buffer.
 
-    Not blocking a checklist item, and worse than one that is: it is reachable in every
-    session that uses the mode.
+    **The fix** is one question asked of the state rather than of an element:
+    `AppController` now resolves *which line is in front of the user* and toggles between
+    that and the buffer, and `Escape` from the buffer returns to the same one. Escape *at*
+    the far end's line stays the far end's, and the keyboard adapter tells the two apart by
+    `defaultPrevented` — the field consumed it — rather than by asking which mode is on,
+    which is one less thing to keep in step.
+
+    **Re-checked on the reader 2026-09-02**: F6 from the far-end line landed on "Results
+    região, gh repo create, título nível 2", and F6 again came back to "Command line" rather
+    than to the hidden local field. Both directions, both announced.
 
 29. A program that is waiting says so. Spec: none yet → specify first. **Agreed
     2026-08-31**, and it is what makes 28 discoverable rather than a mode only its author

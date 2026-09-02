@@ -677,18 +677,42 @@ export class AppController {
     }
   }
 
+  /**
+   * F6: move between the command line and the results buffer.
+   *
+   * **It asks which line is in front of the user, not which element it knows about**
+   * (roadmap 28.3). It used to ask the `<input>` alone, so while the far end owned the line
+   * it focused a hidden field and nothing happened at all — leaving review by heading, which
+   * is the whole of how this product is read back, unreachable in the mode. Found on NVDA
+   * 2026.1.1 in 28's own pass: F6 there re-read the far-end field and focus never moved.
+   */
   toggleFocusArea(): void {
-    if (this.editField.isFocused()) {
+    const line = this.commandLine();
+    if (line.isFocused()) {
       this.buffer.focus();
     } else {
-      this.editField.focus();
+      line.focus();
     }
   }
 
-  escapeToEditField(): void {
+  /**
+   * Escape in the results buffer: back to the command line, whichever one that is.
+   *
+   * Only from the buffer. Escape *at* the far end's line is the far end's — it leaves insert
+   * mode in `vi`, closes a completion menu, cancels a prompt — and the keyboard adapter
+   * never routes it here, because that field consumed it.
+   */
+  escapeToCommandLine(): void {
     if (this.buffer.containsFocus()) {
-      this.editField.focus();
+      this.commandLine().focus();
     }
+  }
+
+  /** Whichever line the user is editing: Acter's field, or the far end's. */
+  private commandLine(): { focus(): void; isFocused(): boolean } {
+    return this.lineOwner === 'FarEnd' && this.farEndField !== undefined
+      ? this.farEndField
+      : this.editField;
   }
 
   /**
@@ -738,11 +762,6 @@ export class AppController {
     const next: LineOwner = this.lineOwner === 'Local' ? 'FarEnd' : 'Local';
     await this.backend.setLineOwner(this.session, next);
     this.setLineOwner(next, true);
-  }
-
-  /** Whether the far end owns the line, which decides what Escape means. */
-  farEndOwnsTheLine(): boolean {
-    return this.lineOwner === 'FarEnd';
   }
 
   /**

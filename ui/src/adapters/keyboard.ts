@@ -39,12 +39,13 @@ export function bindKeys(
     } else if (event.key === 'F6') {
       event.preventDefault();
       controller.toggleFocusArea();
-    } else if (event.key === 'Escape' && !controller.farEndOwnsTheLine()) {
-      // Escape is contextual, and while the far end owns the line it is the far end's:
-      // it leaves insert mode in `vi`, closes a completion menu in `readline`, and cancels
-      // a `gh` prompt. Returning focus to an edit field the user is not using would take
-      // that away and give nothing back.
-      controller.escapeToEditField();
+    } else if (event.key === 'Escape' && !event.defaultPrevented) {
+      // Escape is contextual, and `defaultPrevented` is what tells the two contexts apart
+      // without asking anybody: the far-end field's own listener runs first and consumes it
+      // — there it is the far end's, leaving insert mode in `vi`, closing a completion menu
+      // in `readline`, cancelling a `gh` prompt — and everywhere else it is still Acter's
+      // way back from the results buffer to whichever command line is in front.
+      controller.escapeToCommandLine();
     }
   });
 

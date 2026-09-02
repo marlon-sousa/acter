@@ -1112,12 +1112,38 @@ describe('handing the line to the far end (28)', () => {
     expect(backend.pasted).toEqual(['cargo test --all']);
   });
 
-  it('answers whether the far end owns the line, which is what Escape turns on', async () => {
-    const { controller } = await makeApp();
-
-    expect(controller.farEndOwnsTheLine()).toBe(false);
+  // **Roadmap 28.3**, found on NVDA 2026.1.1 in 28's own pass: F6 in far-end-line mode did
+  // nothing at all, because the toggle asked the `<input>` — hidden and unfocused there — and
+  // then focused it, which is a no-op. Review by heading is the whole of how this product is
+  // read back, so it has to reach the buffer from whichever line is in front.
+  it('F6 reaches the buffer from the far end line, and comes back to it', async () => {
+    const { buffer, farEndField, editField, controller } = await makeApp();
     await controller.toggleLineOwner();
-    expect(controller.farEndOwnsTheLine()).toBe(true);
+    expect(farEndField.focused).toBe(true);
+    buffer.focused = false;
+    editField.focused = false;
+
+    controller.toggleFocusArea();
+    expect(buffer.focused).toBe(true);
+
+    // And back to the far end's line rather than to the hidden local one.
+    farEndField.focused = false;
+    controller.toggleFocusArea();
+    expect(farEndField.focused).toBe(true);
+    expect(editField.focused).toBe(false);
+  });
+
+  it('Escape from the buffer returns to the far end line, not the hidden local one', async () => {
+    const { buffer, farEndField, editField, controller } = await makeApp();
+    await controller.toggleLineOwner();
+    farEndField.focused = false;
+    editField.focused = false;
+    buffer.focused = true;
+
+    controller.escapeToCommandLine();
+
+    expect(farEndField.focused).toBe(true);
+    expect(editField.focused).toBe(false);
   });
 });
 
@@ -1200,11 +1226,11 @@ describe('focus flow', () => {
 
     editField.focused = false;
     buffer.focused = false;
-    controller.escapeToEditField();
+    controller.escapeToCommandLine();
     expect(editField.focused).toBe(false);
 
     buffer.focused = true;
-    controller.escapeToEditField();
+    controller.escapeToCommandLine();
     expect(editField.focused).toBe(true);
   });
 });

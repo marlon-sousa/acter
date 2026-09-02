@@ -26,16 +26,11 @@ class StubController {
   toggleFocusArea(): void {
     this.toggled += 1;
   }
-  escapeToEditField(): void {
+  escapeToCommandLine(): void {
     this.escaped += 1;
   }
   editFieldHasSelection(): boolean {
     return this.selection;
-  }
-  /** Which line owner is in force; the adapter's second input, and Escape's whole test. */
-  farEnd = false;
-  farEndOwnsTheLine(): boolean {
-    return this.farEnd;
   }
   owners: number = 0;
   toggleLineOwner(): Promise<void> {
@@ -58,7 +53,6 @@ class StubController {
     this.escaped = 0;
     this.submitted = 0;
     this.selection = false;
-    this.farEnd = false;
     this.owners = 0;
     this.pastes = [];
   }
@@ -203,16 +197,25 @@ describe('the keys the frontend keeps', () => {
     expect(controller.reported).toEqual([]);
   });
 
-  // **Escape is the far end's while the far end owns the line** (spec 28). There it leaves
-  // insert mode in `vi`, closes a completion menu in `readline` and cancels a `gh` prompt;
-  // taking it away to move focus to an edit field the user is not using would cost all of
-  // that and give nothing back.
-  it('leaves Escape alone while the far end owns the line', () => {
-    controller.farEnd = true;
-
-    keydown(results, 'Escape');
+  // **Escape at the far end's line is the far end's** (spec 28). There it leaves insert mode
+  // in `vi`, closes a completion menu in `readline` and cancels a `gh` prompt — so the field
+  // consumes it, and the document listener reads `defaultPrevented` rather than asking
+  // anybody which mode is on.
+  it('leaves Escape alone when the far end line consumed it', () => {
+    keydown(farEndField, 'Escape');
 
     expect(controller.escaped).toBe(0);
+    expect(controller.reported).toEqual([
+      { key: 'Escape', ctrl: false, shift: false, alt: false },
+    ]);
+  });
+
+  // And from anywhere else it is still the way back to the command line, which is what
+  // roadmap 28.3 is about: the buffer has to have a way out in both states.
+  it('still returns from the results buffer while the far end owns the line', () => {
+    keydown(results, 'Escape');
+
+    expect(controller.escaped).toBe(1);
   });
 });
 
