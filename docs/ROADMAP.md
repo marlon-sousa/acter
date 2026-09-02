@@ -4005,6 +4005,33 @@ bargain 22.11 and 23.14 struck, and both paid.
     that is not the shell Acter spawned (23.5's subject), and what is said for a row that a
     key emptied.
 
+    **Answered 2026-09-02, and the entry is now specifiable.** A design session with the
+    user measured four programs on a real pseudoconsole through Acter's own engine (rig:
+    `crates/acter-transports/examples/capture.rs`) and read NVDA's own configuration, and
+    the results are written into DESIGN.md rather than repeated here. In summary:
+
+    - **The element question dissolved.** The tester's NVDA has
+      `autoPassThroughOnFocusChange` off, so the 2026-08-31 "did not switch to focus mode"
+      finding described a configuration, not the reader. With it off no ARIA role
+      auto-switches, and the one that forces keys through — `role="application"` — is
+      already measured (readable_field.ts) to stop the arrows reading prose. So: no region,
+      no key sink, no new element. The edit field stays, NVDA+Space is the handoff.
+    - **No renderer either.** The buffer applies revisions by id, blanks included, and a
+      `gh` prompt answered with Cancel resolves itself into one line carrying the question
+      and the answer — the far end writes the transcript record itself.
+    - **The rule is "the row that was rewritten after a key Acter sent"**, not the cursor
+      row: `gh` hides the cursor and parks it off the list. Candidate for choosing between
+      the two rows that change: speak the one that gained non-whitespace content.
+    - **Enter and headings are solved by an existing Decided rule.** The anchored row at
+      the instant Enter is sent *is* the far end's echo, so the echo test applies one step
+      earlier; a widget answer leaves an empty anchored row and earns no heading. History
+      stays out, now as a decision.
+    - **One new capability**: cursor position on `TerminalEngine`, for left and right
+      arrows, which rewrite nothing and are therefore invisible to every diff rule.
+
+    Still owed: the "blank" probe on an empty `<input>` whose arrows are prevented, Ctrl+D
+    at a far end (23.5's subject), and the emptied-row string.
+
     **Deliberately not in this entry**: any renderer, the alternate screen, and the
     several-rows case, which is 30.
 
@@ -4031,6 +4058,16 @@ bargain 22.11 and 23.14 struck, and both paid.
     and bracketed paste is off" is positive evidence that whatever holds the terminal is not
     a shell waiting for a command line. That is a candidate, on two programs, and the spec
     should widen the sample before it leans on it.
+
+    **A second and better discriminator, measured 2026-09-02, and it contradicts this
+    entry's premise.** `less -X` — the case DESIGN cites as the one where "Acter has no
+    signal at all" — turns on **application cursor keys** (`ESC[?1h`) while never touching
+    the alternate screen. So a program that wants raw keys on the primary screen can
+    announce itself, and the pager case is detectable after all. `gh pr create` does not set
+    it, so DECCKM separates the announced half of the semi-interactive population from the
+    silent half rather than covering all of it — but a hint that fires reliably for pagers
+    and readline-driven far ends is worth more than one resting on bracketed paste alone.
+    Both should be in the spec, and the sample should still be widened.
 
     **The difficulty is false positives, and it is the whole entry.** A command that
     *finished* also produces output and then goes quiet. Telling the two apart is exactly
@@ -4093,6 +4130,27 @@ bargain 22.11 and 23.14 struck, and both paid.
     over the tool's life, and a CLI that draws its highlight in colour alone would reopen
     everything this measurement closed.
 
+    **The second sample was taken 2026-09-02, on `gh pr create` at the same version,
+    aborted before anything was pushed, and it confirms rather than reopens.** No alternate
+    screen, no DECCKM, no bracketed paste; the selection drawn with a `>` at the start of
+    the row; each arrow rewriting exactly two rows, which the engine reports as two while
+    suppressing the two it repainted identically. Two further findings that were not sought:
+
+    - **The cursor is not on the selected row and cannot be followed.** `gh` hides it with
+      `ESC[?25l`, repaints from `ESC[2;1H`, and parks it at `ESC[100C` on the blank line
+      below the list until the prompt is answered. So this is a rewritten-row rule, never a
+      cursor-row one — recorded in DESIGN under "A row that changed is an answer".
+    - **Answering the prompt erases it, and that settles what the buffer keeps.** Cancel was
+      chosen, so nothing was created; the question row became `? Where should we push the
+      '…' branch? Cancel` and the three option rows became empty. The far end writes its own
+      transcript record, so the buffer applies revisions by id — blanks included — and keeps
+      nothing else.
+
+    What remains owed is only the choice between the two rows that change. "The row that
+    gained the marker" hard-codes `gh`'s `>`; DESIGN now carries a program-agnostic
+    candidate — the row that gained non-whitespace content — which still wants a third
+    sample before a spec leans on it.
+
     Once measured, the rule to specify is the fourth bucket from DESIGN.md: speak the row
     that gained the selection, and never re-read the whole list on every arrow. A listener
     arrowing through a list wants what a listbox gives them, which is one item at a time.
@@ -4111,6 +4169,20 @@ since they are what makes an `ssh`, a `wsl`, a container or a REPL usable. What 
 here is the screen: a grid renderer, and how a full-screen program is read to someone who
 cannot see it. That is still a design conversation, and it is still the hardest question
 in the document.
+
+**Amended 2026-09-02, and the gate now has a measured edge rather than an argued one.**
+Where this gate begins is **the alternate screen**, and nothing else. A design session
+captured nano, `less -X`, `gh pr create` and `bash` on a real pseudoconsole: nano takes the
+alternate screen and the other three do not, so everything on this side of that byte —
+pagers, inline selection prompts, readline at any far end — belongs to the section above
+and needs no renderer, while everything past it belongs here. The three-level taxonomy is
+Decided in DESIGN.md under "Where the boundary actually falls".
+
+The merge that this session briefly proposed — folding 28 into this gate on the grounds
+that `gh` needed a renderer — was withdrawn once `gh` was measured: two rows change per
+arrow, both legible as text, and answering the prompt collapses the list into one line the
+far end writes itself. The population here is genuinely full-screen programs, and the
+hardest question in the document is still theirs alone.
 
 ## Principles — **Decided**
 

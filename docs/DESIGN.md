@@ -50,6 +50,50 @@ escape hatch to full terminal emulation when a program needs it.
   is presented and needs a renderer; this is about who owns the *line* and needs none.
   Detail under "Edit field ownership" below.
 
+### Where the boundary actually falls — **Decided 2026-09-02, and it is measured**
+
+The line above between "interactive" and "far-end-line" was drawn on who owns the line.
+That was the wrong axis, and four programs captured on a real pseudoconsole through
+Acter's own engine say where the right one is. The rig is
+`crates/acter-transports/examples/capture.rs`; every claim below is one of its runs.
+
+What each program announces on the wire:
+
+- **nano** (WSL, `TERM=xterm-256color`): alternate screen yes, application cursor keys
+  (DECCKM, `ESC[?1h`) yes, bracketed paste yes.
+- **`less -X`** (WSL, piped input): alternate screen **no**, DECCKM **yes**, bracketed
+  paste no.
+- **`gh pr create`** (gh 2.96.0, a real repository, aborted before anything was pushed):
+  alternate screen **no**, DECCKM **no**, bracketed paste **no**.
+- **`bash` at a prompt** (measured 2026-08-31): alternate screen no, DECCKM no,
+  bracketed paste yes.
+
+So there are three levels, and only the first boundary is a mode:
+
+1. **Interactive** — the program took the alternate screen. Full-screen, two-dimensional,
+   needs a renderer and needs the reading strategy that is still this document's hardest
+   open question. nano, htop, vim. **Detectable from the stream, automatically.**
+2. **Semi-interactive** — no alternate screen, but the far end wants keys and repaints
+   rows in place. `gh`'s prompts, `less -X`, readline at any far end. Two flavours:
+   *announced*, which sets DECCKM, and *silent*, which announces nothing at all.
+3. **Non-interactive** — everything else, which is today's product.
+
+**The second boundary is not a mode and needs no detection**, which is the finding that
+keeps this small. Whether a far end is semi-interactive is answered per keystroke rather
+than per program: after a key Acter sent, were rows rewritten, and how many. That is the
+row-count rule under "A row that changed is an answer", which was already Decided. DECCKM
+is therefore a bonus rather than a requirement — it is what lets Acter say "this program
+appears to want the keyboard" *before* the user has pressed anything, which is what the
+waiting-program hint needs.
+
+**Correction to a recorded conclusion.** The open question below about `git diff`'s pager
+says that for a program which pages without the alternate screen "Acter has no signal at
+all — no event, no announcement". That is measurably false: `less -X` turns DECCKM on. The
+signal was always in the stream; nobody had looked at that byte.
+
+Cursor hiding remains dead as a discriminator — nano and `gh` both do it, and so does
+readline on every redraw.
+
 ## GUI framework
 
 **Decided: Tauri 2.**
@@ -663,6 +707,48 @@ one, but a user who runs a whole `ssh` session this way ends with an Acter histo
 none of it. And a slow far end is felt on every character, which is what the far end owning
 the line means, and why the toggle has to be cheap to reach in both directions.
 
+**Amended 2026-09-02: "nothing earns a heading" was wrong, and it was the costly half of
+that paragraph — Decided.** An hour inside an `ssh` would produce one undifferentiated
+block, and F6-plus-heading navigation is the whole of how this product is reviewed. The
+same defect, reached from the other side, is what the amendment of 2026-08-22 below was
+written to fix: a nested shell collapsing into one block under one heading, with no way to
+jump command to command.
+
+**And the rule that fixes it is already Decided and needs no new test.** For a far end no
+marker can reach, what proves a line was a command is *positive evidence that the far end
+echoed it*. In local-line mode Acter holds the submitted text and waits for a matching
+echo. In far-end-line mode there is nothing to wait for, because every character the user
+typed went down the wire and came back as the far end's echo — that is why it is on the
+row at all. So at the instant Enter is sent, **the anchored row content is the echo**: the
+same evidence, at the same standard of proof, in hand one step earlier.
+
+- Enter with a non-empty anchored row: the far end echoed a line. Open the block, and that
+  text is the heading.
+- Enter with an empty anchored row: nothing was typed, so nothing was echoed, so no block
+  and no heading.
+
+**The second bullet disposes of the widget case for free.** At a `gh` prompt the user
+presses arrows rather than characters, so the anchored row is empty and answering the
+prompt earns no heading — which is right, since answering a question is not running a
+command. It falls out of the existing rule instead of needing one of its own. This is also
+the direction the rule is *permitted* to fail in, for the reason stated below: a coarser
+buffer loses nothing, while a spurious heading could put an answer — possibly a secret —
+into a heading and into history.
+
+**One honest edge, named here rather than discovered.** `gh`'s prompts advertise "type to
+filter", and a user who filters does type characters the far end echoes. That leaves a
+non-empty anchored row and would produce a spurious heading. The spec that builds this
+must say what it does about it.
+
+**History stays out — Decided, and now as a decision rather than a consequence.** The
+paragraph above treats an empty Acter history as something that merely falls out of the
+exclusion rule. Once the anchored line is read, Acter knows every command the user ran,
+so keeping them out is a choice. It is still the right one: Acter's history is offered as
+completion and recall *on this machine*, and the original complaint that produced this
+whole mode is that it holds lines typed at every far end the profile ever reached. Adding
+a session's worth of a remote box's commands to it makes that worse, not better. If this
+is revisited, the shape to revisit it as is history keyed to the far end, never one pool.
+
 **Layer 1 is untouched in either state.** Ctrl+Shift is always Acter's, so the way back is
 always pressable. Ctrl+Shift+Space still sends one literal keystroke without changing
 state, which is the right tool for a pager or a bare `[y/N]` — neither of those edits a
@@ -974,6 +1060,62 @@ selection move at all depends on whether the highlight is drawn with a marker ch
 only with colour — the grid carries attributes and the buffer does not — and that is
 measured rather than assumed (roadmap entry 30).
 
+**Measured 2026-09-02 against `gh pr create`, and it corrects the rule's name.** The rule
+above is called a cursor-row rule, and for readline that is what it is: history recall,
+Tab and Ctrl+U all redraw the row the cursor is on. `gh` does not work that way at all. It
+hides the cursor with `ESC[?25l` before drawing, jumps to `ESC[2;1H`, repaints the question
+and every option row, and parks the cursor with `ESC[100C` on the blank line *below* the
+list, showing it again only once the prompt is answered. Through the whole selection the
+cursor is hidden and is never on the selected row.
+
+So whatever reads `gh` in an ordinary terminal today is diffing the screen, not following
+the caret — it cannot be following one, there is none. **The rule is therefore "the row
+that was rewritten after a key Acter sent", and the cursor row is the case where those
+coincide.** Both families are then one rule with no per-program knowledge: readline's
+redrawn row is the cursor's, `gh`'s is not, and neither needs to be recognised.
+
+The engine already does the whole of the comparison. `gh` repaints four rows per arrow and
+the engine reported exactly **two** — the row losing the marker and the row gaining it —
+because it emits only lines whose text changed.
+
+**Which of the two is the answer, and the candidate rule is not `>`.** Reading both gives
+a listener the option they just left as well as the one they arrived at, on every press.
+Naming the marker character would hard-code `gh`'s choice. What the bytes suggest instead
+is content: the row losing selection went from `> marlon-sousa/acter` to
+`  marlon-sousa/acter` and gained nothing, while the row gaining it went from
+`  Skip pushing the branch` to `> Skip pushing the branch` and gained a character. So
+**speak a rewritten row only when it gained non-whitespace content**. That picks exactly
+one row here, works for a program marking its selection with `*` or an arrow instead, and
+is a *candidate* until a second prompt-driven CLI has been measured beside it.
+
+**And one thing no diff rule can ever answer, which is why the engine has to grow a
+cursor.** Left and right arrows at a far end move the cursor and rewrite no text. Home,
+End and word-wise motion likewise. There is no revision to speak, so the only observable
+is the cursor position — and `TerminalEngine` today exposes `advance`, `screen`, `resize`
+and `take_replies` and no cursor at all. That is the single new capability this whole area
+needs. It also lets the anchor become a real column rather than a prompt-string prefix
+match, which is more robust than what the echo tracker does today.
+
+**What survives the interaction, measured 2026-09-02 by answering a prompt rather than
+reasoning about one — Decided.** A `gh` selection was answered with **Cancel**, so nothing
+was created, and what the far end did to its own rows is the whole answer to a question
+this document had been treating as a policy decision:
+
+- the question row was rewritten to `? Where should we push the '…' branch? Cancel`;
+- the three option rows were rewritten to the empty string.
+
+So the far end writes the transcript record itself, in exactly the form a review wants:
+one line carrying the question and the answer. **The buffer therefore applies revisions by
+id, blanks included, and keeps nothing else.** No snapshot of the list, no synthesized
+summary, no policy about what an ephemeral widget deserves to leave behind — a listener
+reviewing the session afterwards finds precisely what a sighted user is left looking at.
+
+This is also the answer to the objection that motivated the whole question: the options
+*are* gone after the interaction, so whatever a listener learns about a list they learn
+while it is on screen. That is what makes the live region load-bearing here rather than
+decorative — it is the only thing that reports the moving selection, and a design that
+required leaving focus mode to re-read the list between arrow presses would not be used.
+
 **Measured 2026-08-31, and the fourth bucket survives.** `gh repo create`'s selection
 prompt draws its highlight as a `>` in the text of the row, with colour *as well as* rather
 than *instead of*, so a text comparison sees the selection move. It takes no alternate
@@ -1079,6 +1221,39 @@ keeps that caveat.
   The answer is likely that the key sink should not be a text input at all but a focusable
   element with no text in it, inside the application region. That is entry 28's to settle,
   and it is now a choice between two known behaviours rather than an open question.
+
+  **Answered 2026-09-02, and the measurement above turns out to have described a
+  configuration rather than a reader.** `virtualBuffers.autoPassThroughOnFocusChange` is
+  `false` on the tester's NVDA, and so is `autoPassThroughOnCaretMove` — read from NVDA's
+  own configuration through the bridge. The first of those is the switch that makes NVDA
+  enter focus mode by itself when focus lands on a control that needs it, and NVDA ships it
+  enabled. So "NVDA did not switch to focus mode" was true of this machine and is not a
+  property of the reader, and CLAUDE.md's warning about reporting a mode artifact as a
+  defect applies to the conclusion drawn from it.
+
+  **Consequence, and it decides the element.** With that setting off, *no* ARIA role will
+  auto-switch focus mode — a role only nominates a control as focus-mode-worthy, and the
+  setting is what acts on the nomination. The single exception is `role="application"`,
+  which does not request a switch so much as declare the subtree is not a document. And
+  this project has already measured what that costs: the note at the head of
+  `ui/src/adapters/readable_field.ts` records that inside `role="application"` the arrows
+  do not read prose, so the only way to walk text there is the review cursor, which
+  `screenreader://guidance` places outside an ordinary user's vocabulary. One element
+  cannot both have keys forced to it by ARIA and be read in browse mode.
+
+  **So the answer is no region and no new element.** The edit field stays the edit field;
+  what changes is where its keys are delivered. The handoff into focus mode is NVDA+Space,
+  pressed by the user, which is what the tester already does at every control and is not a
+  thing Acter can or should perform. Combined with the measurement under "A row that
+  changed is an answer", the mode needs no renderer, no application region and no key sink:
+  the buffer holds what the far end leaves behind — its erasures included — and the live
+  region speaks the row that changed.
+
+  **One probe is still owed.** The field holds no text in this mode, and an empty `<input>`
+  was measured saying "blank" before every arrow because the caret moved. Acter intercepts
+  those arrows and prevents the default, so the caret does not move — but whether that also
+  removes the "blank" has not been measured, and it is cheap to settle on a static page
+  before any of this is built.
 - Interactive-mode screen reading strategy: how the buffer/grid is exposed to the
   screen reader while a full-screen app runs (review cursor? live row announcements?).
 - Non-visual tab/session navigation UX (switch keys, announcing which session is
