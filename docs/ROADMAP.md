@@ -4333,7 +4333,55 @@ bargain 22.11 and 23.14 struck, and both paid.
     at the price of announcing only what the completion added. **G and J are ruled out by
     measurement**, and their entries above say why.
 
-    Blocks the one checklist item still unchecked in 28's PR body.
+    **What Tab-Tab does, which is the question that must be answered before choosing.** Asked
+    2026-09-02 and measured rather than reasoned about, at a real `bash` under WSL with three
+    files sharing a prefix (`/tmp/acterprobe/alpha-{one,two,three}.txt`), typing
+    `ls /tmp/acterprobe/al`:
+
+    - **Tab 1** appends the common prefix: the row goes from `...al` to `...alpha-`, a pure
+      append of `pha-`, and the cursor moves along the same row. bash also rings the bell.
+    - **Tab 2 does nothing at all.** bash sends one `` and no other byte. readline lists on
+      a *repeated* completion, and Tab 1 changed the line, so Tab 2 is a fresh attempt.
+    - **Tab 3 lists**, and it does so as **two new rows**: `alpha-one.txt    alpha-three.txt
+      alpha-two.txt`, and below it the prompt and command line redrawn — and **the cursor
+      moves from row 0 to row 2**, to the same column, onto the redrawn command line.
+
+    So **the candidate list is output, not the command line**, and no mechanism in this entry
+    would speak it: H selects a delta on the command line and there is none; I/K feed a
+    listbox from the command line; F feeds a live region from the command line. The answer to
+    "will Tab-Tab say everything it shows" is **no, and not because of the mechanism**.
+
+28.6. **After a listing Tab the far-end field holds the candidate list instead of the line
+    being edited, and stays wrong.** Spec: none yet → this is a hole in decision 6, found by
+    asking what Tab-Tab does. **Found 2026-09-02** on NVDA 2026.1.1, silent capture, `user`
+    persona, at a real `bash` under WSL.
+
+    **What a listener meets.** After the third Tab, NVDA said the bare prompt row
+    (`marlon@splyt:/mnt/c/Users/marlo$`). The field then held
+    `alpha-one.txt    alpha-three.txt  alpha-two.txt` — the candidates — and it **did not
+    recover**: a left arrow spoke `h`, a character out of the candidate row, and
+    `nvda+uparrow` read the candidate list back. The user is editing
+    `ls /tmp/acterprobe/alpha-` and everything they hear comes from a row they are not on.
+    The candidate list never reached the buffer either, so it is both in the wrong place and
+    missing from the transcript.
+
+    **The cause.** The far end drew the list *and* redrew the command line on a new row, so
+    two rows gained content. `policies::far_end_row`'s second step answers with the row that
+    gained content and picked the list. Its third step, which would have caught this, tests
+    for a cursor that moved *along the same row*, and this cursor changed rows — measured,
+    row 0 column 58 to row 2 column 58.
+
+    **The shape of the fix, not yet a spec.** The cursor is the evidence and it is
+    unambiguous: **when the cursor changes row, the command line has moved, and the row it
+    moved to is the command line.** Follow it, re-anchor there, and answer from the new
+    anchor — which yields `ls /tmp/acterprobe/alpha-`, the row the user is actually editing.
+    The other rows that gained content are then what they look like: the far end printing
+    output at its own prompt, which belongs in the buffer and is spoken by the path that
+    speaks output. That is also what makes Tab-Tab audible, and it is why **28.6 comes before
+    28.4** — the listing case is answered by the transcript, and only the completing case
+    needs a mechanism at all.
+
+    Blocks nothing that is checked; it makes the unchecked item worse than it looked.
 
 28.5. **Done** — an anchor taken from a prompt still being drawn headed the next block with
     the whole row. Spec: [28-far-end-line-mode.md](specs/28-far-end-line-mode.md),
