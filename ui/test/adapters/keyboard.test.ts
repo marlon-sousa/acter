@@ -32,6 +32,21 @@ class StubController {
   editFieldHasSelection(): boolean {
     return this.selection;
   }
+  /** Which line owner is in force; the adapter's second input, and Escape's whole test. */
+  farEnd = false;
+  farEndOwnsTheLine(): boolean {
+    return this.farEnd;
+  }
+  owners: number = 0;
+  toggleLineOwner(): Promise<void> {
+    this.owners += 1;
+    return Promise.resolve();
+  }
+  pastes: string[] = [];
+  pasteToFarEnd(text: string): Promise<void> {
+    this.pastes.push(text);
+    return Promise.resolve();
+  }
   reportKey(press: KeyPress): Promise<void> {
     this.reported.push(press);
     return Promise.resolve();
@@ -43,6 +58,9 @@ class StubController {
     this.escaped = 0;
     this.submitted = 0;
     this.selection = false;
+    this.farEnd = false;
+    this.owners = 0;
+    this.pastes = [];
   }
 }
 
@@ -68,9 +86,12 @@ function keydown(
 // preventDefault would answer for the one under test. So it is bound once and the stub
 // is reset instead.
 document.body.innerHTML =
-  '<form id="command-form"><input id="command-input"></form><div id="results"></div>';
+  '<form id="command-form"><input id="command-input"></form>' +
+  '<span id="far-end-input" contenteditable="true" role="textbox"></span>' +
+  '<div id="results"></div>';
 const controller = new StubController();
 const editField = document.getElementById('command-input') as HTMLInputElement;
+const farEndField = document.getElementById('far-end-input') as HTMLElement;
 const results = document.getElementById('results') as HTMLElement;
 let helpOpened = 0;
 bindKeys(
@@ -80,6 +101,7 @@ bindKeys(
   () => {
     helpOpened += 1;
   },
+  farEndField,
 );
 
 beforeEach(() => {
@@ -178,6 +200,130 @@ describe('the keys the frontend keeps', () => {
     keydown(results, 'Escape');
 
     expect(controller.escaped).toBe(1);
+    expect(controller.reported).toEqual([]);
+  });
+
+  // **Escape is the far end's while the far end owns the line** (spec 28). There it leaves
+  // insert mode in `vi`, closes a completion menu in `readline` and cancels a `gh` prompt;
+  // taking it away to move focus to an edit field the user is not using would cost all of
+  // that and give nothing back.
+  it('leaves Escape alone while the far end owns the line', () => {
+    controller.farEnd = true;
+
+    keydown(results, 'Escape');
+
+    expect(controller.escaped).toBe(0);
+  });
+});
+
+// **Ctrl+D leaving the page is the whole of roadmap 23.5.** The path existed end to end —
+// the intent, the binding, PowerShell's measured `exit` — and `isReportable` answered true
+// for `Ctrl+C` and nothing else, so a listener pressing it in a real session met silence and
+// a session that was still there (measured 2026-08-25, NVDA 2026.1.1, silent capture).
+describe('Ctrl+D from the edit field (23.5)', () => {
+  it('reports the keystroke and prevents the browser default', () => {
+    const prevented = keydown(editField, 'd', { ctrl: true });
+
+    expect(controller.reported).toEqual([
+      { key: { Char: 'd' }, ctrl: true, shift: false, alt: false },
+    ]);
+    expect(prevented).toBe(true);
+  });
+
+  it('does not report a plain d, or Ctrl+Shift+D', () => {
+    keydown(editField, 'd');
+    keydown(editField, 'D', { ctrl: true, shift: true });
+
+    expect(controller.reported).toEqual([]);
+  });
+});
+
+// **Ctrl+Shift+K is layer 1 and is never reported as a keystroke** (DESIGN's default
+// bindings). Layer 1 is Acter's in both states, which is what makes the way back always
+// pressable — including from a far end that has stopped answering.
+describe('Ctrl+Shift+K hands the line over and takes it back', () => {
+  it('toggles from anywhere in the window, and is answered', () => {
+    expect(keydown(results, 'K', { ctrl: true, shift: true })).toBe(true);
+
+    expect(controller.owners).toBe(1);
+    expect(controller.reported).toEqual([]);
+  });
+
+  it('is heard from the far end field too, so the way back is always pressable', () => {
+    keydown(farEndField, 'K', { ctrl: true, shift: true });
+
+    expect(controller.owners).toBe(1);
+    expect(controller.reported).toEqual([]);
+  });
+
+  it('is not a plain Ctrl+K, which is a far end line-editing key', () => {
+    keydown(farEndField, 'k', { ctrl: true });
+
+    expect(controller.owners).toBe(0);
+    expect(controller.reported).toEqual([
+      { key: { Char: 'k' }, ctrl: true, shift: false, alt: false },
+    ]);
+  });
+});
+
+// The far-end field reports the *named* key and never the bytes: which spelling an arrow is
+// depends on modes only the emulator tracks, and this side has never been able to know
+// (spec 28, decision 4).
+describe('the far end field', () => {
+  it('reports each named key by name and prevents it', () => {
+    const rows: Array<[string, string]> = [
+      ['ArrowUp', 'Up'],
+      ['ArrowDown', 'Down'],
+      ['ArrowLeft', 'Left'],
+      ['ArrowRight', 'Right'],
+      ['Home', 'Home'],
+      ['End', 'End'],
+      ['Tab', 'Tab'],
+      ['Enter', 'Enter'],
+      ['Backspace', 'Backspace'],
+      ['Delete', 'Delete'],
+      ['Escape', 'Escape'],
+    ];
+    for (const [pressed, named] of rows) {
+      controller.reset();
+
+      const prevented = keydown(farEndField, pressed);
+
+      expect(controller.reported).toEqual([
+        { key: named, ctrl: false, shift: false, alt: false },
+      ]);
+      expect(prevented).toBe(true);
+    }
+  });
+
+  it('reports a character key as a character, modifiers and all', () => {
+    keydown(farEndField, 'y');
+    keydown(farEndField, 'c', { ctrl: true });
+    keydown(farEndField, 'b', { alt: true });
+
+    expect(controller.reported).toEqual([
+      { key: { Char: 'y' }, ctrl: false, shift: false, alt: false },
+      { key: { Char: 'c' }, ctrl: true, shift: false, alt: false },
+      { key: { Char: 'b' }, ctrl: false, shift: false, alt: true },
+    ]);
+  });
+
+  // A key with no measured spelling goes nowhere rather than going as a guess: the far end
+  // would answer it and say nothing about having done so.
+  it('sends nothing for a key nobody measured, and does not prevent it', () => {
+    for (const key of ['F5', 'PageUp', 'Insert', 'ScrollLock']) {
+      controller.reset();
+
+      const prevented = keydown(farEndField, key);
+
+      expect(controller.reported).toEqual([]);
+      expect(prevented).toBe(false);
+    }
+  });
+
+  it('is silent while it does not have the keystroke', () => {
+    keydown(editField, 'ArrowUp');
+
     expect(controller.reported).toEqual([]);
   });
 });

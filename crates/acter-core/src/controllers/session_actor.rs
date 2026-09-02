@@ -22,8 +22,8 @@ use tokio::sync::mpsc;
 use crate::entities::{Integration, ReadMode, UnspokenText};
 use crate::policies::{PacingAction, measure, on_command_end, on_output, on_wake};
 use crate::{
-    Announcement, Clock, CommandId, ConnectionState, EventSink, ExitCode, Mode, PacingConfig,
-    PacingState, SessionEvent, SessionState, Timer,
+    Announcement, Clock, CommandId, ConnectionState, EventSink, ExitCode, LineId, LineRevision,
+    Mode, PacingConfig, PacingState, SessionEvent, SessionState, Timer,
 };
 
 /// A domain fact the actor is told about. Deliberately not bytes: extraction, OSC 133
@@ -40,10 +40,31 @@ pub enum SessionInput {
         command_id: CommandId,
         command_line: Option<String>,
     },
-    /// Text arrived for the running command. An empty chunk is not output and must not
-    /// move the quiescence deadline (B1.1), which the policy enforces.
+    /// Text arrived for the running command, for one identified line.
+    ///
+    /// An empty chunk is not output and must not move the quiescence deadline (B1.1), which
+    /// the policy enforces.
+    ///
+    /// **It names its line since 28** (spec 28, decision 8), because the buffer applies
+    /// revisions by id and cannot do that from a stream of text. `spoken` is the other half
+    /// of DESIGN's separate paths arriving here rather than being decided here: the service
+    /// knows a rewrite is churn, and knows that the row the far end is echoing the user's
+    /// own typing onto is the reader's to speak rather than Acter's.
     Output {
+        line: LineId,
+        revision: LineRevision,
         text: String,
+        spoken: bool,
+    },
+    /// What the far end's command line says now, and where its cursor is in it.
+    ///
+    /// Carried through untouched, like `PromptDrawn` and for the same reason: what it says
+    /// is the far end's business, and what becomes of it is the frontend's — which here
+    /// means writing it into an ARIA text box and letting the reader do the speaking (spec
+    /// 28, decisions 2 and 3).
+    FarEndLine {
+        text: Option<String>,
+        caret: u32,
     },
     /// The running command ended on its own.
     /// The shell drew a prompt. Carried through the actor untouched: what it says is the
@@ -129,11 +150,26 @@ struct ActiveCommand {
     id: CommandId,
     started_at: Duration,
     pacing: PacingState,
-    /// Text not yet sent to the buffer. Flushed on the coalescing tick, and always
+    /// Lines not yet sent to the buffer. Flushed on the coalescing tick, and always
     /// before an announcement that covers it.
-    unrendered: String,
+    unrendered: Vec<Rendered>,
     unspoken: UnspokenText,
     render_armed: bool,
+    /// The last line the speech path was given text for, so consecutive lines are separated
+    /// the way the pacing policy counts them.
+    ///
+    /// **Only spoken text moves it**, which is what keeps a rewrite from inserting a line
+    /// ending into a span it is not part of: a rewrite reaches the buffer and never the
+    /// accumulator this separates.
+    last_line: Option<LineId>,
+}
+
+/// One line's text waiting to reach the buffer, and what it does to that line.
+#[derive(Debug)]
+struct Rendered {
+    line: LineId,
+    revision: LineRevision,
+    text: String,
 }
 
 impl ActiveCommand {
@@ -142,10 +178,35 @@ impl ActiveCommand {
             id,
             started_at,
             pacing: PacingState::default(),
-            unrendered: String::new(),
+            unrendered: Vec::new(),
             unspoken: UnspokenText::default(),
             render_armed: false,
+            last_line: None,
         }
+    }
+
+    /// Puts one line's text in the queue for the next coalescing tick.
+    ///
+    /// **Coalescing is per line rather than per chunk.** Consecutive appends to one line
+    /// join, which is the flood case and the reason this queue exists at all; and anything
+    /// carrying a row whole supersedes whatever is pending for that row, because a frontend
+    /// applying both in order lands on the same text and one event says it once.
+    fn render(&mut self, line: LineId, revision: LineRevision, text: &str) {
+        if revision == LineRevision::Appended
+            && let Some(last) = self.unrendered.last_mut()
+            && last.line == line
+        {
+            last.text.push_str(text);
+            return;
+        }
+        if revision != LineRevision::Appended {
+            self.unrendered.retain(|pending| pending.line != line);
+        }
+        self.unrendered.push(Rendered {
+            line,
+            revision,
+            text: text.to_owned(),
+        });
     }
 }
 
@@ -233,7 +294,12 @@ impl SessionActor {
                 command_id,
                 command_line,
             } => self.command_started(command_id, command_line),
-            SessionInput::Output { text } => self.output(&text),
+            SessionInput::Output {
+                line,
+                revision,
+                text,
+                spoken,
+            } => self.output(line, revision, &text, spoken),
             SessionInput::CommandEnded {
                 command_id,
                 exit_code,
@@ -248,6 +314,13 @@ impl SessionActor {
             // not stop talking, which is not what drawing a prompt is (spec B5.6).
             SessionInput::PromptDrawn { text } => {
                 self.sink.send(SessionEvent::PromptDrawn { text })
+            }
+            // **Rendered before it is handed over**, which is A5.2's invariant reaching this
+            // path too: the row the reader is about to be pointed at is already in the
+            // buffer, so a listener who reaches for it finds it there.
+            SessionInput::FarEndLine { text, caret } => {
+                self.flush_render();
+                self.sink.send(SessionEvent::FarEndLine { text, caret });
             }
             SessionInput::MarkersObserved => self.session = self.session.markers_observed(),
             SessionInput::GracePeriodExpired => {
@@ -306,25 +379,47 @@ impl SessionActor {
         });
     }
 
-    fn output(&mut self, text: &str) {
+    fn output(&mut self, line: LineId, revision: LineRevision, text: &str, spoken: bool) {
         let Some(active) = self.active.as_mut() else {
             return;
         };
         // Rendering is unconditional: the buffer loads whenever content arrives, whatever
         // speech later decides (DESIGN). The tick is a fixed cadence, not a debounce —
         // re-arming it on every chunk would starve rendering under continuous output.
-        active.unrendered.push_str(text);
-        if !active.unrendered.is_empty() && !active.render_armed {
-            active.render_armed = true;
-            self.requests.render = Wake::After(self.config.render_tick);
+        // **An empty append has nothing for the buffer to apply**, and it is a repaint that
+        // changed nothing rather than output. An empty *rewrite* is a different thing
+        // entirely — a row the far end erased, which the buffer must show as erased — so
+        // only the append is skipped. It still goes on to the pacing policy below, which is
+        // B1.1 from this side: an empty chunk does not push the deadline out, and the wake
+        // it asks for is what remains of the one already running.
+        if revision != LineRevision::Appended || !text.is_empty() {
+            active.render(line, revision, text);
+            if !active.render_armed {
+                active.render_armed = true;
+                self.requests.render = Wake::After(self.config.render_tick);
+            }
         }
 
-        active.unspoken.push(text, &self.config);
+        // **And speech is not**, which is the whole of DESIGN's separate paths: a rewrite is
+        // churn a listener must not hear, and the row a far end is echoing the user's own
+        // typing onto is their reader's to speak. Neither touches the pacing state, so a
+        // spinner cannot trip the patience window or the babble guard by repainting.
+        if !spoken {
+            return;
+        }
+        // The line ending is the actor's, not the engine's: a line item carries none, and
+        // the pacing policy counts lines.
+        let separated = match active.last_line {
+            Some(last) if last != line => format!("\n{text}"),
+            _ => text.to_owned(),
+        };
+        active.last_line = Some(line);
+        active.unspoken.push(&separated, &self.config);
         let at = self.clock.now().saturating_sub(active.started_at);
         let (pacing, outcome) = on_output(
             active.pacing,
             &self.config,
-            measure(text),
+            measure(&separated),
             at,
             self.follow_mode,
         );
@@ -484,11 +579,23 @@ impl SessionActor {
         if active.unrendered.is_empty() {
             return;
         }
-        let text = std::mem::take(&mut active.unrendered);
+        let lines = std::mem::take(&mut active.unrendered);
         let command_id = active.id;
         // Render-only: the verdict rides an `Announce` (A6 retired the field that used
         // to duplicate it here).
-        self.sink.send(SessionEvent::Output { command_id, text });
+        //
+        // One event per line rather than one per tick, because the buffer applies a
+        // revision to a line and a chunk of text names none (spec 28, decision 8). They
+        // are in the order the far end drew them, and the channel delivers in order, so a
+        // frontend applying them one at a time ends where the far end's screen is.
+        for line in lines {
+            self.sink.send(SessionEvent::Output {
+                command_id,
+                line: line.line,
+                revision: line.revision,
+                text: line.text,
+            });
+        }
     }
 
     fn announce(&self, announcement: Announcement) {
@@ -628,9 +735,30 @@ mod tests {
         let _ = actor.take_requests();
     }
 
+    /// One chunk of output, all on one line.
+    ///
+    /// **One line and not one per call**, because these tests are about pacing over spans
+    /// of text and write their own line endings into them. The separator the actor inserts
+    /// between two *different* lines is what [`line_of`] is for, and it is asserted where it
+    /// belongs rather than doubled into every span here.
     fn output(actor: &mut SessionActor, text: &str) -> Requests {
+        line_of(actor, 1, LineRevision::Appended, text, true)
+    }
+
+    /// One chunk on a named line, with the revision it is and whether the speech path is
+    /// owed it.
+    fn line_of(
+        actor: &mut SessionActor,
+        line: u64,
+        revision: LineRevision,
+        text: &str,
+        spoken: bool,
+    ) -> Requests {
         actor.handle(SessionInput::Output {
+            line: LineId(line),
+            revision,
             text: text.to_owned(),
+            spoken,
         });
         actor.take_requests()
     }
@@ -738,6 +866,8 @@ mod tests {
             sink.events().last(),
             Some(&SessionEvent::Output {
                 command_id: CommandId(1),
+                line: LineId(1),
+                revision: LineRevision::Appended,
                 text: "text\n".to_owned(),
             }),
             "rendering carries no verdict: the verdict rides an Announce"
@@ -1473,7 +1603,10 @@ the user's
             .expect("actor is running");
         inputs
             .send(SessionInput::Output {
+                line: LineId(0),
+                revision: LineRevision::Appended,
                 text: "hello\n".to_owned(),
+                spoken: true,
             })
             .expect("actor is running");
         until(&sink, "the command to open", |events| !events.is_empty()).await;

@@ -6,7 +6,14 @@
 // a working directory and on a machine they never chose for it. Which session is current
 // is `ConnectApi`'s answer, held by the controller and passed here.
 
-import type { KeyAck, KeyPress, SessionEvent, SessionId, SubmitAck } from '../protocol';
+import type {
+  KeyAck,
+  KeyPress,
+  LineOwner,
+  SessionEvent,
+  SessionId,
+  SubmitAck,
+} from '../protocol';
 
 export interface BackendApi {
   /**
@@ -44,4 +51,21 @@ export interface BackendApi {
    * supplied can only be stale by the time the invoke lands.
    */
   sendKey(session: SessionId, key: KeyPress): Promise<KeyAck>;
+  /**
+   * Hand the line to the far end, or take it back (spec 28, decision 1).
+   *
+   * The state lives in the domain because the domain is what acts on it: which bytes a key
+   * becomes, whether Enter opens a block, and which row goes in front of the listener all
+   * depend on it. Holding it here would need a second binding table here, which is what this
+   * seam exists to prevent.
+   */
+  setLineOwner(session: SessionId, owner: LineOwner): Promise<void>;
+  /**
+   * Paste into the far end's own line editor (spec 28, decision 10).
+   *
+   * One call rather than a run of `sendKey`s, because whether the text is wrapped in
+   * `ESC[200~` and `ESC[201~` depends on a mode only the emulator tracks — and both branches
+   * occur in ordinary use, so neither can be assumed here.
+   */
+  paste(session: SessionId, text: string): Promise<void>;
 }

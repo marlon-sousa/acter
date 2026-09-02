@@ -35,7 +35,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::{
     Chosen, ConnectApi, ConnectQuestions, Connectable, Connected, Connection, ConnectionKind,
-    EventSink, KeyAck, KeyPress, ProfileId, ProgramAnswer, ProgramQuestion, SessionApi,
+    EventSink, KeyAck, KeyPress, LineOwner, ProfileId, ProgramAnswer, ProgramQuestion, SessionApi,
     SessionFactory, SessionId, SetUp, ShellInstall, Signatures, Started, SubmitAck, ThisComputer,
     Variant, catalogue,
 };
@@ -725,6 +725,21 @@ impl SessionApi for ConnectService {
             None => KeyAck::NothingToActOn,
         }
     }
+
+    /// Handing the line over to a far end there is none of does nothing, and says nothing:
+    /// the window with no session has already told the listener what it is, and it says so
+    /// again for every line submitted into it.
+    fn set_line_owner(&self, session: SessionId, owner: LineOwner) {
+        if let Some(live) = self.live(session) {
+            live.set_line_owner(session, owner);
+        }
+    }
+
+    fn paste(&self, session: SessionId, text: &str) {
+        if let Some(live) = self.live(session) {
+            live.paste(session, text);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -763,6 +778,10 @@ mod tests {
         alive: Arc<AtomicUsize>,
         submitted: Mutex<Vec<String>>,
         attached: Mutex<bool>,
+        /// Who owns the line, so a test can assert the hand-over reached the live session
+        /// rather than stopping at the window in front of it.
+        owner: Mutex<LineOwner>,
+        pasted: Mutex<Vec<String>>,
     }
 
     impl FakeSession {
@@ -772,11 +791,21 @@ mod tests {
                 alive: Arc::clone(alive),
                 submitted: Mutex::new(Vec::new()),
                 attached: Mutex::new(false),
+                owner: Mutex::new(LineOwner::Local),
+                pasted: Mutex::new(Vec::new()),
             })
         }
 
         fn was_attached(&self) -> bool {
             *self.attached.lock().unwrap()
+        }
+
+        fn owner(&self) -> LineOwner {
+            *self.owner.lock().unwrap()
+        }
+
+        fn pasted(&self) -> Vec<String> {
+            self.pasted.lock().unwrap().clone()
         }
     }
 
@@ -798,6 +827,12 @@ mod tests {
         }
         fn send_key(&self, _session: SessionId, _key: KeyPress) -> KeyAck {
             KeyAck::Applied
+        }
+        fn set_line_owner(&self, _session: SessionId, owner: LineOwner) {
+            *self.owner.lock().unwrap() = owner;
+        }
+        fn paste(&self, _session: SessionId, text: &str) {
+            self.pasted.lock().unwrap().push(text.to_owned());
         }
     }
 
@@ -1924,6 +1959,55 @@ mod tests {
         assert!(
             live.was_attached(),
             "the sink reached the session that is live"
+        );
+    }
+
+    /// Handing the line to the far end reaches the session that is live, and pasting into
+    /// it does too — both are the window forwarding to whatever is behind it, and both are
+    /// silent when there is nothing (spec 28, decisions 1 and 10).
+    ///
+    /// **Silent rather than answered, unlike a submitted line**, and that is the difference
+    /// worth pinning: a line typed into an unconnected window has to be answered because the
+    /// user is waiting for it to run. Toggling a mode in a window with no session, or
+    /// pasting into one, is a gesture with nothing behind it, and the window has already
+    /// said what it is.
+    #[test]
+    fn handing_the_line_over_reaches_the_session_that_is_live() {
+        let (service, factory) = service(FakeMachine::complete(), &[]);
+
+        // Nothing behind the window: neither of these has anywhere to go, and neither is an
+        // error.
+        service.set_line_owner(SessionId(1), LineOwner::FarEnd);
+        service.paste(SessionId(1), "nowhere");
+
+        let connected = service
+            .use_profile(
+                &ProfileId::Shell {
+                    kind: ConnectionKind::Cmd,
+                },
+                SetUp::Yes,
+                &unasked(),
+            )
+            .expect("cmd starts");
+        service.set_line_owner(connected.session, LineOwner::FarEnd);
+        service.paste(connected.session, "cargo test");
+
+        let live = factory
+            .last
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("a session was made");
+        assert_eq!(live.owner(), LineOwner::FarEnd);
+        assert_eq!(live.pasted(), vec!["cargo test".to_owned()]);
+
+        // And an id that names a session which has been replaced reaches nothing, the same
+        // rule a submitted line follows.
+        service.set_line_owner(SessionId(999), LineOwner::Local);
+        assert_eq!(
+            live.owner(),
+            LineOwner::FarEnd,
+            "a stale id must not change the session that is live"
         );
     }
 

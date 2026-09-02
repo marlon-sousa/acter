@@ -44,10 +44,11 @@ use tokio::spawn;
 use tokio::sync::mpsc::{Receiver, Sender, UnboundedSender, channel, unbounded_channel};
 
 use crate::{
-    BoundaryEvent, BoundaryTracker, Clock, CommandId, ConnectionState, EventSink, ExitCode,
-    Integration, KeyAck, KeyPress, LineId, LineRevision, PacingConfig, Region, Screen,
-    SessionActor, SessionApi, SessionEvent, SessionId, SessionInput, SessionIntent, ShellFacts,
-    ShellMarkers, SubmitAck, TerminalEngine, Timer, Transport, intent_for,
+    Anchor, Binding, BoundaryEvent, BoundaryTracker, Caret, Clock, CommandId, ConnectionState,
+    EventSink, ExitCode, FarEndAnswer, Integration, Key, KeyAck, KeyPress, Keystroke, LineId,
+    LineOwner, LineRevision, PacingConfig, Region, RowChange, Screen, SessionActor, SessionApi,
+    SessionEvent, SessionId, SessionInput, SessionIntent, ShellFacts, ShellMarkers, SubmitAck,
+    TerminalEngine, Timer, Transport, binding_for, far_end_row, key_bytes,
 };
 
 /// Read buffering between the transport and the pump. Bounded, so a far end that floods
@@ -58,6 +59,14 @@ const READS: usize = 1024;
 /// How many invokes may be in flight toward the pump. Generous, because a person types
 /// one line at a time and every entry here is one keystroke or one submitted line.
 const REQUESTS: usize = 64;
+
+/// What wraps pasted text for a far end that asked for bracketed paste, and what ends it.
+///
+/// `bash` turns the mode on at every prompt and clears it on submission; `gh`'s prompts
+/// never touch it (measured 2026-08-31 and 2026-09-02), so both branches occur in ordinary
+/// use and neither wrapper nor bare text can be the unconditional answer.
+const BRACKET_START: &[u8] = b"\x1b[200~";
+const BRACKET_END: &[u8] = b"\x1b[201~";
 
 /// What a terminal sends when the user presses Enter: a carriage return.
 ///
@@ -85,6 +94,15 @@ pub struct SessionService {
     /// Whether a submitted command is outstanding, so [`SessionApi::send_key`] can
     /// answer "there was nothing to act on" without waiting on the pump.
     running: Arc<AtomicBool>,
+    /// Whether the far end owns the line being edited (spec 28, decision 1).
+    ///
+    /// Held on this side of the channel as well as in the pump because the *answer* to
+    /// `send_key` depends on it and an invoke may not wait: a key aimed at the far end is
+    /// acknowledged as applied the moment it is queued, exactly as an end-of-input is. A
+    /// bool rather than the enum because that is what an atomic can hold, and because there
+    /// are two states and there is no third — the alternative is a lock on the path every
+    /// keystroke takes.
+    far_end_line: Arc<AtomicBool>,
     /// What this shell wants written when the user says there is no more input, taken
     /// from the adapter once at start.
     ///
@@ -145,12 +163,14 @@ impl SessionService {
         let (requests, inbox) = channel(REQUESTS);
         let next_id = Arc::new(AtomicU32::new(1));
         let running = Arc::new(AtomicBool::new(false));
+        let far_end_line = Arc::new(AtomicBool::new(false));
         spawn(
             Pump {
                 transport,
                 engine,
                 tracker: BoundaryTracker::new(markers),
                 grace: config.integration_grace,
+                quiescence: config.quiescence,
                 clock,
                 reads,
                 inbox,
@@ -171,9 +191,9 @@ impl SessionService {
                 lines: HashMap::new(),
                 held: None,
                 row: String::new(),
-                last_line: None,
                 cursor: None,
                 pending_row: None,
+                far_end: FarEndLine::default(),
             }
             .run(),
         );
@@ -182,6 +202,7 @@ impl SessionService {
             requests,
             next_id,
             running,
+            far_end_line,
             eof: shell.eof,
             sink,
         }
@@ -232,8 +253,20 @@ impl SessionApi for SessionService {
     /// end between the keypress and the invoke, which is exactly why decision 7 has the
     /// service target whatever is running instead of an id the frontend supplied.
     fn send_key(&self, _session: SessionId, key: KeyPress) -> KeyAck {
-        let Some(intent) = intent_for(&key) else {
-            return KeyAck::Unbound;
+        let intent = match binding_for(&key, self.owner()) {
+            Binding::Unbound => return KeyAck::Unbound,
+            // **Acknowledged as applied the moment it is queued**, because nothing on this
+            // side can know more: which bytes the key becomes depends on the modes the far
+            // end has turned on, and only the pump owns the engine that tracks them. A
+            // closed channel is a session that has ended, which is the one honest refusal
+            // there is (spec 28, decision 4).
+            Binding::ToFarEnd => {
+                return match self.requests.try_send(Request::Key { key }) {
+                    Ok(()) => KeyAck::Applied,
+                    Err(_) => KeyAck::NothingToActOn,
+                };
+            }
+            Binding::Intent(intent) => intent,
         };
         match intent {
             SessionIntent::Interrupt => {
@@ -253,15 +286,51 @@ impl SessionApi for SessionService {
             // input is entitled to it too. What it is gated on is whether this shell's
             // answer was ever measured — a session over a shell Acter knows nothing about
             // says so rather than writing a byte and hoping (spec B5.2).
+            //
+            // **A shell with no measured answer says so, and it is a different answer from
+            // "nothing is listening"** (spec 28, decision 9). Until `Unsupported` existed
+            // the two were the same reply, so a `Ctrl+D` at a shell nobody had measured
+            // reported that there was nothing to act on, in a session that was working
+            // perfectly well — and the frontend had no way to say the one useful thing,
+            // which is to type `exit` instead.
             SessionIntent::Eof => {
                 let Some(bytes) = self.eof.clone() else {
-                    return KeyAck::NothingToActOn;
+                    return KeyAck::Unsupported;
                 };
                 match self.requests.try_send(Request::Eof { bytes }) {
                     Ok(()) => KeyAck::Applied,
                     Err(_) => KeyAck::NothingToActOn,
                 }
             }
+        }
+    }
+
+    /// Hands the line over, or takes it back.
+    ///
+    /// Both copies of the state are set here — the atomic this side reads on every
+    /// keystroke, and the pump's, which decides what a key does once it arrives. They
+    /// cannot disagree, because this is the only thing that writes either.
+    fn set_line_owner(&self, _session: SessionId, owner: LineOwner) {
+        self.far_end_line
+            .store(owner == LineOwner::FarEnd, Ordering::SeqCst);
+        // A full or closed channel means the pump is gone or swamped; the session is
+        // ending or the far end is flooding, and neither is something an invoke waits on.
+        let _ = self.requests.try_send(Request::Owner(owner));
+    }
+
+    fn paste(&self, _session: SessionId, text: &str) {
+        let _ = self.requests.try_send(Request::Paste {
+            text: text.to_owned(),
+        });
+    }
+}
+
+impl SessionService {
+    fn owner(&self) -> LineOwner {
+        if self.far_end_line.load(Ordering::SeqCst) {
+            LineOwner::FarEnd
+        } else {
+            LineOwner::Local
         }
     }
 }
@@ -279,6 +348,17 @@ enum Request {
     /// to have asked the adapter once.
     Eof {
         bytes: Vec<u8>,
+    },
+    /// A keystroke for the far end's own line editor. What it costs in bytes is decided at
+    /// the far side of this channel, where the modes the far end turned on are known.
+    Key {
+        key: KeyPress,
+    },
+    /// The user handed the line over, or took it back.
+    Owner(LineOwner),
+    /// Text to put into the far end's line editor, bracketed if it asked for that.
+    Paste {
+        text: String,
     },
 }
 
@@ -358,6 +438,10 @@ struct Pump {
     engine: Box<dyn TerminalEngine + Send>,
     tracker: BoundaryTracker,
     grace: Duration,
+    /// How long the far end has to go quiet before a batch has settled — the same number
+    /// the pacing policy coalesces output on, read here for the other question it answers:
+    /// when the far end has finished replying to a key (spec 28, decision 6).
+    quiescence: Duration,
     clock: Arc<dyn Clock>,
     reads: Receiver<Vec<u8>>,
     inbox: Receiver<Request>,
@@ -442,8 +526,9 @@ struct Pump {
     /// yet. What tells a stopped command from a finished one, since the exit code cannot
     /// (decision 8).
     interrupted: bool,
-    /// What has been done with each line seen so far: `false` once some of its text has
-    /// been forwarded, `true` if it was rewritten and its final text is still owed. Kept
+    /// What has been done with each line seen so far, and what the far end has drawn on
+    /// it. [`Row::owed`] is `false` once some of its text has been forwarded and `true` if
+    /// it was rewritten and its final text is still owed. Kept
     /// across regions on purpose — the engine settles a block's lines while the region is
     /// still `Output`, including the prompt row the echo was written onto, and it is
     /// knowing that row's id that keeps the echo out of the command's output.
@@ -458,14 +543,14 @@ struct Pump {
     /// continuation, at a block boundary, on a screen change or resize, or on staging
     /// saturation — and [`Pump::due`] removes the entry then. What this holds is the lines
     /// currently live on screen.
-    lines: HashMap<LineId, bool>,
+    lines: HashMap<LineId, Row>,
     /// Text that arrived somewhere it might not belong, and the line it came from.
     ///
     /// See [`Pump::hold`]: it is very often a submission's echo, and publishing it would
     /// mean the user's own command line read back at them — under a heading of its own at
     /// the start of a session, and as the previous block's output at every command after
     /// that.
-    held: Option<(LineId, String)>,
+    held: Option<Held>,
     /// The tail of what the far end has appended lately, bounded by [`Pump::window`].
     ///
     /// Only [`Pump::boundary`] reads it: the far end's echo of a submitted line is
@@ -474,9 +559,6 @@ struct Pump {
     /// enough to wrap is still recognised when its continuation lands on a new line item
     /// (spec B4.4).
     row: String,
-    /// The last line whose text was forwarded, so consecutive lines are separated the way
-    /// the pacing policy counts them.
-    last_line: Option<LineId>,
     /// The line the far end last wrote to: where its cursor is, as far as anything here
     /// can know. Every item but a settlement moves it, because a settlement is the
     /// extractor freezing a row rather than the far end writing to one.
@@ -493,6 +575,113 @@ struct Pump {
     /// Only meaningful while something is pending; [`Pump::pending_echo`] asks both
     /// questions together.
     pending_row: Option<LineId>,
+    /// Where the far end's own line editor stands, while the far end owns the line.
+    far_end: FarEndLine,
+}
+
+/// One live line: what is owed about it, and what the far end has put on it.
+///
+/// The text is kept because two things need to read a row rather than a delta. **The
+/// anchored row is the far end's echo of the line the user is typing** (spec 28,
+/// decision 7), so at the instant Enter goes out it *is* the command line, and it has to be
+/// readable then rather than reconstructed afterwards. And the rule that decides which
+/// redrawn row is the answer to a key compares a row's content before and after, which an
+/// append delta cannot answer on its own.
+///
+/// It costs one copy of each row currently live on screen, which is the same bound the map
+/// already had: every id the engine emits as `Appended` is eventually emitted as `Settled`,
+/// and the entry goes then.
+#[derive(Debug, Default)]
+struct Row {
+    owed: bool,
+    text: String,
+}
+
+/// Text held back, and everything the buffer and the speech path will need if it turns out
+/// to deserve publishing.
+///
+/// The revision travels with it because a held rewrite carries a whole row while a held
+/// append carries a delta, and publishing one as the other would either lose the row's
+/// beginning or repeat it.
+struct Held {
+    line: LineId,
+    text: String,
+    revision: LineRevision,
+    spoken: bool,
+}
+
+impl Held {
+    fn of(line: LineId, due: Due) -> Self {
+        Self {
+            line,
+            text: due.text,
+            revision: due.revision,
+            spoken: due.spoken,
+        }
+    }
+
+    /// Another item for the same row: an append extends what is held, and anything else
+    /// replaces it, because anything else carries the row whole.
+    fn absorb(&mut self, due: Due) {
+        match due.revision {
+            LineRevision::Appended => self.text.push_str(&due.text),
+            _ => {
+                self.text = due.text;
+                self.revision = due.revision;
+            }
+        }
+        self.spoken |= due.spoken;
+    }
+
+    fn due(self) -> Due {
+        Due {
+            text: self.text,
+            revision: self.revision,
+            spoken: self.spoken,
+        }
+    }
+}
+
+/// What one line item owes the two paths below it.
+///
+/// **Both, since 28** (decision 8). It used to answer only the speech path, and a rewrite
+/// was `None` — so a redrawn row reached neither speech nor the buffer, and the buffer was
+/// the one that needed it. `spoken` is what keeps DESIGN's separate paths separate now that
+/// both are served by one answer.
+struct Due {
+    text: String,
+    revision: LineRevision,
+    /// Whether the speech path is owed this text as well as the buffer.
+    ///
+    /// `false` for a rewrite, which is buffer-only churn — a spinner must not be read
+    /// mid-spin — and `false` for anything on the anchored row while the far end owns the
+    /// line, because there the reader speaks the field and Acter reading the same row aloud
+    /// would say the user's own typing back at them (spec 28, decision 3).
+    spoken: bool,
+}
+
+/// Where the far end's own line editor stands (spec 28).
+///
+/// Every field is inert while Acter owns the line, which is the default and the whole of
+/// every session before somebody presses Ctrl+Shift+K.
+#[derive(Debug, Default)]
+struct FarEndLine {
+    owner: LineOwner,
+    /// The row the far end draws its command line on, and the column that line starts at,
+    /// or `None` between a submission and the far end drawing its next prompt.
+    anchor: Option<Anchor>,
+    /// The rows that have changed since the key went out, each holding what stood on it
+    /// then and what stands on it now.
+    changed: Vec<RowChange>,
+    /// Whether a key is outstanding, so the next settling is that key's answer rather than
+    /// the far end drawing on its own.
+    ///
+    /// **This is the bound that keeps the rule small**: nothing is compared continuously,
+    /// and no timer runs while the user is not pressing anything (DESIGN, "A row that
+    /// changed is an answer").
+    watching: bool,
+    /// Where the far end's cursor was when the key went out, when it was showing one.
+    was: Option<Caret>,
 }
 
 impl Pump {
@@ -506,6 +695,10 @@ impl Pump {
     /// spoken has not had its chance, and the clock should not be running.
     async fn run(mut self) {
         let mut grace = None;
+        // The far end has stopped talking for long enough that whatever it was drawing is
+        // what it means. Armed only while the far end owns the line, so an ordinary session
+        // runs exactly the timers it always did.
+        let mut settled = None;
         loop {
             // Resolved before any state is touched, so no timer future is alive while
             // the step below mutates the pump.
@@ -513,6 +706,7 @@ impl Pump {
                 read = self.reads.recv() => Woke::Read(read),
                 request = self.inbox.recv() => Woke::Request(request),
                 () = fire(&mut grace) => Woke::Grace,
+                () = fire(&mut settled) => Woke::Settled,
             };
             match woke {
                 // The far end let go: the shell exited, the connection dropped, the
@@ -542,6 +736,12 @@ impl Pump {
                     }
                     self.feed(&bytes).await;
                     self.set_up().await;
+                    // Re-armed on every read, so the deadline is measured from the last
+                    // byte rather than from the first: a far end still painting has not
+                    // finished answering.
+                    if self.far_end.owner == LineOwner::FarEnd {
+                        settled = Some(self.clock.timer(self.quiescence));
+                    }
                 }
                 // Every `SessionApi` handle is gone, so nothing can ask for anything
                 // again.
@@ -550,6 +750,10 @@ impl Pump {
                 Woke::Grace => {
                     grace = None;
                     self.grace_expired().await;
+                }
+                Woke::Settled => {
+                    settled = None;
+                    self.far_end_settled();
                 }
             }
         }
@@ -645,6 +849,9 @@ impl Pump {
             Request::Submit { command_id, line } => self.submit(command_id, &line).await,
             Request::Interrupt => self.interrupt(),
             Request::Eof { bytes } => self.end_input(&bytes),
+            Request::Key { key } => self.far_end_key(key).await,
+            Request::Owner(owner) => self.line_owner(owner),
+            Request::Paste { text } => self.paste(&text),
         }
     }
 
@@ -664,6 +871,239 @@ impl Pump {
     /// and a shell that is has no measured end-of-input answer to send.
     fn end_input(&mut self, bytes: &[u8]) {
         self.write(bytes);
+    }
+
+    /// The far end owns the line now, or Acter does again (spec 28, decision 1).
+    ///
+    /// **The anchor is taken here rather than at the next settling**, and that is not an
+    /// optimisation. A far end sitting at its prompt says nothing more, so there would be
+    /// no next settling and no anchor — and a listener landing on the far-end field would
+    /// meet an empty text box while their command line sat unread on the screen.
+    fn line_owner(&mut self, owner: LineOwner) {
+        self.far_end.owner = owner;
+        self.far_end.changed.clear();
+        self.far_end.watching = false;
+        self.far_end.was = None;
+        match owner {
+            LineOwner::FarEnd => self.anchor_here(),
+            // Nothing is kept: taking the line back is the end of everything this state is
+            // about, and a stale anchor would be a row pointing at whatever the far end
+            // draws next.
+            LineOwner::Local => self.far_end.anchor = None,
+        }
+    }
+
+    /// One keystroke on its way to the far end's own line editor.
+    ///
+    /// The bytes are the policy's, asked here because here is where the far end's modes are
+    /// known — an arrow is `ESC[A` or `ESC OA` depending on something only the emulator
+    /// tracks, and a frontend choosing between them would be right at a bare `cmd` prompt
+    /// and silently wrong inside `bash` (spec 28, decision 4).
+    async fn far_end_key(&mut self, key: KeyPress) {
+        let bytes = key_bytes(&key, self.engine.modes());
+        // **Enter is the one key that is also a submission**, and the evidence arrives one
+        // step earlier than it does in local-line mode: at this instant the anchored row is
+        // the far end's own echo of the line, because every character on it went down the
+        // wire and came back (spec 28, decision 7).
+        if key.key == Key::Enter {
+            self.far_end_submitted().await;
+        }
+        self.far_end.was = self.caret();
+        self.far_end.changed.clear();
+        self.far_end.watching = true;
+        self.write(&bytes);
+    }
+
+    /// Enter, at the instant it goes out: the anchored row is the echo, so it opens the
+    /// block and heads it.
+    ///
+    /// **An empty anchored row earns no block and no heading**, which disposes of the
+    /// widget case for free: at a `gh` prompt the user presses arrows rather than
+    /// characters, so nothing was echoed and answering a question is not running a command.
+    ///
+    /// **The filter edge is accepted rather than guessed at** (spec 28, decision 7). A user
+    /// who types characters to filter such a prompt leaves a non-empty anchored row and gets
+    /// a heading naming their filter. That is not a leak — the far end echoed those
+    /// characters, so they are on the screen and in the transcript whatever Acter does — and
+    /// the alternative is a rule that guesses which typed text was a command, which is the
+    /// guess this project has refused twice.
+    async fn far_end_submitted(&mut self) {
+        let line = self.row_from_anchor().trim().to_owned();
+        // Stale from here: the far end is about to draw its next command line, and the
+        // settling after that is where the anchor is taken again.
+        self.far_end.anchor = None;
+        if line.is_empty() {
+            return;
+        }
+        let command_id = CommandId(self.next_id.fetch_add(1, Ordering::SeqCst));
+        // Opened before the bytes go out, so the output this line produces has somewhere to
+        // go — the actor drops output arriving while nothing is active.
+        self.close(None).await;
+        self.open(command_id, Some(line));
+        self.settle_running();
+    }
+
+    /// Text pasted into the far end's line editor, bracketed only when it asked for that.
+    ///
+    /// Both branches occur in ordinary use — `bash` turns bracketed paste on at every prompt
+    /// and `gh`'s prompts never touch it — so neither can be the unconditional answer.
+    /// Sending the wrapper to a far end that never asked puts its bytes into the line;
+    /// never sending it runs each pasted line as it arrives, which is data loss rather than
+    /// noise (spec 28, decision 10).
+    fn paste(&mut self, text: &str) {
+        if self.far_end.owner != LineOwner::FarEnd {
+            return;
+        }
+        let mut bytes = Vec::new();
+        if self.engine.modes().bracketed_paste {
+            bytes.extend_from_slice(BRACKET_START);
+            bytes.extend_from_slice(text.as_bytes());
+            bytes.extend_from_slice(BRACKET_END);
+        } else {
+            bytes.extend_from_slice(text.as_bytes());
+        }
+        self.write(&bytes);
+    }
+
+    /// The far end has gone quiet: whatever it drew is what it means.
+    ///
+    /// Two things reach here. **After a key Acter sent**, this is that key's answer, and
+    /// which row it is comes from the pure rule in `policies::far_end_row`. **Otherwise**
+    /// the far end drew on its own — it finished a command and put its prompt back — and
+    /// what that means is a new anchor, because the command line starts wherever its cursor
+    /// came to rest.
+    fn far_end_settled(&mut self) {
+        if self.far_end.owner != LineOwner::FarEnd {
+            return;
+        }
+        let changed = std::mem::take(&mut self.far_end.changed);
+        // Not watching, or watching with no anchor to compare against — which is the
+        // settling right after Enter, where the far end has just drawn its next prompt.
+        if !self.far_end.watching || self.far_end.anchor.is_none() {
+            self.far_end.watching = false;
+            self.anchor_here();
+            return;
+        }
+        self.far_end.watching = false;
+        let answer = far_end_row(&Keystroke {
+            changed: &changed,
+            anchor: self.far_end.anchor,
+            was: self.far_end.was,
+            now: self.caret(),
+        });
+        match answer {
+            FarEndAnswer::Row { text, caret } => self.far_end_line(Some(text), caret),
+            FarEndAnswer::Caret { caret } => self.far_end_line(None, caret),
+            // The far end had no answer, so Acter has none either — and says nothing rather
+            // than inventing a sentence about a key that did nothing.
+            FarEndAnswer::Nothing => {}
+        }
+    }
+
+    /// Takes the anchor where the far end's cursor has come to rest, and hands the row it
+    /// is on to the field.
+    ///
+    /// **Nothing is taken from a cursor the far end is not showing**, and that is the same
+    /// reasoning decision 5 gives for the caret: `gh` hides the cursor for the whole of a
+    /// selection prompt and parks it on the blank row below its options, so an anchor taken
+    /// there would name a row nobody is editing — and the row rule would then read that row
+    /// aloud on every arrow instead of the option the user moved to. A far end drawing a
+    /// widget leaves the anchor where the last prompt put it, which is a row that does not
+    /// change while the widget is up, so the content rule gets the press.
+    ///
+    /// **The anchor is the column the cursor sat at when the far end finished drawing**, and
+    /// nothing the user typed can have moved it: while Acter owns the line nothing crosses
+    /// to the far end at all, and once the far end owns it every keystroke is watched, so
+    /// this is not reached until the next submission.
+    fn anchor_here(&mut self) {
+        let cursor = self.engine.cursor();
+        let Some(line) = self.cursor.filter(|_| cursor.visible) else {
+            return;
+        };
+        self.far_end.anchor = Some(Anchor {
+            line,
+            column: cursor.column,
+        });
+        let text = self.row_from_anchor();
+        self.far_end_line(Some(text), 0);
+    }
+
+    /// The anchored row as it stands, from the anchor column onward — the far end's command
+    /// line with whatever it drew in front of it left behind.
+    fn row_from_anchor(&self) -> String {
+        let Some(anchor) = self.far_end.anchor else {
+            return String::new();
+        };
+        self.lines
+            .get(&anchor.line)
+            .map(|row| row.text.chars().skip(usize::from(anchor.column)).collect())
+            .unwrap_or_default()
+    }
+
+    /// Where the far end's cursor is, or `None` while it is not showing one.
+    fn caret(&self) -> Option<Caret> {
+        let cursor = self.engine.cursor();
+        cursor.visible.then_some(Caret {
+            column: cursor.column,
+            row: cursor.row,
+        })
+    }
+
+    fn far_end_line(&mut self, text: Option<String>, caret: usize) {
+        self.send(SessionInput::FarEndLine {
+            text,
+            caret: u32::try_from(caret).unwrap_or(u32::MAX),
+        });
+    }
+
+    /// Whether this row is the one the far end is drawing its command line on.
+    ///
+    /// What it decides is speech and nothing else: the row still reaches the buffer, because
+    /// the far end drew it and the transcript is the far end's record. What must not happen
+    /// is Acter reading it aloud, because in this mode the reader is already speaking the
+    /// field that holds the same characters (spec 28, decision 3).
+    fn on_anchor(&self, id: LineId) -> bool {
+        self.far_end.owner == LineOwner::FarEnd
+            && self.far_end.anchor.is_some_and(|anchor| anchor.line == id)
+    }
+
+    /// Records what a row said when the key went out and what it says now, for the batch the
+    /// next settling will answer with.
+    ///
+    /// Only while a key is outstanding, which is the first of the three bounds: nothing is
+    /// compared continuously, and a spinner repainting on its own stays churn and stays
+    /// unspoken exactly as it always did.
+    fn note_change(&mut self, id: LineId, before: String, text: &str, revision: LineRevision) {
+        if self.far_end.owner != LineOwner::FarEnd || !self.far_end.watching {
+            return;
+        }
+        let after = match revision {
+            LineRevision::Appended => format!("{before}{text}"),
+            _ => text.to_owned(),
+        };
+        match self
+            .far_end
+            .changed
+            .iter_mut()
+            .find(|change| change.line == id)
+        {
+            // The row had already changed in this batch, so what it said when the key went
+            // out is what the first item recorded — this one only moves the "after".
+            Some(change) => change.after = after,
+            None => self.far_end.changed.push(RowChange {
+                line: id,
+                before,
+                after,
+            }),
+        }
+    }
+
+    /// The row's whole text as the far end has drawn it, or nothing for a row nobody has
+    /// seen yet.
+    fn row_text(&self, id: LineId) -> String {
+        self.lines
+            .get(&id)
+            .map_or_else(String::new, |row| row.text.clone())
     }
 
     /// A submitted line: correlated, then written.
@@ -822,7 +1262,6 @@ impl Pump {
     async fn block_started(&mut self) {
         let echoed = self.echo.take();
         if self.open.is_some() && self.submitted.is_empty() {
-            self.last_line = None;
             return;
         }
         self.close(None).await;
@@ -936,9 +1375,15 @@ impl Pump {
             self.cursor = Some(id);
         }
 
+        // Read before `due` writes the row, because what the far-end rule compares is what
+        // the row said when the key went out.
+        let before = self.row_text(id);
         // `due` runs for every line whatever region it fell in: the bookkeeping it keeps
         // is what tells the echo's row from the output's later on.
-        if let Some(due) = self.due(id, text.clone(), revision)
+        let due = self.due(id, text.clone(), revision);
+        self.note_change(id, before, &text, revision);
+
+        if let Some(due) = due
             && self.wants(region)
         {
             // Nothing is forwarded into a session with no open block: `SessionActor`
@@ -978,23 +1423,23 @@ impl Pump {
     /// that it would mean holding every row back until it was complete, delaying speech
     /// and stranding text when a far end goes quiet mid-row. Only the pending row is ever
     /// held, and only for as long as a line of that length could still be arriving.
-    async fn hold(&mut self, id: LineId, text: String) {
+    async fn hold(&mut self, id: LineId, due: Due) {
         let Some(window) = self.window() else {
             self.spill().await;
-            self.publish(id, text);
+            self.publish(id, due);
             return;
         };
-        if !self.held.as_ref().is_some_and(|(held, _)| *held == id) {
+        if !self.held.as_ref().is_some_and(|held| held.line == id) {
             self.spill().await;
         }
         match self.held.as_mut() {
-            Some((_, accumulated)) => accumulated.push_str(&text),
-            None => self.held = Some((id, text)),
+            Some(held) => held.absorb(due),
+            None => self.held = Some(Held::of(id, due)),
         }
         if self
             .held
             .as_ref()
-            .is_some_and(|(_, held)| held.len() > window)
+            .is_some_and(|held| held.text.len() > window)
         {
             self.spill().await;
         }
@@ -1012,19 +1457,19 @@ impl Pump {
 
     /// Gives held text the block it turned out to deserve, no echo having claimed it.
     async fn spill(&mut self) {
-        let Some((id, text)) = self.held.take() else {
+        let Some(held) = self.held.take() else {
             return;
         };
-        self.publish(id, text);
+        self.publish(held.line, held.due());
     }
 
     /// Forwards text that has finished waiting, into the block that is open or into one
     /// minted for text no submission accounts for.
-    fn publish(&mut self, id: LineId, text: String) {
+    fn publish(&mut self, id: LineId, due: Due) {
         if self.open.is_none() {
             self.unclaimed();
         }
-        self.output(id, text);
+        self.output(id, due);
     }
 
     /// Opens a block for text no submission accounts for — the shell's own prompt, or its
@@ -1103,11 +1548,16 @@ impl Pump {
         // user as the previous block's output. Whatever came before the echo on that row —
         // a prompt, a banner — is still text the far end wrote, and still reaches a block.
         let whole = (revision != LineRevision::Appended).then_some(text.as_str());
-        if let Some((id, held)) = self.held.take() {
-            match before_echo(&held, whole, submitted.line.trim()) {
+        if let Some(held) = self.held.take() {
+            let line = held.line;
+            match before_echo(&held.text, whole, submitted.line.trim()) {
                 Some(before) if before.is_empty() => {}
-                Some(before) => self.publish(id, before),
-                None => self.publish(id, held),
+                Some(before) => {
+                    let mut due = held.due();
+                    due.text = before;
+                    self.publish(line, due);
+                }
+                None => self.publish(line, held.due()),
             }
         }
 
@@ -1219,7 +1669,6 @@ impl Pump {
 
     fn open(&mut self, command_id: CommandId, command_line: Option<String>) {
         self.open = Some(command_id);
-        self.last_line = None;
         self.send(SessionInput::CommandStarted {
             command_id,
             command_line,
@@ -1241,8 +1690,7 @@ impl Pump {
         // here is owed to anyone any more, and saying so is what stops a row of this
         // command settling into the *next* one when no marker ever freezes it (B4.2).
         // Clearing instead would leave those settlements looking like lines never seen.
-        self.lines.values_mut().for_each(|owed| *owed = false);
-        self.last_line = None;
+        self.lines.values_mut().for_each(|row| row.owed = false);
         let stopped = exit.is_none() && self.interrupted;
         self.interrupted = false;
         self.send(if stopped {
@@ -1339,18 +1787,36 @@ impl Pump {
         matches!(region, Region::Output | Region::Prompt)
     }
 
-    /// The text this item owes the speech path, if any: an append always, a settlement
-    /// only when it is the line's first or last word, a rewrite never (DESIGN's separate
-    /// paths — the buffer applies all three, speech does not).
-    fn due(&mut self, id: LineId, text: String, revision: LineRevision) -> Option<String> {
+    /// What this item owes the two paths below it, and the bookkeeping that decides.
+    ///
+    /// **A rewrite is no longer dropped** (spec 28, decision 8). It used to answer `None`,
+    /// so a redrawn row reached neither speech nor the buffer — and the buffer is the one
+    /// that needed it: without it, arrowing a history list at a far end appends a line per
+    /// press, and a `gh` prompt answered with Cancel keeps three option rows the far end
+    /// itself blanked. It stops being a speech question and becomes a rendering one, which
+    /// is DESIGN's separate-paths decision unchanged: `spoken` is what carries it now, and
+    /// a rewrite still says nothing.
+    fn due(&mut self, id: LineId, text: String, revision: LineRevision) -> Option<Due> {
         match revision {
             LineRevision::Appended => {
-                self.lines.insert(id, false);
-                Some(text)
+                let row = self.lines.entry(id).or_default();
+                row.owed = false;
+                row.text.push_str(&text);
+                Some(Due {
+                    text,
+                    revision,
+                    spoken: true,
+                })
             }
             LineRevision::Rewritten => {
-                self.lines.insert(id, true);
-                None
+                let row = self.lines.entry(id).or_default();
+                row.owed = true;
+                row.text = text.clone();
+                Some(Due {
+                    text,
+                    revision,
+                    spoken: false,
+                })
             }
             // Owed when the line was rewritten since its last word, and when it was never
             // seen at all — which is how a line that scrolled out of the screen area
@@ -1358,21 +1824,34 @@ impl Pump {
             // The default is only honest because the record outlives the block: a line
             // whose text went to an earlier block is on record as owing nothing, rather
             // than being indistinguishable from one nobody has seen (B4.2).
-            LineRevision::Settled => self.lines.remove(&id).unwrap_or(true).then_some(text),
+            LineRevision::Settled => {
+                self.lines
+                    .remove(&id)
+                    .is_none_or(|row| row.owed)
+                    .then_some(Due {
+                        text,
+                        revision,
+                        spoken: true,
+                    })
+            }
         }
     }
 
-    /// Forwards one line's text as output, separated from the line before it. The
-    /// separator is the service's, not the engine's: a line item carries no line ending,
-    /// and the pacing policy counts lines.
-    fn output(&mut self, id: LineId, text: String) {
-        let separated = match self.last_line {
-            Some(last) if last == id => text,
-            None => text,
-            Some(_) => format!("\n{text}"),
-        };
-        self.last_line = Some(id);
-        self.send(SessionInput::Output { text: separated });
+    /// Forwards one line's text, saying which line it belongs to and whether the speech
+    /// path is owed it as well as the buffer.
+    ///
+    /// **The line ending is no longer added here** (spec 28, decision 8). It used to be,
+    /// because the actor received a stream of text and the pacing policy counts lines; now
+    /// the actor is told which line each piece belongs to, so it separates them itself for
+    /// the one path that needs a line count and hands the buffer the line as it stands.
+    fn output(&mut self, id: LineId, due: Due) {
+        let spoken = due.spoken && !self.on_anchor(id);
+        self.send(SessionInput::Output {
+            line: id,
+            revision: due.revision,
+            text: due.text,
+            spoken,
+        });
     }
 
     /// Publishes whether anything is outstanding, for [`SessionApi::send_key`] to read.
@@ -1536,6 +2015,7 @@ enum Woke {
     Read(Option<Vec<u8>>),
     Request(Option<Request>),
     Grace,
+    Settled,
 }
 
 /// Awaits an armed timer, or waits forever when none is — so the grace branch simply
@@ -1552,7 +2032,10 @@ mod tests {
     use tokio::sync::oneshot;
     use tokio::task::yield_now;
 
-    use crate::{Announcement, Key, Osc133Marker, SessionSetup, TerminalItem, TransportError};
+    use crate::{
+        Announcement, Cursor, Key, Osc133Marker, SessionSetup, TerminalItem, TerminalModes,
+        TransportError,
+    };
 
     use super::*;
 
@@ -1612,12 +2095,39 @@ mod tests {
     /// Items rather than bytes on the way in, because what a byte stream means is
     /// `acter-term`'s job and `pipeline.rs` already asserts that end to end over the real
     /// engine. What is under test here is everything above the engine.
-    #[derive(Default)]
     struct FarEnd {
         reads: Mutex<Option<Sender<Vec<u8>>>>,
         batches: Mutex<VecDeque<Vec<TerminalItem>>>,
         written: Mutex<Vec<u8>>,
         interrupts: Mutex<u32>,
+        /// Where the far end says its cursor is, which a test sets the way a real far end
+        /// sets it: by addressing it. Nothing infers it from the items, because the whole
+        /// point of the accessor is that a program can move the cursor without writing a
+        /// character.
+        cursor: Mutex<Cursor>,
+        modes: Mutex<TerminalModes>,
+    }
+
+    impl Default for FarEnd {
+        fn default() -> Self {
+            Self {
+                reads: Mutex::new(None),
+                batches: Mutex::new(VecDeque::new()),
+                written: Mutex::new(Vec::new()),
+                interrupts: Mutex::new(0),
+                // Visible, at the top left: a far end that has said nothing about its
+                // cursor is showing one, which is what every terminal starts out doing.
+                cursor: Mutex::new(Cursor {
+                    column: 0,
+                    row: 0,
+                    visible: true,
+                }),
+                modes: Mutex::new(TerminalModes {
+                    application_cursor_keys: false,
+                    bracketed_paste: false,
+                }),
+            }
+        }
     }
 
     struct FakeTransport(Arc<FarEnd>);
@@ -1667,6 +2177,14 @@ mod tests {
 
         fn take_replies(&mut self) -> Vec<u8> {
             Vec::new()
+        }
+
+        fn cursor(&self) -> Cursor {
+            *self.0.cursor.lock().expect("far end poisoned")
+        }
+
+        fn modes(&self) -> TerminalModes {
+            *self.0.modes.lock().expect("far end poisoned")
         }
     }
 
@@ -1802,6 +2320,49 @@ mod tests {
             ack
         }
 
+        /// The far end's cursor, as a program that addressed it would leave it.
+        async fn cursor_at(&self, column: u16, row: u16) {
+            *self.far_end.cursor.lock().expect("far end poisoned") = Cursor {
+                column,
+                row,
+                visible: true,
+            };
+            self.settle().await;
+        }
+
+        /// A far end that has hidden its cursor, which is what `gh` does for the whole of
+        /// a selection prompt.
+        async fn hides_its_cursor(&self) {
+            self.far_end
+                .cursor
+                .lock()
+                .expect("far end poisoned")
+                .visible = false;
+            self.settle().await;
+        }
+
+        async fn asks_for(&self, modes: TerminalModes) {
+            *self.far_end.modes.lock().expect("far end poisoned") = modes;
+            self.settle().await;
+        }
+
+        /// Hands the line to the far end, or takes it back.
+        async fn owner(&self, owner: LineOwner) {
+            self.api.set_line_owner(SessionId(1), owner);
+            self.settle().await;
+        }
+
+        /// Every far-end line the frontend would have written into its field, in order.
+        fn far_end_lines(&self) -> Vec<(Option<String>, u32)> {
+            self.events()
+                .into_iter()
+                .filter_map(|event| match event {
+                    SessionEvent::FarEndLine { text, caret } => Some((text, caret)),
+                    _ => None,
+                })
+                .collect()
+        }
+
         async fn advance_to(&self, millis: u64) {
             self.clock.advance_to(Duration::from_millis(millis));
             self.settle().await;
@@ -1836,17 +2397,9 @@ mod tests {
         /// far end's echo rather than on the submission, so which block a row landed in
         /// is the question most of these tests are actually asking.
         fn output_of(&self, command_id: CommandId) -> String {
-            self.events()
-                .into_iter()
-                .filter_map(|event| match event {
-                    SessionEvent::Output {
-                        command_id: at,
-                        text,
-                        ..
-                    } if at == command_id => Some(text),
-                    _ => None,
-                })
-                .collect()
+            joined(self.events().into_iter().filter(|event| {
+                !matches!(event, SessionEvent::Output { command_id: at, .. } if *at != command_id)
+            }))
         }
 
         /// Each `Output` event's text in order, so what one block received can be told
@@ -1862,13 +2415,7 @@ mod tests {
         }
 
         fn rendered(&self) -> String {
-            self.events()
-                .iter()
-                .filter_map(|event| match event {
-                    SessionEvent::Output { text, .. } => Some(text.clone()),
-                    _ => None,
-                })
-                .collect()
+            joined(self.events())
         }
 
         fn announcements(&self) -> Vec<Announcement> {
@@ -1889,6 +2436,50 @@ mod tests {
         fn interrupts(&self) -> u32 {
             *self.far_end.interrupts.lock().expect("far end poisoned")
         }
+    }
+
+    /// The buffer as the frontend would hold it: one line per [`LineId`], in the order the
+    /// far end drew them.
+    ///
+    /// **The separator is put back here rather than sent** (spec 28, decision 8). It used to
+    /// be part of the text, so a concatenation was the transcript; now each event names its
+    /// line, and what these tests are asking is what a listener would find in the buffer —
+    /// which is what this reconstructs. A command boundary resets it for the same reason the
+    /// service used to: the first line of a block starts a block rather than continuing the
+    /// one above.
+    fn joined(events: impl IntoIterator<Item = SessionEvent>) -> String {
+        let mut text = String::new();
+        let mut last: Option<LineId> = None;
+        for event in events {
+            match event {
+                SessionEvent::Output {
+                    line,
+                    revision,
+                    text: chunk,
+                    ..
+                } => {
+                    if last.is_some_and(|last| last != line) {
+                        text.push('\n');
+                    }
+                    last = Some(line);
+                    match revision {
+                        LineRevision::Appended => text.push_str(&chunk),
+                        // A whole row replaces whatever this line already said, which is
+                        // what the buffer does with it.
+                        _ => {
+                            let start = text.len() - text.rsplit('\n').next().unwrap_or("").len();
+                            text.truncate(start);
+                            text.push_str(&chunk);
+                        }
+                    }
+                }
+                SessionEvent::CommandStarted { .. }
+                | SessionEvent::CommandFinished { .. }
+                | SessionEvent::CommandInterrupted { .. } => last = None,
+                _ => {}
+            }
+        }
+        text
     }
 
     /// What a shell has drawn when it is waiting for a line. Any string would do — what
@@ -3208,7 +3799,10 @@ mod tests {
 
         assert_eq!(
             session.outputs(),
-            vec!["still on screen\nscrolled past inside one read".to_owned()],
+            vec![
+                "still on screen".to_owned(),
+                "scrolled past inside one read".to_owned()
+            ],
             "dropping a settlement nobody has a record of would lose output: {:?}",
             session.outputs()
         );
@@ -3906,6 +4500,374 @@ mod tests {
     /// bytes are right for PowerShell is measured against a real one in
     /// `acter-transports`' real-shell suite, because that is a fact about a shell rather
     /// than about this service.
+    /// **Far-end-line mode: the keyboard goes to the far end, and the row it redraws is
+    /// what a listener is handed** (spec 28).
+    ///
+    /// Every test here runs over an unintegrated far end, because that is what the mode is
+    /// for: an `ssh`, a `wsl`, a container or a REPL, none of which Acter can mark. The
+    /// grace period is short so the session has resolved before anything is pressed.
+    mod the_far_end_owns_the_line {
+        use super::*;
+
+        fn named(key: Key) -> KeyPress {
+            KeyPress {
+                key,
+                ctrl: false,
+                shift: false,
+                alt: false,
+            }
+        }
+
+        /// A far end sitting at a prompt, with its cursor where the prompt ended.
+        async fn at_a_prompt() -> Session {
+            // Nothing marks anything: the far end this mode exists for is past the shell
+            // Acter spawned, so the grace period expires and the session is unintegrated.
+            let session = Session::with_config(quick_grace()).await;
+            session.advance_to(300).await;
+            session.emit(vec![line(1, "user@host:~$ ")]).await;
+            session.cursor_at(13, 0).await;
+            session.advance_to(1_000).await;
+            session
+        }
+
+        /// Landing on the field says what is on the command line, which at a fresh prompt
+        /// is nothing — and "nothing" is the reader's word rather than one Acter invents.
+        #[tokio::test]
+        async fn taking_the_line_hands_over_the_row_from_the_anchor() {
+            let session = at_a_prompt().await;
+            session.owner(LineOwner::FarEnd).await;
+
+            assert_eq!(
+                session.far_end_lines(),
+                vec![(Some(String::new()), 0)],
+                "the anchor is taken where the far end's cursor came to rest"
+            );
+        }
+
+        /// **The anchor is taken at the hand-over rather than at the next settling**, and
+        /// this is why: a far end sitting at its prompt says nothing more, so waiting for it
+        /// to speak would leave the listener in front of an empty field with no way to
+        /// find out what their command line says.
+        ///
+        /// Typing then extends the row without moving the anchor, so the field holds the
+        /// line and never the prompt in front of it.
+        #[tokio::test]
+        async fn typing_extends_the_line_without_moving_the_anchor() {
+            let session = at_a_prompt().await;
+            session.owner(LineOwner::FarEnd).await;
+
+            let _ = session.press(named(Key::Char('l'))).await;
+            let _ = session.press(named(Key::Char('s'))).await;
+            session.emit(vec![line(1, "ls")]).await;
+            session.cursor_at(15, 0).await;
+            session.advance_to(4_000).await;
+
+            assert_eq!(
+                session.far_end_lines().last(),
+                Some(&(Some("ls".to_owned()), 2)),
+                "the prompt stays behind and the command line is what is handed over"
+            );
+        }
+
+        /// Up at a far end: the row is rewritten with the recalled line, and what the
+        /// listener gets is the line rather than the prompt in front of it.
+        #[tokio::test]
+        async fn up_hands_over_the_recalled_line_without_the_prompt() {
+            let session = at_a_prompt().await;
+            session.owner(LineOwner::FarEnd).await;
+
+            assert_eq!(session.press(named(Key::Up)).await, KeyAck::Applied);
+            assert_eq!(session.written(), "\x1b[A", "the measured spelling");
+
+            session.emit(vec![rewritten(1, "user@host:~$ exit")]).await;
+            session.cursor_at(17, 0).await;
+            session.advance_to(2_000).await;
+
+            assert_eq!(
+                session.far_end_lines().last(),
+                Some(&(Some("exit".to_owned()), 4)),
+                "the anchor is what keeps the prompt out of it"
+            );
+        }
+
+        /// **The first recall appends rather than rewriting**, because there is nothing on
+        /// the row to overwrite — and it is still the answer. A rule keyed on revisions
+        /// would be silent on the commonest press of the commonest key.
+        #[tokio::test]
+        async fn the_first_recall_appends_and_is_still_the_answer() {
+            let session = at_a_prompt().await;
+            session.owner(LineOwner::FarEnd).await;
+            let _ = session.press(named(Key::Up)).await;
+
+            session.emit(vec![line(1, "echo one")]).await;
+            session.cursor_at(21, 0).await;
+            session.advance_to(2_000).await;
+
+            assert_eq!(
+                session.far_end_lines().last(),
+                Some(&(Some("echo one".to_owned()), 8))
+            );
+        }
+
+        /// Left and right rewrite nothing, so nothing but the caret moves — which is the
+        /// whole reason the engine grew a cursor.
+        #[tokio::test]
+        async fn a_key_that_moves_only_the_cursor_moves_only_the_caret() {
+            let session = at_a_prompt().await;
+            session.owner(LineOwner::FarEnd).await;
+            let _ = session.press(named(Key::Char('l'))).await;
+            session.emit(vec![line(1, "ls -la")]).await;
+            session.cursor_at(19, 0).await;
+            session.advance_to(4_000).await;
+
+            let _ = session.press(named(Key::Left)).await;
+            session.cursor_at(18, 0).await;
+            session.emit(vec![]).await;
+            session.advance_to(8_000).await;
+
+            assert_eq!(
+                session.far_end_lines().last(),
+                Some(&(None, 5)),
+                "no text, because no text changed"
+            );
+        }
+
+        /// **The anchored row wins over ten blanked ones**, which is PSReadLine's completion
+        /// menu: one arrow rewrote eleven rows and only one of them is an answer.
+        #[tokio::test]
+        async fn a_menu_repaint_answers_with_the_command_line() {
+            let session = at_a_prompt().await;
+            session.owner(LineOwner::FarEnd).await;
+            let _ = session.press(named(Key::Char('G'))).await;
+            session.emit(vec![line(1, "Get-C")]).await;
+            session.cursor_at(18, 0).await;
+            session.advance_to(4_000).await;
+
+            let _ = session.press(named(Key::Down)).await;
+            let mut repaint = vec![rewritten(1, "user@host:~$ Get-Command")];
+            for row in 2..12 {
+                repaint.push(rewritten(row, ""));
+            }
+            session.emit(repaint).await;
+            session.cursor_at(24, 0).await;
+            session.advance_to(8_000).await;
+
+            assert_eq!(
+                session.far_end_lines().last(),
+                Some(&(Some("Get-Command".to_owned()), 11)),
+                "row count routes nothing: this is ordinary Tab completion"
+            );
+        }
+
+        /// **`gh`'s selection prompt**: the anchored row never changes, the cursor is
+        /// hidden and parked off the list, and the row that gained content is the answer.
+        #[tokio::test]
+        async fn a_selection_prompt_answers_with_the_row_that_gained_content() {
+            let session = at_a_prompt().await;
+            session.owner(LineOwner::FarEnd).await;
+            // The widget takes the screen: it hides the cursor before drawing, which is what
+            // stops the anchor moving onto a row nobody is editing.
+            session.hides_its_cursor().await;
+            session
+                .emit(vec![
+                    line(2, "> marlon-sousa/acter"),
+                    line(3, "  Skip pushing the branch"),
+                ])
+                .await;
+            session.advance_to(4_000).await;
+
+            let _ = session.press(named(Key::Down)).await;
+            session
+                .emit(vec![
+                    rewritten(2, "  marlon-sousa/acter"),
+                    rewritten(3, "> Skip pushing the branch"),
+                ])
+                .await;
+            session.advance_to(8_000).await;
+
+            assert_eq!(
+                session.far_end_lines().last(),
+                Some(&(Some("> Skip pushing the branch".to_owned()), 0)),
+                "one option per press, and not the one they just left"
+            );
+        }
+
+        /// **Enter with a non-empty anchored row opens a block headed by it** — the far end
+        /// echoed every character on that row, so it is the evidence B4.9 already uses,
+        /// arriving one step earlier.
+        #[tokio::test]
+        async fn enter_opens_a_block_headed_by_the_row_the_far_end_echoed() {
+            let session = at_a_prompt().await;
+            session.owner(LineOwner::FarEnd).await;
+            let _ = session.press(named(Key::Char('c'))).await;
+            session.emit(vec![line(1, "cargo test")]).await;
+            session.cursor_at(23, 0).await;
+            session.advance_to(4_000).await;
+
+            let _ = session.press(named(Key::Enter)).await;
+
+            assert!(
+                session.written().ends_with('\r'),
+                "Enter is a carriage return: {:?}",
+                session.written()
+            );
+            assert_eq!(
+                session.headings().last(),
+                Some(&Some("cargo test".to_owned())),
+                "the anchored row is the heading"
+            );
+        }
+
+        /// **And Enter with an empty anchored row opens neither**, which disposes of the
+        /// widget case for free: answering a question with arrows is not running a command.
+        #[tokio::test]
+        async fn enter_on_an_empty_row_earns_no_block_and_no_heading() {
+            let session = at_a_prompt().await;
+            session.owner(LineOwner::FarEnd).await;
+            let before = session.started().len();
+
+            let _ = session.press(named(Key::Enter)).await;
+
+            assert_eq!(
+                session.started().len(),
+                before,
+                "nothing was typed, so nothing was echoed, so nothing ran"
+            );
+        }
+
+        /// The far end's own echo of the user's typing reaches the buffer — it is on the
+        /// screen and the transcript is the far end's record — and is never read aloud,
+        /// because the reader is already speaking the field that holds it.
+        #[tokio::test]
+        async fn the_anchored_row_is_rendered_and_never_spoken() {
+            let session = at_a_prompt().await;
+            session.owner(LineOwner::FarEnd).await;
+            let spoken_before = session.announcements().len();
+
+            let _ = session.press(named(Key::Char('l'))).await;
+            session.emit(vec![line(1, "l")]).await;
+            session.advance_to(4_000).await;
+
+            assert!(
+                session.rendered().contains('l'),
+                "the far end drew it, so the buffer keeps it: {:?}",
+                session.rendered()
+            );
+            assert_eq!(
+                session.announcements().len(),
+                spoken_before,
+                "and the reader speaks the field rather than Acter speaking the row"
+            );
+        }
+
+        /// Every key is the far end's in this mode, the two Acter binds locally included:
+        /// `Ctrl+C` is `0x03` on the wire rather than an interrupt Acter asked for.
+        #[tokio::test]
+        async fn ctrl_c_reaches_the_far_end_as_a_byte_rather_than_an_interrupt() {
+            let session = at_a_prompt().await;
+            session.owner(LineOwner::FarEnd).await;
+
+            assert_eq!(session.press(ctrl('c')).await, KeyAck::Applied);
+
+            assert!(
+                session.written().ends_with('\u{3}'),
+                "the control byte, not a transport interrupt: {:?}",
+                session.written()
+            );
+            assert_eq!(
+                session.interrupts(),
+                0,
+                "nothing asked the transport to interrupt anything"
+            );
+        }
+
+        /// The arrow's spelling comes from the modes the far end turned on, which is the
+        /// whole reason this decision is on this side of the wire.
+        #[tokio::test]
+        async fn application_cursor_keys_change_what_an_arrow_costs() {
+            let session = at_a_prompt().await;
+            session
+                .asks_for(TerminalModes {
+                    application_cursor_keys: true,
+                    bracketed_paste: false,
+                })
+                .await;
+            session.owner(LineOwner::FarEnd).await;
+
+            let _ = session.press(named(Key::Up)).await;
+
+            assert!(
+                session.written().ends_with("\x1bOA"),
+                "the far end asked for the application form: {:?}",
+                session.written()
+            );
+        }
+
+        /// A paste is bracketed when the far end asked for that and bare when it did not.
+        /// Both happen in ordinary use, so neither can be the unconditional answer.
+        #[tokio::test]
+        async fn a_paste_is_bracketed_only_when_the_far_end_asked_for_it() {
+            let session = at_a_prompt().await;
+            session.owner(LineOwner::FarEnd).await;
+
+            session.api.paste(SessionId(1), "one\ntwo");
+            session.settle().await;
+            assert!(
+                session.written().ends_with("one\ntwo"),
+                "bare, because nothing asked: {:?}",
+                session.written()
+            );
+
+            session
+                .asks_for(TerminalModes {
+                    application_cursor_keys: false,
+                    bracketed_paste: true,
+                })
+                .await;
+            session.api.paste(SessionId(1), "three");
+            session.settle().await;
+            assert!(
+                session.written().ends_with("\x1b[200~three\x1b[201~"),
+                "wrapped, because the far end asked: {:?}",
+                session.written()
+            );
+        }
+
+        /// Taking the line back puts every key where it was, which is what makes the mode a
+        /// state rather than a setting: `Ctrl+C` is Acter's interrupt again rather than a
+        /// byte on the wire.
+        #[tokio::test]
+        async fn taking_the_line_back_puts_the_keys_where_they_were() {
+            let session = at_a_prompt().await;
+            session.owner(LineOwner::FarEnd).await;
+            session.owner(LineOwner::Local).await;
+            let written = session.written();
+
+            assert_eq!(session.press(ctrl('c')).await, KeyAck::Applied);
+
+            assert_eq!(
+                session.interrupts(),
+                1,
+                "the transport was asked, rather than a control byte written"
+            );
+            assert_eq!(
+                session.written(),
+                written,
+                "and nothing went down the wire for it"
+            );
+        }
+
+        /// A key nobody bound is still unbound while Acter owns the line — the far-end
+        /// route is a state, not an escape hatch a stray keystroke falls into.
+        #[tokio::test]
+        async fn a_named_key_is_unbound_while_acter_owns_the_line() {
+            let session = at_a_prompt().await;
+
+            assert_eq!(session.press(named(Key::Up)).await, KeyAck::Unbound);
+            assert_eq!(session.written(), "");
+        }
+    }
+
     mod end_of_input {
         use super::*;
 
@@ -3928,7 +4890,11 @@ mod tests {
         async fn a_shell_with_no_answer_writes_nothing_and_says_so() {
             let session = Session::with_config(quick_grace()).await;
 
-            assert_eq!(session.press(ctrl('d')).await, KeyAck::NothingToActOn);
+            // **`Unsupported` rather than `NothingToActOn` since 28** (decision 9). The two
+            // used to be one answer, so a shell nobody had measured reported that there was
+            // nothing to act on in a session that was working perfectly well — and the
+            // frontend could not say the one useful thing, which is to type `exit` instead.
+            assert_eq!(session.press(ctrl('d')).await, KeyAck::Unsupported);
             assert_eq!(session.written(), "");
         }
 

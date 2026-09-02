@@ -93,6 +93,8 @@ mod tests {
                 super::submit_command,
                 super::attach_session,
                 super::send_key,
+                super::set_line_owner,
+                super::paste,
                 super::connectable,
                 super::use_profile,
                 super::answer_connect,

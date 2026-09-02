@@ -139,6 +139,8 @@ pub fn run() {
             crate::routers::attach_session,
             crate::routers::submit_command,
             crate::routers::send_key,
+            crate::routers::set_line_owner,
+            crate::routers::paste,
             crate::routers::about,
             crate::routers::platform,
             crate::routers::connectable,

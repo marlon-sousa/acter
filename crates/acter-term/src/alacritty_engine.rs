@@ -29,7 +29,7 @@ mod sniffer;
 
 use std::mem::take;
 
-use acter_core::{Osc133Marker, Screen, TerminalEngine, TerminalItem};
+use acter_core::{Cursor, Osc133Marker, Screen, TerminalEngine, TerminalItem, TerminalModes};
 use alacritty_terminal::Term;
 use alacritty_terminal::term::test::TermSize;
 use alacritty_terminal::term::{Config, Osc52, TermMode};
@@ -196,6 +196,30 @@ impl TerminalEngine for AlacrittyEngine {
 
     fn take_replies(&mut self) -> Vec<u8> {
         self.replies.take()
+    }
+
+    /// Read straight off the grid, which is the only thing that knows.
+    ///
+    /// The point is the emulator's own cursor rather than anything this adapter tracks: a
+    /// program addressing the cursor with `ESC[2;1H` moves it without writing a character,
+    /// and a position derived from the text that arrived would never see that. Screen
+    /// coordinates, so the row is relative to the top of the screen area and history is not
+    /// counted — the caret this places is inside one row.
+    fn cursor(&self) -> Cursor {
+        let point = self.term.grid().cursor.point;
+        Cursor {
+            column: u16::try_from(point.column.0).unwrap_or(u16::MAX),
+            row: u16::try_from(point.line.0.max(0)).unwrap_or(u16::MAX),
+            visible: self.term.mode().contains(TermMode::SHOW_CURSOR),
+        }
+    }
+
+    fn modes(&self) -> TerminalModes {
+        let mode = self.term.mode();
+        TerminalModes {
+            application_cursor_keys: mode.contains(TermMode::APP_CURSOR),
+            bracketed_paste: mode.contains(TermMode::BRACKETED_PASTE),
+        }
     }
 }
 

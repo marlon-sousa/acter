@@ -16,6 +16,7 @@ import type {
   Connected,
   KeyAck,
   KeyPress,
+  LineOwner,
   ProfileId,
   SessionEvent,
   SessionId,
@@ -39,6 +40,14 @@ export class TauriBackend implements BackendApi {
 
   sendKey(session: SessionId, key: KeyPress): Promise<KeyAck> {
     return invoke<KeyAck>('send_key', { sessionId: session, key });
+  }
+
+  setLineOwner(session: SessionId, owner: LineOwner): Promise<void> {
+    return invoke('set_line_owner', { sessionId: session, owner });
+  }
+
+  paste(session: SessionId, text: string): Promise<void> {
+    return invoke('paste', { sessionId: session, text });
   }
 }
 

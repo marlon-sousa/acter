@@ -740,6 +740,12 @@ filter", and a user who filters does type characters the far end echoes. That le
 non-empty anchored row and would produce a spurious heading. The spec that builds this
 must say what it does about it.
 
+**Answered 2026-09-02: the edge is accepted rather than guessed at** (spec 28, decision 7).
+A user who filters gets a heading naming their filter. That is not a leak — the far end
+echoed those characters, so they are on the screen and in the transcript whatever Acter does
+— and the only alternative is a rule that guesses which typed text was a command, which is
+the guess this project has refused twice.
+
 **History stays out — Decided, and now as a decision rather than a consequence.** The
 paragraph above treats an empty Acter history as something that merely falls out of the
 exclusion rule. Once the anchored line is read, Acter knows every command the user ran,
@@ -748,6 +754,44 @@ completion and recall *on this machine*, and the original complaint that produce
 whole mode is that it holds lines typed at every far end the profile ever reached. Adding
 a session's worth of a remote box's commands to it makes that worse, not better. If this
 is revisited, the shape to revisit it as is history keyed to the far end, never one pool.
+
+**Amended 2026-09-02: the far-end line is an element of its own, and the reader speaks it —
+Decided.** The open question below asked whether a permanently empty field needs
+`role="application"`, and answered "no region, no key sink, no new element": the edit field
+stays, the arrows are prevented, and the row that changed is spoken into the live region.
+That answer rested on a guess it named as the one thing left to measure — that preventing
+the arrows would remove NVDA's "blank" — and the measurement says it does not. The probe and
+its five results are recorded at the question. What follows is what replaces it, and it is a
+reversal made on evidence rather than a change of mind.
+
+**While the far end owns the line, the keys go to a `<span contenteditable="true"
+role="textbox" aria-multiline="false">` labelled as the command line, and the `<input>` that
+owns the local line does not hold focus.** Acter writes two things into it and nothing else:
+the anchored row's text, from the anchor column, and the caret at the far end's cursor
+column. Every key is prevented and no character is ever inserted locally.
+
+**The reader then does the speaking, and Acter invents no strings for this mode.** Measured
+on the same run: landing on it said "command line, edit, cargo test --all" — announced as an
+edit field, which is what `role="textbox"` buys and what "section, multiline, editable" is
+without it. Right arrow with the caret at column 1 said "a", the character at the far end's
+cursor. Up arrow with the text replaced by `exit` said "exit". Typing `y` said "y", because
+the element is editable — a focusable non-text element is silent when typed into. A row a key
+emptied, and a caret past the last character, both said "blank". So what a listener hears is
+identical in kind to what they hear in every other text box on Windows, and the two strings
+this mode was going to invent — one for an emptied row, one for end of line — are deleted
+rather than decided. **The live region is not used by this mode at all.**
+
+**It is not `role="application"`, and the cost that role carries is the reason.** Inside one,
+the arrows stop reading prose (measured, and recorded at the head of
+`ui/src/adapters/readable_field.ts`). This shape uses none of it: no region, the document
+stays browsable, and the handoff into focus mode is still the user's own NVDA+Space.
+
+**And it reverses the older invariant that the field never renders remote state, which is
+narrower than it sounds.** That invariant was written about the *local* line, where a field
+rendering remote echo would race the user's own typing and hand them a caret nobody owns.
+Here the far end owns the line by definition — there is no local line to race — and the
+element is written when the row settles on the quiescence clock rather than per byte. What
+the invariant forbade cannot arise in the state it does not describe.
 
 **Layer 1 is untouched in either state.** Ctrl+Shift is always Acter's, so the way back is
 always pressable. Ctrl+Shift+Space still sends one literal keystroke without changing
@@ -1088,6 +1132,22 @@ is content: the row losing selection went from `> marlon-sousa/acter` to
 one row here, works for a program marking its selection with `*` or an arrow instead, and
 is a *candidate* until a second prompt-driven CLI has been measured beside it.
 
+**The second sample was taken 2026-09-02, on PSReadLine's completion menu, and it settles
+the rule — Decided.** `pwsh` 7.6.5 with Tab bound to `MenuComplete`: the selection is drawn
+in **colour alone**, `ESC[30m` and `ESC[47m` around the item, with no marker character
+anywhere. So a rule naming a marker would have heard nothing at all there, and the
+content rule is what survives contact with a second program. What that sample also shows is
+that the menu is not where the answer is: each arrow rewrites the *command line itself*, one
+completion per press, so the anchored row already carries it. The rule is therefore two steps
+and their order matters — **the anchored row if it changed, otherwise the row that gained
+non-whitespace content** — and neither step needs to know which program is running.
+
+**Row count routes nothing, and that is the other thing the sample settled.** PSReadLine's
+first arrow produced eleven line items: the command line rewritten and ten menu rows blanked.
+A rule sending "most of the screen changed" to interactive mode would mis-route ordinary Tab
+completion in PowerShell. The alternate screen is the only boundary that means anything —
+see "Where the boundary actually falls" — and the several-rows bucket above is not a mode.
+
 **And one thing no diff rule can ever answer, which is why the engine has to grow a
 cursor.** Left and right arrows at a far end move the cursor and rewrite no text. Home,
 End and word-wise motion likewise. There is no revision to speak, so the only observable
@@ -1254,6 +1314,24 @@ keeps that caveat.
   those arrows and prevents the default, so the caret does not move — but whether that also
   removes the "blank" has not been measured, and it is cheap to settle on a static page
   before any of this is built.
+
+  **The probe was run 2026-09-02 and it answers the other way, so this question is Closed
+  and the conclusion above is reversed.** NVDA 2026.1.1 through the bridge, `user` persona,
+  silent capture, in Edge — the engine WebView2 runs — with a field held permanently empty:
+
+  - A plain `<input>` said "em branco" once before right, left, up, down, Home and End
+    alike.
+  - **The identical field with `preventDefault` on every arrow said it exactly as often.**
+    So the word does not come from a caret that moved. It comes from NVDA reading the line
+    *after* a caret command, and the caret in an empty field had nowhere to move in the
+    first place — which is why preventing the key changes nothing.
+  - Answering into a live region does not mask it, politely or assertively: "em branco",
+    then "cargo test --all", two utterances in the same millisecond, the blank first.
+
+  So the shape this question settled on — the edit field kept, the arrows prevented, the row
+  spoken into the live region — would have put "blank" in front of every single press,
+  forever. What replaces it is under "Edit field ownership" above: an ARIA text box holding
+  the far end's row and caret, where the reader speaks and Acter invents nothing.
 - Interactive-mode screen reading strategy: how the buffer/grid is exposed to the
   screen reader while a full-screen app runs (review cursor? live row announcements?).
 - Non-visual tab/session navigation UX (switch keys, announcing which session is

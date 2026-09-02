@@ -7,6 +7,7 @@ import { BufferDom } from './adapters/buffer';
 import { installDebugRecorder } from './adapters/debug_recorder';
 import { AboutDialog } from './adapters/about_dialog';
 import { EditFieldDom } from './adapters/edit_field';
+import { FarEndFieldDom } from './adapters/far_end_field';
 import { HelpDialog } from './adapters/help_dialog';
 import { bindKeys } from './adapters/keyboard';
 import { ConnectDialog } from './adapters/connect_dialog';
@@ -33,6 +34,10 @@ function byId<T extends HTMLElement>(id: string): T {
 const commandInput = byId<HTMLInputElement>('command-input');
 const editField = new EditFieldDom(commandInput);
 const buffer = new BufferDom(byId('results'));
+// The far end's command line: an ARIA text box Acter writes into and never inserts into
+// (spec 28, decision 2). Hidden until the user hands the keyboard over with Ctrl+Shift+K.
+const farEndInput = byId('far-end-input');
+const farEndField = new FarEndFieldDom(farEndInput, byId('far-end-line'));
 const announcer = new AnnouncerDom(byId('announcer'));
 const beep = new BeepAudio();
 // In a debug build this wraps the router and installs `window.__acterDebug`; in a
@@ -114,6 +119,7 @@ const controller = new AppController(
   connectApi,
   editField,
   buffer,
+  farEndField,
   announcer,
   beep,
   windowChrome,
@@ -203,8 +209,12 @@ void shell.platform().then((os) => {
 // The edit field is passed because the session hears a keystroke only while that field
 // has focus (DESIGN, layer 2), and the adapter enforces that by listening on the element
 // rather than on the document.
-bindKeys(controller, byId<HTMLFormElement>('command-form'), commandInput, () =>
-  helpDialog.open(),
+bindKeys(
+  controller,
+  byId<HTMLFormElement>('command-form'),
+  commandInput,
+  () => helpDialog.open(),
+  farEndInput,
 );
 // What this window opens onto: the session the launch brought, or nothing at all — which
 // since B7 is the ordinary case, and which the controller announces rather than leaving a

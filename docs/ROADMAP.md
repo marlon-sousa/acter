@@ -2416,8 +2416,17 @@ thing to pick up once the adapters land, not merely the next number.
     is testable without a machine that happens to lack something. Asking the machine is 25
     (B7)'s, and this is what B7 and 13 (A8) render.
 
-23.5. Ctrl+D is not reachable from the window. Spec: none yet → specify first, and the
-    specifying is small because the diagnosis is already complete. **Found 2026-08-25** in
+23.5. **Done** — Ctrl+D is reachable from the window, and is answered three ways. Spec:
+    [28-far-end-line-mode.md](specs/28-far-end-line-mode.md), decision 9. **Folded into 28
+    and shipped there**, because the two halves of this entry belong to the same seam: the
+    key had to leave the page (`isReportable` in `ui/src/adapters/keyboard.ts` now answers
+    for `Ctrl+D` as well as `Ctrl+C`), and the three answers needed a `KeyAck` variant that
+    28 was adding anyway — "this shell has no measured end-of-input answer" and "nothing is
+    listening" were one reply until `KeyAck::Unsupported` existed. In far-end-line mode the
+    same key is `0x04` on the wire, aimed at whatever is actually reading rather than at the
+    shell Acter spawned, which is what makes it right inside an `ssh` where today's `Eof`
+    would send PowerShell's `exit` into the wrong shell. The diagnosis below is kept as the
+    record of how it was found. **Found 2026-08-25** in
     B5.2's NVDA pass, and filed rather than fixed there: forwarding it is frontend work and
     B5.2 is a shell adapter, so fixing it in that PR would have widened an entry that had
     already grown once.
@@ -3928,7 +3937,21 @@ change shape once it meets a real far end. An entry that turns out to have speci
 wrong thing has still done its job if the measurement is written down — that is the same
 bargain 22.11 and 23.14 struck, and both paid.
 
-28. Far-end-line mode: the keyboard goes to the far end. Spec: none yet → specify first.
+28. **Done** — far-end-line mode: the keyboard goes to the far end, and the row it redraws
+    is what you hear. Spec:
+    [28-far-end-line-mode.md](specs/28-far-end-line-mode.md). **23.5 is folded into it** and
+    marked Done above. What shipped: `Ctrl+Shift+K` and `set_line_owner`; named `Key`
+    variants and `policies::key_bytes`, the measured table, with Backspace pinned as `0x7f`
+    because `0x08` deletes the previous *word* in PSReadLine and in `cmd.exe`;
+    `TerminalEngine::cursor` and `modes`; `policies::far_end_row`, decision 6's two steps as
+    a pure function over the revisions of one settled batch; `LineId` and `LineRevision` on
+    the wire, so the buffer applies revisions by id and `Pump::due` stops dropping rewrites;
+    Enter's anchored-row rule for headings; and the frontend's ARIA text box, whose shape was
+    measured before it was chosen (`ui/src/adapters/far_end_field.ts` carries the run).
+    DESIGN's "Edit field ownership" and the open question under it were amended in the same
+    PR, since the element decision is a reversal of a Decided one. The reasoning below is
+    kept as the record of how the entry got here.
+
     **Agreed 2026-08-31**, from the user's ask: up and down, Tab, and Ctrl plus any key
     have to be able to reach the far end, and a session inside an `ssh`, a `wsl`, a
     container or a REPL is unusable without them.
@@ -4087,73 +4110,34 @@ bargain 22.11 and 23.14 struck, and both paid.
     what the user needs to hear is that the program seems to be waiting for a keypress and
     which key hands it the keyboard.
 
-30. A widget redraws several rows, and a text diff may not see it. Spec: none yet →
-    **measure first**, then specify. **Raised 2026-08-31 by the user, from the `gh` case.**
+30. **Closed 2026-09-02 — measured, and the answer went into 28.** This entry existed to
+    find out whether a widget's selection is visible to a text diff at all, because a
+    highlight drawn in colour alone would have needed attribute-aware diffing and a decision
+    about how a "selected" row is expressed to a screen reader. Three prompt-driven samples
+    answered it and none of them reopened anything, so what is left is the measurement note
+    rather than an entry to build.
 
-    `gh` asks its questions with an inline prompt: a list of choices drawn as several rows,
-    with arrows moving a highlight through them. Two things about it matter and they point
-    in opposite directions. It is beyond the cursor-row rule 28 builds, because the answer to
-    an arrow is on a row the cursor is not on. And it is *not* a case Acter can route
-    automatically, because it never takes the alternate screen, so there is nothing to
-    detect — which is what the DESIGN open question now records.
+    - **`gh repo create`, 2026-08-31, gh 2.96.0**, aborted at the first prompt. No alternate
+      screen. The selection is a `>` at the start of the row, with colour used as well as the
+      marker rather than instead of it. Each arrow rewrites exactly two rows, and the engine
+      reports exactly those two, because it emits only lines whose text changed. Both arrow
+      encodings accepted; the selection wraps at both ends.
+    - **`gh pr create`, 2026-09-02, same version**, aborted before anything was pushed. The
+      same shape, and two findings nobody sought: the cursor is hidden for the whole prompt
+      and parked below the list, so this is a rewritten-row rule and never a cursor-row one;
+      and answering the prompt erases it — the question row became `? Where should we push
+      the '…' branch? Cancel` and the three option rows became empty — which is what settles
+      that the buffer applies revisions by id, blanks included, and keeps nothing else.
+    - **PSReadLine's completion menu, 2026-09-02**, `pwsh` 7.6.5 with Tab bound to
+      `MenuComplete`. **The selection is drawn in colour alone**, with no marker character
+      anywhere, which is what a rule naming `>` would have been unable to hear — and it is
+      why the rule is the row that gained non-whitespace content. The menu is also not where
+      the answer is: each arrow rewrites the command line itself, one completion per press,
+      so the anchored row already carries it. And the repaint is large — eleven line items on
+      the first press — which is what settled that row count routes nothing.
 
-    **The measurement comes first because the answer decides whether there is an entry at
-    all.** On a real pseudoconsole, on the rig that measured the `less` case, capture the
-    bytes of a `gh` prompt and answer four things: does it take the alternate screen
-    (expected no, and if yes this belongs to phase 2 instead); is the selection drawn with a
-    marker character or only with colour or reverse video; how many rows change per arrow
-    press; and does it repaint the whole list or only the two rows that differ.
-
-    **The colour answer is the one that changes the design.** A marker character is visible
-    to a text diff and this entry stays small. A highlight drawn only in colour is invisible
-    to one: the row's text is identical before and after, so a text diff reports that nothing
-    happened and the user hears silence while arrowing. The grid carries attributes and could
-    answer it; the buffer is text and could not, so that path means attribute-aware diffing
-    and a decision about how a "selected" row is expressed to a screen reader at all. Do not
-    guess which case `gh` is — the library behind its prompts has changed over the tool's
-    life, and one sample is not a population, so measure a second prompt-driven CLI beside it.
-
-    **Measured 2026-08-31, on `gh repo create` at version 2.96.0, aborted at the first
-    prompt so nothing was created. Every answer came back favourable.** No alternate screen:
-    neither `ESC [ ? 1 0 4 9` nor `ESC [ ? 4 7` appears anywhere. The selection is drawn as a
-    `>` at the start of the row, with colour used as well as the marker rather than instead
-    of it — so a text comparison sees the selection move, and the attribute-aware path this
-    entry was afraid of is not needed. Each arrow rewrites exactly two rows, the one losing
-    the marker and the one gaining it. And the engine already reports precisely those two:
-    the prompt repaints its header row identically on every press and the engine emits
-    nothing for it, because it only reports lines whose text changed. Both encodings of the
-    arrow were accepted, and the selection wraps at both ends of the list.
-
-    **So the entry is now small and its shape is known**: consume the revisions the engine
-    already emits, and speak the row that gained the marker. What is still owed is the second
-    sample — one program is not a population, the library behind `gh`'s prompts has changed
-    over the tool's life, and a CLI that draws its highlight in colour alone would reopen
-    everything this measurement closed.
-
-    **The second sample was taken 2026-09-02, on `gh pr create` at the same version,
-    aborted before anything was pushed, and it confirms rather than reopens.** No alternate
-    screen, no DECCKM, no bracketed paste; the selection drawn with a `>` at the start of
-    the row; each arrow rewriting exactly two rows, which the engine reports as two while
-    suppressing the two it repainted identically. Two further findings that were not sought:
-
-    - **The cursor is not on the selected row and cannot be followed.** `gh` hides it with
-      `ESC[?25l`, repaints from `ESC[2;1H`, and parks it at `ESC[100C` on the blank line
-      below the list until the prompt is answered. So this is a rewritten-row rule, never a
-      cursor-row one — recorded in DESIGN under "A row that changed is an answer".
-    - **Answering the prompt erases it, and that settles what the buffer keeps.** Cancel was
-      chosen, so nothing was created; the question row became `? Where should we push the
-      '…' branch? Cancel` and the three option rows became empty. The far end writes its own
-      transcript record, so the buffer applies revisions by id — blanks included — and keeps
-      nothing else.
-
-    What remains owed is only the choice between the two rows that change. "The row that
-    gained the marker" hard-codes `gh`'s `>`; DESIGN now carries a program-agnostic
-    candidate — the row that gained non-whitespace content — which still wants a third
-    sample before a spec leans on it.
-
-    Once measured, the rule to specify is the fourth bucket from DESIGN.md: speak the row
-    that gained the selection, and never re-read the whole list on every arrow. A listener
-    arrowing through a list wants what a listbox gives them, which is one item at a time.
+    All three are written into DESIGN under "A row that changed is an answer", and the rule
+    they produced shipped in 28 as `policies::far_end_row`. Nothing is owed here.
 
 ## Phase 2 gate — planning conversation, not code
 

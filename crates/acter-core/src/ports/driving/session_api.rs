@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use crate::{EventSink, KeyAck, KeyPress, SessionId, SubmitAck};
+use crate::{EventSink, KeyAck, KeyPress, LineOwner, SessionId, SubmitAck};
 
 /// The session domain's actionable surface. Methods are synchronous
 /// (sync-core/async-edges; also keeps the trait dyn-compatible without async_trait).
@@ -32,4 +32,30 @@ pub trait SessionApi: Send + Sync {
     /// frontend-supplied id can only be stale — the command may have ended between the
     /// keypress and the invoke. Returns immediately, like every other invoke.
     fn send_key(&self, session: SessionId, key: KeyPress) -> KeyAck;
+
+    /// Hand the line to the far end, or take it back (spec 28, decision 1).
+    ///
+    /// **The state lives here rather than in the frontend because the domain is what needs
+    /// it**: which bytes a key becomes, whether Enter opens a block, and which row goes in
+    /// front of the listener all depend on it. A frontend holding it would need a second
+    /// binding table to act on it, which is the seam B6 decision 4 exists to prevent.
+    ///
+    /// Toggled by the user and by nothing else — never inferred. The far ends that need it
+    /// announce nothing, and a state that changed itself would change what a key does
+    /// between one session and the next (DESIGN, "Edit field ownership").
+    fn set_line_owner(&self, session: SessionId, owner: LineOwner);
+
+    /// Paste text into the far end's own line editor.
+    ///
+    /// **Wrapped in `ESC[200~` and `ESC[201~` when the far end asked for that and sent bare
+    /// when it did not** (spec 28, decision 10), which is why this is an invoke of its own
+    /// rather than a run of [`Self::send_key`] calls: only the emulator knows whether
+    /// bracketed paste is on, and the two branches both occur in ordinary use — `bash`
+    /// turns it on at every prompt and `gh`'s prompts never touch it. Sending the wrapper
+    /// unconditionally puts its bytes into a far end that never asked; never sending it runs
+    /// each pasted line as it arrives, which is data loss rather than noise.
+    ///
+    /// Nothing happens while Acter owns the line: there the paste is the edit field's own,
+    /// and the browser has already done it.
+    fn paste(&self, session: SessionId, text: &str);
 }

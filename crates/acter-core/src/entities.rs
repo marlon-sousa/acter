@@ -22,7 +22,7 @@ pub use connection_kind::ConnectionKind;
 pub use osc133::Osc133Marker;
 pub use pacing_state::{PacingConfig, PacingState};
 pub use protocol_commands::{
-    Connectable, Connected, Key, KeyAck, KeyPress, ProfileId, SubmitAck, Variant,
+    Connectable, Connected, Key, KeyAck, KeyPress, LineOwner, ProfileId, SubmitAck, Variant,
 };
 pub use protocol_common::{CommandId, ConnectionState, ExitCode, Mode, SessionId};
 pub use protocol_connect::{AttemptId, ConnectAnswer, ConnectQuestion, ConnectStep};

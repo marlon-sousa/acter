@@ -8,7 +8,9 @@ import type {
   Connected,
   ConnectionState,
   CommandId,
+  KeyAck,
   KeyPress,
+  LineOwner,
   ProfileId,
   SessionEvent,
   SessionId,
@@ -23,6 +25,7 @@ import type { MessageView } from '../ports/message_view';
 import type { QuestionView } from '../ports/question_view';
 import type { WindowView } from '../ports/window_view';
 import type { EditFieldView } from '../ports/edit_field_view';
+import type { FarEndFieldView } from '../ports/far_end_field_view';
 
 // Pinned announcement strings (spec decision 3). Every announced string is a domain
 // requirement; this module is their single source in the frontend. The dynamic ones
@@ -135,6 +138,66 @@ export function connectedMessage(label: string, note?: string | null): string {
 // still spoken, because the first thing a second reported key must not do is vanish.
 export const unboundKeyMessage = 'that key does nothing here';
 
+// **What handing the keyboard to the far end costs and buys, said once rather than left to
+// be discovered** (spec 28, decision 1). Neither sentence names a mode: what changes for the
+// person listening is whose history and whose completion they get, and "far-end-line mode"
+// tells them nothing about that.
+//
+// It is the frontend's string, pinned here beside every other announced one, for the reason
+// they all are: the backend sends what happened and never the words.
+export const farEndLineOnMessage =
+  'The program gets your keys now. Its own history and completion — Acter\u2019s are off.';
+export const farEndLineOffMessage =
+  'Acter gets your keys again. History and completion are back.';
+
+// The two answers to `Ctrl+D` that only the frontend can voice, and the one it must not
+// (spec 28, decision 9; roadmap 23.5).
+//
+// **The third case has no string on purpose**: when the far end takes the key and the
+// session ends, the connection sentence already says so, and a second announcement would be
+// Acter talking over the answer the user actually wanted.
+//
+// `Unsupported` is a shell nobody has measured an end-of-input answer for. It says what to
+// do instead, because a listener who hears only that the key did nothing has no next step —
+// which is the failure A3.1 named for "nothing running to stop".
+export const noEndOfInputKeyMessage =
+  'This shell has no key for end of input. Type exit and press Enter.';
+// And `NothingToActOn` for that key means the session is not there any more, which is a
+// different thing from a shell that has no answer.
+export const sessionAlreadyEndedMessage = 'This session has already ended.';
+
+/**
+ * What to say about the answer to one keystroke, or `null` when nothing is to be said.
+ *
+ * **The frontend words the answer to the key it sent, and still does not decide what the key
+ * means** (spec 28, decision 9). "Bound, and this far end has no measured answer" and
+ * "bound, and nothing is listening" are different things to tell a listener, and for
+ * `Ctrl+D` they are two different sentences — but which of them applies is the backend's
+ * `KeyAck`, and the binding table stays behind the port.
+ */
+function answerTo(press: KeyPress, ack: KeyAck): string | null {
+  const endOfInput =
+    typeof press.key === 'object' &&
+    press.key.Char === 'd' &&
+    press.ctrl &&
+    !press.shift &&
+    !press.alt;
+  switch (ack) {
+    case 'Applied':
+      // The far end has the key, and whatever it does about it is a better answer than
+      // anything Acter could say — a session that ends says so through its connection.
+      return null;
+    case 'NothingToActOn':
+      return endOfInput ? sessionAlreadyEndedMessage : nothingToStopMessage;
+    case 'Unsupported':
+      return endOfInput ? noEndOfInputKeyMessage : unboundKeyMessage;
+    case 'Unbound':
+      return unboundKeyMessage;
+    default:
+      return assertNeverAck(ack);
+  }
+}
+
 function assertNever(event: never): never {
   throw new Error(`unhandled SessionEvent variant: ${JSON.stringify(event)}`);
 }
@@ -194,12 +257,24 @@ export class AppController {
   // What this window is connected to, kept so the status region can restate it without a
   // second, shorter description of the same fact being invented somewhere else.
   private connection: Connected | null = null;
+  // Who owns the line being edited (spec 28, decision 1).
+  //
+  // **The backend holds the state that decides anything** — which bytes a key becomes,
+  // whether Enter opens a block, which row goes in front of the listener — and this copy
+  // decides only what this window shows and where focus goes. Keeping the deciding half here
+  // would put a second binding table in the frontend, which is the seam B6 decision 4 exists
+  // to prevent.
+  private lineOwner: LineOwner = 'Local';
 
   constructor(
     private readonly backend: BackendApi,
     private readonly connect: ConnectApi,
     private readonly editField: EditFieldView,
     private readonly buffer: BufferView,
+    // **Optional, because a window can exist without one** — the connect dialogs' own
+    // harness builds a controller with the views it needs and no more, and a caller without
+    // this one simply never leaves local-line mode.
+    private readonly farEndField: FarEndFieldView | undefined,
     private readonly announcer: AnnouncerView,
     private readonly beep: BeepView,
     private readonly window: WindowView,
@@ -307,6 +382,10 @@ export class AppController {
     // vocabulary A13 removed and B9.5 rewrote — so a reworded sentence silently changed what
     // a listener heard afterwards. The backend computes it beside the sentence now.
     this.noteSaidIntegrationIsMissing = connected?.limit_explained ?? false;
+    // A new far end owns nothing until the user says so. The state is per session, like
+    // everything else this method resets: a mode carried across a connection would change
+    // what a key does in a shell the user never chose it for.
+    this.setLineOwner('Local', false);
     this.buffer.clear();
     this.openBlocks.clear();
     this.tooBig.clear();
@@ -422,7 +501,15 @@ export class AppController {
         // backend's to keep — it emits this event before the `Announce` about it, and
         // the per-session channel delivers in order, so the text is in the buffer before
         // anything speaks it.
-        this.buffer.appendOutput(event.command_id, event.text);
+        //
+        // **Applied to the line it names since 28** (decision 8): the far end writes its own
+        // record, revisions and blanks included, and the buffer keeps that and nothing else.
+        this.buffer.applyLine(
+          event.command_id,
+          event.line,
+          event.revision,
+          event.text,
+        );
         break;
       case 'CommandFinished':
         this.ensureBlock(event.command_id);
@@ -494,6 +581,16 @@ export class AppController {
       case 'ConnectionChanged':
         this.connectionChanged(event.state);
         break;
+      case 'FarEndLine':
+        // **Nothing is announced here, and that is the decision rather than an omission**
+        // (spec 28, decision 3). The element is an ARIA text box holding the far end's row
+        // and its caret, so NVDA answers every key out of its own text-box behaviour: the
+        // row when the row changed, the character at the caret when only the cursor moved,
+        // the character typed when the user typed, and "blank" for a row a key emptied.
+        // Announcing as well would say it twice — measured: a live region answering
+        // alongside produced two utterances in the same millisecond.
+        this.farEndField?.render(event.text, event.caret);
+        break;
       case 'TitleChanged':
         // No UX decided yet (no producers in Phase 1); handled to keep the switch
         // exhaustive.
@@ -542,6 +639,10 @@ export class AppController {
         // record of a session that ended, which a user who typed `exit` by accident must
         // not lose; what has no purpose left is a field with nothing to submit to.
         this.session = null;
+        // The far end that owned the line is gone, so the line comes back to Acter — which
+        // is not a mode change the user made and therefore not one they are told about.
+        // What they are told is that the session ended.
+        this.setLineOwner('Local', false);
         this.window.showTerminal(false);
         this.announcer.announce(notConnectedMessage);
         break;
@@ -602,22 +703,83 @@ export class AppController {
     // session would have said anyway — there is nothing running to stop — and saying them
     // without a round trip keeps the answer immediate.
     if (this.session === null) {
-      this.announcer.announce(nothingToStopMessage);
+      // `NothingToActOn` is what a session that has gone would have answered, so the words
+      // are the same ones — which for `Ctrl+D` is "this session has already ended" and for
+      // everything else is "nothing running to stop". Neither can be null: `Applied` is the
+      // only silent ack, and nothing was applied.
+      this.announcer.announce(
+        answerTo(press, 'NothingToActOn') ?? nothingToStopMessage,
+      );
       return;
     }
     const ack = await this.backend.sendKey(this.session, press);
-    switch (ack) {
-      case 'Applied':
-        // Nothing: the session speaks for itself when the intent lands.
-        break;
-      case 'NothingToActOn':
-        this.announcer.announce(nothingToStopMessage);
-        break;
-      case 'Unbound':
-        this.announcer.announce(unboundKeyMessage);
-        break;
-      default:
-        assertNeverAck(ack);
+    // 'Applied' answers nothing: the session speaks for itself when the intent lands.
+    const said = answerTo(press, ack);
+    if (said !== null) {
+      this.announcer.announce(said);
+    }
+  }
+
+  /**
+   * Hand the keyboard to the far end, or take it back (spec 28, decision 1).
+   *
+   * **The announcement says what the user gains and loses rather than naming a mode**, and
+   * focus moves with it: the line's owner and the element the keys go to are the same fact
+   * said twice, so leaving focus behind would put a listener in a field whose keys no longer
+   * do what it says they do.
+   */
+  async toggleLineOwner(): Promise<void> {
+    if (this.session === null || this.farEndField === undefined) {
+      // Nothing to hand the keyboard to. The same answer the window gives every other
+      // gesture it cannot act on, in the same words it has used since it opened.
+      this.announcer.announce(notConnectedMessage);
+      return;
+    }
+    const next: LineOwner = this.lineOwner === 'Local' ? 'FarEnd' : 'Local';
+    await this.backend.setLineOwner(this.session, next);
+    this.setLineOwner(next, true);
+  }
+
+  /** Whether the far end owns the line, which decides what Escape means. */
+  farEndOwnsTheLine(): boolean {
+    return this.lineOwner === 'FarEnd';
+  }
+
+  /**
+   * Paste into the far end's own line editor (spec 28, decision 10).
+   *
+   * One invoke rather than a run of keystrokes, because only the backend knows whether the
+   * far end asked for bracketed paste — and sending the wrapper to one that did not puts its
+   * bytes into the line, while never sending it runs each pasted line as it arrives.
+   */
+  async pasteToFarEnd(text: string): Promise<void> {
+    if (this.session === null || this.lineOwner !== 'FarEnd') {
+      return;
+    }
+    await this.backend.paste(this.session, text);
+  }
+
+  /**
+   * Show the window whichever line is being edited, and say which.
+   *
+   * `announce` is false when nothing changed for the user to hear about — a new connection
+   * starting in local-line mode, which is where every session starts.
+   */
+  private setLineOwner(owner: LineOwner, announce: boolean): void {
+    this.lineOwner = owner;
+    if (this.farEndField === undefined) {
+      return;
+    }
+    const far = owner === 'FarEnd';
+    this.farEndField.show(far);
+    this.window.showLocalLine(!far);
+    if (far) {
+      this.farEndField.focus();
+    } else if (announce) {
+      this.editField.focus();
+    }
+    if (announce) {
+      this.announcer.announce(far ? farEndLineOnMessage : farEndLineOffMessage);
     }
   }
 

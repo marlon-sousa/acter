@@ -389,17 +389,21 @@ export type ConnectionState =
 export type ExitCode = number;
 
 /**
- *  Which key, with exactly the one variant something presses today.
+ *  Which key, as the frontend read it off the keyboard event.
  * 
- *  Named variants (Tab, Escape, the arrows, the function keys) arrive when an entry
- *  needs them — Tab with A4's completion, the rest with phase 2's pass-through key —
- *  and not before. Shipping the whole keyboard now would be a dozen variants with no
- *  consumer, which is the shape B1 refused to create and B3.5 decision 10 restated
- *  (spec B6, decision 6).
+ *  **The named variants arrived with the entry that needed them** (spec 28, decision 4).
+ *  B6 shipped `Char` alone and said the rest would come with a consumer rather than as a
+ *  dozen variants nobody reads; far-end-line mode is that consumer, because a key aimed at
+ *  the far end has to be spelled as bytes and an arrow is not a character.
+ * 
+ *  The list is what [`key_bytes`](crate::key_bytes) has a measured spelling for and stops
+ *  there. The function keys are still absent, and so is every key nobody has measured a far
+ *  end's answer to: a variant with a guessed spelling is worse than no variant, because the
+ *  far end simply does something else and says nothing about it.
  */
 export type Key = 
 /**  A character key, as the frontend read it off the keyboard event. */
-{ Char: string };
+{ Char: string } | "Up" | "Down" | "Left" | "Right" | "Home" | "End" | "Tab" | "Enter" | "Backspace" | "Delete" | "Escape";
 
 /**
  *  What became of a keystroke: the two questions the frontend cannot answer itself.
@@ -414,12 +418,23 @@ export type KeyAck =
 /**  Bound, and acted on: the intent reached the session. */
 "Applied" | 
 /**
- *  Bound, but there was no running command to act on.
+ *  Bound, but there was no running command to act on — and, for a key aimed at the far
+ *  end rather than at a command, nothing left listening at all.
  * 
  *  The honest answer to A3.1 decision 6's "nothing to stop", which the typed `stop`
  *  had no way to give.
  */
-"NothingToActOn";
+"NothingToActOn" | 
+/**
+ *  Bound, and this far end has no measured answer for it.
+ * 
+ *  **Different from [`Self::NothingToActOn`], which is why it exists** (spec 28,
+ *  decision 9). "This shell has no key for end of input" and "there is nothing left to
+ *  send it to" are two different things to tell a listener, and until this variant they
+ *  were the same answer: a `Ctrl+D` at a shell nobody has measured an end-of-input
+ *  answer for reported that nothing was listening, in a session that was working fine.
+ */
+"Unsupported";
 
 /**
  *  One keystroke the frontend did not consume, described rather than interpreted.
@@ -433,6 +448,102 @@ export type KeyPress = {
 	shift: boolean,
 	alt: boolean,
 };
+
+/**
+ *  Identifies one line of output for as long as anything may still revise it.
+ * 
+ *  Opaque and monotonic: the engine mints one when a line is first emitted and never
+ *  reuses it. Deliberately **not** a grid coordinate — a row index survives scrolling
+ *  but breaks on resize, on scrollback eviction, and on alt-screen entry, which swaps in
+ *  a separate grid with its own coordinate space. Ids are session-global and outlive the
+ *  command block that produced them, so a frontend can find a line whichever block it
+ *  came from (spec B3, decision 7).
+ * 
+ *  `u64`, unlike [`CommandId`](crate::CommandId)'s `u32`, because lines are minted per
+ *  line of output rather than per submitted command.
+ * 
+ *  **A protocol type since 28** (decision 8), which B3 said would happen when the wire
+ *  format learned about lines. It has to be, because a terminal's output is not
+ *  append-only and the buffer had been pretending it was: without an id to apply a
+ *  revision to, arrowing a history list appends a line per press, and a `gh` prompt
+ *  answered with Cancel leaves its three option rows behind where the far end itself
+ *  blanked them. The far end writes its own record; Acter keeps that and nothing else.
+ * 
+ *  **Exported to TypeScript as a plain number by naming a narrower integer to specta.**
+ *  `specta-typescript` refuses `u64` outright, to stop a caller silently losing precision
+ *  in a JSON number — and JSON is exactly what this crosses on, so serde already writes a
+ *  number and the TypeScript describing it is `number` whichever integer is named. The
+ *  annotation is a statement about the exported *shape*, not about the id: the two
+ *  alternatives were narrowing a Decided domain type to suit a generator, and giving the
+ *  domain crate a dependency on the frontend's TypeScript exporter.
+ */
+export type LineId = number;
+
+/**
+ *  Who owns the line being edited: Acter, or the far end (DESIGN, "Edit field ownership").
+ * 
+ *  **A state rather than a setting, and never inferred** (spec 28, decision 1). The choice
+ *  cannot be made key by key — a Tab that completes against Acter's history while the far
+ *  end holds its own line buffer corrupts a command line rather than roughening an edge — so
+ *  ownership moves whole or not at all, and the user is the only thing that moves it.
+ * 
+ *  It lives in the domain because the domain is what needs it: which bytes a key becomes,
+ *  whether Enter opens a block, and which row goes in front of the listener all depend on
+ *  it. Holding it in the frontend would put a second binding table there, which is the seam
+ *  B6 decision 4 exists to prevent.
+ */
+export type LineOwner = 
+/**
+ *  Acter owns the line: its own history, its own completion, and nothing crosses to the
+ *  far end until Enter. The default in every session.
+ */
+"Local" | 
+/**
+ *  The far end owns the line: every key that is not layer 1 goes to it as it is typed,
+ *  and what the user hears back is the row the far end redrew.
+ */
+"FarEnd";
+
+/**
+ *  What one [`TerminalItem::Line`] did to the line it names.
+ * 
+ *  Two kinds would be information-sufficient — whole text plus a final flag lets a
+ *  consumer diff for itself — but the engine already did that diff to detect the
+ *  rewrite, so re-deriving it downstream would make every consumer keep a copy of every
+ *  line. Three kinds also keep the common case cheap: [`Appended`](Self::Appended)
+ *  carries only the delta, so a session containing no rewrites produces exactly the
+ *  append-only stream that existed before this type did.
+ * 
+ *  Which path consumes which follows DESIGN's separate-paths decision exactly. The
+ *  **buffer** applies all three, assigning or appending by id, so it always shows current
+ *  state. **Speech** takes `Appended` as it always has, ignores `Rewritten` as
+ *  buffer-only churn, and takes `Settled` as the line's final word — so a spinner is
+ *  never read mid-spin and its result still is.
+ * 
+ *  **A protocol type since 28** (decision 8), for the reason [`LineId`] is: the buffer
+ *  cannot apply a revision it is not told about. Which path takes which is unchanged —
+ *  this is DESIGN's separate-paths decision reaching the frontend rather than stopping at
+ *  the service.
+ */
+export type LineRevision = 
+/**
+ *  The text is the delta added to the end of the line. The ordinary case: output
+ *  streaming in, including the very first text a line ever carries.
+ */
+"Appended" | 
+/**  The line changed below what was already emitted; the text is the whole line. */
+"Rewritten" | 
+/**
+ *  The line can no longer change; the text is its final content.
+ * 
+ *  Every line settles at most once, and nothing follows a line's settlement. A line
+ *  settles when change has become impossible: it scrolled out of the active screen
+ *  area, its command block closed, the screen changed, or the terminal was resized.
+ *  Not at a newline — until a row leaves the screen area it stays reachable by
+ *  cursor addressing, which is exactly how an in-place progress display works
+ *  (spec B3, decisions 5 and 6).
+ */
+"Settled";
 
 /**
  *  Rendering mode over the one live session. Phase 1 only ever emits
@@ -555,11 +666,23 @@ export type SessionEvent =
  */
 { type: "CommandStarted"; command_id: CommandId; command_line: string | null } | 
 /**
- *  A coalesced quiescent chunk of output. Rendering only: it says what to put in
- *  the buffer and never what to say about it. Whether any of it is spoken is a
+ *  One line of output, and what this event does to it. Rendering only: it says what to
+ *  put in the buffer and never what to say about it. Whether any of it is spoken is a
  *  separate [`Announce`](SessionEvent::Announce) (A6).
+ * 
+ *  **It names a line since 28** (decision 8), and that is what makes the transcript
+ *  honest. A terminal's output is not append-only: `readline` repaints the row it is
+ *  editing, and `gh` blanks its option rows when the prompt is answered — so a buffer
+ *  that could only append grew a junk line per arrow press and kept three option rows
+ *  the far end had already erased. With the id and the revision the buffer assigns or
+ *  appends by line, blanks included, and the far end writes its own record.
+ * 
+ *  This is DESIGN's separate-paths decision unchanged rather than widened: the buffer
+ *  applies all three revisions, and what is *spoken* is still an
+ *  [`Announce`](SessionEvent::Announce) about text that is already there — a rewrite
+ *  reaches the buffer and never the speech path.
  */
-{ type: "Output"; command_id: CommandId; text: string } | 
+{ type: "Output"; command_id: CommandId; line: LineId; revision: LineRevision; text: string } | 
 /**
  *  The command block closed (OSC 133 D).
  * 
@@ -625,6 +748,26 @@ export type SessionEvent =
 { type: "AltScreenLeft" } | 
 /**  The terminal title changed. */
 { type: "TitleChanged"; title: string } | 
+/**
+ *  What the far end's command line says now, and where its cursor is in it.
+ * 
+ *  **Only in far-end-line mode, and it carries no words of Acter's** (spec 28,
+ *  decisions 2 and 3). The frontend writes both into an ARIA text box — a
+ *  `contenteditable` span with `role="textbox"` — and the reader does the speaking out
+ *  of its own text-box behaviour: the row when the row changed, the character at the
+ *  caret when only the cursor moved, and "blank" for a row a key emptied or a caret
+ *  past the end. That is why there is no live region on this path and no string here:
+ *  what a listener hears is identical in kind to what they hear in every other text box
+ *  on Windows.
+ * 
+ *  `text` is `None` when nothing was redrawn and only the caret moved, which is the
+ *  whole of what left, right, Home and End do — they rewrite nothing, so there is no
+ *  text to send and a row replaced with itself would be a change the reader announces.
+ * 
+ *  `caret` counts characters from the start of the text the field holds, which is the
+ *  anchored row from the anchor column onward.
+ */
+{ type: "FarEndLine"; text: string | null; caret: number } | 
 /**  The transport connection state changed. */
 { type: "ConnectionChanged"; state: ConnectionState } | 
 /**

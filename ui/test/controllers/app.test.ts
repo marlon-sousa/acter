@@ -9,6 +9,9 @@ import type {
   Connected,
   KeyAck,
   KeyPress,
+  LineId,
+  LineOwner,
+  LineRevision,
   ProfileId,
   SessionEvent,
   SessionId,
@@ -25,6 +28,7 @@ import type { BeepView } from '../../src/ports/beep_view';
 import type { BufferView } from '../../src/ports/buffer_view';
 import type { WindowView } from '../../src/ports/window_view';
 import type { EditFieldView } from '../../src/ports/edit_field_view';
+import type { FarEndFieldView } from '../../src/ports/far_end_field_view';
 import {
   AppController,
   altScreenEnteredMessage,
@@ -38,6 +42,10 @@ import {
   patienceMessage,
   tooBigMessage,
   unboundKeyMessage,
+  farEndLineOnMessage,
+  farEndLineOffMessage,
+  noEndOfInputKeyMessage,
+  sessionAlreadyEndedMessage,
 } from '../../src/controllers/app';
 
 class FakeBackend implements BackendApi {
@@ -91,6 +99,17 @@ class FakeBackend implements BackendApi {
     this.keysSent.push(key);
     return Promise.resolve(this.keyAck);
   }
+  /** Every hand-over of the line, in order (spec 28, decision 1). */
+  owners: LineOwner[] = [];
+  setLineOwner(_session: SessionId, owner: LineOwner): Promise<void> {
+    this.owners.push(owner);
+    return Promise.resolve();
+  }
+  pasted: string[] = [];
+  paste(_session: SessionId, text: string): Promise<void> {
+    this.pasted.push(text);
+    return Promise.resolve();
+  }
   /** Push an event as the backend would over the Channel. */
   emit(event: SessionEvent): void {
     this.onEvent?.(event);
@@ -122,15 +141,25 @@ class FakeEditField implements EditFieldView {
 
 class FakeBuffer implements BufferView {
   opened: Array<{ commandId: CommandId; commandLine: string }> = [];
-  appended: Array<{ commandId: CommandId; text: string }> = [];
+  appended: Array<{
+    commandId: CommandId;
+    line: LineId;
+    revision: LineRevision;
+    text: string;
+  }> = [];
   /** Prompts the shell drew, in the order the buffer was asked to keep them (B5.6). */
   prompts: string[] = [];
   focused = false;
   openBlock(commandId: CommandId, commandLine: string): void {
     this.opened.push({ commandId, commandLine });
   }
-  appendOutput(commandId: CommandId, text: string): void {
-    this.appended.push({ commandId, text });
+  applyLine(
+    commandId: CommandId,
+    line: LineId,
+    revision: LineRevision,
+    text: string,
+  ): void {
+    this.appended.push({ commandId, line, revision, text });
   }
   appendPrompt(text: string): void {
     this.prompts.push(text);
@@ -184,6 +213,36 @@ class FakeWindow implements WindowView {
   }
   showTerminal(live: boolean): void {
     this.terminals.push(live);
+  }
+  /** Whether the local command line was shown or taken away, in order (spec 28). */
+  localLines: boolean[] = [];
+  showLocalLine(showing: boolean): void {
+    this.localLines.push(showing);
+  }
+}
+
+/**
+ * The far end's command line, as the controller drives it (spec 28, decision 2).
+ *
+ * It records rather than renders: what an ARIA text box does with a row and a caret is the
+ * adapter's own test, and what this one asks is whether the controller hands it the right
+ * ones and moves focus with the mode.
+ */
+class FakeFarEndField implements FarEndFieldView {
+  rendered: Array<{ text: string | null; caret: number }> = [];
+  showing = false;
+  focused = false;
+  render(text: string | null, caret: number): void {
+    this.rendered.push({ text, caret });
+  }
+  show(showing: boolean): void {
+    this.showing = showing;
+  }
+  focus(): void {
+    this.focused = true;
+  }
+  isFocused(): boolean {
+    return this.focused;
   }
 }
 
@@ -268,11 +327,13 @@ async function makeApp(connect: FakeConnect = new FakeConnect()) {
   const announcer = new FakeAnnouncer();
   const beep = new FakeBeep();
   const window = new FakeWindow();
+  const farEndField = new FakeFarEndField();
   const controller = new AppController(
     backend,
     connect,
     editField,
     buffer,
+    farEndField,
     announcer,
     beep,
     window,
@@ -284,11 +345,13 @@ async function makeApp(connect: FakeConnect = new FakeConnect()) {
   window.titles = [];
   window.statuses = [];
   window.terminals = [];
+  window.localLines = [];
   return {
     backend,
     connect,
     editField,
     buffer,
+    farEndField,
     announcer,
     beep,
     window,
@@ -483,14 +546,22 @@ describe('event rendering (decision 2)', () => {
     const { backend, buffer, announcer, controller } = await makeApp();
 
     backend.emit({ type: 'CommandStarted', command_id: 1, command_line: null });
-    backend.emit({ type: 'Output', command_id: 1, text: 'hello from acter' });
+    backend.emit({
+      type: 'Output',
+      command_id: 1,
+      line: 1,
+      revision: 'Appended',
+      text: 'hello from acter',
+    });
     backend.emit({
       type: 'Announce',
       command_id: 1,
       announcement: { kind: 'ReadAloud', text: 'hello from acter' },
     });
 
-    expect(buffer.appended).toEqual([{ commandId: 1, text: 'hello from acter' }]);
+    expect(buffer.appended).toEqual([
+      { commandId: 1, line: 1, revision: 'Appended', text: 'hello from acter' },
+    ]);
     expect(announcer.announcements).toEqual(['hello from acter']);
   });
 
@@ -501,7 +572,7 @@ describe('event rendering (decision 2)', () => {
     // which the per-view recordings cannot show.
     const buffer: BufferView = {
       openBlock: () => {},
-      appendOutput: () => {
+      applyLine: () => {
         order.push('buffer');
       },
       appendPrompt: () => {
@@ -522,6 +593,7 @@ describe('event rendering (decision 2)', () => {
       new FakeConnect(),
       new FakeEditField(),
       buffer,
+      new FakeFarEndField(),
       announcer,
       new FakeBeep(),
       new FakeWindow(),
@@ -532,7 +604,13 @@ describe('event rendering (decision 2)', () => {
     // Two events now, in the order the backend sends them: A6 moved this invariant from
     // "append before announcing inside one handler" to "the render event before the
     // announce about it". The channel delivers in order, so obeying that order is enough.
-    backend.emit({ type: 'Output', command_id: 1, text: 'hello' });
+    backend.emit({
+      type: 'Output',
+      command_id: 1,
+      line: 1,
+      revision: 'Appended',
+      text: 'hello',
+    });
     backend.emit({
       type: 'Announce',
       command_id: 1,
@@ -547,14 +625,22 @@ describe('event rendering (decision 2)', () => {
     const text = Array.from({ length: 40 }, (_, i) => `line ${i + 1}`).join('\n');
 
     backend.emit({ type: 'CommandStarted', command_id: 1, command_line: null });
-    backend.emit({ type: 'Output', command_id: 1, text });
+    backend.emit({
+      type: 'Output',
+      command_id: 1,
+      line: 1,
+      revision: 'Appended',
+      text,
+    });
     backend.emit({
       type: 'Announce',
       command_id: 1,
       announcement: { kind: 'TooBig', lines: 40 },
     });
 
-    expect(buffer.appended).toEqual([{ commandId: 1, text }]);
+    expect(buffer.appended).toEqual([
+      { commandId: 1, line: 1, revision: 'Appended', text },
+    ]);
     expect(announcer.announcements).toEqual([tooBigMessage(40)]);
     expect(announcer.announcements[0]).toBe('40 lines arrived, too big to read');
   });
@@ -563,9 +649,15 @@ describe('event rendering (decision 2)', () => {
     const { backend, buffer, announcer, controller } = await makeApp();
 
     backend.emit({ type: 'CommandStarted', command_id: 1, command_line: null });
-    backend.emit({ type: 'Output', command_id: 1, text: 'still working' });
+    backend.emit({
+      type: 'Output',
+      command_id: 1,
+      line: 1,
+      revision: 'Appended',
+      text: 'still working',
+    });
 
-    expect(buffer.appended).toEqual([{ commandId: 1, text: 'still working' }]);
+    expect(buffer.appended).toEqual([{ commandId: 1, line: 1, revision: 'Appended', text: 'still working' }]);
     expect(announcer.announcements).toEqual([]);
   });
 
@@ -573,7 +665,13 @@ describe('event rendering (decision 2)', () => {
     const { backend, announcer, beep, controller } = await makeApp();
 
     backend.emit({ type: 'CommandStarted', command_id: 1, command_line: null });
-    backend.emit({ type: 'Output', command_id: 1, text: 'hello from acter' });
+    backend.emit({
+      type: 'Output',
+      command_id: 1,
+      line: 1,
+      revision: 'Appended',
+      text: 'hello from acter',
+    });
     backend.emit({
       type: 'Announce',
       command_id: 1,
@@ -594,7 +692,13 @@ describe('event rendering (decision 2)', () => {
     const { backend, announcer, beep, controller } = await makeApp();
 
     backend.emit({ type: 'CommandStarted', command_id: 1, command_line: null });
-    backend.emit({ type: 'Output', command_id: 1, text: 'error: boom' });
+    backend.emit({
+      type: 'Output',
+      command_id: 1,
+      line: 1,
+      revision: 'Appended',
+      text: 'error: boom',
+    });
     backend.emit({
       type: 'Announce',
       command_id: 1,
@@ -630,7 +734,13 @@ describe('event rendering (decision 2)', () => {
     const { backend, buffer, announcer, controller } = await makeApp();
 
     backend.emit({ type: 'CommandStarted', command_id: 1, command_line: null });
-    backend.emit({ type: 'Output', command_id: 1, text: 'phase one' });
+    backend.emit({
+      type: 'Output',
+      command_id: 1,
+      line: 1,
+      revision: 'Appended',
+      text: 'phase one',
+    });
     backend.emit({
       type: 'Announce',
       command_id: 1,
@@ -640,7 +750,13 @@ describe('event rendering (decision 2)', () => {
 
     expect(announcer.announcements).toEqual(['phase one']);
     // The block was closed, so a later event for the same id opens a fresh one.
-    backend.emit({ type: 'Output', command_id: 1, text: 'late' });
+    backend.emit({
+      type: 'Output',
+      command_id: 1,
+      line: 1,
+      revision: 'Appended',
+      text: 'late',
+    });
     expect(buffer.opened).toEqual([
       { commandId: 1, commandLine: '' },
       { commandId: 1, commandLine: '' },
@@ -651,7 +767,13 @@ describe('event rendering (decision 2)', () => {
     const { backend, beep, announcer, controller } = await makeApp();
 
     backend.emit({ type: 'CommandStarted', command_id: 1, command_line: null });
-    backend.emit({ type: 'Output', command_id: 1, text: 'a\nb' });
+    backend.emit({
+      type: 'Output',
+      command_id: 1,
+      line: 1,
+      revision: 'Appended',
+      text: 'a\nb',
+    });
     backend.emit({
       type: 'Announce',
       command_id: 1,
@@ -669,7 +791,13 @@ describe('event rendering (decision 2)', () => {
   it('clears the too-big flag on interrupt, so a reused id does not beep later', async () => {
     const { backend, beep, controller } = await makeApp();
 
-    backend.emit({ type: 'Output', command_id: 1, text: 'a\nb' });
+    backend.emit({
+      type: 'Output',
+      command_id: 1,
+      line: 1,
+      revision: 'Appended',
+      text: 'a\nb',
+    });
     backend.emit({
       type: 'Announce',
       command_id: 1,
@@ -685,13 +813,25 @@ describe('event rendering (decision 2)', () => {
     const { backend, beep, controller } = await makeApp();
 
     backend.emit({ type: 'CommandStarted', command_id: 1, command_line: null });
-    backend.emit({ type: 'Output', command_id: 1, text: 'a\nb' });
+    backend.emit({
+      type: 'Output',
+      command_id: 1,
+      line: 1,
+      revision: 'Appended',
+      text: 'a\nb',
+    });
     backend.emit({
       type: 'Announce',
       command_id: 1,
       announcement: { kind: 'TooBig', lines: 2 },
     });
-    backend.emit({ type: 'Output', command_id: 1, text: 'trickle' });
+    backend.emit({
+      type: 'Output',
+      command_id: 1,
+      line: 1,
+      revision: 'Appended',
+      text: 'trickle',
+    });
     backend.emit({
       type: 'Announce',
       command_id: 1,
@@ -723,7 +863,13 @@ describe('event rendering (decision 2)', () => {
     const { backend, beep, controller } = await makeApp();
 
     // Command 1 is too-big and beeps.
-    backend.emit({ type: 'Output', command_id: 1, text: 'a\nb' });
+    backend.emit({
+      type: 'Output',
+      command_id: 1,
+      line: 1,
+      revision: 'Appended',
+      text: 'a\nb',
+    });
     backend.emit({
       type: 'Announce',
       command_id: 1,
@@ -731,7 +877,13 @@ describe('event rendering (decision 2)', () => {
     });
     backend.emit({ type: 'CommandFinished', command_id: 1 });
     // Command 2 is plain; it must not beep.
-    backend.emit({ type: 'Output', command_id: 2, text: 'ok' });
+    backend.emit({
+      type: 'Output',
+      command_id: 2,
+      line: 1,
+      revision: 'Appended',
+      text: 'ok',
+    });
     backend.emit({
       type: 'Announce',
       command_id: 2,
@@ -805,10 +957,16 @@ describe('event rendering (decision 2)', () => {
     const { backend, buffer, controller } = await makeApp();
 
     // No submit happened; an Output races in first.
-    backend.emit({ type: 'Output', command_id: 7, text: 'orphan chunk' });
+    backend.emit({
+      type: 'Output',
+      command_id: 7,
+      line: 1,
+      revision: 'Appended',
+      text: 'orphan chunk',
+    });
 
     expect(buffer.opened).toEqual([{ commandId: 7, commandLine: '' }]);
-    expect(buffer.appended).toEqual([{ commandId: 7, text: 'orphan chunk' }]);
+    expect(buffer.appended).toEqual([{ commandId: 7, line: 1, revision: 'Appended', text: 'orphan chunk' }]);
   });
 
   it('sets the command line on the ack even when an event opened the block first', async () => {
@@ -833,9 +991,194 @@ describe('event rendering (decision 2)', () => {
     await controller.submit();
 
     backend.emit({ type: 'CommandStarted', command_id: 1, command_line: null });
-    backend.emit({ type: 'Output', command_id: 1, text: 'hello from acter' });
+    backend.emit({
+      type: 'Output',
+      command_id: 1,
+      line: 1,
+      revision: 'Appended',
+      text: 'hello from acter',
+    });
 
     expect(buffer.opened).toEqual([{ commandId: 1, commandLine: 'small' }]);
+  });
+});
+
+// **Far-end-line mode: the keyboard goes to the far end** (spec 28).
+//
+// What is asserted here is the controller's half: that the state reaches the backend, that
+// focus and the two fields move with it, that the sentence says what is gained and lost, and
+// that the far end's row is handed to the field rather than announced. What NVDA then says
+// about that field is the measurement recorded in adapters/far_end_field.ts.
+describe('handing the line to the far end (28)', () => {
+  it('tells the backend, moves focus, and says what is gained and lost', async () => {
+    const { backend, farEndField, window, announcer, controller } = await makeApp();
+
+    await controller.toggleLineOwner();
+
+    expect(backend.owners).toEqual(['FarEnd']);
+    expect(farEndField.showing).toBe(true);
+    expect(farEndField.focused).toBe(true);
+    expect(window.localLines).toEqual([false]);
+    expect(announcer.announcements).toEqual([farEndLineOnMessage]);
+  });
+
+  it('takes it back, and says that too', async () => {
+    const { backend, editField, farEndField, window, announcer, controller } =
+      await makeApp();
+    await controller.toggleLineOwner();
+    announcer.announcements = [];
+    window.localLines = [];
+    editField.focused = false;
+
+    await controller.toggleLineOwner();
+
+    expect(backend.owners).toEqual(['FarEnd', 'Local']);
+    expect(farEndField.showing).toBe(false);
+    expect(editField.focused).toBe(true);
+    expect(window.localLines).toEqual([true]);
+    expect(announcer.announcements).toEqual([farEndLineOffMessage]);
+  });
+
+  // Neither sentence names a mode. What changes for the person listening is whose history
+  // and whose completion they get, and "far-end-line mode" says nothing about that.
+  it('names what changes rather than naming a mode', () => {
+    for (const said of [farEndLineOnMessage, farEndLineOffMessage]) {
+      expect(said.toLowerCase()).not.toContain('mode');
+      expect(said.toLowerCase()).toContain('history');
+      expect(said.toLowerCase()).toContain('completion');
+    }
+  });
+
+  it('says which way it went', () => {
+    expect(farEndLineOnMessage).not.toBe(farEndLineOffMessage);
+  });
+
+  // Nothing to hand the keyboard to. The window answers in the words it has used since it
+  // opened, rather than pretending the gesture worked.
+  it('refuses in a window with no session, in the words that window already uses', async () => {
+    const connect = new FakeConnect();
+    connect.atStartup = null;
+    const { announcer, controller, backend } = await makeApp(connect);
+
+    await controller.toggleLineOwner();
+
+    expect(backend.owners).toEqual([]);
+    expect(announcer.announcements).toEqual([notConnectedMessage]);
+  });
+
+  // A mode carried across a connection would change what a key does in a shell the user
+  // never chose it for, which is why the state is per session.
+  it('comes back to Acter when the far end goes away, silently', async () => {
+    const { farEndField, announcer, backend, controller } = await makeApp();
+    await controller.toggleLineOwner();
+    announcer.announcements = [];
+
+    backend.emit({ type: 'ConnectionChanged', state: 'Disconnected' });
+
+    expect(farEndField.showing).toBe(false);
+    // The listener is told the session ended, and not also told about a mode change they
+    // did not make.
+    expect(announcer.announcements).toEqual([notConnectedMessage]);
+  });
+
+  // **Nothing is announced about the far end's row** (spec 28, decision 3), because the
+  // element holding it is a text box and the reader speaks it. Announcing as well would say
+  // it twice: measured on the bridge, a live region answering alongside produced two
+  // utterances in the same millisecond, the reader's first.
+  it('hands the row and the caret to the field and announces neither', async () => {
+    const { backend, farEndField, announcer, controller } = await makeApp();
+    await controller.toggleLineOwner();
+    announcer.announcements = [];
+
+    backend.emit({ type: 'FarEndLine', text: 'cargo test --all', caret: 16 });
+    backend.emit({ type: 'FarEndLine', text: null, caret: 3 });
+
+    expect(farEndField.rendered).toEqual([
+      { text: 'cargo test --all', caret: 16 },
+      { text: null, caret: 3 },
+    ]);
+    expect(announcer.announcements).toEqual([]);
+  });
+
+  it('pastes into the far end only while the far end owns the line', async () => {
+    const { backend, controller } = await makeApp();
+
+    await controller.pasteToFarEnd('ignored');
+    expect(backend.pasted).toEqual([]);
+
+    await controller.toggleLineOwner();
+    await controller.pasteToFarEnd('cargo test --all');
+
+    expect(backend.pasted).toEqual(['cargo test --all']);
+  });
+
+  it('answers whether the far end owns the line, which is what Escape turns on', async () => {
+    const { controller } = await makeApp();
+
+    expect(controller.farEndOwnsTheLine()).toBe(false);
+    await controller.toggleLineOwner();
+    expect(controller.farEndOwnsTheLine()).toBe(true);
+  });
+});
+
+// **The three answers to Ctrl+D** (spec 28, decision 9; roadmap 23.5). The frontend words
+// the answer to the key it sent and still does not decide what the key means: which of the
+// three applies is the backend's `KeyAck`.
+describe('what Ctrl+D is answered with (23.5)', () => {
+  const ctrlD: KeyPress = {
+    key: { Char: 'd' },
+    ctrl: true,
+    shift: false,
+    alt: false,
+  };
+
+  // The far end took it and the session is ending. The connection sentence already says so,
+  // and a second announcement would talk over the answer the user actually wanted.
+  it('says nothing when the far end took it', async () => {
+    const { backend, announcer, controller } = await makeApp();
+    backend.keyAck = 'Applied';
+
+    await controller.reportKey(ctrlD);
+
+    expect(announcer.announcements).toEqual([]);
+  });
+
+  // "Bound, and this shell has no measured answer" — which is a working session, so the
+  // sentence has to say what to do instead rather than only that the key did nothing.
+  it('names the way out when the shell has no key for end of input', async () => {
+    const { backend, announcer, controller } = await makeApp();
+    backend.keyAck = 'Unsupported';
+
+    await controller.reportKey(ctrlD);
+
+    expect(announcer.announcements).toEqual([noEndOfInputKeyMessage]);
+    expect(noEndOfInputKeyMessage).toContain('exit');
+  });
+
+  it('says the session has already ended when nothing is listening', async () => {
+    const { backend, announcer, controller } = await makeApp();
+    backend.keyAck = 'NothingToActOn';
+
+    await controller.reportKey(ctrlD);
+
+    expect(announcer.announcements).toEqual([sessionAlreadyEndedMessage]);
+  });
+
+  // And the three are three, which is the whole reason `Unsupported` was added: before it,
+  // "no measured answer" and "nothing is listening" were the same reply.
+  it('does not give Ctrl+C the sentences that belong to Ctrl+D', async () => {
+    const ctrlC: KeyPress = {
+      key: { Char: 'c' },
+      ctrl: true,
+      shift: false,
+      alt: false,
+    };
+    const { backend, announcer, controller } = await makeApp();
+    backend.keyAck = 'NothingToActOn';
+
+    await controller.reportKey(ctrlC);
+
+    expect(announcer.announcements).toEqual([nothingToStopMessage]);
   });
 });
 
@@ -871,14 +1214,20 @@ describe('Announce (B1.5): speech is its own event', () => {
     const { backend, buffer, announcer, controller } = await makeApp();
 
     backend.emit({ type: 'CommandStarted', command_id: 1, command_line: null });
-    backend.emit({ type: 'Output', command_id: 1, text: 'hello\n' });
+    backend.emit({
+      type: 'Output',
+      command_id: 1,
+      line: 1,
+      revision: 'Appended',
+      text: 'hello\n',
+    });
     backend.emit({
       type: 'Announce',
       command_id: 1,
       announcement: { kind: 'ReadAloud', text: 'hello\n' },
     });
 
-    expect(buffer.appended).toEqual([{ commandId: 1, text: 'hello\n' }]);
+    expect(buffer.appended).toEqual([{ commandId: 1, line: 1, revision: 'Appended', text: 'hello\n' }]);
     expect(announcer.announcements).toEqual(['hello\n']);
   });
 
@@ -888,7 +1237,13 @@ describe('Announce (B1.5): speech is its own event', () => {
     backend.emit({ type: 'CommandStarted', command_id: 1, command_line: null });
     // Past the threshold the backend does not hold the text, so the count cannot be
     // re-derived here even in principle — it is carried.
-    backend.emit({ type: 'Output', command_id: 1, text: 'y\ny\n' });
+    backend.emit({
+      type: 'Output',
+      command_id: 1,
+      line: 1,
+      revision: 'Appended',
+      text: 'y\ny\n',
+    });
     backend.emit({
       type: 'Announce',
       command_id: 1,
@@ -896,7 +1251,7 @@ describe('Announce (B1.5): speech is its own event', () => {
     });
 
     expect(announcer.announcements).toEqual([tooBigMessage(500)]);
-    expect(buffer.appended).toEqual([{ commandId: 1, text: 'y\ny\n' }]);
+    expect(buffer.appended).toEqual([{ commandId: 1, line: 1, revision: 'Appended', text: 'y\ny\n' }]);
   });
 
   it('a too-big Announce arms the completion beep', async () => {
@@ -964,12 +1319,18 @@ describe('Announce (B1.5): speech is its own event', () => {
       announcement: { kind: 'OutputContinues' },
     });
     for (const text of ['still\n', 'coming\n']) {
-      backend.emit({ type: 'Output', command_id: 1, text });
+      backend.emit({
+      type: 'Output',
+      command_id: 1,
+      line: 1,
+      revision: 'Appended',
+      text,
+    });
     }
 
     expect(buffer.appended).toEqual([
-      { commandId: 1, text: 'still\n' },
-      { commandId: 1, text: 'coming\n' },
+      { commandId: 1, line: 1, revision: 'Appended', text: 'still\n' },
+      { commandId: 1, line: 1, revision: 'Appended', text: 'coming\n' },
     ]);
     expect(announcer.announcements).toEqual([outputContinuesMessage]);
   });
@@ -1062,6 +1423,7 @@ describe('a window connected to nothing (spec B7, decision 3)', () => {
       connect,
       editField,
       buffer,
+      new FakeFarEndField(),
       announcer,
       beep,
       window,
@@ -1146,7 +1508,13 @@ describe('connecting to a profile (spec B7)', () => {
 
   it('clears the buffer before attaching, so no shell writes under another one', async () => {
     const { backend, buffer, controller } = await makeApp();
-    backend.emit({ type: 'Output', command_id: 1, text: 'from the old shell' });
+    backend.emit({
+      type: 'Output',
+      command_id: 1,
+      line: 1,
+      revision: 'Appended',
+      text: 'from the old shell',
+    });
     expect(buffer.appended).toHaveLength(1);
 
     await controller.connectTo(ubuntu);
@@ -1347,7 +1715,13 @@ describe('the two faces of the window (spec A10)', () => {
    * submit to, so it goes. */
   it('takes the edit field away when the far end goes, and keeps the buffer', async () => {
     const { backend, buffer, window, controller } = await makeApp();
-    backend.emit({ type: 'Output', command_id: 1, text: 'some history' });
+    backend.emit({
+      type: 'Output',
+      command_id: 1,
+      line: 1,
+      revision: 'Appended',
+      text: 'some history',
+    });
     const before = buffer.cleared;
 
     backend.emit({ type: 'ConnectionChanged', state: 'Disconnected' });

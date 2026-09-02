@@ -21,6 +21,7 @@ import type { BackendApi } from '../ports/backend_api';
 import type {
   KeyAck,
   KeyPress,
+  LineOwner,
   SessionEvent,
   SessionId,
   SubmitAck,
@@ -113,6 +114,19 @@ class RecordingBackend implements BackendApi {
     const ack = await this.inner.sendKey(session, key);
     this.ring.push('ack', 'sendKey', ack);
     return ack;
+  }
+
+  // Recorded like every other call, and for the reason the ring exists: which line owner
+  // was in force when a keystroke went out is exactly the ordering question a far-end
+  // session raises, and it is unanswerable from the keystrokes alone.
+  setLineOwner(session: SessionId, owner: LineOwner): Promise<void> {
+    this.ring.push('call', 'setLineOwner', { session, owner });
+    return this.inner.setLineOwner(session, owner);
+  }
+
+  paste(session: SessionId, text: string): Promise<void> {
+    this.ring.push('call', 'paste', { session, text });
+    return this.inner.paste(session, text);
   }
 }
 

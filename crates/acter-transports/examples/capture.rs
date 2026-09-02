@@ -151,6 +151,18 @@ fn key_bytes(name: &str) -> Option<&'static [u8]> {
         "ctrl_d" => b"\x04",
         "ctrl_u" => b"\x15",
         "ctrl_x" => b"\x18",
+        // The two spellings of Backspace, and of Home and End, which entry 28 must
+        // choose between and which no document can answer.
+        "bs" => b"\x08",
+        "del" => b"\x7f",
+        "delete" => b"\x1b[3~",
+        "home_h" => b"\x1b[H",
+        "home_1" => b"\x1b[1~",
+        "home_o" => b"\x1bOH",
+        "end_f" => b"\x1b[F",
+        "end_4" => b"\x1b[4~",
+        "end_o" => b"\x1bOF",
+        "up_o" => b"\x1bOA",
         _ => return None,
     })
 }

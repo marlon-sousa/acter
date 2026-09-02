@@ -14,6 +14,9 @@
 //! says what it did to it — DESIGN's Decided "output is a stream of identified lines,
 //! and a rewrite is a revision", which spec B3 decision 6 implements.
 
+use serde::{Deserialize, Serialize};
+use specta::Type;
+
 use crate::{Osc133Marker, Screen};
 
 /// Identifies one line of output for as long as anything may still revise it.
@@ -26,9 +29,26 @@ use crate::{Osc133Marker, Screen};
 /// came from (spec B3, decision 7).
 ///
 /// `u64`, unlike [`CommandId`](crate::CommandId)'s `u32`, because lines are minted per
-/// line of output rather than per submitted command. It is not a protocol type yet: B6
-/// promotes it when the wire format learns about lines.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// line of output rather than per submitted command.
+///
+/// **A protocol type since 28** (decision 8), which B3 said would happen when the wire
+/// format learned about lines. It has to be, because a terminal's output is not
+/// append-only and the buffer had been pretending it was: without an id to apply a
+/// revision to, arrowing a history list appends a line per press, and a `gh` prompt
+/// answered with Cancel leaves its three option rows behind where the far end itself
+/// blanked them. The far end writes its own record; Acter keeps that and nothing else.
+///
+/// **Exported to TypeScript as a plain number by naming a narrower integer to specta.**
+/// `specta-typescript` refuses `u64` outright, to stop a caller silently losing precision
+/// in a JSON number — and JSON is exactly what this crosses on, so serde already writes a
+/// number and the TypeScript describing it is `number` whichever integer is named. The
+/// annotation is a statement about the exported *shape*, not about the id: the two
+/// alternatives were narrowing a Decided domain type to suit a generator, and giving the
+/// domain crate a dependency on the frontend's TypeScript exporter.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Type,
+)]
+#[specta(type = u32)]
 pub struct LineId(pub u64);
 
 /// What one [`TerminalItem::Line`] did to the line it names.
@@ -45,7 +65,12 @@ pub struct LineId(pub u64);
 /// state. **Speech** takes `Appended` as it always has, ignores `Rewritten` as
 /// buffer-only churn, and takes `Settled` as the line's final word — so a spinner is
 /// never read mid-spin and its result still is.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// **A protocol type since 28** (decision 8), for the reason [`LineId`] is: the buffer
+/// cannot apply a revision it is not told about. Which path takes which is unchanged —
+/// this is DESIGN's separate-paths decision reaching the frontend rather than stopping at
+/// the service.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
 pub enum LineRevision {
     /// The text is the delta added to the end of the line. The ordinary case: output
     /// streaming in, including the very first text a line ever carries.
