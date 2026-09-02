@@ -4058,9 +4058,9 @@ bargain 22.11 and 23.14 struck, and both paid.
     **Deliberately not in this entry**: any renderer, the alternate screen, and the
     several-rows case, which is 30.
 
-28.1. **The reader answers the key before the far end has.** Spec: none yet → this is a
-    design conversation before it is a spec, because the fix is a decision 28 already took
-    the other way. **Found 2026-09-02 in 28's own NVDA pass**, driving a real WSL `bash`
+28.1. **Acter writes the row after the reader has stopped waiting for it.** Spec: none yet
+    → small, and the diagnosis is now complete and measured; it reverses no decision of 28.
+    **Found 2026-09-02 in 28's own NVDA pass**, driving a real WSL `bash`
     through the screen-readers bridge as the `user` persona, NVDA 2026.1.1, silent capture.
 
     **What a listener meets.** In far-end-line mode, every key is answered with the state
@@ -4076,22 +4076,64 @@ bargain 22.11 and 23.14 struck, and both paid.
     right line every time, and Tab's completion (`ech` to `echo `) and Backspace's single
     character deletion were both exactly right in the field. What is wrong is only *when*.
 
-    **The cause is structural and was not foreseen.** NVDA answers a caret command
-    synchronously, reading the field as it stands at that instant; Acter writes the far end's
-    answer when the batch settles on the quiescence clock, half a second later. Decision 2's
-    element measurement was taken on a static page where the text and caret were already set
-    when the key was pressed, so it could not see this — and decision 6's "once the row
-    settles" is what puts the write on the other side of the reader's answer.
+    **The first diagnosis written here was wrong, and the correction is the whole entry.**
+    It said NVDA answers a caret command synchronously from the field as it stands, and that
+    the defect therefore could not be fixed by writing sooner. **NVDA does not answer
+    synchronously. It waits.** Read in NVDA's own source, `source/editableText.py`:
+    `EditableText._caretMovementScriptHelper` takes a bookmark of the caret, sends the key on
+    with `gesture.send()`, and then calls `_hasCaretMoved`, which polls the caret every 10 ms
+    until it moves or until `config.conf["editableText"]["caretMoveTimeoutMs"]` elapses —
+    **default 100 ms, and exposed to the user in Advanced settings as "Caret movement timeout
+    (in ms)", 0 to 2000**. Only then does it speak what is at the caret. The arrow keys are
+    bound to those scripts (`__gestures`, `caret_moveByCharacter` and `caret_moveByLine`), and
+    our field gets that behaviour because `IAccessible.findOverlayClasses` attaches
+    `EditableTextWithAutoSelectDetection` to any object with an `IAccessibleTextObject` whose
+    role is text or whose state is editable — which is what a `contenteditable` in WebView2 is.
 
-    **It cannot be fixed by writing sooner**, and that is the part that makes this a design
-    conversation. The far end is remote: at the instant of the press there is nothing to
-    write, because nothing has come back. So the choices are real ones — suppress the
-    reader's own answer at press time and speak the row when it arrives (which is the live
-    region decision 3 deleted, reinstated for this path only); or keep the text box and
-    accept that it is re-read on demand rather than spoken on the press; or something that
-    keeps NVDA quiet at the keystroke without an application region. **Do not guess between
-    them**: this is the same class of question the element probe answered, and it should be
-    answered the same way, on the bridge, before a spec.
+    **So the model Acter needs is the one NVDA already assumes for a terminal**, and it is not
+    an invention: `NVDAObjects.behaviors.Terminal` is `LiveText` plus `EditableText`, and
+    `WinConsoleUIA._caretMovementTimeoutMultiplier` raises the poll to 1.5x with the comment
+    "On older consoles, the caret can take a while to move." A terminal is expected to repaint
+    late; the reader's job is to wait for the repaint and then speak it. Acter is simply
+    later than the window it is allowed.
+
+    **How much later is measured, and the margin is enormous.** New rig,
+    `crates/acter-transports/examples/latency.rs`, which sends a key to a real pseudoconsole
+    and timestamps every line and cursor change the engine reports, in milliseconds from the
+    byte going out. Measured 2026-09-02 against `bash` under WSL, Windows PowerShell and
+    `cmd.exe`, on a warmed prompt with history:
+
+    - `bash` under WSL: left 1 ms, Home 0 ms, up arrow 3 ms, Backspace 4 ms.
+    - Windows PowerShell: all four keys 0 ms.
+    - `cmd.exe`: left 0 ms, Home 0 ms, up 0 ms, Backspace 1 ms.
+
+    In every case the answer arrived **in a single batch — first change and settled are the
+    same instant**. The far end answers in single-digit milliseconds against a 100 ms window.
+    **Acter's 500 ms quiescence clock is the entire defect**: it is five times the window the
+    reader gives, and one hundred times what the far end takes. (The first run of the rig
+    reported 226 and 351 ms and was thrown away — that was WSL still starting, not a keypress.)
+
+    **A second defect the rig found, independent of the clock.** Left, right, Home and End
+    **rewrite no line at all** — the far end only repositions the cursor, and the engine
+    reports no `TerminalItem::Line` for any of them. The cursor is the whole of the evidence
+    that the key arrived. `policies::far_end_row`'s third step exists for exactly this and is
+    correct, so the pump does answer them; but it means any future change that keys the
+    far-end path off changed lines alone would silently lose the four commonest navigation
+    keys.
+
+    **What this makes the fix.** Not a live region, not `role="application"`, and no reversal
+    of decision 2 or 3 — the element is right and the content it holds was right all along.
+    The far-end line comes off the pacing clock: `Pump::run` arms its settle timer with
+    `self.quiescence`, and that number belongs to the transcript, not to a keystroke a reader
+    is standing there waiting for. It needs its own, measured, much smaller number, chosen to
+    coalesce a multi-write redraw while landing well inside 100 ms. Everything downstream is
+    already fast enough: `SessionActor` forwards `SessionInput::FarEndLine` straight to the
+    sink with no render tick, and `far_end_field.render` writes the text and the caret in one
+    DOM update, which is one bookmark change for the poll to catch.
+
+    **And there is an honest answer for a far end that is genuinely slow**, which is the same
+    one NVDA gives for old consoles: the timeout is the user's, up to 2000 ms. That is a line
+    of documentation, not code.
 
     Blocks the four checklist items that failed in 28's PR body — up arrow, Tab completion,
     left and right, and Backspace's spoken half — and it is what keeps 28.2's item unchecked
