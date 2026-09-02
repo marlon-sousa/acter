@@ -171,6 +171,7 @@ impl SessionService {
                 tracker: BoundaryTracker::new(markers),
                 grace: config.integration_grace,
                 quiescence: config.quiescence,
+                far_end_settle: config.far_end_settle,
                 clock,
                 reads,
                 inbox,
@@ -442,6 +443,9 @@ struct Pump {
     /// the pacing policy coalesces output on, read here for the other question it answers:
     /// when the far end has finished replying to a key (spec 28, decision 6).
     quiescence: Duration,
+    /// How long a keystroke's answer coalesces before it reaches the listener — the far-end
+    /// line's own clock, and not the transcript's (roadmap 28.1).
+    far_end_settle: Duration,
     clock: Arc<dyn Clock>,
     reads: Receiver<Vec<u8>>,
     inbox: Receiver<Request>,
@@ -754,8 +758,34 @@ impl Pump {
                     // Re-armed on every read, so the deadline is measured from the last
                     // byte rather than from the first: a far end still painting has not
                     // finished answering.
+                    //
+                    // **Which clock depends on whether anybody is waiting** (roadmap 28.1).
+                    // A key is outstanding: someone pressed it and the screen reader is
+                    // polling the caret right now, for a hundred milliseconds by default, so
+                    // the answer rides `far_end_settle` and is only coalescing a redraw that
+                    // arrived in pieces. Nothing is outstanding: this is the far end drawing
+                    // on its own, the settling only moves the anchor, and it keeps the
+                    // pacing clock — dropping *that* to thirty milliseconds would re-anchor
+                    // and rewrite the field through every quiet gap in a command's output.
+                    //
+                    // **A submission is the case that looks like the first and belongs to
+                    // the second** (roadmap 28.5). Enter leaves a key outstanding, but its
+                    // answer is not a caret the reader is polling for — it is the far end
+                    // running a command and drawing its next prompt, and the settling after
+                    // it is where the anchor is taken. Thirty milliseconds catches a far end
+                    // part-way through that: the prompt is on screen, the cursor has not
+                    // reached the end of it yet, and the anchor lands at column zero. The
+                    // next submission then heads its block with the whole row, prompt and
+                    // all.
                     if self.far_end.owner == LineOwner::FarEnd {
-                        settled = Some(self.clock.timer(self.quiescence));
+                        let waiting_on_a_key =
+                            self.far_end.watching && !self.far_end.awaiting_prompt;
+                        let wait = if waiting_on_a_key {
+                            self.far_end_settle
+                        } else {
+                            self.quiescence
+                        };
+                        settled = Some(self.clock.timer(wait));
                     }
                 }
                 // Every `SessionApi` handle is gone, so nothing can ask for anything
@@ -4756,6 +4786,173 @@ mod tests {
                 session.far_end_lines().last(),
                 Some(&(Some("> Skip pushing the branch".to_owned()), 0)),
                 "the row that gained content is the answer, anchor or no anchor"
+            );
+        }
+
+        /// **The regression 28.1 is: the answer has to arrive while the reader is still
+        /// waiting for it.**
+        ///
+        /// NVDA does not answer an arrow key from the field as it stands. It sends the key
+        /// on, polls the caret every 10ms until it moves, and speaks only then — for
+        /// `caretMoveTimeoutMs`, 100ms by default. On timeout it speaks the caret that did
+        /// not move, so being late is not silence: it is the previous answer said again.
+        /// That is exactly what a listener met, up arrow by up arrow, in 28's NVDA pass.
+        ///
+        /// The far end is not the slow part. Measured at three real shells, a key is
+        /// answered in 0 to 4ms, in one batch. Acter was the slow part: this settling rode
+        /// `quiescence`, which is 500ms and belongs to the transcript.
+        ///
+        /// Thirty milliseconds is inside the reader's window with room to spare; five
+        /// hundred is five times outside it. This test fails against the code as it was.
+        #[tokio::test]
+        async fn a_keystroke_is_answered_while_the_reader_is_still_listening() {
+            let session = at_a_prompt().await;
+            session.owner(LineOwner::FarEnd).await;
+            let answered = session.far_end_lines().len();
+
+            let _ = session.press(named(Key::Up)).await;
+            session
+                .emit(vec![rewritten(1, "user@host:~$ echo one")])
+                .await;
+            session.cursor_at(21, 0).await;
+            // The far end answered at 1_000; the reader stops waiting at 1_100.
+            session.advance_to(1_030).await;
+
+            assert_eq!(
+                session.far_end_lines().len(),
+                answered + 1,
+                "the recalled line is in the field before the caret poll gives up"
+            );
+            assert_eq!(
+                session.far_end_lines().last(),
+                Some(&(Some("echo one".to_owned()), 8)),
+                "and it is the recalled line, with the caret at its end"
+            );
+        }
+
+        /// **A redraw that arrives in pieces is still one answer**, which is the whole
+        /// reason the number is not zero.
+        ///
+        /// `gh` erases its options and draws them again, and a slow link can split that
+        /// across reads. Each piece re-arms the timer, so what reaches the listener is the
+        /// finished row and not a half-erased one — the reader would speak the first write
+        /// it saw, because its poll returns on the first caret change.
+        #[tokio::test]
+        async fn a_redraw_that_arrives_in_pieces_is_coalesced_into_one_answer() {
+            let session = at_a_prompt().await;
+            session.owner(LineOwner::FarEnd).await;
+            session.hides_its_cursor().await;
+            session
+                .emit(vec![
+                    line(2, "> Create a new repository"),
+                    line(3, "  Push an existing repository"),
+                ])
+                .await;
+            session.advance_to(1_500).await;
+            let answered = session.far_end_lines().len();
+
+            let _ = session.press(named(Key::Down)).await;
+            // The widget erases first...
+            session
+                .emit(vec![rewritten(2, "  Create a new repository")])
+                .await;
+            session.advance_to(1_510).await;
+            // ...and draws the new selection ten milliseconds later, inside the gap.
+            session
+                .emit(vec![rewritten(3, "> Push an existing repository")])
+                .await;
+            session.advance_to(1_545).await;
+
+            assert_eq!(
+                session.far_end_lines().len(),
+                answered + 1,
+                "one press, one answer, however many writes the far end took"
+            );
+            assert_eq!(
+                session.far_end_lines().last(),
+                Some(&(Some("> Push an existing repository".to_owned()), 0)),
+                "and it is the option they moved to, not the row that was erased"
+            );
+        }
+
+        /// **The short clock is the keystroke's, and nothing else borrows it.**
+        ///
+        /// A far end drawing on its own — output scrolling by, a prompt coming back — is
+        /// not a key anybody is waiting on, and its settling only moves the anchor. Running
+        /// *that* at thirty milliseconds would re-anchor and rewrite the field through every
+        /// quiet gap in a command's output, which is churn a listener would hear as the
+        /// command line changing under them while they read.
+        #[tokio::test]
+        async fn output_nobody_pressed_a_key_for_keeps_the_pacing_clock() {
+            let session = at_a_prompt().await;
+            session.owner(LineOwner::FarEnd).await;
+            let anchored = session.far_end_lines().len();
+
+            // The far end speaks with no key outstanding.
+            session.emit(vec![line(2, "some output")]).await;
+            session.advance_to(1_100).await;
+
+            assert_eq!(
+                session.far_end_lines().len(),
+                anchored,
+                "a keystroke's clock is not a transcript's: nothing re-anchored at 100ms"
+            );
+
+            session.advance_to(1_600).await;
+            assert_eq!(
+                session.far_end_lines().len(),
+                anchored + 1,
+                "and the anchor is still taken, on the clock that has always taken it"
+            );
+        }
+
+        /// **The regression 28.5 is, and the sequence that found it**, observed on NVDA
+        /// 2026.1.1 at a real inline selection prompt under `bash`.
+        ///
+        /// Enter leaves a key outstanding like any other, but nobody is polling a caret for
+        /// its answer: what comes back is a command running and the far end drawing its next
+        /// prompt, and the settling after it is where the anchor is taken. Taking that on the
+        /// keystroke clock catches the far end part-way through drawing — the prompt is on
+        /// the row, the cursor has not reached the end of it, and the anchor lands at column
+        /// zero. Nothing is heard at the time. It goes wrong at the *next* submission, which
+        /// heads its block with everything from column zero: the shell prompt, the command,
+        /// and a heading a listener has to read past.
+        ///
+        /// Measured before the fix: a heading reading
+        /// `marlon@splyt:/mnt/c/Users/marlo$ python3 /tmp/acter_menu.py` where the command
+        /// alone belonged.
+        #[tokio::test]
+        async fn an_anchor_is_never_taken_from_a_prompt_still_being_drawn() {
+            let session = at_a_prompt().await;
+            session.owner(LineOwner::FarEnd).await;
+            let _ = session.press(named(Key::Char('l'))).await;
+            session.emit(vec![line(1, "ls")]).await;
+            session.cursor_at(15, 0).await;
+            session.advance_to(4_000).await;
+
+            // Submitted. The far end echoes the line onto a new row and begins drawing
+            // there, and for an instant its cursor is still at column zero of that row.
+            // This is where the keystroke clock would fire, and what it would anchor to.
+            let _ = session.press(named(Key::Enter)).await;
+            session.emit(vec![line(4, "user@host:~$ ls")]).await;
+            session.cursor_at(0, 1).await;
+            session.advance_to(4_100).await;
+
+            // Then a program takes the screen and hides the cursor for the whole of its
+            // prompt — so nothing ever re-anchors, and a bad anchor taken in that instant
+            // is the one still standing when the user answers.
+            session.hides_its_cursor().await;
+            session
+                .emit(vec![line(5, "? What would you like to do?")])
+                .await;
+            session.advance_to(6_000).await;
+
+            let _ = session.press(named(Key::Enter)).await;
+
+            assert_eq!(
+                session.headings().into_iter().flatten().collect::<Vec<_>>(),
+                vec!["ls".to_owned()],
+                "answering a prompt is not running a command, and heads no block"
             );
         }
 

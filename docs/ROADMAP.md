@@ -4058,8 +4058,9 @@ bargain 22.11 and 23.14 struck, and both paid.
     **Deliberately not in this entry**: any renderer, the alternate screen, and the
     several-rows case, which is 30.
 
-28.1. **Acter writes the row after the reader has stopped waiting for it.** Spec: none yet
-    → small, and the diagnosis is now complete and measured; it reverses no decision of 28.
+28.1. **Done** — Acter wrote the row after the reader had stopped waiting for it. Spec:
+    [28-far-end-line-mode.md](specs/28-far-end-line-mode.md), amendment F. Fixed in 28's own
+    PR. It reversed no decision of 28.
     **Found 2026-09-02 in 28's own NVDA pass**, driving a real WSL `bash`
     through the screen-readers bridge as the `user` persona, NVDA 2026.1.1, silent capture.
 
@@ -4135,13 +4136,29 @@ bargain 22.11 and 23.14 struck, and both paid.
     one NVDA gives for old consoles: the timeout is the user's, up to 2000 ms. That is a line
     of documentation, not code.
 
+    **The fix** is `PacingConfig::far_end_settle`, default 30 ms, used for a settling a key is
+    outstanding for; everything else keeps `quiescence`. Pinned by
+    `a_keystroke_is_answered_while_the_reader_is_still_listening` and
+    `a_redraw_that_arrives_in_pieces_is_coalesced_into_one_answer`, both of which fail against
+    the code as it was, and by
+    `output_nobody_pressed_a_key_for_keeps_the_pacing_clock`, which pins what must not change.
+
+    **Re-checked on the reader 2026-09-02**, NVDA 2026.1.1, silent capture, `user` persona, at
+    a real `bash` under WSL Ubuntu. Every item this blocked now passes. Up arrow said
+    `echo acter-history-two` then `echo acter-history-one`, one recall per press, where before
+    it said "em branco" and then the previous press's line. Home said "e" and three rights said
+    "c", "h", "o", where before it said "em branco" and then "e", "c", "c". Backspace spoke the
+    character it deleted and left the row exactly one shorter, where before it said nothing.
+    The selection prompt speaks one option per press. **Tab is the one key that is still
+    silent, and it is not this** — see 28.4.
+
     Blocks the four checklist items that failed in 28's PR body — up arrow, Tab completion,
     left and right, and Backspace's spoken half — and it is what keeps 28.2's item unchecked
     now that 28.2 itself is fixed: the `gh` selection reaches the field one option per press
     and is still not spoken on the press.
 
-    **One smaller thing seen in the same pass, recorded here rather than as an entry of its
-    own**, because it may turn out to be the same clock: after `Ctrl+C` killed `gh`, the
+    **The smaller thing recorded here turned out to be its own defect** and is now 28.5. What
+    follows is what was seen at the time, because it may turn out to be the same clock: after `Ctrl+C` killed `gh`, the
     field briefly held the whole prompt row — `marlon@splyt:/mnt/c/Users/marlo$` — because
     the anchor was taken at a settling that landed part-way through the far end drawing its
     prompt, so the anchor column was zero. No spurious heading came of it in that session,
@@ -4208,6 +4225,73 @@ bargain 22.11 and 23.14 struck, and both paid.
     **Re-checked on the reader 2026-09-02**: F6 from the far-end line landed on "Results
     região, gh repo create, título nível 2", and F6 again came back to "Command line" rather
     than to the hidden local field. Both directions, both announced.
+
+28.4. **Tab completion is applied silently, and the reason is not timing.** Spec: none yet →
+    this one really is a design conversation, and unlike 28.1 it stays one after being
+    measured. **Found 2026-09-02**, re-running 28's checklist on NVDA 2026.1.1 after 28.1 was
+    fixed, silent capture, `user` persona, at a real `bash` under WSL.
+
+    **What a listener meets.** `ech` then Tab: no speech at all. The completion is correct —
+    the field held `echo ` and `nvda+uparrow` read it back — so nothing is wrong with what
+    Acter wrote or when it wrote it. Every caret key around it now speaks on the press.
+
+    **The cause.** NVDA's poll-then-speak behaviour, which is what 28.1's fix aims at, lives
+    in `EditableText`'s caret-movement scripts, and its `__gestures` table binds the arrows,
+    `home`, `end`, the page keys, Enter and Backspace. **Tab is not bound there.** In focus
+    mode Tab means "announce the newly focused object"; the field prevents it, focus does not
+    move, and NVDA has nothing to say. No clock reaches this, because no clock is running.
+
+    **A real terminal gets it from the other half of the same object.**
+    `NVDAObjects.behaviors.Terminal` is `LiveText` *plus* `EditableText`. The caret scripts
+    answer the arrows; `LiveText` monitors the object's text and speaks what changed, and that
+    is what carries Tab completion in a console. Acter's field is an ARIA text box: it has the
+    first half and not the second.
+
+    **The choices, and none of them should be guessed at.** Give this path the web's
+    equivalent of `LiveText` — a live region carrying *only* what the reader would otherwise
+    not say. That is narrower than the region decision 3 deleted, and it would not
+    double-speak, because these are precisely the keys that produce no reader speech; the
+    risk is that the set is NVDA's and another reader draws the line elsewhere. Or accept the
+    silence: the completion is applied, and the next keystroke or `nvda+uparrow` reads it.
+    Or re-measure the element, since a role carrying an autocomplete contract announces
+    exactly this, which is a second element probe of the kind decision 2 was settled by.
+
+    Blocks the one checklist item still unchecked in 28's PR body.
+
+28.5. **Done** — an anchor taken from a prompt still being drawn headed the next block with
+    the whole row. Spec: [28-far-end-line-mode.md](specs/28-far-end-line-mode.md),
+    amendment F. Fixed in 28's own PR, in the same commit as 28.1, which introduced it.
+    **Found 2026-09-02** while re-running 28's checklist on the reader.
+
+    It was seen once before, during 28's first pass, and recorded under 28.1 as a smaller
+    thing not worth chasing. Making the keystroke clock short turned it from rare into
+    reproducible, and the re-check caught it doing real damage.
+
+    **What a listener meets.** Answering an inline selection prompt left the transcript with a
+    second heading for the same command, reading
+    `marlon@splyt:/mnt/c/Users/marlo$ python3 /tmp/acter_menu.py` — the shell prompt and the
+    command together, where the command alone belongs, and where decision 7 says no heading
+    belongs at all, because answering a prompt is not running a command.
+
+    **The cause.** Enter leaves a key outstanding like any other, so it took the keystroke
+    clock. But its answer is not a caret anybody is polling for: it is the far end running a
+    command and drawing its next prompt, and the settling after it is where the anchor is
+    taken. Thirty milliseconds lands inside that drawing — the prompt is on the row, the
+    cursor has not reached the end of it — so the anchor is taken at column zero. Nothing is
+    heard at the time. It goes wrong at the *next* submission, which reads the row from
+    column zero and heads its block with all of it.
+
+    **The fix** is that the short clock is for `watching && !awaiting_prompt`: a key whose
+    answer someone is waiting to hear, and not a submission whose answer is a new prompt.
+    Pinned by `an_anchor_is_never_taken_from_a_prompt_still_being_drawn`, which reproduces the
+    sequence — submit, the far end echoes onto a new row with its cursor still at column
+    zero, then a program hides the cursor so nothing ever re-anchors — and fails against the
+    code as it was with exactly the observed heading.
+
+    **Re-checked on the reader 2026-09-02**: the transcript of the same interaction is now one
+    heading (`python3 /tmp/acter_menu.py`), the four rows of the prompt with the selection
+    where it was left, the far end's own one-line record (`chose: Push an existing local
+    repository`) and the returning prompt. No second heading.
 
 29. A program that is waiting says so. Spec: none yet → specify first. **Agreed
     2026-08-31**, and it is what makes 28 discoverable rather than a mode only its author

@@ -375,6 +375,101 @@ the TypeScript describing it is `number` whichever integer is named; the type ca
 The two alternatives were narrowing a Decided domain type to suit a generator, and giving the
 domain crate a dependency on the frontend's TypeScript exporter.
 
+### F. The far-end line has its own clock, because decision 6's "once the row settles" was the transcript's
+
+Decision 6 says the answer goes out once the batch settles, and did not say on which clock.
+The implementation used `quiescence`, which is 500 ms and is DESIGN's number for turning
+output into a chunk a listener is read. That was wrong, and roadmap 28.1 is what it cost: a
+listener heard every key answered with the state before it.
+
+**The window is the screen reader's and is not ours.** NVDA does not answer an arrow key from
+the field as it stands. `EditableText._caretMovementScriptHelper` takes a bookmark of the
+caret, sends the key on, and polls every 10 ms until the caret moves or `caretMoveTimeoutMs`
+elapses — 100 ms by default, and the user's to raise to 2000. Only then does it speak, and on
+timeout it speaks the caret that did not move: a late answer is not silence, it is the
+previous answer said again. This is also how NVDA treats a terminal — `behaviors.Terminal` is
+`LiveText` plus `EditableText`, and `WinConsoleUIA` raises the poll by 1.5x because "on older
+consoles, the caret can take a while to move".
+
+**The far end is not the slow part.** Measured 2026-09-02 with
+`acter-transports/examples/latency.rs`: `bash` under WSL answers left in 1 ms, Home in 0 ms,
+up in 3 ms, Backspace in 4 ms; Windows PowerShell all four in 0 ms; `cmd.exe` 0 to 1 ms —
+each in a single batch, first change and settled at the same instant.
+
+So `PacingConfig` gains `far_end_settle`, default 30 ms, and the pump uses it for a settling a
+key is outstanding for. **It is a coalescing gap, not a latency budget**: it is added on top
+of the round trip on every endpoint, so it is the smallest number that still holds a redraw
+that arrived in pieces together, never the largest that fits in the window. What varies with
+the endpoint is the round trip, and no number here can absorb it — the knob for that is the
+reader's own `caretMoveTimeoutMs`, which is where it belongs and which NVDA itself reaches for
+on slow consoles.
+
+**A settling with no key outstanding keeps `quiescence`.** It only moves the anchor, nobody is
+waiting on it, and running it at 30 ms would re-anchor and rewrite the field through every
+quiet gap in a command's output.
+
+**And so does the settling after a submission**, which is the one case that looks like the
+first and belongs to the second (roadmap 28.5, found on the reader while re-running this
+spec's own checklist). Enter leaves a key outstanding like any other, but its answer is not a
+caret anybody is polling for: it is the far end running a command and drawing its next prompt,
+and that settling is where the anchor is taken. Thirty milliseconds catches a far end
+part-way through drawing — the prompt is on the row, the cursor has not reached the end of it
+— and the anchor lands at column zero. Nothing is heard at the time; it goes wrong at the
+*next* submission, which heads its block with everything from column zero. Observed: a heading
+reading `marlon@splyt:/mnt/c/Users/marlo$ python3 /tmp/acter_menu.py` where the command alone
+belonged. So the short clock is for `watching && !awaiting_prompt`.
+
+This reverses nothing. Decisions 2 and 3 stand — the element is an ARIA text box, there is no
+live region and no `role="application"` — and the row and caret the field held were correct
+throughout the NVDA pass; `nvda+uparrow` re-read them accurately every time. Only *when* was
+wrong.
+
+**One thing the measurement found that the pass could not.** Left, right, Home and End rewrite
+no line at all: the far end only repositions the cursor, and the engine reports no line item
+for any of them. Decision 6's third step is what answers them, and it is load-bearing — any
+future change keying this path off changed lines alone would silently lose the four commonest
+navigation keys.
+
+### H. Tab completion is not spoken, and the reason is not timing
+
+Measured on the reader after the clock was fixed: every caret key now speaks the far end's
+answer on the press, and **Tab still says nothing at all**. The completion itself is right —
+`ech` became `echo ` in the field, confirmed on demand — so this is not decision 6 failing.
+
+**NVDA speaks for a fixed set of keys, and Tab is not in it.** The poll-then-speak behaviour
+amendment F relies on lives in `EditableText`'s caret-movement scripts, and its `__gestures`
+table binds the arrows, `home`, `end`, the page keys, Enter and Backspace. Tab is not bound
+there: in focus mode Tab means "announce the newly focused object", and the field prevents it,
+so focus does not move and there is nothing for NVDA to say.
+
+**A real terminal gets this from somewhere else.** `NVDAObjects.behaviors.Terminal` is
+`LiveText` *plus* `EditableText`: the caret scripts answer the arrows, and `LiveText` monitors
+the object's text and speaks what changed, which is what carries Tab completion, command
+output and everything else no keystroke asked for. Acter's field is an ARIA text box, so it
+has the first half and not the second.
+
+That makes the choice a real one rather than a bug to fix, and it is **roadmap 28.4**, left
+open deliberately: give this path the web's equivalent of `LiveText` — a live region carrying
+only what the reader would otherwise not say, which is a narrower thing than the live region
+decision 3 deleted and would not double-speak, because these are exactly the keys that produce
+no reader speech; or accept that a completion is applied silently and read on the next
+keystroke or on demand; or re-measure the element, since a role with an autocomplete contract
+announces exactly this and would be a second element probe of the kind decision 2 already
+turned on. **Do not guess between them.**
+
+### G. Checklist item 7 asks for a prompt that creates nothing
+
+The item as written says to answer a `gh repo create` selection prompt. Answering it creates a
+repository, so it was not run in 28's pass. What it is actually checking is that a submission
+at the far end's own prompt leaves the far end's one-line record and no Acter heading, and a
+`bash` `select` loop puts exactly that in front of a listener while creating nothing.
+
+What the item now names is `crates/acter-transports/examples/acter_menu.py`, kept with the
+rigs: an inline selection prompt drawn the way `gh` draws one — options below the question,
+the cursor hidden for the whole prompt, the option rows rewritten in place on every arrow, and
+no alternate screen, which is a different path. It creates nothing, so the item can be run to
+the end, which is what `gh repo create` never allowed.
+
 ## Definition of done
 
 - Every named key becomes the measured bytes, with a unit test per row of the table and one
