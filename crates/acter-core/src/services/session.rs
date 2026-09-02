@@ -652,6 +652,7 @@ impl Held {
 /// was `None` — so a redrawn row reached neither speech nor the buffer, and the buffer was
 /// the one that needed it. `spoken` is what keeps DESIGN's separate paths separate now that
 /// both are served by one answer.
+#[derive(Debug)]
 struct Due {
     text: String,
     revision: LineRevision,
@@ -701,6 +702,28 @@ struct FarEndLine {
     watching: bool,
     /// Where the far end's cursor was when the key went out, when it was showing one.
     was: Option<Caret>,
+    /// Rows the far end drew at its own prompt that the region filter turned away.
+    ///
+    /// **The far end prints at its prompt and nothing marks it** (roadmap 28.6). A `bash`
+    /// listing completions writes the candidates and redraws its command line with no OSC
+    /// 133 marker anywhere — `readline` draws that, not `PROMPT_COMMAND` — so the tracker
+    /// is still in the region the last `B` left it in, and an integrated session's filter
+    /// wants only `Output`. The candidates were therefore not held, not rendered, and gone:
+    /// the listener could neither hear them nor find them in the transcript.
+    ///
+    /// They are kept here rather than published as they arrive because which row is the
+    /// command line is not known until the batch settles — the command line is the row the
+    /// cursor comes to rest on, and it may be one of these.
+    printed: Vec<(LineId, Due)>,
+    /// The text the listener currently has in front of them.
+    ///
+    /// Kept because it is the only thing that can say *where on a new row* the command
+    /// line begins (roadmap 28.6). A far end that redraws its command line lower down the
+    /// screen — which is what `readline` does after it prints a list of completions —
+    /// sends a row of prompt and command line together, with no marker between them and
+    /// nothing to strip by. What the listener already had is the tail of that row, so
+    /// where it starts is where the new anchor goes.
+    held: String,
 }
 
 impl Pump {
@@ -930,6 +953,8 @@ impl Pump {
         self.far_end.watching = false;
         self.far_end.awaiting_prompt = false;
         self.far_end.was = None;
+        self.far_end.held.clear();
+        self.far_end.printed.clear();
         match owner {
             LineOwner::FarEnd => self.anchor_here(),
             // Nothing is kept: taking the line back is the end of everything this state is
@@ -1025,6 +1050,7 @@ impl Pump {
         if self.far_end.owner != LineOwner::FarEnd {
             return;
         }
+        self.printed();
         let changed = std::mem::take(&mut self.far_end.changed);
         let watching = std::mem::take(&mut self.far_end.watching);
         // The far end drew on its own — it finished a command and put its prompt back — or
@@ -1034,6 +1060,9 @@ impl Pump {
             self.anchor_here();
             return;
         }
+        // The far end may have moved its command line to another row before answering, and
+        // if it has, the anchor has to go with it (roadmap 28.6).
+        self.follow_cursor();
         // **And an anchor is not required to get here**, which is the whole of 28.2: a far
         // end hiding its cursor has none, and the rule's second step is what answers for it.
         let answer = far_end_row(&Keystroke {
@@ -1049,6 +1078,78 @@ impl Pump {
             // than inventing a sentence about a key that did nothing.
             FarEndAnswer::Nothing => {}
         }
+    }
+
+    /// What the far end printed at its own prompt reaches the transcript (roadmap 28.6).
+    ///
+    /// **Every row except the one the command line is on.** That row is the field's, and
+    /// putting it in the buffer as well would read the user's own line back at them, which
+    /// is what decision 3 spends its whole length avoiding. Everything else the far end drew
+    /// is content it showed and a listener must be able to reach — a list of completions,
+    /// a `readline` message, anything a shell prints without running a command.
+    ///
+    /// **It goes into a block nobody submitted**, which `Pump::publish` already mints for
+    /// exactly this: text no submission accounts for. And it goes to speech as well as the
+    /// buffer, on the ordinary pacing path — measured 2026-09-02, `bash` sends a candidate
+    /// list as fresh `Appended` rows and never rewrites them, so nothing published here is
+    /// ever taken back.
+    fn printed(&mut self) {
+        let printed = std::mem::take(&mut self.far_end.printed);
+        for (id, due) in printed {
+            if self.cursor == Some(id) {
+                continue;
+            }
+            self.publish(id, due);
+        }
+    }
+
+    /// The far end redrew its command line on a different row, so the anchor follows it
+    /// (roadmap 28.6).
+    ///
+    /// **`readline` does this every time it lists completions.** Measured 2026-09-02 at a
+    /// real `bash`: a third Tab prints the candidates on one row and the prompt and command
+    /// line again on the next, and moves the cursor from row 0 to row 2 at the same column.
+    /// The old anchored row is untouched and stays where it was, so the anchored-row step
+    /// finds nothing, the content step answers with whichever row gained content — the
+    /// candidate list — and the field ends up holding a row the user is not on and cannot
+    /// get off. Observed: the field held
+    /// `alpha-one.txt    alpha-three.txt  alpha-two.txt` and a left arrow read a character
+    /// out of it, while the line actually being edited was `ls /tmp/acterprobe/alpha-`.
+    ///
+    /// **The cursor is the evidence and the held text is the ruler.** The row the cursor
+    /// came to rest on is the command line's row; there are no markers in a `readline`
+    /// redraw to say where the prompt ends, so the only thing that can measure the prompt
+    /// off the front is what the listener already had — the command line is the tail of the
+    /// row, and where that tail begins is the new anchor. If the row does not end with it,
+    /// nothing is assumed and the anchor is left where it was.
+    fn follow_cursor(&mut self) {
+        if !self.engine.cursor().visible {
+            return;
+        }
+        let Some(line) = self.cursor else {
+            return;
+        };
+        if self
+            .far_end
+            .anchor
+            .is_some_and(|anchor| anchor.line == line)
+        {
+            return;
+        }
+        let held = self.far_end.held.trim_end().to_owned();
+        if held.is_empty() {
+            return;
+        }
+        let row = self.row_text(line);
+        let row = row.trim_end();
+        if !row.ends_with(&held) {
+            return;
+        }
+        let column = row.chars().count() - held.chars().count();
+        self.far_end.anchor = Some(Anchor {
+            line,
+            column: u16::try_from(column).unwrap_or(u16::MAX),
+        });
     }
 
     /// Takes the anchor where the far end's cursor has come to rest, and hands the row it
@@ -1101,6 +1202,9 @@ impl Pump {
     }
 
     fn far_end_line(&mut self, text: Option<String>, caret: usize) {
+        if let Some(text) = text.as_ref() {
+            self.far_end.held = text.clone();
+        }
         self.send(SessionInput::FarEndLine {
             text,
             caret: u32::try_from(caret).unwrap_or(u32::MAX),
@@ -1434,17 +1538,23 @@ impl Pump {
         let due = self.due(id, text.clone(), revision);
         self.note_change(id, before, &text, revision);
 
-        if let Some(due) = due
-            && self.wants(region)
-        {
-            // Nothing is forwarded into a session with no open block: `SessionActor`
-            // returns early when nothing is active, so that text would be dropped
-            // outright — this product's cardinal defect. And nothing is forwarded onto
-            // the row a submission is pending on, because what lands there is the user's
-            // own line coming back (spec B4.9, decision 2).
-            match self.open {
-                Some(_) if !self.pending_echo(id) => self.output(id, due),
-                _ => self.hold(id, due).await,
+        if let Some(due) = due {
+            if self.wants(region) {
+                // Nothing is forwarded into a session with no open block: `SessionActor`
+                // returns early when nothing is active, so that text would be dropped
+                // outright — this product's cardinal defect. And nothing is forwarded onto
+                // the row a submission is pending on, because what lands there is the user's
+                // own line coming back (spec B4.9, decision 2).
+                match self.open {
+                    Some(_) if !self.pending_echo(id) => self.output(id, due),
+                    _ => self.hold(id, due).await,
+                }
+            } else if self.far_end.owner == LineOwner::FarEnd {
+                // The filter turned it away, and while the far end owns the line that is
+                // not the same as it being nothing: this is the far end printing at its own
+                // prompt, with no marker to label it (roadmap 28.6). Kept until the batch
+                // settles, because only then is it known which row was the command line.
+                self.far_end.printed.push((id, due));
             }
         }
 
@@ -4953,6 +5063,125 @@ mod tests {
                 session.headings().into_iter().flatten().collect::<Vec<_>>(),
                 vec!["ls".to_owned()],
                 "answering a prompt is not running a command, and heads no block"
+            );
+        }
+
+        /// **The regression 28.6 is, and the sequence `readline` actually sends.**
+        ///
+        /// Measured 2026-09-02 at a real `bash` under WSL with three files sharing a prefix,
+        /// typing `ls /tmp/acterprobe/al`. Tab appends the common prefix. A second Tab sends
+        /// one bell byte and nothing else, because `readline` lists on a *repeated*
+        /// completion and the first Tab changed the line. **The third Tab prints the
+        /// candidates on a new row and the prompt and command line again on the row below**,
+        /// and moves the cursor from row 0 to row 2 at the same column. There are no OSC 133
+        /// markers anywhere in that redraw — `readline` draws it, not `PROMPT_COMMAND`.
+        ///
+        /// The old anchored row is never touched, so the anchored-row step finds nothing and
+        /// the content step answers with the row that gained content: the candidate list.
+        /// Observed on NVDA 2026.1.1 — the field held
+        /// `alpha-one.txt    alpha-three.txt  alpha-two.txt`, a left arrow spoke `h` out of
+        /// that row, and it never recovered, while the line being edited was
+        /// `ls /tmp/acterprobe/alpha-`.
+        #[tokio::test]
+        async fn a_command_line_redrawn_on_another_row_is_followed_there() {
+            let session = at_a_prompt().await;
+            session.owner(LineOwner::FarEnd).await;
+            let _ = session.press(named(Key::Char('l'))).await;
+            session.emit(vec![line(1, "ls /tmp/al")]).await;
+            session.cursor_at(23, 0).await;
+            session.advance_to(4_000).await;
+            assert_eq!(
+                session.far_end_lines().last(),
+                Some(&(Some("ls /tmp/al".to_owned()), 10)),
+                "the line being edited, before any of this"
+            );
+
+            // The listing Tab: the candidates on one row, the prompt and the same command
+            // line again on the next, and the cursor moves to it.
+            let _ = session.press(named(Key::Tab)).await;
+            session
+                .emit(vec![
+                    line(4, "alpha-one.txt  alpha-two.txt"),
+                    line(5, "user@host:~$ ls /tmp/al"),
+                ])
+                .await;
+            session.cursor_at(23, 2).await;
+            session.advance_to(4_100).await;
+
+            assert_eq!(
+                session.far_end_lines().last(),
+                Some(&(Some("ls /tmp/al".to_owned()), 10)),
+                "the field holds the line being edited, not the candidates"
+            );
+
+            // And it stays followed: the next key is answered from the row it moved to.
+            let _ = session.press(named(Key::Backspace)).await;
+            session
+                .emit(vec![rewritten(5, "user@host:~$ ls /tmp/a")])
+                .await;
+            session.cursor_at(22, 2).await;
+            session.advance_to(4_200).await;
+
+            assert_eq!(
+                session.far_end_lines().last(),
+                Some(&(Some("ls /tmp/a".to_owned()), 9)),
+                "one character shorter, still without the prompt"
+            );
+        }
+
+        /// **The other half of 28.6: what the far end printed has to be readable.**
+        ///
+        /// The candidates are not the command line and no marker says what they are, so the
+        /// region filter turned them away and they reached neither speech nor the buffer.
+        /// A listener could not hear the completions and could not go and read them either.
+        ///
+        /// They belong in a block nobody submitted, which is what `Pump::publish` mints, and
+        /// they belong in speech on the ordinary pacing path. Measured 2026-09-02: `bash`
+        /// sends a candidate list as fresh `Appended` rows and never rewrites them, so
+        /// nothing published here is taken back — three candidates leave three, a hundred
+        /// and fifty leave a hundred and fifty.
+        #[tokio::test]
+        async fn what_the_far_end_printed_at_its_prompt_reaches_the_transcript() {
+            // A *marked* session, which is the case the filter rejects: an integrated far
+            // end wants only `Output`, and `readline` draws a completion list with no
+            // marker at all, so the tracker is still where the last `B` left it.
+            let session = Session::start().await;
+            session
+                .emit(vec![
+                    marker(Osc133Marker::PromptStart),
+                    line(0, "user@host:~$ "),
+                    marker(Osc133Marker::CommandStart),
+                ])
+                .await;
+            session.cursor_at(13, 0).await;
+            session.advance_to(1_000).await;
+            session.owner(LineOwner::FarEnd).await;
+
+            let _ = session.press(named(Key::Char('l'))).await;
+            session.emit(vec![line(0, "ls /tmp/al")]).await;
+            session.cursor_at(23, 0).await;
+            session.advance_to(2_000).await;
+
+            // The listing Tab, with no marker anywhere in it.
+            let _ = session.press(named(Key::Tab)).await;
+            session
+                .emit(vec![
+                    line(4, "alpha-one.txt  alpha-two.txt"),
+                    line(5, "user@host:~$ ls /tmp/al"),
+                ])
+                .await;
+            session.cursor_at(23, 2).await;
+            session.advance_to(2_100).await;
+
+            let rendered = session.rendered();
+            assert!(
+                rendered.contains("alpha-one.txt  alpha-two.txt"),
+                "the candidates are in the transcript rather than lost: {rendered:?}"
+            );
+            assert_eq!(
+                session.far_end_lines().last(),
+                Some(&(Some("ls /tmp/al".to_owned()), 10)),
+                "and the field still holds the line being edited"
             );
         }
 

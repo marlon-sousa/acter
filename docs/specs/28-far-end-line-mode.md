@@ -457,6 +457,64 @@ keystroke or on demand; or re-measure the element, since a role with an autocomp
 announces exactly this and would be a second element probe of the kind decision 2 already
 turned on. **Do not guess between them.**
 
+### I. The completing Tab speaks what it added; the listing Tab is the transcript's
+
+Amendment H left 28.4 open with three options. It is answered, and the answer split in two,
+because measuring what `readline` actually sends showed that a completing Tab and a listing
+Tab are different problems.
+
+**The completing Tab is the field's, and the mechanism is a selection.** Eleven variants of
+this element were driven on NVDA 2026.1.1 (`ui/probes/element_probe.html`). No role announces
+a programmatic content change: plain `textbox`, `textbox` with `aria-autocomplete="inline"`,
+`combobox` with it, and `searchbox` are all silent, and `aria-autocomplete` turned out to be a
+state announced once when focus arrives and never again. The full ARIA 1.2 combobox with
+`aria-activedescendant` does announce the completion — and then **silences `Home`, the arrows
+and `Backspace` entirely**, which would undo 28.1; the same failure Adobe's React Spectrum
+team published. A live region fed on every answer says everything twice, which is decision 3
+confirmed by measurement rather than assumed.
+
+What works without any of that is the inline-autocomplete pattern: leave what the completion
+added **selected**, and NVDA announces it out of `EditableText.detectPossibleSelectionChange`.
+The selection is dropped 120 ms later, because this field holds the far end's line rather than
+a provisional suggestion. Only a pure append qualifies — a far end that rewrote the row has no
+addition to point at, and a diff the user never saw is not something to speak.
+
+**The listing Tab is the transcript's, and needs no mechanism at all** — see 28.6, which is
+what makes it audible. Measured at a real `bash`: Tab appends the common prefix, a second Tab
+sends one bell byte and nothing else, and a third prints the candidates on a new row and
+redraws the prompt and command line below them, with no OSC 133 marker anywhere.
+
+**Observed after both landed**, NVDA 2026.1.1, silent capture, `user` persona, at a real
+`bash` under WSL: `ech` then Tab said **"o selecionado"**; `ls /tmp/acterprobe/al` then Tab
+said **"pha- selecionado"**, and the field then read `ls /tmp/acterprobe/alpha-` with a left
+arrow answering "hífen". The listing Tab spoke
+**`alpha-one.txt alpha-three.txt alpha-two.txt`**, put that row in the transcript, and left
+the field holding `ls /tmp/acterprobe/al` — the line being edited.
+
+### J. What the far end prints at its own prompt is content, and the cursor says which row is not
+
+Decision 6 answers with the row that gained content when the anchored row did not change, and
+step 3 catches a cursor that moved along its row. Neither covers a far end that **moves its
+command line to another row**, which is what `readline` does every time it lists completions.
+The anchored row is untouched, so step 1 finds nothing and step 2 answers with the candidate
+list: the field then holds a row the user is not on, and does not recover.
+
+**The cursor is the evidence.** It comes to rest on the command line's row — measured, row 0
+column 58 to row 2 column 58 — so the anchor follows it there. Where on that row the command
+line begins cannot come from a marker, because a `readline` redraw emits none; it comes from
+what the listener already had, which is the tail of the new row.
+
+And the rows the far end drew that are **not** the command line's row are content it showed.
+An integrated session's region filter wants only `Output`, and these carry no marker, so they
+were dropped outright — neither spoken nor recorded. They now go where `Pump::publish` already
+puts text no submission accounts for: a block nobody submitted. That is a change to what the
+filter admits while the far end owns the line, and it is stated here rather than made quietly
+because decision 10 draws that line.
+
+**Nothing published this way is ever taken back**: measured, `bash` sends a candidate list as
+fresh `Appended` rows and never rewrites them, so three candidates leave three rows in the
+transcript and a hundred and fifty leave a hundred and fifty.
+
 ### G. Checklist item 7 asks for a prompt that creates nothing
 
 The item as written says to answer a `gh repo create` selection prompt. Answering it creates a

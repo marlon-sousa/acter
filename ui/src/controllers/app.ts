@@ -589,7 +589,8 @@ export class AppController {
         // the character typed when the user typed, and "blank" for a row a key emptied.
         // Announcing as well would say it twice — measured: a live region answering
         // alongside produced two utterances in the same millisecond.
-        this.farEndField?.render(event.text, event.caret);
+        this.farEndField?.render(event.text, event.caret, this.completing);
+        this.completing = false;
         break;
       case 'TitleChanged':
         // No UX decided yet (no producers in Phase 1); handled to keep the switch
@@ -722,7 +723,24 @@ export class AppController {
    * method knows nothing about interrupting and needs no change when a second binding
    * arrives (spec A3.2 decision 1).
    */
+  /**
+   * Whether the key still being answered was a completion.
+   *
+   * **`Tab` is the one key the reader cannot answer for itself** (roadmap 28.4). NVDA
+   * speaks for a fixed set — the arrows, `Home`, `End`, the page keys, `Enter` and
+   * `Backspace`, which are what its caret-movement scripts are bound to — and in focus mode
+   * `Tab` means "announce the newly focused object", which the field prevents, so focus
+   * does not move and nothing is said. So this one answer is marked, and the field makes
+   * what the completion added audible by selecting it.
+   *
+   * Set on every reported key rather than only on `Tab`, so a completion that produced no
+   * answer at all — `bash` sends one bell byte for a repeat that changes nothing — cannot
+   * leave the mark standing for whatever key comes next.
+   */
+  private completing = false;
+
   async reportKey(press: KeyPress): Promise<void> {
+    this.completing = press.key === 'Tab';
     // Nothing to report a keystroke to. `NothingToActOn`'s words are what a window with no
     // session would have said anyway — there is nothing running to stop — and saying them
     // without a round trip keeps the answer immediate.

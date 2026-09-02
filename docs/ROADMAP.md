@@ -4226,9 +4226,9 @@ bargain 22.11 and 23.14 struck, and both paid.
     região, gh repo create, título nível 2", and F6 again came back to "Command line" rather
     than to the hidden local field. Both directions, both announced.
 
-28.4. **Tab completion is applied silently, and the reason is not timing.** Spec: none yet →
-    this one really is a design conversation, and unlike 28.1 it stays one after being
-    measured. **Found 2026-09-02**, re-running 28's checklist on NVDA 2026.1.1 after 28.1 was
+28.4. **Done** — Tab completion was applied silently. Spec:
+    [28-far-end-line-mode.md](specs/28-far-end-line-mode.md), amendment I. Fixed in 28's own
+    PR, after two rounds of element measurement and one of reading NVDA's source. **Found 2026-09-02**, re-running 28's checklist on NVDA 2026.1.1 after 28.1 was
     fixed, silent capture, `user` persona, at a real `bash` under WSL.
 
     **What a listener meets.** `ech` then Tab: no speech at all. The completion is correct —
@@ -4328,10 +4328,27 @@ bargain 22.11 and 23.14 struck, and both paid.
     being noise and starts being the point. **Its cost is the position info** — "echo 1 de 1"
     where F says "echo" — which could not be removed from the page side.
 
-    **F remains the fallback**, and is the better choice if the extra words are judged worse
-    than maintaining the key table. **H is the fallback that adds nothing to the tree at all**,
-    at the price of announcing only what the completion added. **G and J are ruled out by
-    measurement**, and their entries above say why.
+    **What was built is H**, and the question about Tab-Tab below is why. I/K would have
+    spoken the whole row on a *completing* Tab, which is more than the press changed; H speaks
+    what the completion added, which is what the user asked for and what a listener needs to
+    know. It also adds nothing at all to the accessibility tree, where I/K adds a listbox and
+    F a live region. The listing Tab, which is the case a whole-row announcement would have
+    been for, turned out not to be the field's problem at all — it is 28.6's.
+
+    **The fix**: what the completion added is left *selected*, which NVDA announces out of
+    `EditableText.detectPossibleSelectionChange`, and the selection is dropped 120 ms later so
+    nothing stale stands in a field holding the far end's line. Only a pure append qualifies,
+    and only the answer to a completion key is marked — every other key the reader already
+    speaks for, and a selection on top of that would be the double-speaking decision 3
+    deleted.
+
+    **Re-checked on the reader 2026-09-02**, NVDA 2026.1.1, silent capture, `user` persona, at
+    a real `bash` under WSL: `ech` then Tab said **"o selecionado"**, and
+    `ls /tmp/acterprobe/al` then Tab said **"pha- selecionado"**. The field then read
+    `ls /tmp/acterprobe/alpha-` on demand and a left arrow answered "hífen", so the caret keys
+    are untouched.
+
+    **G and J stay ruled out by measurement**, and their entries above say why.
 
     **What Tab-Tab does, which is the question that must be answered before choosing.** Asked
     2026-09-02 and measured rather than reasoned about, at a real `bash` under WSL with three
@@ -4351,9 +4368,10 @@ bargain 22.11 and 23.14 struck, and both paid.
     listbox from the command line; F feeds a live region from the command line. The answer to
     "will Tab-Tab say everything it shows" is **no, and not because of the mechanism**.
 
-28.6. **After a listing Tab the far-end field holds the candidate list instead of the line
-    being edited, and stays wrong.** Spec: none yet → this is a hole in decision 6, found by
-    asking what Tab-Tab does. **Found 2026-09-02** on NVDA 2026.1.1, silent capture, `user`
+28.6. **Done** — after a listing Tab the far-end field held the candidate list instead of the
+    line being edited, and stayed wrong. Spec:
+    [28-far-end-line-mode.md](specs/28-far-end-line-mode.md), amendment J. Fixed in 28's own
+    PR. It was a hole in decision 6, found by asking what Tab-Tab does. **Found 2026-09-02** on NVDA 2026.1.1, silent capture, `user`
     persona, at a real `bash` under WSL.
 
     **What a listener meets.** After the third Tab, NVDA said the bare prompt row
@@ -4381,7 +4399,27 @@ bargain 22.11 and 23.14 struck, and both paid.
     28.4** — the listing case is answered by the transcript, and only the completing case
     needs a mechanism at all.
 
-    Blocks nothing that is checked; it makes the unchecked item worse than it looked.
+    **The fix is in two halves.** The anchor follows the cursor to the row the command line
+    was redrawn on, and where it begins on that row is measured off by what the listener
+    already had, because a `readline` redraw carries no marker to strip by. And the rows that
+    changed which are *not* the command line's row are content the far end showed: they now go
+    where `Pump::publish` already puts text no submission accounts for, instead of being
+    dropped by a region filter that wants only `Output`. Pinned by
+    `a_command_line_redrawn_on_another_row_is_followed_there` and
+    `what_the_far_end_printed_at_its_prompt_reaches_the_transcript`, both of which fail against
+    the code as it was.
+
+    **Re-checked on the reader 2026-09-02** at a real `bash` under WSL with three files
+    sharing a prefix: the listing Tab spoke
+    **`alpha-one.txt alpha-three.txt alpha-two.txt`**, put that row in the transcript, and left
+    the field holding `ls /tmp/acterprobe/al` — the line being edited. Before the fix the field
+    held the candidates, a left arrow read a character out of them, and the transcript had
+    nothing.
+
+    **One wart left standing, and it is not new**: the bare prompt row the far end redraws is
+    published and spoken alongside the candidates, so the listener hears
+    `marlon@splyt:/mnt/c/Users/marlo$` first. It behaved identically before this fix, so it is
+    not a regression, and it is recorded here rather than chased.
 
 28.5. **Done** — an anchor taken from a prompt still being drawn headed the next block with
     the whole row. Spec: [28-far-end-line-mode.md](specs/28-far-end-line-mode.md),

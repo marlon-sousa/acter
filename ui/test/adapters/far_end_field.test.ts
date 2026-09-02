@@ -130,4 +130,57 @@ describe('being there at all', () => {
     expect(built.dom.isFocused()).toBe(true);
     expect(document.activeElement).toBe(built.field);
   });
+
+  // **Roadmap 28.4.** `Tab` is the one key NVDA does not speak for: its caret-movement
+  // scripts are bound to the arrows, `Home`, `End`, the page keys, `Enter` and `Backspace`,
+  // and in focus mode `Tab` means "announce the newly focused object", which the field
+  // prevents. Measured across eleven variants of this element, the only mechanism that
+  // reaches a completion without a live region is a selection: NVDA announces one out of
+  // `detectPossibleSelectionChange`, and `ech` then Tab said "o  selecionado".
+  describe('a completion', () => {
+    it('leaves what it added selected, so the reader says it', () => {
+      const { field, dom } = build();
+      dom.render('ech', 3);
+
+      dom.render('echo ', 5, true);
+
+      const selection = window.getSelection();
+      expect(selection?.toString()).toBe('o ');
+      expect(field.textContent).toBe('echo ');
+    });
+
+    it("drops the selection again, because the row is the far end's and not a suggestion", async () => {
+      const { dom } = build();
+      dom.render('ech', 3);
+      dom.render('echo ', 5, true);
+
+      await new Promise((resolve) => setTimeout(resolve, 200));
+
+      const selection = window.getSelection();
+      expect(selection?.toString()).toBe('');
+      expect(selection?.isCollapsed).toBe(true);
+    });
+
+    // A far end that rewrote the row rather than adding to it has no addition to point at,
+    // and a diff the user never saw is not something to speak.
+    it('says nothing extra when the row was rewritten rather than added to', () => {
+      const { dom } = build();
+      dom.render('echo one', 8);
+
+      dom.render('echo two', 8, true);
+
+      expect(window.getSelection()?.isCollapsed).toBe(true);
+    });
+
+    // Every other key is answered by the reader already, and a selection on top of that
+    // would be the double-speaking decision 3 deleted.
+    it('is not applied to an ordinary answer', () => {
+      const { dom } = build();
+      dom.render('ech', 3);
+
+      dom.render('echo ', 5);
+
+      expect(window.getSelection()?.isCollapsed).toBe(true);
+    });
+  });
 });

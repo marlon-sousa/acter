@@ -229,11 +229,11 @@ class FakeWindow implements WindowView {
  * ones and moves focus with the mode.
  */
 class FakeFarEndField implements FarEndFieldView {
-  rendered: Array<{ text: string | null; caret: number }> = [];
+  rendered: Array<{ text: string | null; caret: number; completed: boolean }> = [];
   showing = false;
   focused = false;
-  render(text: string | null, caret: number): void {
-    this.rendered.push({ text, caret });
+  render(text: string | null, caret: number, completed = false): void {
+    this.rendered.push({ text, caret, completed });
   }
   show(showing: boolean): void {
     this.showing = showing;
@@ -1094,10 +1094,42 @@ describe('handing the line to the far end (28)', () => {
     backend.emit({ type: 'FarEndLine', text: null, caret: 3 });
 
     expect(farEndField.rendered).toEqual([
-      { text: 'cargo test --all', caret: 16 },
-      { text: null, caret: 3 },
+      { text: 'cargo test --all', caret: 16, completed: false },
+      { text: null, caret: 3, completed: false },
     ]);
     expect(announcer.announcements).toEqual([]);
+  });
+
+  // **Roadmap 28.4.** `Tab` is the one key the reader will not answer for itself, so its
+  // answer is marked and the field makes what the completion added audible by selecting it.
+  // The mark is set on every reported key rather than only on `Tab`, because a repeat that
+  // changes nothing produces no answer at all — `bash` sends one bell byte — and a mark left
+  // standing would attach to whatever key came next.
+  it('marks the answer to a completion, and only that one', async () => {
+    const { backend, farEndField, controller } = await makeApp();
+    await controller.toggleLineOwner();
+
+    await controller.reportKey({ key: 'Tab', ctrl: false, shift: false, alt: false });
+    backend.emit({ type: 'FarEndLine', text: 'echo ', caret: 5 });
+    backend.emit({ type: 'FarEndLine', text: 'echo one', caret: 8 });
+
+    expect(farEndField.rendered).toEqual([
+      { text: 'echo ', caret: 5, completed: true },
+      { text: 'echo one', caret: 8, completed: false },
+    ]);
+  });
+
+  it('does not mark the answer to a key the reader speaks for', async () => {
+    const { backend, farEndField, controller } = await makeApp();
+    await controller.toggleLineOwner();
+
+    await controller.reportKey({ key: 'Tab', ctrl: false, shift: false, alt: false });
+    await controller.reportKey({ key: 'Up', ctrl: false, shift: false, alt: false });
+    backend.emit({ type: 'FarEndLine', text: 'echo one', caret: 8 });
+
+    expect(farEndField.rendered).toEqual([
+      { text: 'echo one', caret: 8, completed: false },
+    ]);
   });
 
   it('pastes into the far end only while the far end owns the line', async () => {

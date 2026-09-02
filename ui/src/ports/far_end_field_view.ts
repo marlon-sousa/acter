@@ -15,8 +15,13 @@ export interface FarEndFieldView {
    * reader announces as one.
    *
    * `caret` counts characters from the start of the row the field holds.
+   *
+   * `completed` says this row is the answer to a completion key. It is the one case the
+   * reader has no way to hear on its own (roadmap 28.4): NVDA speaks for a fixed set of
+   * keys — the arrows, `Home`, `End`, the page keys, `Enter` and `Backspace`, bound to its
+   * caret-movement scripts — and `Tab` is not among them, so a completion lands silently.
    */
-  render(text: string | null, caret: number): void;
+  render(text: string | null, caret: number, completed?: boolean): void;
   /** Whether the window shows the far end's line at all. */
   show(showing: boolean): void;
   focus(): void;

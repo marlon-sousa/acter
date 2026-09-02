@@ -37,6 +37,16 @@
 import type { FarEndFieldView } from '../ports/far_end_field_view';
 
 /**
+ * How long what a completion added stays selected before the caret is collapsed onto it.
+ *
+ * Long enough for NVDA to have read the selection — it announces one out of
+ * `EditableText.detectPossibleSelectionChange`, which runs on the caret event the write
+ * fires — and short enough that nothing stale is left standing in a field whose contents
+ * are the far end's rather than provisional. 120ms measured working on NVDA 2026.1.1.
+ */
+const SELECTION_MS = 120;
+
+/**
  * The far end's command line.
  *
  * Nothing is ever inserted locally: every key is prevented by `keyboard.ts` and the only
@@ -44,6 +54,9 @@ import type { FarEndFieldView } from '../ports/far_end_field_view';
  * end drew.
  */
 export class FarEndFieldDom implements FarEndFieldView {
+  /** The timer that drops a completion's selection, so a second one cannot outlive it. */
+  private selected: ReturnType<typeof setTimeout> | undefined;
+
   constructor(
     private readonly field: HTMLElement,
     private readonly container: HTMLElement,
@@ -56,11 +69,64 @@ export class FarEndFieldDom implements FarEndFieldView {
    * and End — and writing the same string back would be a text change the reader announces
    * as one. So the two cases are kept apart all the way from the domain.
    */
-  render(text: string | null, caret: number): void {
-    if (text !== null && this.field.textContent !== text) {
+  render(text: string | null, caret: number, completed = false): void {
+    const before = this.field.textContent ?? '';
+    if (text !== null && before !== text) {
       this.field.textContent = text;
     }
+    if (completed && text !== null && text.length > before.length && text.startsWith(before)) {
+      this.announceAddition(before.length, text.length, caret);
+      return;
+    }
     this.placeCaret(caret);
+  }
+
+  /**
+   * Leave what the completion added selected, so the reader says it, then collapse.
+   *
+   * **This is the inline-autocomplete pattern, and it is the one mechanism that reaches a
+   * completion without a live region** (roadmap 28.4). Measured on NVDA 2026.1.1 across
+   * eleven variants of this element: no role announces a programmatic content change —
+   * `aria-autocomplete` is a state announced once on focus and never again, and the full
+   * ARIA combobox with `aria-activedescendant` announces the completion and then silences
+   * `Home`, the arrows and `Backspace` entirely, which would undo 28.1. A selection is
+   * announced out of NVDA's own `detectPossibleSelectionChange`, and costs nothing else:
+   * `ech` then Tab said "o  selecionado".
+   *
+   * **Only a pure append**, which is what a completion is. A far end that rewrites the row
+   * instead has no addition to point at, and inventing one would mean speaking a diff the
+   * user never saw.
+   *
+   * The selection is dropped again after [`SELECTION_MS`], because the field holds the far
+   * end's line rather than a suggestion: leaving text selected in it would say that typing
+   * replaces it, which is not true of anything here.
+   */
+  private announceAddition(from: number, to: number, caret: number): void {
+    this.drop();
+    const node = this.field.firstChild;
+    if (node === null || node.nodeType !== Node.TEXT_NODE) {
+      this.placeCaret(caret);
+      return;
+    }
+    const selection = this.field.ownerDocument.defaultView?.getSelection();
+    if (selection === undefined || selection === null) {
+      this.placeCaret(caret);
+      return;
+    }
+    const range = this.field.ownerDocument.createRange();
+    range.setStart(node, from);
+    range.setEnd(node, to);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    this.selected = setTimeout(() => this.placeCaret(caret), SELECTION_MS);
+  }
+
+  /** Cancels a pending collapse, so two completions in a row cannot cross. */
+  private drop(): void {
+    if (this.selected !== undefined) {
+      clearTimeout(this.selected);
+      this.selected = undefined;
+    }
   }
 
   /** Whether this window is showing the far end's line at all. */
@@ -86,6 +152,7 @@ export class FarEndFieldDom implements FarEndFieldView {
    * caret in an empty text box belongs — and is what NVDA reads as "blank".
    */
   private placeCaret(caret: number): void {
+    this.drop();
     const selection = this.field.ownerDocument.defaultView?.getSelection();
     if (selection === undefined || selection === null) {
       return;
