@@ -2,7 +2,7 @@
 // keyed by CommandId so interleaved output from concurrent commands lands under the
 // right heading (events are demultiplexed by id).
 
-import type { CommandId } from '../protocol';
+import type { CommandId, LineId, LineRevision } from '../protocol';
 
 export interface BufferView {
   /**
@@ -14,10 +14,23 @@ export interface BufferView {
    */
   openBlock(commandId: CommandId, commandLine: string): void;
   /**
-   * Append an output chunk under the block for `commandId`. The block must already be
-   * open (the controller guarantees this, opening one lazily if an event races ahead).
+   * Apply one output event to the line it names, under the block for `commandId`. The
+   * block must already be open (the controller guarantees this, opening one lazily if an
+   * event races ahead).
+   *
+   * **Lines rather than chunks since 28** (decision 8). A terminal's output is not
+   * append-only — `readline` repaints the row it is editing and `gh` blanks its option rows
+   * once the prompt is answered — so a buffer that could only append grew a junk line per
+   * arrow press and kept rows the far end had already erased. `Appended` extends the line;
+   * `Rewritten` and `Settled` replace it, blanks included, because the far end writes its
+   * own record and the buffer keeps that and nothing else.
    */
-  appendOutput(commandId: CommandId, text: string): void;
+  applyLine(
+    commandId: CommandId,
+    line: LineId,
+    revision: LineRevision,
+    text: string,
+  ): void;
   /**
    * Move focus into the buffer. Landing contract: focus the most recent command
    * heading (the newest end of the terminal history) so a screen reader lands on it

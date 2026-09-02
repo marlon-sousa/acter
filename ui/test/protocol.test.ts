@@ -56,6 +56,8 @@ function describeEvent(event: SessionEvent): string {
       return `announce ${event.command_id}: ${describeAnnouncement(event.announcement)}`;
     case 'PromptDrawn':
       return `prompt ${event.text}`;
+    case 'FarEndLine':
+      return `far end line ${event.text ?? '(unchanged)'} at ${event.caret}`;
     default:
       return assertNever(event);
   }
@@ -63,7 +65,13 @@ function describeEvent(event: SessionEvent): string {
 
 describe('protocol bindings', () => {
   it('discriminates every SessionEvent variant on `type`', () => {
-    const output: SessionEvent = { type: 'Output', command_id: 1, text: 'hello' };
+    const output: SessionEvent = {
+      type: 'Output',
+      command_id: 1,
+      line: 4,
+      revision: 'Appended',
+      text: 'hello',
+    };
     expect(describeEvent(output)).toBe('output 1: hello');
 
     const finished: SessionEvent = { type: 'CommandFinished', command_id: 1 };

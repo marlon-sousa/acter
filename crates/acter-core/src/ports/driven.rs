@@ -27,6 +27,6 @@ pub use signatures::{Signatures, Unchecked};
 pub use ssh_questions::{
     HostKeyAnswer, HostKeyQuestion, HostKeyState, PasswordQuestion, Secret, SshQuestions, Unasked,
 };
-pub use terminal_engine::TerminalEngine;
+pub use terminal_engine::{Cursor, TerminalEngine, TerminalModes};
 pub use this_computer::{LoginShell, NoDistributions, ThisComputer};
 pub use transport::{Transport, TransportError};

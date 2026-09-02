@@ -28,8 +28,8 @@ use std::time::Duration;
 
 use acter_core::{
     Announcement, Clock, CommandId, ConnectionState, EventSink, ExitCode, Key, KeyAck, KeyPress,
-    PacingConfig, SessionApi, SessionEvent, SessionId, SessionService, ShellFacts, ShellMarkers,
-    SubmitAck, Timer, Transport, TransportError,
+    LineId, LineRevision, PacingConfig, SessionApi, SessionEvent, SessionId, SessionService,
+    ShellFacts, ShellMarkers, SubmitAck, Timer, Transport, TransportError,
 };
 use acter_term::AlacrittyEngine;
 use acter_transports::{
@@ -310,19 +310,75 @@ impl Pipeline {
         panic!("the session never went quiet; saw {:?}", self.events());
     }
 
+    /// Everything the frontend would have received, with output line ids renumbered from
+    /// zero in the order they first appear.
+    ///
+    /// The engine mints ids for rows a session never shows anybody — a prompt row, a row a
+    /// setup line was written onto — so the number on a given piece of output is an
+    /// artefact of how much came before it. Renumbering keeps what these tests assert (this
+    /// text and that text are the same line, or are not) and drops what they do not.
     fn events(&self) -> Vec<SessionEvent> {
-        self.events.events()
+        let mut seen: Vec<LineId> = Vec::new();
+        self.events
+            .events()
+            .into_iter()
+            .map(|event| match event {
+                SessionEvent::Output {
+                    command_id,
+                    line,
+                    revision,
+                    text,
+                } => {
+                    let at = seen
+                        .iter()
+                        .position(|known| *known == line)
+                        .unwrap_or_else(|| {
+                            seen.push(line);
+                            seen.len() - 1
+                        });
+                    SessionEvent::Output {
+                        command_id,
+                        line: LineId(at as u64),
+                        revision,
+                        text,
+                    }
+                }
+                other => other,
+            })
+            .collect()
     }
 
     /// Just the text the buffer would have shown, in order.
+    /// The buffer as the frontend would hold it: one line per [`LineId`], revisions applied
+    /// in the order they arrived.
+    ///
+    /// **Reconstructed rather than concatenated since 28** (decision 8). Output events now
+    /// name their line and say what they did to it, so what a listener would find in the
+    /// buffer is the result of applying them — which is what these assertions have always
+    /// been about.
     fn rendered(&self) -> String {
-        self.events()
-            .iter()
-            .filter_map(|event| match event {
-                SessionEvent::Output { text, .. } => Some(text.clone()),
-                _ => None,
-            })
-            .collect()
+        let mut lines: Vec<(LineId, String)> = Vec::new();
+        for event in self.events() {
+            let SessionEvent::Output {
+                line,
+                revision,
+                text,
+                ..
+            } = event
+            else {
+                continue;
+            };
+            match lines.iter_mut().find(|(known, _)| *known == line) {
+                Some((_, held)) if revision == LineRevision::Appended => held.push_str(&text),
+                Some((_, held)) => *held = text,
+                None => lines.push((line, text)),
+            }
+        }
+        lines
+            .into_iter()
+            .map(|(_, text)| text)
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
     /// What a session said, with everything about *how* its bytes were cut left out.
@@ -347,14 +403,17 @@ impl Pipeline {
                 } => blocks.push(Block {
                     command_id,
                     command_line,
-                    output: String::new(),
+                    lines: Vec::new(),
                     closed: false,
                 }),
                 SessionEvent::Output {
-                    command_id, text, ..
+                    command_id,
+                    line,
+                    revision,
+                    text,
                 } => {
                     let at = find(&mut blocks, command_id, "output");
-                    blocks[at].output.push_str(&text);
+                    blocks[at].apply(line, revision, &text);
                 }
                 SessionEvent::CommandFinished { command_id } => {
                     let at = find(&mut blocks, command_id, "a command finished that");
@@ -420,8 +479,32 @@ struct Block {
     /// The heading the frontend would put on this block: what the far end echoed, read
     /// out of the byte stream by the real engine and tracker (spec B6.1, decision 1).
     command_line: Option<String>,
-    output: String,
+    /// This block's lines, in the order the far end first drew them, each holding what it
+    /// says now (spec 28, decision 8). Read as one string through [`Block::output`].
+    lines: Vec<(LineId, String)>,
     closed: bool,
+}
+
+impl Block {
+    /// Applies one output event the way the buffer does: an append extends its line, and
+    /// anything else replaces it — blanks included, because a row the far end erased has to
+    /// read as erased.
+    fn apply(&mut self, line: LineId, revision: LineRevision, text: &str) {
+        match self.lines.iter_mut().find(|(known, _)| *known == line) {
+            Some((_, held)) if revision == LineRevision::Appended => held.push_str(text),
+            Some((_, held)) => *held = text.to_owned(),
+            None => self.lines.push((line, text.to_owned())),
+        }
+    }
+
+    /// What a listener would find under this block's heading.
+    fn output(&self) -> String {
+        self.lines
+            .iter()
+            .map(|(_, text)| text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
 }
 
 fn fixture(name: &str) -> PathBuf {
@@ -442,9 +525,20 @@ fn started(command_line: &str) -> SessionEvent {
     }
 }
 
+/// One line of output, on the first line this session emitted.
+///
+/// **The id is renumbered rather than guessed** — see [`Pipeline::events`]. What these
+/// end-to-end assertions are about is which text reached which block in what order; which
+/// number the engine happened to mint for a row is `acter-term`'s to pin, and it does.
 fn output(text: &str) -> SessionEvent {
+    output_on(0, LineRevision::Appended, text)
+}
+
+fn output_on(line: u64, revision: LineRevision, text: &str) -> SessionEvent {
     SessionEvent::Output {
         command_id: CommandId(1),
+        line: LineId(line),
+        revision,
         text: text.to_owned(),
     }
 }
@@ -703,7 +797,8 @@ async fn a_marker_split_across_two_reads_is_still_one_marker() {
         vec![Block {
             command_id: CommandId(1),
             command_line: Some("small".to_owned()),
-            output: "hello from acter".to_owned(),
+            // One line, and the id is the renumbered one `Pipeline::events` hands out.
+            lines: vec![(LineId(0), "hello from acter".to_owned())],
             closed: true,
         }],
         "one block, opened and closed by markers nobody ever received whole, headed by an          echo delivered one byte at a time"
@@ -806,10 +901,7 @@ async fn a_session_with_no_markers_degrades_honestly_instead_of_going_silent() {
                 command_id: CommandId(1),
                 command_line: None,
             },
-            SessionEvent::Output {
-                command_id: CommandId(1),
-                text: "acter>".to_owned(),
-            },
+            output_on(0, LineRevision::Appended, "acter>"),
             // Then the flag, which is what this test is here for.
             SessionEvent::IntegrationUnavailable,
             SessionEvent::Announce {
@@ -951,21 +1043,21 @@ async fn a_shell_that_marks_only_its_prompt_still_gets_blocks_and_speaks() {
     let dir = commands[0];
     assert_eq!(dir.command_line.as_deref(), Some("dir"));
     assert!(
-        dir.output.contains("one.txt") && dir.output.contains("two.txt"),
+        dir.output().contains("one.txt") && dir.output().contains("two.txt"),
         "the command's output is under its own heading: {:?}",
-        dir.output
+        dir.output()
     );
     assert!(
-        !dir.output.contains("dir\r") && !dir.output.starts_with("dir"),
+        !dir.output().contains("dir\r") && !dir.output().starts_with("dir"),
         "and the echo of the command line is not, which is DESIGN's echo exclusion doing \
          what the markers were injected to let it do: {:?}",
-        dir.output
+        dir.output()
     );
     assert!(
-        dir.output.contains("acter>"),
+        dir.output().contains("acter>"),
         "the returning prompt is the last thing the block says — the only ending a shell \
          with no exit code has to offer (spec B4.5, decision 4): {:?}",
-        dir.output
+        dir.output()
     );
     assert!(dir.closed, "and the block closes");
 
@@ -977,9 +1069,9 @@ async fn a_shell_that_marks_only_its_prompt_still_gets_blocks_and_speaks() {
         substance.blocks
     );
     assert!(
-        quiet.output.contains("acter>"),
+        quiet.output().contains("acter>"),
         "with the returning prompt as its content: {:?}",
-        quiet.output
+        quiet.output()
     );
 }
 
@@ -1214,7 +1306,7 @@ async fn every_case_in_the_suite_actually_produces_a_session() {
             // command's block opens when the far end echoes it.
             assert_eq!(substance.blocks.len(), 2, "{}: {substance:?}", case.name);
             assert!(
-                !substance.blocks[1].output.is_empty(),
+                !substance.blocks[1].output().is_empty(),
                 "{}: a degraded session still puts its text in the buffer: {substance:?}",
                 case.name
             );
@@ -1324,7 +1416,8 @@ async fn a_finished_commands_rows_do_not_scroll_into_the_next_block() {
         panic!("a prompt block and two submissions: {substance:?}");
     };
 
-    let flooded: Vec<&str> = flood.output.lines().map(str::trim_end).collect();
+    let flood_output = flood.output();
+    let flooded: Vec<&str> = flood_output.lines().map(str::trim_end).collect();
     for row in 1..=30 {
         let expected = format!("line {row}");
         assert!(
@@ -1334,13 +1427,13 @@ async fn a_finished_commands_rows_do_not_scroll_into_the_next_block() {
         );
     }
     assert!(
-        after.output.contains("hello from acter"),
+        after.output().contains("hello from acter"),
         "the second block still has its own output: {:?}",
-        after.output
+        after.output()
     );
     assert!(
-        !after.output.contains("line "),
+        !after.output().contains("line "),
         "and none of the first command's, however much the screen scrolled under it: {:?}",
-        after.output
+        after.output()
     );
 }

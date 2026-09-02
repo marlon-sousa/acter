@@ -11,7 +11,7 @@
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
-use crate::{CommandId, ConnectionState, ExitCode};
+use crate::{CommandId, ConnectionState, ExitCode, LineId, LineRevision};
 
 /// Everything the backend streams to the frontend about one session.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
@@ -33,10 +33,27 @@ pub enum SessionEvent {
         command_id: CommandId,
         command_line: Option<String>,
     },
-    /// A coalesced quiescent chunk of output. Rendering only: it says what to put in
-    /// the buffer and never what to say about it. Whether any of it is spoken is a
+    /// One line of output, and what this event does to it. Rendering only: it says what to
+    /// put in the buffer and never what to say about it. Whether any of it is spoken is a
     /// separate [`Announce`](SessionEvent::Announce) (A6).
-    Output { command_id: CommandId, text: String },
+    ///
+    /// **It names a line since 28** (decision 8), and that is what makes the transcript
+    /// honest. A terminal's output is not append-only: `readline` repaints the row it is
+    /// editing, and `gh` blanks its option rows when the prompt is answered — so a buffer
+    /// that could only append grew a junk line per arrow press and kept three option rows
+    /// the far end had already erased. With the id and the revision the buffer assigns or
+    /// appends by line, blanks included, and the far end writes its own record.
+    ///
+    /// This is DESIGN's separate-paths decision unchanged rather than widened: the buffer
+    /// applies all three revisions, and what is *spoken* is still an
+    /// [`Announce`](SessionEvent::Announce) about text that is already there — a rewrite
+    /// reaches the buffer and never the speech path.
+    Output {
+        command_id: CommandId,
+        line: LineId,
+        revision: LineRevision,
+        text: String,
+    },
     /// The command block closed (OSC 133 D).
     ///
     /// Carries no exit code. A nonzero one arrives as `Announce { Failed }`, after the
@@ -94,6 +111,24 @@ pub enum SessionEvent {
     AltScreenLeft,
     /// The terminal title changed.
     TitleChanged { title: String },
+    /// What the far end's command line says now, and where its cursor is in it.
+    ///
+    /// **Only in far-end-line mode, and it carries no words of Acter's** (spec 28,
+    /// decisions 2 and 3). The frontend writes both into an ARIA text box — a
+    /// `contenteditable` span with `role="textbox"` — and the reader does the speaking out
+    /// of its own text-box behaviour: the row when the row changed, the character at the
+    /// caret when only the cursor moved, and "blank" for a row a key emptied or a caret
+    /// past the end. That is why there is no live region on this path and no string here:
+    /// what a listener hears is identical in kind to what they hear in every other text box
+    /// on Windows.
+    ///
+    /// `text` is `None` when nothing was redrawn and only the caret moved, which is the
+    /// whole of what left, right, Home and End do — they rewrite nothing, so there is no
+    /// text to send and a row replaced with itself would be a change the reader announces.
+    ///
+    /// `caret` counts characters from the start of the text the field holds, which is the
+    /// anchored row from the anchor column onward.
+    FarEndLine { text: Option<String>, caret: u32 },
     /// The transport connection state changed.
     ConnectionChanged { state: ConnectionState },
     /// Something should be said. Speaking is its own event: as long as one event type
@@ -147,7 +182,15 @@ mod tests {
             },
             SessionEvent::Output {
                 command_id: CommandId(1),
+                line: LineId(4),
+                revision: LineRevision::Appended,
                 text: "hello".to_owned(),
+            },
+            SessionEvent::Output {
+                command_id: CommandId(1),
+                line: LineId(4),
+                revision: LineRevision::Rewritten,
+                text: "hello again".to_owned(),
             },
             SessionEvent::CommandFinished {
                 command_id: CommandId(1),
@@ -160,6 +203,14 @@ mod tests {
             SessionEvent::AltScreenLeft,
             SessionEvent::TitleChanged {
                 title: "~/acter".to_owned(),
+            },
+            SessionEvent::FarEndLine {
+                text: Some("cargo test --all".to_owned()),
+                caret: 16,
+            },
+            SessionEvent::FarEndLine {
+                text: None,
+                caret: 3,
             },
             SessionEvent::ConnectionChanged {
                 state: ConnectionState::Reconnecting,
@@ -204,6 +255,8 @@ mod tests {
     fn output_is_internally_tagged_on_type() {
         let event = SessionEvent::Output {
             command_id: CommandId(3),
+            line: LineId(9),
+            revision: LineRevision::Appended,
             text: "line".to_owned(),
         };
         assert_eq!(
@@ -211,8 +264,56 @@ mod tests {
             json!({
                 "type": "Output",
                 "command_id": 3,
+                "line": 9,
+                "revision": "Appended",
                 "text": "line",
             })
+        );
+    }
+
+    /// The id is a bare number on the wire, like every other identifier this protocol
+    /// carries, and the revision is a bare name — so a frontend applying one reads what the
+    /// engine decided rather than re-deriving it from the text.
+    #[test]
+    fn a_rewrite_names_the_line_it_replaces() {
+        assert_eq!(
+            serde_json::to_value(SessionEvent::Output {
+                command_id: CommandId(3),
+                line: LineId(9),
+                revision: LineRevision::Rewritten,
+                text: String::new(),
+            })
+            .unwrap(),
+            json!({
+                "type": "Output",
+                "command_id": 3,
+                "line": 9,
+                "revision": "Rewritten",
+                "text": "",
+            })
+        );
+    }
+
+    /// **The far-end line carries a row and a caret and no words at all**, because the
+    /// reader speaks it: `text` absent is "only the caret moved", which is what left and
+    /// right do.
+    #[test]
+    fn the_far_end_line_carries_a_row_and_a_caret() {
+        assert_eq!(
+            serde_json::to_value(SessionEvent::FarEndLine {
+                text: Some("exit".to_owned()),
+                caret: 4,
+            })
+            .unwrap(),
+            json!({ "type": "FarEndLine", "text": "exit", "caret": 4 })
+        );
+        assert_eq!(
+            serde_json::to_value(SessionEvent::FarEndLine {
+                text: None,
+                caret: 2,
+            })
+            .unwrap(),
+            json!({ "type": "FarEndLine", "text": null, "caret": 2 })
         );
     }
 

@@ -25,4 +25,13 @@ export interface WindowView {
    * stays afterwards, because once a session has ended it is the record of what happened.
    */
   showTerminal(live: boolean): void;
+  /**
+   * Whether the window shows the local command line at all.
+   *
+   * **The two lines are never both in the document** (spec 28, decision 2). While the far
+   * end owns the line the `<input>` owns nothing and can submit nothing, and leaving it
+   * there would give a listener two edit fields to arrow between, only one of which does
+   * anything — which is exactly the noise A10 took the field away to avoid.
+   */
+  showLocalLine(showing: boolean): void;
 }

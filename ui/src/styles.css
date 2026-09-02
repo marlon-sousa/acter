@@ -29,6 +29,27 @@ main {
   padding: 0.25rem;
 }
 
+/* The far end's command line. A span rather than an input for accessibility reasons that
+   are measured and recorded in adapters/far_end_field.ts, so it needs the borders and the
+   baseline an input gets for free — a sighted developer looking at this window should see
+   a command line where a command line is. */
+#far-end-line {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+#far-end-input {
+  flex: 1;
+  font-family: monospace;
+  font-size: 1rem;
+  padding: 0.25rem;
+  border: 1px solid;
+  min-height: 1.5rem;
+  white-space: pre;
+  overflow-x: auto;
+}
+
 .visually-hidden {
   position: absolute;
   width: 1px;

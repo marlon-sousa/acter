@@ -2416,8 +2416,17 @@ thing to pick up once the adapters land, not merely the next number.
     is testable without a machine that happens to lack something. Asking the machine is 25
     (B7)'s, and this is what B7 and 13 (A8) render.
 
-23.5. Ctrl+D is not reachable from the window. Spec: none yet → specify first, and the
-    specifying is small because the diagnosis is already complete. **Found 2026-08-25** in
+23.5. **Done** — Ctrl+D is reachable from the window, and is answered three ways. Spec:
+    [28-far-end-line-mode.md](specs/28-far-end-line-mode.md), decision 9. **Folded into 28
+    and shipped there**, because the two halves of this entry belong to the same seam: the
+    key had to leave the page (`isReportable` in `ui/src/adapters/keyboard.ts` now answers
+    for `Ctrl+D` as well as `Ctrl+C`), and the three answers needed a `KeyAck` variant that
+    28 was adding anyway — "this shell has no measured end-of-input answer" and "nothing is
+    listening" were one reply until `KeyAck::Unsupported` existed. In far-end-line mode the
+    same key is `0x04` on the wire, aimed at whatever is actually reading rather than at the
+    shell Acter spawned, which is what makes it right inside an `ssh` where today's `Eof`
+    would send PowerShell's `exit` into the wrong shell. The diagnosis below is kept as the
+    record of how it was found. **Found 2026-08-25** in
     B5.2's NVDA pass, and filed rather than fixed there: forwarding it is frontend work and
     B5.2 is a shell adapter, so fixing it in that PR would have widened an entry that had
     already grown once.
@@ -3928,7 +3937,21 @@ change shape once it meets a real far end. An entry that turns out to have speci
 wrong thing has still done its job if the measurement is written down — that is the same
 bargain 22.11 and 23.14 struck, and both paid.
 
-28. Far-end-line mode: the keyboard goes to the far end. Spec: none yet → specify first.
+28. **Done** — far-end-line mode: the keyboard goes to the far end, and the row it redraws
+    is what you hear. Spec:
+    [28-far-end-line-mode.md](specs/28-far-end-line-mode.md). **23.5 is folded into it** and
+    marked Done above. What shipped: `Ctrl+Shift+K` and `set_line_owner`; named `Key`
+    variants and `policies::key_bytes`, the measured table, with Backspace pinned as `0x7f`
+    because `0x08` deletes the previous *word* in PSReadLine and in `cmd.exe`;
+    `TerminalEngine::cursor` and `modes`; `policies::far_end_row`, decision 6's two steps as
+    a pure function over the revisions of one settled batch; `LineId` and `LineRevision` on
+    the wire, so the buffer applies revisions by id and `Pump::due` stops dropping rewrites;
+    Enter's anchored-row rule for headings; and the frontend's ARIA text box, whose shape was
+    measured before it was chosen (`ui/src/adapters/far_end_field.ts` carries the run).
+    DESIGN's "Edit field ownership" and the open question under it were amended in the same
+    PR, since the element decision is a reversal of a Decided one. The reasoning below is
+    kept as the record of how the entry got here.
+
     **Agreed 2026-08-31**, from the user's ask: up and down, Tab, and Ctrl plus any key
     have to be able to reach the far end, and a session inside an `ssh`, a `wsl`, a
     container or a REPL is unusable without them.
@@ -4005,8 +4028,433 @@ bargain 22.11 and 23.14 struck, and both paid.
     that is not the shell Acter spawned (23.5's subject), and what is said for a row that a
     key emptied.
 
+    **Answered 2026-09-02, and the entry is now specifiable.** A design session with the
+    user measured four programs on a real pseudoconsole through Acter's own engine (rig:
+    `crates/acter-transports/examples/capture.rs`) and read NVDA's own configuration, and
+    the results are written into DESIGN.md rather than repeated here. In summary:
+
+    - **The element question dissolved.** The tester's NVDA has
+      `autoPassThroughOnFocusChange` off, so the 2026-08-31 "did not switch to focus mode"
+      finding described a configuration, not the reader. With it off no ARIA role
+      auto-switches, and the one that forces keys through — `role="application"` — is
+      already measured (readable_field.ts) to stop the arrows reading prose. So: no region,
+      no key sink, no new element. The edit field stays, NVDA+Space is the handoff.
+    - **No renderer either.** The buffer applies revisions by id, blanks included, and a
+      `gh` prompt answered with Cancel resolves itself into one line carrying the question
+      and the answer — the far end writes the transcript record itself.
+    - **The rule is "the row that was rewritten after a key Acter sent"**, not the cursor
+      row: `gh` hides the cursor and parks it off the list. Candidate for choosing between
+      the two rows that change: speak the one that gained non-whitespace content.
+    - **Enter and headings are solved by an existing Decided rule.** The anchored row at
+      the instant Enter is sent *is* the far end's echo, so the echo test applies one step
+      earlier; a widget answer leaves an empty anchored row and earns no heading. History
+      stays out, now as a decision.
+    - **One new capability**: cursor position on `TerminalEngine`, for left and right
+      arrows, which rewrite nothing and are therefore invisible to every diff rule.
+
+    Still owed: the "blank" probe on an empty `<input>` whose arrows are prevented, Ctrl+D
+    at a far end (23.5's subject), and the emptied-row string.
+
     **Deliberately not in this entry**: any renderer, the alternate screen, and the
     several-rows case, which is 30.
+
+28.1. **Done** — Acter wrote the row after the reader had stopped waiting for it. Spec:
+    [28-far-end-line-mode.md](specs/28-far-end-line-mode.md), amendment F. Fixed in 28's own
+    PR. It reversed no decision of 28.
+    **Found 2026-09-02 in 28's own NVDA pass**, driving a real WSL `bash`
+    through the screen-readers bridge as the `user` persona, NVDA 2026.1.1, silent capture.
+
+    **What a listener meets.** In far-end-line mode, every key is answered with the state
+    *before* it. Two commands in history, then up arrow: NVDA said "em branco" — blank —
+    because the field was still empty at the instant of the press. Up arrow again: NVDA said
+    `echo acter-history-two`, the line the *previous* press had recalled, while the field by
+    then held `echo acter-history-one`. Home said "blank". Right arrow from the start of the
+    line said "e", "c", "c" — one behind, and repeating. Tab and Backspace said nothing at
+    all.
+
+    **The row and the caret Acter writes are correct**, which is what makes this a timing
+    defect rather than a content one: `nvda+uparrow` re-read the field on demand and got the
+    right line every time, and Tab's completion (`ech` to `echo `) and Backspace's single
+    character deletion were both exactly right in the field. What is wrong is only *when*.
+
+    **The first diagnosis written here was wrong, and the correction is the whole entry.**
+    It said NVDA answers a caret command synchronously from the field as it stands, and that
+    the defect therefore could not be fixed by writing sooner. **NVDA does not answer
+    synchronously. It waits.** Read in NVDA's own source, `source/editableText.py`:
+    `EditableText._caretMovementScriptHelper` takes a bookmark of the caret, sends the key on
+    with `gesture.send()`, and then calls `_hasCaretMoved`, which polls the caret every 10 ms
+    until it moves or until `config.conf["editableText"]["caretMoveTimeoutMs"]` elapses —
+    **default 100 ms, and exposed to the user in Advanced settings as "Caret movement timeout
+    (in ms)", 0 to 2000**. Only then does it speak what is at the caret. The arrow keys are
+    bound to those scripts (`__gestures`, `caret_moveByCharacter` and `caret_moveByLine`), and
+    our field gets that behaviour because `IAccessible.findOverlayClasses` attaches
+    `EditableTextWithAutoSelectDetection` to any object with an `IAccessibleTextObject` whose
+    role is text or whose state is editable — which is what a `contenteditable` in WebView2 is.
+
+    **So the model Acter needs is the one NVDA already assumes for a terminal**, and it is not
+    an invention: `NVDAObjects.behaviors.Terminal` is `LiveText` plus `EditableText`, and
+    `WinConsoleUIA._caretMovementTimeoutMultiplier` raises the poll to 1.5x with the comment
+    "On older consoles, the caret can take a while to move." A terminal is expected to repaint
+    late; the reader's job is to wait for the repaint and then speak it. Acter is simply
+    later than the window it is allowed.
+
+    **How much later is measured, and the margin is enormous.** New rig,
+    `crates/acter-transports/examples/latency.rs`, which sends a key to a real pseudoconsole
+    and timestamps every line and cursor change the engine reports, in milliseconds from the
+    byte going out. Measured 2026-09-02 against `bash` under WSL, Windows PowerShell and
+    `cmd.exe`, on a warmed prompt with history:
+
+    - `bash` under WSL: left 1 ms, Home 0 ms, up arrow 3 ms, Backspace 4 ms.
+    - Windows PowerShell: all four keys 0 ms.
+    - `cmd.exe`: left 0 ms, Home 0 ms, up 0 ms, Backspace 1 ms.
+
+    In every case the answer arrived **in a single batch — first change and settled are the
+    same instant**. The far end answers in single-digit milliseconds against a 100 ms window.
+    **Acter's 500 ms quiescence clock is the entire defect**: it is five times the window the
+    reader gives, and one hundred times what the far end takes. (The first run of the rig
+    reported 226 and 351 ms and was thrown away — that was WSL still starting, not a keypress.)
+
+    **A second defect the rig found, independent of the clock.** Left, right, Home and End
+    **rewrite no line at all** — the far end only repositions the cursor, and the engine
+    reports no `TerminalItem::Line` for any of them. The cursor is the whole of the evidence
+    that the key arrived. `policies::far_end_row`'s third step exists for exactly this and is
+    correct, so the pump does answer them; but it means any future change that keys the
+    far-end path off changed lines alone would silently lose the four commonest navigation
+    keys.
+
+    **What this makes the fix.** Not a live region, not `role="application"`, and no reversal
+    of decision 2 or 3 — the element is right and the content it holds was right all along.
+    The far-end line comes off the pacing clock: `Pump::run` arms its settle timer with
+    `self.quiescence`, and that number belongs to the transcript, not to a keystroke a reader
+    is standing there waiting for. It needs its own, measured, much smaller number, chosen to
+    coalesce a multi-write redraw while landing well inside 100 ms. Everything downstream is
+    already fast enough: `SessionActor` forwards `SessionInput::FarEndLine` straight to the
+    sink with no render tick, and `far_end_field.render` writes the text and the caret in one
+    DOM update, which is one bookmark change for the poll to catch.
+
+    **And there is an honest answer for a far end that is genuinely slow**, which is the same
+    one NVDA gives for old consoles: the timeout is the user's, up to 2000 ms. That is a line
+    of documentation, not code.
+
+    **The fix** is `PacingConfig::far_end_settle`, default 30 ms, used for a settling a key is
+    outstanding for; everything else keeps `quiescence`. Pinned by
+    `a_keystroke_is_answered_while_the_reader_is_still_listening` and
+    `a_redraw_that_arrives_in_pieces_is_coalesced_into_one_answer`, both of which fail against
+    the code as it was, and by
+    `output_nobody_pressed_a_key_for_keeps_the_pacing_clock`, which pins what must not change.
+
+    **Re-checked on the reader 2026-09-02**, NVDA 2026.1.1, silent capture, `user` persona, at
+    a real `bash` under WSL Ubuntu. Every item this blocked now passes. Up arrow said
+    `echo acter-history-two` then `echo acter-history-one`, one recall per press, where before
+    it said "em branco" and then the previous press's line. Home said "e" and three rights said
+    "c", "h", "o", where before it said "em branco" and then "e", "c", "c". Backspace spoke the
+    character it deleted and left the row exactly one shorter, where before it said nothing.
+    The selection prompt speaks one option per press. **Tab is the one key that is still
+    silent, and it is not this** — see 28.4.
+
+    Blocks the four checklist items that failed in 28's PR body — up arrow, Tab completion,
+    left and right, and Backspace's spoken half — and it is what keeps 28.2's item unchecked
+    now that 28.2 itself is fixed: the `gh` selection reaches the field one option per press
+    and is still not spoken on the press.
+
+    **The smaller thing recorded here turned out to be its own defect** and is now 28.5. What
+    follows is what was seen at the time, because it may turn out to be the same clock: after `Ctrl+C` killed `gh`, the
+    field briefly held the whole prompt row — `marlon@splyt:/mnt/c/Users/marlo$` — because
+    the anchor was taken at a settling that landed part-way through the far end drawing its
+    prompt, so the anchor column was zero. No spurious heading came of it in that session,
+    and it was not chased further.
+
+28.2. **Done** — the content rule never ran, so a `gh` prompt said nothing. Spec:
+    [28-far-end-line-mode.md](specs/28-far-end-line-mode.md), decision 6. Fixed in 28's own
+    PR, in the commit after the pass that found it. **Found 2026-09-02**, on a real
+    `gh repo create` aborted at its first prompt.
+
+    **What a listener meets.** Arrowing the selection produces silence. The field stays
+    empty and stays empty.
+
+    **The far end and the engine both did their part**, which is what makes this a plain
+    bug: the buffer afterwards holds the whole interaction as four rows — the question, the
+    three options with `>` on the one the arrow moved to, and the returning prompt — so the
+    row gained its marker, the engine reported it, and `policies::far_end_row` would have
+    picked it. It was never asked.
+
+    **Where.** `Pump::far_end_settled` branches on `self.far_end.anchor.is_none()` to
+    re-anchor instead of asking the policy. That condition was written for one case — the
+    settling right after Enter, where the anchor is deliberately cleared — and it also
+    catches the case the content rule exists for: a far end that hides its cursor has no
+    anchor at all, by 28's own amendment B, so step 2 is unreachable exactly where step 2 is
+    the answer. The two states need telling apart rather than sharing `None`.
+
+    **The fix** is an explicit `awaiting_prompt` flag on the pump's far-end state, so the two
+    meanings of "no anchor" stop sharing an `Option`: a submission sets it and the settling
+    after that consumes it, and everything else with no anchor goes to the policy, whose
+    second step is the answer. Pinned by
+    `a_widget_that_hides_its_cursor_still_gets_the_content_rule`, which reproduces the
+    sequence that found it — the widget takes the screen while Acter still owns the line, so
+    no anchor is ever taken — and fails against the code as it was.
+
+    **Re-checked on the reader 2026-09-02**, NVDA 2026.1.1, silent capture, `user` persona,
+    at a real `gh repo create`: the field now holds `> Create a new repository on github.com
+    from a template repository` after one press and `> Push an existing local repository to
+    github.com` after the next, so the selection reaches the listener one option per press.
+    **It is still not *spoken* on the press** — 28.1 stands in front of it, and that item's
+    checklist box stays unchecked until 28.1 is answered.
+
+28.3. **Done** — F6 could not reach the results buffer while the far end owned the line.
+    Spec: [28-far-end-line-mode.md](specs/28-far-end-line-mode.md), decision 2. Fixed in 28's
+    own PR, in the commit after the pass that found it. **Found 2026-09-02.**
+
+    **What a listener meets.** F6 in far-end-line mode does nothing: NVDA re-read the
+    far-end field and focus never moved. Review by heading is unreachable, which is the whole
+    of how this product is meant to be read back — and it is the same complaint the
+    2026-09-02 amendment under "Edit field ownership" made about headings, reached from the
+    other side.
+
+    **Where.** `AppController.toggleFocusArea` knows two areas and asks
+    `editField.isFocused()`; in this mode the edit field is hidden and unfocused, so the
+    toggle focuses a hidden `<input>`, which does nothing at all. It has to ask which line is
+    in front of the user and toggle between *that* field and the buffer.
+
+    **The fix** is one question asked of the state rather than of an element:
+    `AppController` now resolves *which line is in front of the user* and toggles between
+    that and the buffer, and `Escape` from the buffer returns to the same one. Escape *at*
+    the far end's line stays the far end's, and the keyboard adapter tells the two apart by
+    `defaultPrevented` — the field consumed it — rather than by asking which mode is on,
+    which is one less thing to keep in step.
+
+    **Re-checked on the reader 2026-09-02**: F6 from the far-end line landed on "Results
+    região, gh repo create, título nível 2", and F6 again came back to "Command line" rather
+    than to the hidden local field. Both directions, both announced.
+
+28.4. **Done** — Tab completion was applied silently. Spec:
+    [28-far-end-line-mode.md](specs/28-far-end-line-mode.md), amendment I. Fixed in 28's own
+    PR, after two rounds of element measurement and one of reading NVDA's source. **Found 2026-09-02**, re-running 28's checklist on NVDA 2026.1.1 after 28.1 was
+    fixed, silent capture, `user` persona, at a real `bash` under WSL.
+
+    **What a listener meets.** `ech` then Tab: no speech at all. The completion is correct —
+    the field held `echo ` and `nvda+uparrow` read it back — so nothing is wrong with what
+    Acter wrote or when it wrote it. Every caret key around it now speaks on the press.
+
+    **The cause.** NVDA's poll-then-speak behaviour, which is what 28.1's fix aims at, lives
+    in `EditableText`'s caret-movement scripts, and its `__gestures` table binds the arrows,
+    `home`, `end`, the page keys, Enter and Backspace. **Tab is not bound there.** In focus
+    mode Tab means "announce the newly focused object"; the field prevents it, focus does not
+    move, and NVDA has nothing to say. No clock reaches this, because no clock is running.
+
+    **A real terminal gets it from the other half of the same object.**
+    `NVDAObjects.behaviors.Terminal` is `LiveText` *plus* `EditableText`. The caret scripts
+    answer the arrows; `LiveText` monitors the object's text and speaks what changed, and that
+    is what carries Tab completion in a console. Acter's field is an ARIA text box: it has the
+    first half and not the second.
+
+    **The element was re-measured, and the element is not the answer.** Probe
+    `ui/probes/element_probe.html`, run 2026-09-02 on NVDA 2026.1.1 through the bridge, silent
+    capture, `user` persona, in Edge — WebView2's own engine. Eight variants, each behaving
+    exactly as the far-end field does (every key prevented, text and caret written by script),
+    differing only in role, ARIA and how the completion is applied. `ech` then Tab in each:
+
+    - **A, `role="textbox"` as shipped: silent.** The probe reproduces the defect, so it is
+      faithful.
+    - **B, textbox plus `aria-autocomplete="inline"`: silent.** NVDA does see the attribute —
+      it announces "possui autocompletar" when focus lands — and still says nothing when the
+      text changes.
+    - **C, `role="combobox"` plus `aria-autocomplete="inline"`: silent**, and it makes the
+      field announce itself as "caixa de combinação recolhido multilinha editável abre lista"
+      — a collapsed combo box promising a list that does not exist. Worse on arrival and no
+      better on Tab.
+    - **D, `role="searchbox"`: silent.**
+
+    So **no role announces a programmatic content change**, and decision 2's element stands.
+    What does work is a mechanism layered on top of it, and two of them do:
+
+    - **E and H, the inline-autocomplete pattern**: leave what the completion added
+      *selected*, and NVDA announces it — **"o  selecionado"** — out of
+      `EditableText.detectPossibleSelectionChange`. H collapses the caret 120 ms later, so
+      nothing stale is left standing in a field whose contents are the far end's rather than
+      provisional, and the announcement still happens. No live region at all. It says what was
+      *added*, not the completed line, and it needs the change to be a pure append — a Tab
+      with several candidates rewrites the row and has no delta to select.
+    - **F, a live region fed only by the completion**: says **"echo"**, the whole row. Caret
+      keys are unaffected — Home said "e", right arrow "c", one utterance each, no
+      double-speak.
+
+    **And G measured why the always-on version is wrong**, which is decision 3 confirmed
+    rather than assumed: a live region fed on *every* answer says everything twice. Typing
+    `ech` gave "e", "c", **"ec"**; Backspace gave **"h"** from the reader and then **"ec"**
+    from the region. That is the noise decision 3 deleted, reproduced on demand.
+
+    **A second round found the callback, and it is not `aria-autocomplete`.** The question
+    asked was whether ARIA has a proper contract for this rather than a workaround, and it
+    does. In NVDA's source, `NVDAObject.event_selection` reads: *"This object has been
+    selected. If this object's container / parent is being controlled by the focus, then
+    report this selection."* It takes `api.getFocusObject().controllerFor` — which
+    `NVDAObjects.IAccessible._get_controllerFor` resolves from the IA2 `CONTROLLER_FOR`
+    relation, which is **`aria-controls`** — and if the newly selected object is a descendant
+    of something the focused field controls, it cancels speech and calls `reportFocus()` on
+    it. So the announcing mechanism is *a listbox the field controls, whose selection moves*.
+    `aria-autocomplete` is only a state, announced once when focus arrives ("possui
+    autocompletar") and never again; and `InputFieldWithSuggestions.event_controllerForChange`
+    says only that suggestions *appeared*, in braille and a sound — nothing the bridge can
+    hear and no text either way.
+
+    The web agrees, which is worth recording because it means this is not a local quirk.
+    a11ysupport.io's `aria-autocomplete` test data has NVDA's support for `inline`, `list` and
+    `both` as only partial in Chrome, Edge and Firefox, and **no screen reader at all fully
+    conveying `inline`**. And Adobe's React Spectrum team, building a combobox, hit the
+    failure J reproduces below: *"character deletions and text cursor movement in the ComboBox
+    input weren't being announced at all"*, resolved only by *"clearing option focus on any
+    changes to the input text or left/right arrow key presses"*.
+
+    **Three more variants, measured the same way:**
+
+    - **I, the textbox exactly as decision 2 chose it plus `aria-controls` pointing at an
+      offscreen listbox whose selection moves: speaks the completion.** "echo 2 de 2". And
+      **every caret key still works** — Home "e", right arrow "c", End "em branco", Backspace
+      "espaço", one utterance each, no double-speak, because the listbox selection only
+      changes on a completion.
+    - **K, the same with one option replaced each time: "echo 1 de 1".** `aria-setsize="-1"`
+      did **not** suppress the position info, so the count comes along with `reportFocus()`
+      whatever is done to it. Caret keys unaffected.
+    - **J, the full ARIA 1.2 combobox — expanded, `aria-controls`, `aria-activedescendant`:
+      announces the completion and then silences everything else.** Home, right arrow and
+      Backspace all produced **no speech at all** while an option held virtual focus. That is
+      28.1 undone, measured here and corroborated by Adobe above. **J must never be built.**
+
+    **The recommendation is now I/K rather than F**, and the decision is still the user's.
+    I/K is the platform's own contract rather than a workaround; it keeps decision 2's element
+    untouched; it needs no table of "which keys this reader speaks for", which was the one
+    real weakness in F, since the listbox is fed by a completion rather than by a key; and it
+    extends without redesign if Acter ever surfaces several candidates, where "1 of 5" stops
+    being noise and starts being the point. **Its cost is the position info** — "echo 1 de 1"
+    where F says "echo" — which could not be removed from the page side.
+
+    **What was built is H**, and the question about Tab-Tab below is why. I/K would have
+    spoken the whole row on a *completing* Tab, which is more than the press changed; H speaks
+    what the completion added, which is what the user asked for and what a listener needs to
+    know. It also adds nothing at all to the accessibility tree, where I/K adds a listbox and
+    F a live region. The listing Tab, which is the case a whole-row announcement would have
+    been for, turned out not to be the field's problem at all — it is 28.6's.
+
+    **The fix**: what the completion added is left *selected*, which NVDA announces out of
+    `EditableText.detectPossibleSelectionChange`, and the selection is dropped 120 ms later so
+    nothing stale stands in a field holding the far end's line. Only a pure append qualifies,
+    and only the answer to a completion key is marked — every other key the reader already
+    speaks for, and a selection on top of that would be the double-speaking decision 3
+    deleted.
+
+    **Re-checked on the reader 2026-09-02**, NVDA 2026.1.1, silent capture, `user` persona, at
+    a real `bash` under WSL: `ech` then Tab said **"o selecionado"**, and
+    `ls /tmp/acterprobe/al` then Tab said **"pha- selecionado"**. The field then read
+    `ls /tmp/acterprobe/alpha-` on demand and a left arrow answered "hífen", so the caret keys
+    are untouched.
+
+    **G and J stay ruled out by measurement**, and their entries above say why.
+
+    **What Tab-Tab does, which is the question that must be answered before choosing.** Asked
+    2026-09-02 and measured rather than reasoned about, at a real `bash` under WSL with three
+    files sharing a prefix (`/tmp/acterprobe/alpha-{one,two,three}.txt`), typing
+    `ls /tmp/acterprobe/al`:
+
+    - **Tab 1** appends the common prefix: the row goes from `...al` to `...alpha-`, a pure
+      append of `pha-`, and the cursor moves along the same row. bash also rings the bell.
+    - **Tab 2 does nothing at all.** bash sends one `` and no other byte. readline lists on
+      a *repeated* completion, and Tab 1 changed the line, so Tab 2 is a fresh attempt.
+    - **Tab 3 lists**, and it does so as **two new rows**: `alpha-one.txt    alpha-three.txt
+      alpha-two.txt`, and below it the prompt and command line redrawn — and **the cursor
+      moves from row 0 to row 2**, to the same column, onto the redrawn command line.
+
+    So **the candidate list is output, not the command line**, and no mechanism in this entry
+    would speak it: H selects a delta on the command line and there is none; I/K feed a
+    listbox from the command line; F feeds a live region from the command line. The answer to
+    "will Tab-Tab say everything it shows" is **no, and not because of the mechanism**.
+
+28.6. **Done** — after a listing Tab the far-end field held the candidate list instead of the
+    line being edited, and stayed wrong. Spec:
+    [28-far-end-line-mode.md](specs/28-far-end-line-mode.md), amendment J. Fixed in 28's own
+    PR. It was a hole in decision 6, found by asking what Tab-Tab does. **Found 2026-09-02** on NVDA 2026.1.1, silent capture, `user`
+    persona, at a real `bash` under WSL.
+
+    **What a listener meets.** After the third Tab, NVDA said the bare prompt row
+    (`marlon@splyt:/mnt/c/Users/marlo$`). The field then held
+    `alpha-one.txt    alpha-three.txt  alpha-two.txt` — the candidates — and it **did not
+    recover**: a left arrow spoke `h`, a character out of the candidate row, and
+    `nvda+uparrow` read the candidate list back. The user is editing
+    `ls /tmp/acterprobe/alpha-` and everything they hear comes from a row they are not on.
+    The candidate list never reached the buffer either, so it is both in the wrong place and
+    missing from the transcript.
+
+    **The cause.** The far end drew the list *and* redrew the command line on a new row, so
+    two rows gained content. `policies::far_end_row`'s second step answers with the row that
+    gained content and picked the list. Its third step, which would have caught this, tests
+    for a cursor that moved *along the same row*, and this cursor changed rows — measured,
+    row 0 column 58 to row 2 column 58.
+
+    **The shape of the fix, not yet a spec.** The cursor is the evidence and it is
+    unambiguous: **when the cursor changes row, the command line has moved, and the row it
+    moved to is the command line.** Follow it, re-anchor there, and answer from the new
+    anchor — which yields `ls /tmp/acterprobe/alpha-`, the row the user is actually editing.
+    The other rows that gained content are then what they look like: the far end printing
+    output at its own prompt, which belongs in the buffer and is spoken by the path that
+    speaks output. That is also what makes Tab-Tab audible, and it is why **28.6 comes before
+    28.4** — the listing case is answered by the transcript, and only the completing case
+    needs a mechanism at all.
+
+    **The fix is in two halves.** The anchor follows the cursor to the row the command line
+    was redrawn on, and where it begins on that row is measured off by what the listener
+    already had, because a `readline` redraw carries no marker to strip by. And the rows that
+    changed which are *not* the command line's row are content the far end showed: they now go
+    where `Pump::publish` already puts text no submission accounts for, instead of being
+    dropped by a region filter that wants only `Output`. Pinned by
+    `a_command_line_redrawn_on_another_row_is_followed_there` and
+    `what_the_far_end_printed_at_its_prompt_reaches_the_transcript`, both of which fail against
+    the code as it was.
+
+    **Re-checked on the reader 2026-09-02** at a real `bash` under WSL with three files
+    sharing a prefix: the listing Tab spoke
+    **`alpha-one.txt alpha-three.txt alpha-two.txt`**, put that row in the transcript, and left
+    the field holding `ls /tmp/acterprobe/al` — the line being edited. Before the fix the field
+    held the candidates, a left arrow read a character out of them, and the transcript had
+    nothing.
+
+    **One wart left standing, and it is not new**: the bare prompt row the far end redraws is
+    published and spoken alongside the candidates, so the listener hears
+    `marlon@splyt:/mnt/c/Users/marlo$` first. It behaved identically before this fix, so it is
+    not a regression, and it is recorded here rather than chased.
+
+28.5. **Done** — an anchor taken from a prompt still being drawn headed the next block with
+    the whole row. Spec: [28-far-end-line-mode.md](specs/28-far-end-line-mode.md),
+    amendment F. Fixed in 28's own PR, in the same commit as 28.1, which introduced it.
+    **Found 2026-09-02** while re-running 28's checklist on the reader.
+
+    It was seen once before, during 28's first pass, and recorded under 28.1 as a smaller
+    thing not worth chasing. Making the keystroke clock short turned it from rare into
+    reproducible, and the re-check caught it doing real damage.
+
+    **What a listener meets.** Answering an inline selection prompt left the transcript with a
+    second heading for the same command, reading
+    `marlon@splyt:/mnt/c/Users/marlo$ python3 /tmp/acter_menu.py` — the shell prompt and the
+    command together, where the command alone belongs, and where decision 7 says no heading
+    belongs at all, because answering a prompt is not running a command.
+
+    **The cause.** Enter leaves a key outstanding like any other, so it took the keystroke
+    clock. But its answer is not a caret anybody is polling for: it is the far end running a
+    command and drawing its next prompt, and the settling after it is where the anchor is
+    taken. Thirty milliseconds lands inside that drawing — the prompt is on the row, the
+    cursor has not reached the end of it — so the anchor is taken at column zero. Nothing is
+    heard at the time. It goes wrong at the *next* submission, which reads the row from
+    column zero and heads its block with all of it.
+
+    **The fix** is that the short clock is for `watching && !awaiting_prompt`: a key whose
+    answer someone is waiting to hear, and not a submission whose answer is a new prompt.
+    Pinned by `an_anchor_is_never_taken_from_a_prompt_still_being_drawn`, which reproduces the
+    sequence — submit, the far end echoes onto a new row with its cursor still at column
+    zero, then a program hides the cursor so nothing ever re-anchors — and fails against the
+    code as it was with exactly the observed heading.
+
+    **Re-checked on the reader 2026-09-02**: the transcript of the same interaction is now one
+    heading (`python3 /tmp/acter_menu.py`), the four rows of the prompt with the selection
+    where it was left, the far end's own one-line record (`chose: Push an existing local
+    repository`) and the returning prompt. No second heading.
 
 29. A program that is waiting says so. Spec: none yet → specify first. **Agreed
     2026-08-31**, and it is what makes 28 discoverable rather than a mode only its author
@@ -4032,6 +4480,16 @@ bargain 22.11 and 23.14 struck, and both paid.
     a shell waiting for a command line. That is a candidate, on two programs, and the spec
     should widen the sample before it leans on it.
 
+    **A second and better discriminator, measured 2026-09-02, and it contradicts this
+    entry's premise.** `less -X` — the case DESIGN cites as the one where "Acter has no
+    signal at all" — turns on **application cursor keys** (`ESC[?1h`) while never touching
+    the alternate screen. So a program that wants raw keys on the primary screen can
+    announce itself, and the pager case is detectable after all. `gh pr create` does not set
+    it, so DECCKM separates the announced half of the semi-interactive population from the
+    silent half rather than covering all of it — but a hint that fires reliably for pagers
+    and readline-driven far ends is worth more than one resting on bracketed paste alone.
+    Both should be in the spec, and the sample should still be widened.
+
     **The difficulty is false positives, and it is the whole entry.** A command that
     *finished* also produces output and then goes quiet. Telling the two apart is exactly
     the problem this project has met before from the other side: in an integrated session
@@ -4050,52 +4508,34 @@ bargain 22.11 and 23.14 struck, and both paid.
     what the user needs to hear is that the program seems to be waiting for a keypress and
     which key hands it the keyboard.
 
-30. A widget redraws several rows, and a text diff may not see it. Spec: none yet →
-    **measure first**, then specify. **Raised 2026-08-31 by the user, from the `gh` case.**
+30. **Closed 2026-09-02 — measured, and the answer went into 28.** This entry existed to
+    find out whether a widget's selection is visible to a text diff at all, because a
+    highlight drawn in colour alone would have needed attribute-aware diffing and a decision
+    about how a "selected" row is expressed to a screen reader. Three prompt-driven samples
+    answered it and none of them reopened anything, so what is left is the measurement note
+    rather than an entry to build.
 
-    `gh` asks its questions with an inline prompt: a list of choices drawn as several rows,
-    with arrows moving a highlight through them. Two things about it matter and they point
-    in opposite directions. It is beyond the cursor-row rule 28 builds, because the answer to
-    an arrow is on a row the cursor is not on. And it is *not* a case Acter can route
-    automatically, because it never takes the alternate screen, so there is nothing to
-    detect — which is what the DESIGN open question now records.
+    - **`gh repo create`, 2026-08-31, gh 2.96.0**, aborted at the first prompt. No alternate
+      screen. The selection is a `>` at the start of the row, with colour used as well as the
+      marker rather than instead of it. Each arrow rewrites exactly two rows, and the engine
+      reports exactly those two, because it emits only lines whose text changed. Both arrow
+      encodings accepted; the selection wraps at both ends.
+    - **`gh pr create`, 2026-09-02, same version**, aborted before anything was pushed. The
+      same shape, and two findings nobody sought: the cursor is hidden for the whole prompt
+      and parked below the list, so this is a rewritten-row rule and never a cursor-row one;
+      and answering the prompt erases it — the question row became `? Where should we push
+      the '…' branch? Cancel` and the three option rows became empty — which is what settles
+      that the buffer applies revisions by id, blanks included, and keeps nothing else.
+    - **PSReadLine's completion menu, 2026-09-02**, `pwsh` 7.6.5 with Tab bound to
+      `MenuComplete`. **The selection is drawn in colour alone**, with no marker character
+      anywhere, which is what a rule naming `>` would have been unable to hear — and it is
+      why the rule is the row that gained non-whitespace content. The menu is also not where
+      the answer is: each arrow rewrites the command line itself, one completion per press,
+      so the anchored row already carries it. And the repaint is large — eleven line items on
+      the first press — which is what settled that row count routes nothing.
 
-    **The measurement comes first because the answer decides whether there is an entry at
-    all.** On a real pseudoconsole, on the rig that measured the `less` case, capture the
-    bytes of a `gh` prompt and answer four things: does it take the alternate screen
-    (expected no, and if yes this belongs to phase 2 instead); is the selection drawn with a
-    marker character or only with colour or reverse video; how many rows change per arrow
-    press; and does it repaint the whole list or only the two rows that differ.
-
-    **The colour answer is the one that changes the design.** A marker character is visible
-    to a text diff and this entry stays small. A highlight drawn only in colour is invisible
-    to one: the row's text is identical before and after, so a text diff reports that nothing
-    happened and the user hears silence while arrowing. The grid carries attributes and could
-    answer it; the buffer is text and could not, so that path means attribute-aware diffing
-    and a decision about how a "selected" row is expressed to a screen reader at all. Do not
-    guess which case `gh` is — the library behind its prompts has changed over the tool's
-    life, and one sample is not a population, so measure a second prompt-driven CLI beside it.
-
-    **Measured 2026-08-31, on `gh repo create` at version 2.96.0, aborted at the first
-    prompt so nothing was created. Every answer came back favourable.** No alternate screen:
-    neither `ESC [ ? 1 0 4 9` nor `ESC [ ? 4 7` appears anywhere. The selection is drawn as a
-    `>` at the start of the row, with colour used as well as the marker rather than instead
-    of it — so a text comparison sees the selection move, and the attribute-aware path this
-    entry was afraid of is not needed. Each arrow rewrites exactly two rows, the one losing
-    the marker and the one gaining it. And the engine already reports precisely those two:
-    the prompt repaints its header row identically on every press and the engine emits
-    nothing for it, because it only reports lines whose text changed. Both encodings of the
-    arrow were accepted, and the selection wraps at both ends of the list.
-
-    **So the entry is now small and its shape is known**: consume the revisions the engine
-    already emits, and speak the row that gained the marker. What is still owed is the second
-    sample — one program is not a population, the library behind `gh`'s prompts has changed
-    over the tool's life, and a CLI that draws its highlight in colour alone would reopen
-    everything this measurement closed.
-
-    Once measured, the rule to specify is the fourth bucket from DESIGN.md: speak the row
-    that gained the selection, and never re-read the whole list on every arrow. A listener
-    arrowing through a list wants what a listbox gives them, which is one item at a time.
+    All three are written into DESIGN under "A row that changed is an answer", and the rule
+    they produced shipped in 28 as `policies::far_end_row`. Nothing is owed here.
 
 ## Phase 2 gate — planning conversation, not code
 
@@ -4111,6 +4551,20 @@ since they are what makes an `ssh`, a `wsl`, a container or a REPL usable. What 
 here is the screen: a grid renderer, and how a full-screen program is read to someone who
 cannot see it. That is still a design conversation, and it is still the hardest question
 in the document.
+
+**Amended 2026-09-02, and the gate now has a measured edge rather than an argued one.**
+Where this gate begins is **the alternate screen**, and nothing else. A design session
+captured nano, `less -X`, `gh pr create` and `bash` on a real pseudoconsole: nano takes the
+alternate screen and the other three do not, so everything on this side of that byte —
+pagers, inline selection prompts, readline at any far end — belongs to the section above
+and needs no renderer, while everything past it belongs here. The three-level taxonomy is
+Decided in DESIGN.md under "Where the boundary actually falls".
+
+The merge that this session briefly proposed — folding 28 into this gate on the grounds
+that `gh` needed a renderer — was withdrawn once `gh` was measured: two rows change per
+arrow, both legible as text, and answering the prompt collapses the list into one line the
+far end writes itself. The population here is genuinely full-screen programs, and the
+hardest question in the document is still theirs alone.
 
 ## Principles — **Decided**
 

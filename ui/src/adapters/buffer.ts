@@ -2,7 +2,7 @@
 // CommandId, with output chunks appended under it as they arrive. A block for text no
 // command accounts for has no h2 at all; see Block below.
 
-import type { CommandId } from '../protocol';
+import type { CommandId, LineId, LineRevision } from '../protocol';
 import type { BufferView } from '../ports/buffer_view';
 
 interface Block {
@@ -14,6 +14,14 @@ interface Block {
   // read (found in B4.9's manual pass).
   heading: HTMLElement | null;
   output: HTMLElement;
+  // The lines this block has shown, by the id the engine minted for each.
+  //
+  // **The buffer applies revisions by id since 28** (decision 8), and that is what makes the
+  // transcript honest at a far end. A terminal's output is not append-only: `readline`
+  // repaints the row it is editing, and `gh` blanks its option rows when the prompt is
+  // answered and rewrites the question row to carry the answer. Appending every event grew
+  // a junk line per arrow press and kept three option rows the far end had already erased.
+  lines: Map<LineId, HTMLElement>;
 }
 
 export class BufferDom implements BufferView {
@@ -83,7 +91,7 @@ export class BufferDom implements BufferView {
     output.className = 'response';
 
     this.region.append(...(heading === null ? [output] : [heading, output]));
-    this.blocks.set(commandId, { heading, output });
+    this.blocks.set(commandId, { heading, output, lines: new Map() });
     this.show();
   }
 
@@ -96,16 +104,37 @@ export class BufferDom implements BufferView {
     return heading;
   }
 
-  appendOutput(commandId: CommandId, text: string): void {
+  /**
+   * Apply one output event to the line it names.
+   *
+   * `Appended` extends that line; `Rewritten` and `Settled` replace it, because both carry
+   * the row whole. A row the far end erased becomes an empty line rather than disappearing:
+   * the vertical structure is what a listener navigates by, and a line that vanished from
+   * under them mid-read is worse than a blank one.
+   */
+  applyLine(
+    commandId: CommandId,
+    line: LineId,
+    revision: LineRevision,
+    text: string,
+  ): void {
     const block = this.blocks.get(commandId);
     if (block === undefined) {
       // The controller opens a block before appending; this guard keeps a scripting
       // race from throwing rather than silently losing output.
       return;
     }
-    const chunk = document.createElement('div');
-    chunk.textContent = text;
-    block.output.append(chunk);
+    const existing = block.lines.get(line);
+    if (existing === undefined) {
+      const row = document.createElement('div');
+      row.textContent = text;
+      block.output.append(row);
+      block.lines.set(line, row);
+    } else if (revision === 'Appended') {
+      existing.textContent = `${existing.textContent ?? ''}${text}`;
+    } else {
+      existing.textContent = text;
+    }
     this.show();
   }
 

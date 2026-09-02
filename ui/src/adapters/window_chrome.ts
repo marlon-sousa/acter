@@ -197,4 +197,9 @@ export class WindowChrome implements WindowView {
     this.opened = true;
     setTimeout(() => this.focus(), this.startupHold);
   }
+
+  /** Whether the local command line is in the document (spec 28, decision 2). */
+  showLocalLine(showing: boolean): void {
+    this.elements.form.hidden = !showing;
+  }
 }

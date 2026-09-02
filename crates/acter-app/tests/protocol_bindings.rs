@@ -14,8 +14,8 @@ use std::path::PathBuf;
 
 use acter_core::{
     AttemptId, CommandId, ConnectAnswer, ConnectQuestion, ConnectStep, Connectable, Connected,
-    ConnectionKind, ConnectionState, ExitCode, Key, KeyAck, KeyPress, Mode, ProfileId,
-    SessionEvent, SessionId, SetUp, SubmitAck, Variant,
+    ConnectionKind, ConnectionState, ExitCode, Key, KeyAck, KeyPress, LineId, LineOwner,
+    LineRevision, Mode, ProfileId, SessionEvent, SessionId, SetUp, SubmitAck, Variant,
 };
 use specta::Types;
 use specta_typescript::Typescript;
@@ -42,6 +42,13 @@ fn render() -> String {
         .register::<KeyPress>()
         .register::<Key>()
         .register::<KeyAck>()
+        // 28's far-end-line surface. `LineOwner` is an argument to `set_line_owner` and
+        // nothing else references it; `LineId` and `LineRevision` come along through
+        // `SessionEvent::Output` and are listed for the same reason every other referenced
+        // type is — the whole protocol is emitted here, not only what happens to be reached.
+        .register::<LineOwner>()
+        .register::<LineId>()
+        .register::<LineRevision>()
         .register::<SessionId>()
         .register::<CommandId>()
         .register::<ExitCode>()

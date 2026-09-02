@@ -35,6 +35,12 @@ class FakeBackend implements BackendApi {
   sendKey(): Promise<KeyAck> {
     return Promise.resolve(this.keyAck);
   }
+  setLineOwner(): Promise<void> {
+    return Promise.resolve();
+  }
+  paste(): Promise<void> {
+    return Promise.resolve();
+  }
   emit(event: SessionEvent): void {
     this.onEvent?.(event);
   }
@@ -77,7 +83,13 @@ describe('installDebugRecorder in a debug build', () => {
     const wrapped = installDebugRecorder(backend);
     await wrapped.attachSession(SESSION, () => {});
 
-    backend.emit({ type: 'Output', command_id: 1, text: 'hello' });
+    backend.emit({
+      type: 'Output',
+      command_id: 1,
+      line: 1,
+      revision: 'Appended',
+      text: 'hello',
+    });
     backend.emit({
       type: 'Announce',
       command_id: 1,

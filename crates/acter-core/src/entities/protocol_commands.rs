@@ -294,17 +294,54 @@ pub struct KeyPress {
     pub alt: bool,
 }
 
-/// Which key, with exactly the one variant something presses today.
+/// Which key, as the frontend read it off the keyboard event.
 ///
-/// Named variants (Tab, Escape, the arrows, the function keys) arrive when an entry
-/// needs them — Tab with A4's completion, the rest with phase 2's pass-through key —
-/// and not before. Shipping the whole keyboard now would be a dozen variants with no
-/// consumer, which is the shape B1 refused to create and B3.5 decision 10 restated
-/// (spec B6, decision 6).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+/// **The named variants arrived with the entry that needed them** (spec 28, decision 4).
+/// B6 shipped `Char` alone and said the rest would come with a consumer rather than as a
+/// dozen variants nobody reads; far-end-line mode is that consumer, because a key aimed at
+/// the far end has to be spelled as bytes and an arrow is not a character.
+///
+/// The list is what [`key_bytes`](crate::key_bytes) has a measured spelling for and stops
+/// there. The function keys are still absent, and so is every key nobody has measured a far
+/// end's answer to: a variant with a guessed spelling is worse than no variant, because the
+/// far end simply does something else and says nothing about it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
 pub enum Key {
     /// A character key, as the frontend read it off the keyboard event.
     Char(char),
+    Up,
+    Down,
+    Left,
+    Right,
+    Home,
+    End,
+    Tab,
+    Enter,
+    Backspace,
+    Delete,
+    Escape,
+}
+
+/// Who owns the line being edited: Acter, or the far end (DESIGN, "Edit field ownership").
+///
+/// **A state rather than a setting, and never inferred** (spec 28, decision 1). The choice
+/// cannot be made key by key — a Tab that completes against Acter's history while the far
+/// end holds its own line buffer corrupts a command line rather than roughening an edge — so
+/// ownership moves whole or not at all, and the user is the only thing that moves it.
+///
+/// It lives in the domain because the domain is what needs it: which bytes a key becomes,
+/// whether Enter opens a block, and which row goes in front of the listener all depend on
+/// it. Holding it in the frontend would put a second binding table there, which is the seam
+/// B6 decision 4 exists to prevent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, Type)]
+pub enum LineOwner {
+    /// Acter owns the line: its own history, its own completion, and nothing crosses to the
+    /// far end until Enter. The default in every session.
+    #[default]
+    Local,
+    /// The far end owns the line: every key that is not layer 1 goes to it as it is typed,
+    /// and what the user hears back is the row the far end redrew.
+    FarEnd,
 }
 
 /// What became of a keystroke: the two questions the frontend cannot answer itself.
@@ -318,11 +355,20 @@ pub enum KeyAck {
     Unbound,
     /// Bound, and acted on: the intent reached the session.
     Applied,
-    /// Bound, but there was no running command to act on.
+    /// Bound, but there was no running command to act on — and, for a key aimed at the far
+    /// end rather than at a command, nothing left listening at all.
     ///
     /// The honest answer to A3.1 decision 6's "nothing to stop", which the typed `stop`
     /// had no way to give.
     NothingToActOn,
+    /// Bound, and this far end has no measured answer for it.
+    ///
+    /// **Different from [`Self::NothingToActOn`], which is why it exists** (spec 28,
+    /// decision 9). "This shell has no key for end of input" and "there is nothing left to
+    /// send it to" are two different things to tell a listener, and until this variant they
+    /// were the same answer: a `Ctrl+D` at a shell nobody has measured an end-of-input
+    /// answer for reported that nothing was listening, in a session that was working fine.
+    Unsupported,
 }
 
 #[cfg(test)]
@@ -350,7 +396,12 @@ mod tests {
     /// Every answer, so a new one cannot be added without deciding what it means.
     #[test]
     fn every_key_ack_round_trips_as_a_bare_name() {
-        for ack in [KeyAck::Unbound, KeyAck::Applied, KeyAck::NothingToActOn] {
+        for ack in [
+            KeyAck::Unbound,
+            KeyAck::Applied,
+            KeyAck::NothingToActOn,
+            KeyAck::Unsupported,
+        ] {
             let json = serde_json::to_value(ack).unwrap();
             assert!(json.is_string(), "a unit answer is a bare name: {json}");
             let back: KeyAck = serde_json::from_value(json).unwrap();
