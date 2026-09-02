@@ -4508,6 +4508,68 @@ bargain 22.11 and 23.14 struck, and both paid.
     chose it for), and what is missing is the *saved* half: a connection remembering the
     answer it was given last time.
 
+28.9. **A trailing space is invisible, so deleting one is silent.** Spec: none yet → small,
+    and the diagnosis is complete. **Found 2026-09-02 by the user**, driving 28.7 with the
+    remote process holding the keys.
+
+    **What a listener meets.** Backspace over a space says nothing at all. Every other
+    character is announced as it is deleted.
+
+    **The cause, measured** with `acter-transports/examples/capture.rs` at a real `bash`:
+    typing `echo hi` then a space produced **no line item**, the backspace that removed the
+    space produced **no line item**, and only the next backspace — which took the `i` —
+    produced `Rewritten "...echo h"`. Acter's row text is trimmed, so `echo hi ` and
+    `echo hi` are the same string to it: the field never held the space, nothing changed when
+    it went, and the reader correctly said nothing about a field that did not change.
+
+    **The trimming is right and must stay.** `acter-term`'s extractor trims because a grid row
+    is padded with spaces to its full width, and an untrimmed walk "speaks eighty spaces after
+    every line" (decision 9). What is wrong is only that the far-end field then renders a line
+    shorter than the far end's own cursor.
+
+    **The shape of the fix.** The cursor is the evidence again: **a caret beyond the end of
+    the row means there is whitespace there**, so the row handed to the field is padded out to
+    the caret. `echo hi ` then reaches the field with its space, deleting it is a change the
+    reader announces, and a caret can never sit past the text it is given. It belongs in
+    `policies::far_end_row`, where the caret and the text are decided together, and not in the
+    extractor.
+
+28.10. **In an integrated session the prompt is announced on every completion redraw, and the
+    candidate list is not read at all.** Spec: none yet → **finish the diagnosis first**; the
+    first half is established and the second is not. **Found 2026-09-02 by the user**, at an
+    integrated Ubuntu with the remote process holding the keys. Typing `cd a`: the first Tab
+    said nothing, the second repeated the prompt, and the list of matches was never read.
+
+    **Why it is integrated-only, and it is not Acter's doing.** `readline` re-emits the whole
+    prompt string on every redraw, invisible parts included — and an integrated session's
+    `PS1` carries the OSC 133 markers, because that is where Acter's setup puts them.
+    Captured with the markers in `PS1`: **`marker PromptStart` appears on every Tab.**
+    `Pump::drawn` then treats each redraw as a prompt being drawn and announces it, which is
+    B4.5's rule doing exactly what it says. An unintegrated `PS1` carries no markers, no
+    `PromptStart` is emitted, and nothing is announced — which is why the user found this
+    worked unintegrated and not integrated.
+
+    **The sequence, measured** at the same shell, `cd a` in a directory with two matches: Tab
+    one sends a single bell and nothing else, and **Tab two** both lists and redraws. (It
+    differs from the `ls` case recorded under 28.6, where Tab one appended a common prefix and
+    so pushed the listing to Tab three: readline lists on a *repeated* attempt, and whether an
+    attempt changed the line is what decides which press that is.)
+
+    **What is not yet established** is why the list itself goes unread. The leading candidate
+    is that the marker traffic changes which region the list row is labelled with — the
+    engine's item order puts `PromptStart` before the row in the batch, so a row that is
+    plainly output may be arriving labelled as prompt, where an integrated session's filter
+    wants only `Output` and 28.6's publishing path never sees it. **That is a hypothesis and
+    should be proved with a service test before any rule is written**, in the way 28.5 and
+    28.6 were.
+
+    **And the fix for the first half touches a Decided rule**, so it is a proposal rather than
+    a condition to add quietly: B4.5 makes the returning prompt an announcement because for a
+    shell that reports no exit code it is the only ending a listener gets. Suppressing a
+    *redraw* has to keep that while dropping this, and the distinction available is that a
+    redraw draws the same prompt the listener already has, on a line they are editing, while
+    an ending draws a new one.
+
 29. A program that is waiting says so. Spec: none yet → specify first. **Agreed
     2026-08-31**, and it is what makes 28 discoverable rather than a mode only its author
     knows about.
