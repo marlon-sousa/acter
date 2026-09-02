@@ -4283,14 +4283,55 @@ bargain 22.11 and 23.14 struck, and both paid.
     `ech` gave "e", "c", **"ec"**; Backspace gave **"h"** from the reader and then **"ec"**
     from the region. That is the noise decision 3 deleted, reproduced on demand.
 
-    **The recommendation is F**, and the decision is the user's because it puts back a live
-    region on one path. It says the completed line, which is what a listener needs — "o "
-    means nothing without the line it landed in — and it holds up when the far end rewrites
-    the whole row instead of appending, which is the case H cannot serve. Its cost is that
-    "which keys the reader will not speak for" is NVDA's list, so on another reader a key
-    could be said twice; that is one duplicate rather than silence, and Acter already knows
-    which key it sent, so the set is one table in the frontend rather than a guess. **H is
-    the fallback** if the project would rather ship no live region at all.
+    **A second round found the callback, and it is not `aria-autocomplete`.** The question
+    asked was whether ARIA has a proper contract for this rather than a workaround, and it
+    does. In NVDA's source, `NVDAObject.event_selection` reads: *"This object has been
+    selected. If this object's container / parent is being controlled by the focus, then
+    report this selection."* It takes `api.getFocusObject().controllerFor` — which
+    `NVDAObjects.IAccessible._get_controllerFor` resolves from the IA2 `CONTROLLER_FOR`
+    relation, which is **`aria-controls`** — and if the newly selected object is a descendant
+    of something the focused field controls, it cancels speech and calls `reportFocus()` on
+    it. So the announcing mechanism is *a listbox the field controls, whose selection moves*.
+    `aria-autocomplete` is only a state, announced once when focus arrives ("possui
+    autocompletar") and never again; and `InputFieldWithSuggestions.event_controllerForChange`
+    says only that suggestions *appeared*, in braille and a sound — nothing the bridge can
+    hear and no text either way.
+
+    The web agrees, which is worth recording because it means this is not a local quirk.
+    a11ysupport.io's `aria-autocomplete` test data has NVDA's support for `inline`, `list` and
+    `both` as only partial in Chrome, Edge and Firefox, and **no screen reader at all fully
+    conveying `inline`**. And Adobe's React Spectrum team, building a combobox, hit the
+    failure J reproduces below: *"character deletions and text cursor movement in the ComboBox
+    input weren't being announced at all"*, resolved only by *"clearing option focus on any
+    changes to the input text or left/right arrow key presses"*.
+
+    **Three more variants, measured the same way:**
+
+    - **I, the textbox exactly as decision 2 chose it plus `aria-controls` pointing at an
+      offscreen listbox whose selection moves: speaks the completion.** "echo 2 de 2". And
+      **every caret key still works** — Home "e", right arrow "c", End "em branco", Backspace
+      "espaço", one utterance each, no double-speak, because the listbox selection only
+      changes on a completion.
+    - **K, the same with one option replaced each time: "echo 1 de 1".** `aria-setsize="-1"`
+      did **not** suppress the position info, so the count comes along with `reportFocus()`
+      whatever is done to it. Caret keys unaffected.
+    - **J, the full ARIA 1.2 combobox — expanded, `aria-controls`, `aria-activedescendant`:
+      announces the completion and then silences everything else.** Home, right arrow and
+      Backspace all produced **no speech at all** while an option held virtual focus. That is
+      28.1 undone, measured here and corroborated by Adobe above. **J must never be built.**
+
+    **The recommendation is now I/K rather than F**, and the decision is still the user's.
+    I/K is the platform's own contract rather than a workaround; it keeps decision 2's element
+    untouched; it needs no table of "which keys this reader speaks for", which was the one
+    real weakness in F, since the listbox is fed by a completion rather than by a key; and it
+    extends without redesign if Acter ever surfaces several candidates, where "1 of 5" stops
+    being noise and starts being the point. **Its cost is the position info** — "echo 1 de 1"
+    where F says "echo" — which could not be removed from the page side.
+
+    **F remains the fallback**, and is the better choice if the extra words are judged worse
+    than maintaining the key table. **H is the fallback that adds nothing to the tree at all**,
+    at the price of announcing only what the completion added. **G and J are ruled out by
+    measurement**, and their entries above say why.
 
     Blocks the one checklist item still unchecked in 28's PR body.
 
