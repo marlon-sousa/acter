@@ -4608,6 +4608,126 @@ bargain 22.11 and 23.14 struck, and both paid.
     The other side holds too: `cd alpha` announced the new prompt, and `true` in that same
     directory announced the identical prompt again.
 
+28.11. **Done** — a failing command was announced again at every empty Enter. Spec:
+    [b6-session-service.md](specs/b6-session-service.md), decision 8, amendment A — it adds a
+    fourth `SessionInput`, so it is proposed in the amendment rather than made quietly.
+    **Found 2026-09-02 by the user**, at an integrated Ubuntu: `gh pr create`, `Ctrl+C`, and
+    then "command failed, exit code 2" on every press of Enter, however many times they
+    pressed it.
+
+    **What a listener meets.** A command fails. The verdict is announced, correctly. Then
+    every subsequent Enter on an **empty** command line announces that same verdict again,
+    with no command having run in between — so a listener who presses Enter to feel where
+    they are is told three times that something failed, and nothing distinguishes the third
+    telling from a fresh failure.
+
+    **Reproduced on the reader 2026-09-02**, NVDA 2026.1.1, `user` persona, live capture, at
+    an integrated WSL Ubuntu with the setup accepted, and it is **smaller than the recipe it
+    was found with**. Neither `gh` nor `Ctrl+C` is needed:
+
+    - `false` and Enter announced "command failed, exit code 1". Three empty Enters after it
+      announced **"command failed, exit code 1"** each time.
+    - The user's own sequence, with `sleep 100` standing in for `gh` because the throwaway
+      worktree `gh` needed was unusable from WSL: `Ctrl+C` said "^C", then "command failed,
+      exit code 130", and every empty Enter after it repeated **exit code 130**.
+    - **A successful command clears it.** After `true`, an empty Enter announces the prompt
+      and no verdict.
+    - **It is not far-end-line mode.** `Ctrl+Shift+K` back to Acter process keys and the same
+      three presses behave identically.
+
+    **The cause, and Acter is being told the truth.** `__acter_prompt` prints `D;$?` before
+    every prompt. An empty command line runs nothing, so bash leaves `$?` at the last real
+    command's code and honestly re-reports the same failing `D` at the next prompt. Acter
+    believes each `D` and announces it again. That accounts for both boundaries exactly: only
+    an integrated session has a `D` at all, which is why an unintegrated one is silent here,
+    and a successful command resets `$?`, which is why `true` ends it.
+
+    **What the service test established, and it killed both first guesses.** Built from the
+    same capture and run against the code as it stands:
+
+    - **An empty Enter is a whole `C..D` cycle.** The measurement is plain: `OutputStart`,
+      the prompt row settling, `CommandEnd(1)`, `PromptStart`, `CommandStart` — a block
+      really does start, because `PROMPT_COMMAND` itself trips the `DEBUG` trap and prints
+      `C`. So "a verdict with no command started since the last one" — the symmetry with
+      28.10, and the tempting rule — is **false here** and would have been written for a
+      mechanism that does not exist.
+    - **Nor does the empty submission own the block.** `submit("")` took `CommandId(2)`, and
+      what opened was **`CommandId(3)` with `command_line: None`** — a block nobody
+      submitted, minted by `Pump::unclaimed` because an empty line has no echo to claim one
+      with. So "an empty submission has no verdict" cannot be asked of the submission: by the
+      time the `D` arrives, the submission is not what the block belongs to.
+    - **What that block is, is nothing at all.** No command line, and not one line of
+      content — and Acter announces "command failed, exit code 1" about it.
+
+    **The shape that survives**, and it is the one both facts point at: **a block that ends
+    having had no command line and nothing printed into it has no verdict to announce.**
+    Nothing was submitted, nothing was echoed, nothing was output; the `D` closing it is the
+    shell restating `$?` on its way to the next prompt. Every other block keeps its verdict
+    untouched — a submitted command that fails silently still has its line, and a block
+    nobody submitted that *printed* something still has its content.
+
+    The prompt after an empty Enter stays announced, and should: a block did start and end,
+    so it is an ending rather than a repaint, and a terminal saying where you are after you
+    press Enter is what a terminal does.
+
+    **The rule, and what it is asked about.** `Pump` keeps one more fact about the block that
+    is open — nobody submitted it, nothing named it, nothing has been printed into it — and a
+    block closing in that state reports `SessionInput::NothingRan` instead of an exit code.
+    The actor closes it exactly as it closes a finished one and says nothing. **The condition
+    is who opened the block and never what it says**, which is what keeps a real command safe:
+    a submission claims its block whether or not the shell's echo was recognised — busybox
+    redrawing a wrapped line is the measured case — so a command that fails without printing a
+    word keeps its verdict. Pinned from both sides, and the two guard tests pass with the rule
+    and without it: `a_command_that_fails_silently_and_unrecognised_keeps_its_verdict` and
+    `a_block_nobody_submitted_that_printed_something_keeps_its_verdict`.
+
+    **A fourth `SessionInput` rather than an absent exit code**, which is B6 decision 8's own
+    ruling applied again: `exit_code: Option<..>` was rejected there for re-overloading
+    absence, and a missing code already means two other things. Sending `ExitCode(0)` was the
+    worse of the two — 0 is the value that means the command succeeded.
+
+    **Re-checked on the reader 2026-09-02**, NVDA 2026.1.1, `user` persona, live capture, at
+    an integrated WSL Ubuntu with the setup accepted — integration confirmed on the spot by
+    `false`, which announced "command failed, exit code 1". In both line modes: three empty
+    Enters after a failure announce **the prompt and nothing else**, where each of them used
+    to repeat the verdict. The user's own recipe, with `sleep 100` standing in for `gh`:
+    `Ctrl+C` announced "command failed, exit code 130" once, and the Enters after it were
+    quiet. And the halves that must not be lost all hold: a second `false` announces exit
+    code 1 again, `ls /nope` announces its output and then exit code 2, and `echo hi` reads
+    its output with no verdict.
+
+    **One thing measured that is not this entry's, and it is worth an entry of its own.**
+    `Ctrl+C` at an **idle** prompt still announces "command failed, exit code 130". The block
+    is not barren there: `bash` echoes `^C` on the command line, so the block that opens is
+    named and keeps its verdict. It says it once rather than at every Enter, so it is not the
+    loop this entry closes — but "command failed" is a strange thing to hear when nothing was
+    running, and A3.2 already owns what a listener should hear for a `Ctrl+C` that had
+    nothing to stop.
+
+28.12. **Ctrl+C at an idle prompt says a command failed.** Spec: none yet → small, and the
+    measurement is done; what a listener should hear instead is the open question.
+    **Raised 2026-09-02 by the reader pass on 28.11**, at an integrated WSL Ubuntu.
+
+    **What a listener meets.** Nothing is running. They press `Ctrl+C` — to clear a line they
+    have half-typed, or to feel where they are — and hear "command failed, exit code 130".
+    Nothing failed, because nothing ran.
+
+    **Why 28.11 does not cover it, measured rather than assumed.** `bash` echoes `^C` onto the
+    command line before drawing the next prompt, so the block that opens is a **named** one:
+    it has a command line, and 28.11's rule deliberately leaves every named block its verdict.
+    It is also said once rather than at every Enter — the Enters after it are quiet — so this
+    is not the loop 28.11 closed.
+
+    **What it is really about is A3.2.** `KeyAck::NothingToActOn` already exists for exactly
+    this key at exactly this moment, and the frontend already has a sentence for it. So the
+    question is not how to silence a verdict; it is whether the ack and the shell's `130`
+    should be allowed to describe the same keypress twice, and which of the two a listener is
+    better served by. The answer belongs in A3.2's terms, and this entry should not invent a
+    third rule beside it.
+
+    **Not decided here.** Whether it is a defect at all is the user's to say: 130 is the truth
+    about `$?`, and a listener who pressed `Ctrl+C` did cause it.
+
 29. A program that is waiting says so. Spec: none yet → specify first. **Agreed
     2026-08-31**, and it is what makes 28 discoverable rather than a mode only its author
     knows about.

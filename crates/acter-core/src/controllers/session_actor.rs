@@ -93,6 +93,27 @@ pub enum SessionInput {
     CommandInterrupted {
         command_id: CommandId,
     },
+    /// A block ended and there is no verdict that belongs to it, because nothing ran in it
+    /// (roadmap 28.11).
+    ///
+    /// **What a listener met.** At an integrated `bash` a command fails and is announced,
+    /// correctly — and then every press of Enter on an empty command line announces that same
+    /// verdict again, with nothing having run in between. Acter is being told the truth each
+    /// time: `PS1` reports `$?` at every prompt, an empty line runs nothing, so the shell
+    /// honestly restates the last real command's code on its way to drawing the next prompt.
+    ///
+    /// **A third variant rather than an absent exit code**, which is B6 decision 8's own
+    /// ruling applied again: `exit_code: Option<..>` was rejected there for re-overloading
+    /// absence, and it would be the same mistake here, where a missing code already means two
+    /// other things. Reporting `ExitCode(0)` instead would be a lie in the one direction this
+    /// product cannot afford — 0 is the value that means the command succeeded.
+    ///
+    /// Only the service can decide it, because only the service knows the block is nobody's:
+    /// no submission claimed it, no command line names it, and not one line was printed into
+    /// it. The actor closes it exactly as it closes a finished one, and says nothing.
+    NothingRan {
+        command_id: CommandId,
+    },
     /// Shell-integration markers were observed: command boundaries are trustworthy.
     /// Resolves the session, and recovers one already flagged unintegrated.
     MarkersObserved,
@@ -305,6 +326,7 @@ impl SessionActor {
                 exit_code,
             } => self.command_ended(command_id, exit_code),
             SessionInput::CommandInterrupted { command_id } => self.command_interrupted(command_id),
+            SessionInput::NothingRan { command_id } => self.nothing_ran(command_id),
             SessionInput::Connection { state } => {
                 self.sink.send(SessionEvent::ConnectionChanged { state })
             }
@@ -443,6 +465,20 @@ impl SessionActor {
     /// announcing, and the frontend already has one thing to say about a stop.
     fn command_interrupted(&mut self, command_id: CommandId) {
         if !self.close(SessionEvent::CommandInterrupted { command_id }) {
+            return;
+        }
+        self.retire();
+    }
+
+    /// The same close once more, with no verdict at all: the block ended, and the exit code
+    /// the far end sent with it is some earlier command's (roadmap 28.11).
+    ///
+    /// It still closes, and closes as **finished**, because it did finish — leaving a session
+    /// in "running" is the one answer that is certainly wrong (B2), and nothing was stopped
+    /// here either. What is withheld is only the sentence about how it went, there being no
+    /// "it" that went any way at all.
+    fn nothing_ran(&mut self, command_id: CommandId) {
+        if !self.close(SessionEvent::CommandFinished { command_id }) {
             return;
         }
         self.retire();
@@ -1236,6 +1272,29 @@ the user's
                     exit_code: ExitCode(2)
                 },
             ]
+        );
+    }
+
+    /// **The other ending, and the whole of it is what is not said** (roadmap 28.11). The
+    /// service has decided this block is nobody's — no submission, no command line, nothing
+    /// printed into it — so the exit code the far end sent belongs to some earlier command.
+    /// It still finishes, and it finishes silently.
+    #[test]
+    fn a_block_nothing_ran_in_finishes_and_says_nothing() {
+        let (mut actor, _clock, sink) = actor();
+        started(&mut actor);
+
+        actor.handle(SessionInput::NothingRan {
+            command_id: CommandId(1),
+        });
+
+        assert_eq!(sink.announcements(), vec![]);
+        assert!(
+            sink.events().contains(&SessionEvent::CommandFinished {
+                command_id: CommandId(1)
+            }),
+            "and the block closes rather than being left running: {:?}",
+            sink.events()
         );
     }
 
