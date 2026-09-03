@@ -4686,6 +4686,48 @@ bargain 22.11 and 23.14 struck, and both paid.
     absence, and a missing code already means two other things. Sending `ExitCode(0)` was the
     worse of the two — 0 is the value that means the command succeeded.
 
+    **Re-checked on the reader 2026-09-02**, NVDA 2026.1.1, `user` persona, live capture, at
+    an integrated WSL Ubuntu with the setup accepted — integration confirmed on the spot by
+    `false`, which announced "command failed, exit code 1". In both line modes: three empty
+    Enters after a failure announce **the prompt and nothing else**, where each of them used
+    to repeat the verdict. The user's own recipe, with `sleep 100` standing in for `gh`:
+    `Ctrl+C` announced "command failed, exit code 130" once, and the Enters after it were
+    quiet. And the halves that must not be lost all hold: a second `false` announces exit
+    code 1 again, `ls /nope` announces its output and then exit code 2, and `echo hi` reads
+    its output with no verdict.
+
+    **One thing measured that is not this entry's, and it is worth an entry of its own.**
+    `Ctrl+C` at an **idle** prompt still announces "command failed, exit code 130". The block
+    is not barren there: `bash` echoes `^C` on the command line, so the block that opens is
+    named and keeps its verdict. It says it once rather than at every Enter, so it is not the
+    loop this entry closes — but "command failed" is a strange thing to hear when nothing was
+    running, and A3.2 already owns what a listener should hear for a `Ctrl+C` that had
+    nothing to stop.
+
+28.12. **Ctrl+C at an idle prompt says a command failed.** Spec: none yet → small, and the
+    measurement is done; what a listener should hear instead is the open question.
+    **Raised 2026-09-02 by the reader pass on 28.11**, at an integrated WSL Ubuntu.
+
+    **What a listener meets.** Nothing is running. They press `Ctrl+C` — to clear a line they
+    have half-typed, or to feel where they are — and hear "command failed, exit code 130".
+    Nothing failed, because nothing ran.
+
+    **Why 28.11 does not cover it, measured rather than assumed.** `bash` echoes `^C` onto the
+    command line before drawing the next prompt, so the block that opens is a **named** one:
+    it has a command line, and 28.11's rule deliberately leaves every named block its verdict.
+    It is also said once rather than at every Enter — the Enters after it are quiet — so this
+    is not the loop 28.11 closed.
+
+    **What it is really about is A3.2.** `KeyAck::NothingToActOn` already exists for exactly
+    this key at exactly this moment, and the frontend already has a sentence for it. So the
+    question is not how to silence a verdict; it is whether the ack and the shell's `130`
+    should be allowed to describe the same keypress twice, and which of the two a listener is
+    better served by. The answer belongs in A3.2's terms, and this entry should not invent a
+    third rule beside it.
+
+    **Not decided here.** Whether it is a defect at all is the user's to say: 130 is the truth
+    about `$?`, and a listener who pressed `Ctrl+C` did cause it.
+
 29. A program that is waiting says so. Spec: none yet → specify first. **Agreed
     2026-08-31**, and it is what makes 28 discoverable rather than a mode only its author
     knows about.
