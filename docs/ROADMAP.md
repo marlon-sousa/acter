@@ -4547,6 +4547,12 @@ bargain 22.11 and 23.14 struck, and both paid.
     listener holds is left alone and `Home` stays a caret move rather than becoming a row
     reread (`a_caret_moving_inside_a_padded_line_still_rewrites_nothing`).
 
+    **Re-checked on the reader 2026-09-02**, NVDA 2026.1.1, `user` persona, live capture, at
+    an integrated WSL Ubuntu with the remote process holding the keys. Typing `echo hi` and
+    then a space, the backspace that removes the space says **"espaço"**, and the next
+    backspace says **"i"** — the space is announced exactly as every other character is,
+    where before it said nothing at all.
+
 28.10. **Done** — in an integrated session the prompt was announced on every completion
     redraw. Spec: [28-far-end-line-mode.md](specs/28-far-end-line-mode.md), amendment L, and
     [b5.6-the-prompt-is-spoken.md](specs/b5.6-the-prompt-is-spoken.md), amendment A. **Found
@@ -4589,8 +4595,17 @@ bargain 22.11 and 23.14 struck, and both paid.
     read aloud, in the very batch the user described
     (`the_candidates_reach_the_transcript_and_are_read_aloud`). Nothing in the domain was
     dropping it. What stood in front of it was the prompt announcement, arriving first, over a
-    listener editing a line — so removing that is the whole of the fix, and the reader is what
-    says whether the list is now heard.
+    listener editing a line — so removing that is the whole of the fix.
+
+    **Re-checked on the reader 2026-09-02**, NVDA 2026.1.1, `user` persona, live capture, at
+    an integrated WSL Ubuntu — integration confirmed on the spot by `false`, which announced
+    "command failed, exit code 1". In `~/p28` holding `alpha/` and `axel/`, typing `cd a`:
+    the first Tab said nothing, and **the second read "alpha/ axel/" with no prompt before
+    it**. So the list is heard, which is what the service test predicted: it was always on
+    the read-aloud path and the prompt announcement was what stood in front of it. The field
+    still held `cd a` afterwards, and a history recall spoke the recalled line and no prompt.
+    The other side holds too: `cd alpha` announced the new prompt, and `true` in that same
+    directory announced the identical prompt again.
 
 29. A program that is waiting says so. Spec: none yet → specify first. **Agreed
     2026-08-31**, and it is what makes 28 discoverable rather than a mode only its author
