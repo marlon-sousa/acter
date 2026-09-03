@@ -190,6 +190,7 @@ impl SessionService {
                 echo: Echo::default(),
                 open: None,
                 interrupted: false,
+                barren: false,
                 lines: HashMap::new(),
                 held: None,
                 row: String::new(),
@@ -541,6 +542,21 @@ struct Pump {
     /// yet. What tells a stopped command from a finished one, since the exit code cannot
     /// (decision 8).
     interrupted: bool,
+    /// Whether the block that is open is nobody's: no submission claimed it, no command line
+    /// names it, and nothing has been printed into it (roadmap 28.11).
+    ///
+    /// **The state an integrated shell reaches on an empty Enter**, and the reason a listener
+    /// heard "command failed, exit code 1" over and over. `PROMPT_COMMAND` trips the `DEBUG`
+    /// trap, so a whole `C..D` cycle really does happen; an empty line is never queued as a
+    /// submission ([`Pump::submit_line`]), so the block that opens is minted by
+    /// [`Pump::claim`] for nobody; and the `D` closing it carries `$?`, which the shell has
+    /// not touched since the last real command. Every part of that is honest, and the block
+    /// it describes is nothing at all.
+    ///
+    /// **Set from what opened the block rather than from what it printed**, which is what
+    /// keeps a real command safe: a submission claims its block whether or not its echo was
+    /// recognised, so a command that fails without printing a word keeps its verdict.
+    barren: bool,
     /// What has been done with each line seen so far, and what the far end has drawn on
     /// it. [`Row::owed`] is `false` once some of its text has been forwarded and `true` if
     /// it was rewritten and its final text is still owed. Kept
@@ -1318,6 +1334,7 @@ impl Pump {
                 id: command_id,
                 line: line.to_owned(),
                 ours,
+                minted: false,
             });
             self.pending_row = self.cursor;
         }
@@ -1455,7 +1472,12 @@ impl Pump {
                 .then_some(claimed.line)
                 .filter(|line| !line.trim().is_empty())
         });
+        let nobodys = claimed.minted && named.is_none();
         self.open(claimed.id, named);
+        // **Nobody submitted this and nothing named it** (roadmap 28.11). Both halves are
+        // needed: a block minted here that the shell went on to name has a heading a listener
+        // can read, and a submitted command keeps its verdict however little it prints.
+        self.barren = nobodys;
         self.settle_running();
     }
 
@@ -1681,6 +1703,7 @@ impl Pump {
     fn unclaimed(&mut self) {
         let command_id = CommandId(self.next_id.fetch_add(1, Ordering::SeqCst));
         self.open(command_id, None);
+        self.barren = true;
         self.settle_running();
     }
 
@@ -1865,11 +1888,16 @@ impl Pump {
             id: CommandId(self.next_id.fetch_add(1, Ordering::SeqCst)),
             line: String::new(),
             ours: false,
+            minted: true,
         })
     }
 
     fn open(&mut self, command_id: CommandId, command_line: Option<String>) {
         self.open = Some(command_id);
+        // Whatever this block goes on to print, it is someone's: a submission is running in
+        // it, or the shell said what is. The two paths that can open one for nobody say so
+        // for themselves, right where they know it.
+        self.barren = false;
         self.send(SessionInput::CommandStarted {
             command_id,
             command_line,
@@ -1896,6 +1924,8 @@ impl Pump {
         self.interrupted = false;
         self.send(if stopped {
             SessionInput::CommandInterrupted { command_id }
+        } else if self.barren {
+            SessionInput::NothingRan { command_id }
         } else {
             SessionInput::CommandEnded {
                 command_id,
@@ -2046,6 +2076,8 @@ impl Pump {
     /// the actor is told which line each piece belongs to, so it separates them itself for
     /// the one path that needs a line count and hands the buffer the line as it stands.
     fn output(&mut self, id: LineId, due: Due) {
+        // Something was printed into it, so it is a block with content whoever opened it.
+        self.barren = false;
         let spoken = due.spoken && !self.on_anchor(id);
         self.send(SessionInput::Output {
             line: id,
@@ -2134,6 +2166,13 @@ struct Submitted {
     /// nothing on it at all — the empty level 2 heading B4.4's NVDA pass found, with the
     /// command line repeated as text beneath it.
     ours: bool,
+    /// Whether [`Pump::claim`] minted this rather than finding it queued — a block nobody
+    /// submitted (roadmap 28.11).
+    ///
+    /// It is not the same question as [`Self::ours`], which asks who typed the line: a
+    /// minted submission has no line at all, because nobody submitted one. `false` for every
+    /// submission that reached [`Pump::submit_line`], and those are the only ones queued.
+    minted: bool,
 }
 
 /// The command line the shell echoed, read as it arrives.
@@ -5656,6 +5695,213 @@ mod tests {
                 session.far_end_lines().last(),
                 Some(&(Some("cd a".to_owned()), 4)),
                 "while the field still holds the line being edited"
+            );
+        }
+    }
+
+    /// **Roadmap 28.11, written from the capture that found it.** At an integrated `bash`,
+    /// `__acter_prompt` prints `D;$?` before every prompt. An empty command line runs
+    /// nothing, so `$?` still holds the last real command's code and the shell honestly
+    /// re-reports the same failing `D` — and Acter, believing it, announced "command failed,
+    /// exit code 1" at every press of Enter until something succeeded.
+    ///
+    /// **Both first guesses died here before the rule was written**, and this module is what
+    /// killed them. "A verdict with no command started since the last one" is false: an empty
+    /// Enter is a whole `C..D` cycle, because `PROMPT_COMMAND` itself trips the `DEBUG` trap.
+    /// And "an empty submission has no verdict" cannot be asked of the submission: an empty
+    /// line is never queued at all, so by the time the `D` arrives the block belongs to
+    /// nobody.
+    mod an_empty_enter_at_an_integrated_shell {
+        use super::*;
+
+        fn failures(session: &Session) -> Vec<ExitCode> {
+            session
+                .announcements()
+                .into_iter()
+                .filter_map(|said| match said {
+                    Announcement::Failed { exit_code } => Some(exit_code),
+                    _ => None,
+                })
+                .collect()
+        }
+
+        fn prompts(session: &Session) -> Vec<String> {
+            session
+                .events()
+                .into_iter()
+                .filter_map(|event| match event {
+                    SessionEvent::PromptDrawn { text } => Some(text),
+                    _ => None,
+                })
+                .collect()
+        }
+
+        /// An integrated `bash` that has just run `false`. The exit marker is the first thing
+        /// the prompt writes, so the `D` and the next prompt arrive together.
+        async fn after_a_failure() -> Session {
+            let session = Session::start().await;
+            session
+                .emit(vec![
+                    marker(Osc133Marker::PromptStart),
+                    line(1, PROMPT),
+                    marker(Osc133Marker::CommandStart),
+                ])
+                .await;
+            session.submit("false").await;
+            session
+                .emit(vec![
+                    line(1, "false"),
+                    marker(Osc133Marker::OutputStart),
+                    marker(Osc133Marker::CommandEnd(Some(ExitCode(1)))),
+                    marker(Osc133Marker::PromptStart),
+                    line(2, PROMPT),
+                    marker(Osc133Marker::CommandStart),
+                ])
+                .await;
+            session.advance_to(1_000).await;
+            session
+        }
+
+        /// Enter on an empty line, as measured: a `C` because the `DEBUG` trap fires for
+        /// `PROMPT_COMMAND` too, the prompt row freezing behind it, and the `D` restating a
+        /// code no command has touched.
+        async fn an_empty_enter(session: &Session, row: u64, at: u64) {
+            session.submit("").await;
+            session
+                .emit(vec![
+                    marker(Osc133Marker::OutputStart),
+                    settled(row, PROMPT),
+                    marker(Osc133Marker::CommandEnd(Some(ExitCode(1)))),
+                    marker(Osc133Marker::PromptStart),
+                    line(row + 1, PROMPT),
+                    marker(Osc133Marker::CommandStart),
+                ])
+                .await;
+            session.advance_to(at).await;
+        }
+
+        /// **The defect, from the listener's side.** One failure, one verdict.
+        #[tokio::test]
+        async fn does_not_repeat_the_verdict_of_the_command_before_it() {
+            let session = after_a_failure().await;
+            an_empty_enter(&session, 2, 2_000).await;
+
+            assert_eq!(
+                failures(&session),
+                vec![ExitCode(1)],
+                "the failure is announced once, by the command that failed: {:?}",
+                session.announcements()
+            );
+        }
+
+        /// And it is not a matter of one press: the user met it as "however many times I
+        /// press Enter".
+        #[tokio::test]
+        async fn nor_at_the_third_press_of_enter() {
+            let session = after_a_failure().await;
+            an_empty_enter(&session, 2, 2_000).await;
+            an_empty_enter(&session, 3, 3_000).await;
+            an_empty_enter(&session, 4, 4_000).await;
+
+            assert_eq!(failures(&session), vec![ExitCode(1)]);
+        }
+
+        /// **The block still closes**, which is the half a quieter rule could have got wrong:
+        /// a block held open would leave the session answering that there is something to
+        /// stop for the rest of its life (B2).
+        #[tokio::test]
+        async fn the_block_it_opens_is_closed_all_the_same() {
+            let session = after_a_failure().await;
+            an_empty_enter(&session, 2, 2_000).await;
+
+            let opened = *session.started().last().expect("a block opened");
+            assert!(
+                session.events().iter().any(|event| matches!(
+                    event,
+                    SessionEvent::CommandFinished { command_id } if *command_id == opened
+                )),
+                "the block the empty Enter opened ends: {:?}",
+                session.events()
+            );
+            assert_eq!(session.press(ctrl('c')).await, KeyAck::NothingToActOn);
+        }
+
+        /// **The prompt is still announced**, and should be: a block started and ended, so
+        /// this is an ending rather than 28.10's repaint, and a terminal saying where you are
+        /// after you press Enter is what a terminal does.
+        #[tokio::test]
+        async fn the_prompt_that_comes_back_is_still_spoken() {
+            let session = after_a_failure().await;
+            let before = prompts(&session).len();
+            an_empty_enter(&session, 2, 2_000).await;
+
+            assert_eq!(
+                prompts(&session).len(),
+                before + 1,
+                "the prompt after the empty Enter: {:?}",
+                prompts(&session)
+            );
+        }
+
+        /// **What the rule must not take away, part one.** A submitted command owns its block
+        /// whether or not its echo was ever recognised — busybox redrawing a wrapped line is
+        /// the measured case (B9.5) — so a command that fails without printing a word keeps
+        /// its verdict. This is why the rule asks who opened the block and not what it says.
+        #[tokio::test]
+        async fn a_command_that_fails_silently_and_unrecognised_keeps_its_verdict() {
+            let session = Session::start().await;
+            session
+                .emit(vec![
+                    marker(Osc133Marker::PromptStart),
+                    line(1, PROMPT),
+                    marker(Osc133Marker::CommandStart),
+                ])
+                .await;
+            session.submit("false").await;
+            session
+                .emit(vec![
+                    marker(Osc133Marker::OutputStart),
+                    marker(Osc133Marker::CommandEnd(Some(ExitCode(1)))),
+                ])
+                .await;
+            session.advance_to(1_000).await;
+
+            assert_eq!(
+                failures(&session),
+                vec![ExitCode(1)],
+                "no echo, no output, and still a verdict: {:?}",
+                session.announcements()
+            );
+        }
+
+        /// **What the rule must not take away, part two.** A block nobody submitted is a real
+        /// block with real output (B6), and a `D` that ends one is a verdict on what it
+        /// printed.
+        #[tokio::test]
+        async fn a_block_nobody_submitted_that_printed_something_keeps_its_verdict() {
+            let session = Session::start().await;
+            session
+                .emit(vec![
+                    marker(Osc133Marker::PromptStart),
+                    line(1, PROMPT),
+                    marker(Osc133Marker::CommandStart),
+                    marker(Osc133Marker::OutputStart),
+                    line(2, "a far end talking to itself"),
+                    marker(Osc133Marker::CommandEnd(Some(ExitCode(2)))),
+                ])
+                .await;
+            session.advance_to(1_000).await;
+
+            assert!(
+                session.rendered().contains("a far end talking to itself"),
+                "the text reached the buffer: {:?}",
+                session.rendered()
+            );
+            assert_eq!(
+                failures(&session),
+                vec![ExitCode(2)],
+                "and the verdict on it is announced: {:?}",
+                session.announcements()
             );
         }
     }

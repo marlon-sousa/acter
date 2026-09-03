@@ -262,6 +262,42 @@ to the byte path.
    rejected on this decision's own grounds: it would re-overload absence, which is exactly
    the ambiguity this decision exists to remove.
 
+   **Amendment A, roadmap 28.11: there is a third ending, and it is a block nothing ran
+   in.** Found by the user at an integrated Ubuntu — `gh pr create`, `Ctrl+C`, and then
+   "command failed, exit code 2" at every press of Enter, however many times they pressed
+   it. Reproduced smaller on the reader: `false`, then three empty Enters, three verdicts.
+
+   Nothing is lying. `__acter_prompt` prints `D;$?` before every prompt; an empty command
+   line runs nothing, so `$?` still holds the last real command's code and the shell
+   honestly restates it on its way to the next prompt. Acter believes each `D` and
+   announces it again.
+
+   Three things had to be measured before a rule could be written, and two candidate rules
+   died on them. **An empty Enter is a whole `C..D` cycle** — `PROMPT_COMMAND` itself trips
+   the `DEBUG` trap that prints `C` — so "a verdict with no command started since the last
+   one" describes a mechanism that does not exist. **The empty submission does not own the
+   block**: an empty line is never queued as a submission at all, so `claim` finds nothing
+   pending and mints an id, and what closes is a block nobody submitted. **And that block is
+   nothing at all**: no command line names it, and not one line was printed into it.
+
+   So: **a block that nobody submitted, that nothing names, and that nothing was printed
+   into has no verdict to announce.** It still closes, and closes as finished — leaving a
+   session in "running" remains the one answer that is certainly wrong, and nothing was
+   stopped here either. Only the sentence about how it went is withheld, there being no "it"
+   that went any way at all. The prompt that follows is still announced: a block did start
+   and end, so it is an ending rather than 28.10's repaint.
+
+   **The condition is who opened the block, never what it says**, and that is what keeps a
+   real command safe: a submission claims its block whether or not the shell's echo was
+   recognised — busybox redrawing a wrapped line is the measured case — so a command that
+   fails without printing a word keeps its verdict.
+
+   **A fourth `SessionInput`, `NothingRan { command_id }`**, and this decision's own ruling
+   above is why: `exit_code: Option<..>` would re-overload absence, which already means two
+   other things here. Sending `ExitCode(0)` instead was rejected as the worse option of the
+   two — 0 is the value that means the command succeeded, and this product's cardinal defect
+   is telling a listener something that is not so.
+
 9. **The integration grace period becomes real, and the actor keeps `SessionState`.**
 
    `PacingConfig` gains `integration_grace`. `SessionInput` gains `MarkersObserved` and

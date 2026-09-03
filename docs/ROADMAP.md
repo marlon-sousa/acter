@@ -4608,9 +4608,9 @@ bargain 22.11 and 23.14 struck, and both paid.
     The other side holds too: `cd alpha` announced the new prompt, and `true` in that same
     directory announced the identical prompt again.
 
-28.11. **A failing command is announced again at every empty Enter.** Spec: none yet → small,
-    and the diagnosis is complete: reproduced on the reader, and the mechanism proved with a
-    service test before any rule was written.
+28.11. **Done** — a failing command was announced again at every empty Enter. Spec:
+    [b6-session-service.md](specs/b6-session-service.md), decision 8, amendment A — it adds a
+    fourth `SessionInput`, so it is proposed in the amendment rather than made quietly.
     **Found 2026-09-02 by the user**, at an integrated Ubuntu: `gh pr create`, `Ctrl+C`, and
     then "command failed, exit code 2" on every press of Enter, however many times they
     pressed it.
@@ -4669,6 +4669,22 @@ bargain 22.11 and 23.14 struck, and both paid.
     The prompt after an empty Enter stays announced, and should: a block did start and end,
     so it is an ending rather than a repaint, and a terminal saying where you are after you
     press Enter is what a terminal does.
+
+    **The rule, and what it is asked about.** `Pump` keeps one more fact about the block that
+    is open — nobody submitted it, nothing named it, nothing has been printed into it — and a
+    block closing in that state reports `SessionInput::NothingRan` instead of an exit code.
+    The actor closes it exactly as it closes a finished one and says nothing. **The condition
+    is who opened the block and never what it says**, which is what keeps a real command safe:
+    a submission claims its block whether or not the shell's echo was recognised — busybox
+    redrawing a wrapped line is the measured case — so a command that fails without printing a
+    word keeps its verdict. Pinned from both sides, and the two guard tests pass with the rule
+    and without it: `a_command_that_fails_silently_and_unrecognised_keeps_its_verdict` and
+    `a_block_nobody_submitted_that_printed_something_keeps_its_verdict`.
+
+    **A fourth `SessionInput` rather than an absent exit code**, which is B6 decision 8's own
+    ruling applied again: `exit_code: Option<..>` was rejected there for re-overloading
+    absence, and a missing code already means two other things. Sending `ExitCode(0)` was the
+    worse of the two — 0 is the value that means the command succeeded.
 
 29. A program that is waiting says so. Spec: none yet → specify first. **Agreed
     2026-08-31**, and it is what makes 28 discoverable rather than a mode only its author
