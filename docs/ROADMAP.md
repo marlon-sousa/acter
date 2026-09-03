@@ -4608,8 +4608,9 @@ bargain 22.11 and 23.14 struck, and both paid.
     The other side holds too: `cd alpha` announced the new prompt, and `true` in that same
     directory announced the identical prompt again.
 
-28.11. **A failing command is announced again at every empty Enter.** Spec: none yet → the
-    reproduction is complete and the rule is not; **decide the shape before writing it**.
+28.11. **A failing command is announced again at every empty Enter.** Spec: none yet → small,
+    and the diagnosis is complete: reproduced on the reader, and the mechanism proved with a
+    service test before any rule was written.
     **Found 2026-09-02 by the user**, at an integrated Ubuntu: `gh pr create`, `Ctrl+C`, and
     then "command failed, exit code 2" on every press of Enter, however many times they
     pressed it.
@@ -4641,20 +4642,33 @@ bargain 22.11 and 23.14 struck, and both paid.
     an integrated session has a `D` at all, which is why an unintegrated one is silent here,
     and a successful command resets `$?`, which is why `true` ends it.
 
-    **The seam, and it is a question the product already asks elsewhere.** An empty submission
-    has no command, so it has no verdict — which is what spec 28 decision 7 already decided
-    about *headings*: "an empty anchored row earns no block and no heading". The verdict path
-    does not ask that question. What is **not** established is which block the repeated `D`
-    is closing, and a rule written without knowing that would be a guess: **prove it with a
-    service test first**, in the way 28.5, 28.6 and 28.10 were.
+    **What the service test established, and it killed both first guesses.** Built from the
+    same capture and run against the code as it stands:
 
-    **Two shapes to choose between**, and the choice is the user's:
+    - **An empty Enter is a whole `C..D` cycle.** The measurement is plain: `OutputStart`,
+      the prompt row settling, `CommandEnd(1)`, `PromptStart`, `CommandStart` — a block
+      really does start, because `PROMPT_COMMAND` itself trips the `DEBUG` trap and prints
+      `C`. So "a verdict with no command started since the last one" — the symmetry with
+      28.10, and the tempting rule — is **false here** and would have been written for a
+      mechanism that does not exist.
+    - **Nor does the empty submission own the block.** `submit("")` took `CommandId(2)`, and
+      what opened was **`CommandId(3)` with `command_line: None`** — a block nobody
+      submitted, minted by `Pump::unclaimed` because an empty line has no echo to claim one
+      with. So "an empty submission has no verdict" cannot be asked of the submission: by the
+      time the `D` arrives, the submission is not what the block belongs to.
+    - **What that block is, is nothing at all.** No command line, and not one line of
+      content — and Acter announces "command failed, exit code 1" about it.
 
-    - **A submission with an empty line has no verdict to announce.** Narrow, matches decision
-      7, and leaves every other `D` believed exactly as it is now.
-    - **A `D` that closes nothing a listener saw start says nothing.** Wider, and it would
-      also cover a shell that re-reports `$?` for some other reason, at the cost of trusting
-      the block bookkeeping rather than the submission.
+    **The shape that survives**, and it is the one both facts point at: **a block that ends
+    having had no command line and nothing printed into it has no verdict to announce.**
+    Nothing was submitted, nothing was echoed, nothing was output; the `D` closing it is the
+    shell restating `$?` on its way to the next prompt. Every other block keeps its verdict
+    untouched — a submitted command that fails silently still has its line, and a block
+    nobody submitted that *printed* something still has its content.
+
+    The prompt after an empty Enter stays announced, and should: a block did start and end,
+    so it is an ending rather than a repaint, and a terminal saying where you are after you
+    press Enter is what a terminal does.
 
 29. A program that is waiting says so. Spec: none yet → specify first. **Agreed
     2026-08-31**, and it is what makes 28 discoverable rather than a mode only its author
