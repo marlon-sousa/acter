@@ -43,7 +43,7 @@ use acter_transports::{
 };
 use tauri::{Builder, generate_context, generate_handler};
 
-use crate::adapters::{ExplainedShells, SystemClock};
+use crate::adapters::{ExplainedShells, SystemClock, install_system_menu};
 use crate::controllers::Connecting;
 
 /// The environment variable choosing which simulated session to run: a built-in name, or
@@ -133,7 +133,12 @@ pub fn run() {
         connected_state()
     };
 
-    let builder = Builder::default()
+    // The operating system's own menu bar, for an operating system that has one Acter puts
+    // anything in (spec M3). On Windows this hands the builder straight back, so the
+    // platform where a native menu freezes NVDA for tens of seconds keeps the menu bar A7
+    // put in the document — and macOS stops getting Tauri's default menu, whose Help
+    // submenu is empty and whose File menu has no Connect in it.
+    let builder = install_system_menu(Builder::default(), consts::OS)
         .manage(state)
         .invoke_handler(generate_handler![
             crate::routers::attach_session,

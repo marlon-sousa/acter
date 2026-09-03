@@ -14,10 +14,10 @@ pub use controllers::{Requests, SessionActor, SessionInput, Wake};
 pub use entities::{
     Announcement, AttemptId, CommandId, ConnectAnswer, ConnectQuestion, ConnectStep, Connectable,
     Connected, ConnectionKind, ConnectionState, ExitCode, Fault, Integration, Key, KeyAck,
-    KeyPress, LineId, LineOwner, LineRevision, Mode, Osc133Marker, PacingConfig, PacingState,
-    PathStanding, ProfileId, Provenance, Screen, SessionEvent, SessionId, SessionIntent,
-    SessionSetup, SessionState, SetUp, ShellInstall, ShellMarkers, Signer, SubmitAck, TerminalItem,
-    Variant, Verdict,
+    KeyPress, LineId, LineOwner, LineRevision, MenuAction, Mode, Osc133Marker, PacingConfig,
+    PacingState, PathStanding, ProfileId, Provenance, Screen, SessionEvent, SessionId,
+    SessionIntent, SessionSetup, SessionState, SetUp, ShellInstall, ShellMarkers, Signer,
+    SubmitAck, TerminalItem, Variant, Verdict,
 };
 // The pacing verdict is domain-internal since A6: `ReadMode` no longer crosses the wire,
 // so the items whose signatures mention it — `PacingAction`, `PacingOutcome`, `verdict`
@@ -25,8 +25,8 @@ pub use entities::{
 // through that module rather than re-exported here. Nothing outside this crate used them.
 pub use policies::{
     Anchor, Binding, BoundaryEvent, BoundaryTracker, Caret, Connection, FarEndAnswer, Keystroke,
-    Region, RowChange, TextSize, binding_for, catalogue, ended, far_end_row, key_bytes, measure,
-    offered,
+    MenuItem, Region, RowChange, Standard, SystemMenu, TextSize, binding_for, catalogue, ended,
+    far_end_row, key_bytes, measure, offered, system_menu,
 };
 pub use ports::{
     Chosen, Clock, ConnectApi, ConnectQuestions, ConnectSink, Cursor, EventSink, Explained,

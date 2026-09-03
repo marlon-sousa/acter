@@ -15,7 +15,7 @@ use std::path::PathBuf;
 use acter_core::{
     AttemptId, CommandId, ConnectAnswer, ConnectQuestion, ConnectStep, Connectable, Connected,
     ConnectionKind, ConnectionState, ExitCode, Key, KeyAck, KeyPress, LineId, LineOwner,
-    LineRevision, Mode, ProfileId, SessionEvent, SessionId, SetUp, SubmitAck, Variant,
+    LineRevision, MenuAction, Mode, ProfileId, SessionEvent, SessionId, SetUp, SubmitAck, Variant,
 };
 use specta::Types;
 use specta_typescript::Typescript;
@@ -74,7 +74,12 @@ fn render() -> String {
         // an event carries, so nothing else here references it — which is exactly why it is
         // registered by hand: the whole protocol is emitted here, not only the parts something
         // happens to reference.
-        .register::<SetUp>();
+        .register::<SetUp>()
+        // M3's menu. It is the payload of an emitted event rather than the answer to an
+        // invoke, and it is registered for the reason `SetUp` is: the frontend's switch over
+        // it must be exhaustive, so a menu item added with no dialog behind it fails to
+        // compile instead of reaching a listener as an item that does nothing.
+        .register::<MenuAction>();
 
     Typescript::default()
         .header(HEADER)

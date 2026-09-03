@@ -2,6 +2,7 @@
 //! per-concept entity files; declares modules and re-exports their public types.
 
 mod connection_kind;
+mod menu_action;
 mod osc133;
 mod pacing_state;
 mod protocol_commands;
@@ -19,6 +20,7 @@ mod terminal_item;
 mod unspoken_text;
 
 pub use connection_kind::ConnectionKind;
+pub use menu_action::MenuAction;
 pub use osc133::Osc133Marker;
 pub use pacing_state::{PacingConfig, PacingState};
 pub use protocol_commands::{

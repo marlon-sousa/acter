@@ -545,6 +545,15 @@ export type LineRevision =
  */
 "Settled";
 
+/**  What a menu item Acter answers itself asks for. */
+export type MenuAction = 
+/**  Open the Connect dialog — the same action the button and the Windows menu run. */
+"Connect" | 
+/**  Open the help topic, at its first section, exactly as F1 does. */
+"Help" | 
+/**  Open the About dialog. */
+"About";
+
 /**
  *  Rendering mode over the one live session. Phase 1 only ever emits
  *  [`Mode::NonInteractive`]; the interactive variant is defined so Phase 2 is additive.
