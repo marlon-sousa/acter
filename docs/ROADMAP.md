@@ -4456,9 +4456,10 @@ bargain 22.11 and 23.14 struck, and both paid.
     where it was left, the far end's own one-line record (`chose: Push an existing local
     repository`) and the returning prompt. No second heading.
 
-28.7. **You cannot tell who has your keys, and the default was backwards.** Spec: none yet →
-    the decisions are in DESIGN's "Edit field ownership", amended with this change. **Raised
-    2026-09-02 by the user**, after entry 28 merged and they drove it themselves.
+28.7. **Done** — you could not tell who had your keys, and the default was backwards. Spec:
+    none — the decisions are in DESIGN's "Edit field ownership", amended in the PR that made
+    them. Merged as PR #57 (2026-09-02). **Raised 2026-09-02 by the user**, after entry 28
+    merged and they drove it themselves.
 
     **What a listener meets.** Handing the keys over moves focus to a different field, and
     the reader announces the sentence rather than the field it landed on. Measured on NVDA
@@ -4507,6 +4508,105 @@ bargain 22.11 and 23.14 struck, and both paid.
     (a mode carried across connections would change what a key does in a shell the user never
     chose it for), and what is missing is the *saved* half: a connection remembering the
     answer it was given last time.
+
+28.9. **Done** — a trailing space was invisible, so deleting one was silent. Spec:
+    [28-far-end-line-mode.md](specs/28-far-end-line-mode.md), amendment K. **Found 2026-09-02
+    by the user**, driving 28.7 with the remote process holding the keys.
+
+    **What a listener met.** Backspace over a space said nothing at all. Every other
+    character is announced as it is deleted.
+
+    **The cause, measured** with `acter-transports/examples/capture.rs` at a real `bash`:
+    typing `echo hi` then a space produced **no line item**, the backspace that removed the
+    space produced **no line item**, and only the next backspace — which took the `i` —
+    produced `Rewritten "...echo h"`. Acter's row text is trimmed, so `echo hi ` and
+    `echo hi` are the same string to it: the field never held the space, nothing changed when
+    it went, and the reader correctly said nothing about a field that did not change.
+
+    **The trimming is right and stays.** `acter-term`'s extractor trims because a grid row
+    is padded with spaces to its full width, and an untrimmed walk "speaks eighty spaces after
+    every line" (decision 9). What was wrong is only that the far-end field then rendered a
+    line shorter than the far end's own cursor.
+
+    **The fix.** The cursor is the evidence again: **a caret beyond the end of the row means
+    there is whitespace there**, so the row handed to the field is padded out to the caret.
+    `echo hi ` now reaches the field with its space, deleting it is a change the reader
+    announces, and a caret can never sit past the text it is given. It is in
+    `policies::far_end_row`, where the caret and the text are decided together, and not in the
+    extractor — which needed one more input there: the text the field is holding, whose
+    trailing spaces are the padding the policy added last time. Pinned by
+    `a_space_typed_at_the_end_reaches_the_field_as_a_space`,
+    `deleting_a_trailing_space_shortens_the_line_the_listener_holds`,
+    `a_caret_past_the_text_pads_the_row_out_to_it` and the service test
+    `a_trailing_space_is_in_the_field_and_deleting_it_is_a_change`.
+
+    **One thing the entry did not foresee, and the tests forced.** Backspace over a trailing
+    space and a left arrow across one are the *same* grid state — the row reads `echo hi`
+    either way and only the cursor moved, one column left — so nothing can tell them apart and
+    the padding is re-measured for both. What can be told apart is a cursor that came to rest
+    *inside* the row: it says nothing whatever about the whitespace after it, so the line the
+    listener holds is left alone and `Home` stays a caret move rather than becoming a row
+    reread (`a_caret_moving_inside_a_padded_line_still_rewrites_nothing`).
+
+    **Re-checked on the reader 2026-09-02**, NVDA 2026.1.1, `user` persona, live capture, at
+    an integrated WSL Ubuntu with the remote process holding the keys. Typing `echo hi` and
+    then a space, the backspace that removes the space says **"espaço"**, and the next
+    backspace says **"i"** — the space is announced exactly as every other character is,
+    where before it said nothing at all.
+
+28.10. **Done** — in an integrated session the prompt was announced on every completion
+    redraw. Spec: [28-far-end-line-mode.md](specs/28-far-end-line-mode.md), amendment L, and
+    [b5.6-the-prompt-is-spoken.md](specs/b5.6-the-prompt-is-spoken.md), amendment A. **Found
+    2026-09-02 by the user**, at an integrated Ubuntu with the remote process holding the
+    keys. Typing `cd a`: the first Tab said nothing, the second repeated the prompt, and the
+    list of matches was never read.
+
+    **Why it is integrated-only, and it is not Acter's doing.** `readline` re-emits the whole
+    prompt string on every redraw, invisible parts included — and an integrated session's
+    `PS1` carries the OSC 133 markers, because that is where Acter's setup puts them.
+    Captured with the markers in `PS1`: **`marker PromptStart` appears on every Tab.**
+    `Pump::drawn` then treated each redraw as a prompt being drawn and announced it. An
+    unintegrated `PS1` carries no markers, no `PromptStart` is emitted, and nothing is
+    announced — which is why the user found this worked unintegrated and not integrated.
+
+    **The sequence, measured** at the same shell, `cd a` in a directory with two matches: Tab
+    one sends a single bell and nothing else, and **Tab two** both lists and redraws. (It
+    differs from the `ls` case recorded under 28.6, where Tab one appended a common prefix and
+    so pushed the listing to Tab three: readline lists on a *repeated* attempt, and whether an
+    attempt changed the line is what decides which press that is.)
+
+    **The fix, and it is an amendment rather than a quiet condition.** The rule it touches is
+    spec B5.6 decision 3 — "every prompt, not only the ones that changed" — and not B4.5
+    decision 4, which is the separate arm that makes a cmd prompt block *content*; the entry
+    named the wrong one. Amended: **a prompt drawn with no command between it and the last is
+    that prompt being repainted, and is not announced again.** A command starting or ending is
+    what makes the next prompt news. The two are told apart by what happened in between and
+    never by the text, because an ending prompt is usually identical to the one before it —
+    which is why "announce it when it differs" was rejected in B5.6 and stays rejected. Pinned
+    from both sides: `the_same_prompt_after_a_command_is_still_announced` and
+    `a_completion_redraw_does_not_announce_the_prompt_again`.
+
+    **The unread candidate list was a hypothesis, and the service test disproved it.** The
+    theory was that the marker traffic changed which region the list row was labelled with, so
+    an integrated session's filter turned it away. Built from the batch `capture.rs` recorded
+    at a real integrated `bash` — `line "alpha/ axel/"`, `marker PromptStart`, the redrawn
+    prompt row, `marker CommandStart`, the command line — it is **wrong**: the list arrives
+    *before* the redraw's `PromptStart`, so the tracker is still where the last `B` left it,
+    and 28.6's publishing path takes it from there. It reaches the transcript **and** it is
+    read aloud, in the very batch the user described
+    (`the_candidates_reach_the_transcript_and_are_read_aloud`). Nothing in the domain was
+    dropping it. What stood in front of it was the prompt announcement, arriving first, over a
+    listener editing a line — so removing that is the whole of the fix.
+
+    **Re-checked on the reader 2026-09-02**, NVDA 2026.1.1, `user` persona, live capture, at
+    an integrated WSL Ubuntu — integration confirmed on the spot by `false`, which announced
+    "command failed, exit code 1". In `~/p28` holding `alpha/` and `axel/`, typing `cd a`:
+    the first Tab said nothing, and **the second read "alpha/ axel/" with no prompt before
+    it**. So the list is heard, which is what the service test predicted: it was always on
+    the read-aloud path and the prompt announcement was what stood in front of it. The field
+    still held `cd a` afterwards, and a history recall spoke the recalled line and no prompt.
+    The other side holds too: `cd alpha` announced the new prompt, and `true` in that same
+    directory announced the identical prompt again.
 
 29. A program that is waiting says so. Spec: none yet → specify first. **Agreed
     2026-08-31**, and it is what makes 28 discoverable rather than a mode only its author
