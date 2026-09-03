@@ -4456,9 +4456,10 @@ bargain 22.11 and 23.14 struck, and both paid.
     where it was left, the far end's own one-line record (`chose: Push an existing local
     repository`) and the returning prompt. No second heading.
 
-28.7. **You cannot tell who has your keys, and the default was backwards.** Spec: none yet →
-    the decisions are in DESIGN's "Edit field ownership", amended with this change. **Raised
-    2026-09-02 by the user**, after entry 28 merged and they drove it themselves.
+28.7. **Done** — you could not tell who had your keys, and the default was backwards. Spec:
+    none — the decisions are in DESIGN's "Edit field ownership", amended in the PR that made
+    them. Merged as PR #57 (2026-09-02). **Raised 2026-09-02 by the user**, after entry 28
+    merged and they drove it themselves.
 
     **What a listener meets.** Handing the keys over moves focus to a different field, and
     the reader announces the sentence rather than the field it landed on. Measured on NVDA
