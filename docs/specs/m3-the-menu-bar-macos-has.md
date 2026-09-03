@@ -262,6 +262,22 @@ both entries. The same run closed roadmap 33.1: under the bundle, `describe item
 keyboard focus` answered correctly everywhere, where the unbundled build had said "nothing
 has keyboard focus" throughout. One cause, two symptoms, and neither is Acter's.
 
+**And the checklist was run twice, because the first run used a channel a user does not
+have.** The bridge's guidance was revised on 2026-09-02 to say what its two notations mean:
+a keystroke travels out through the window server and past the application under test, where
+the reader's own command name is dispatched inside the reader and never passes the
+application at all. The first run drove the menu by command name, so it could not have seen
+an application that swallows VO-M. The second run pressed the keys — `vo+m`, `vo+rightArrow`,
+`vo+space`, `vo+f3`, `vo+f4` — and the menu bar answered every one of them.
+
+**One limit belongs to the tool and is recorded so nobody reads it as a defect here.** That
+bridge cannot deliver a Command-only chord to an application: `command+k`, `command+/`,
+`command+m` and `command+c` each produced nothing, and against a text field the two letters
+arrived bare. Everything else lands, including `vo+command+h`, so the flag travels when it
+rides with the VoiceOver modifier. The same chords posted through the system's own event
+path opened the Connect dialog, opened the help, and copied the command line to the
+clipboard — so the accelerators work and the checklist says which path proved them.
+
 ## Accessibility checklist (PR body)
 
 One item per check, findings written inline on the unchecked item, naming the VoiceOver
