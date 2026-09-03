@@ -4608,6 +4608,54 @@ bargain 22.11 and 23.14 struck, and both paid.
     The other side holds too: `cd alpha` announced the new prompt, and `true` in that same
     directory announced the identical prompt again.
 
+28.11. **A failing command is announced again at every empty Enter.** Spec: none yet → the
+    reproduction is complete and the rule is not; **decide the shape before writing it**.
+    **Found 2026-09-02 by the user**, at an integrated Ubuntu: `gh pr create`, `Ctrl+C`, and
+    then "command failed, exit code 2" on every press of Enter, however many times they
+    pressed it.
+
+    **What a listener meets.** A command fails. The verdict is announced, correctly. Then
+    every subsequent Enter on an **empty** command line announces that same verdict again,
+    with no command having run in between — so a listener who presses Enter to feel where
+    they are is told three times that something failed, and nothing distinguishes the third
+    telling from a fresh failure.
+
+    **Reproduced on the reader 2026-09-02**, NVDA 2026.1.1, `user` persona, live capture, at
+    an integrated WSL Ubuntu with the setup accepted, and it is **smaller than the recipe it
+    was found with**. Neither `gh` nor `Ctrl+C` is needed:
+
+    - `false` and Enter announced "command failed, exit code 1". Three empty Enters after it
+      announced **"command failed, exit code 1"** each time.
+    - The user's own sequence, with `sleep 100` standing in for `gh` because the throwaway
+      worktree `gh` needed was unusable from WSL: `Ctrl+C` said "^C", then "command failed,
+      exit code 130", and every empty Enter after it repeated **exit code 130**.
+    - **A successful command clears it.** After `true`, an empty Enter announces the prompt
+      and no verdict.
+    - **It is not far-end-line mode.** `Ctrl+Shift+K` back to Acter process keys and the same
+      three presses behave identically.
+
+    **The cause, and Acter is being told the truth.** `__acter_prompt` prints `D;$?` before
+    every prompt. An empty command line runs nothing, so bash leaves `$?` at the last real
+    command's code and honestly re-reports the same failing `D` at the next prompt. Acter
+    believes each `D` and announces it again. That accounts for both boundaries exactly: only
+    an integrated session has a `D` at all, which is why an unintegrated one is silent here,
+    and a successful command resets `$?`, which is why `true` ends it.
+
+    **The seam, and it is a question the product already asks elsewhere.** An empty submission
+    has no command, so it has no verdict — which is what spec 28 decision 7 already decided
+    about *headings*: "an empty anchored row earns no block and no heading". The verdict path
+    does not ask that question. What is **not** established is which block the repeated `D`
+    is closing, and a rule written without knowing that would be a guess: **prove it with a
+    service test first**, in the way 28.5, 28.6 and 28.10 were.
+
+    **Two shapes to choose between**, and the choice is the user's:
+
+    - **A submission with an empty line has no verdict to announce.** Narrow, matches decision
+      7, and leaves every other `D` believed exactly as it is now.
+    - **A `D` that closes nothing a listener saw start says nothing.** Wider, and it would
+      also cover a shell that re-reports `$?` for some other reason, at the cost of trusting
+      the block bookkeeping rather than the submission.
+
 29. A program that is waiting says so. Spec: none yet → specify first. **Agreed
     2026-08-31**, and it is what makes 28 discoverable rather than a mode only its author
     knows about.
