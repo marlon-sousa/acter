@@ -61,13 +61,14 @@ class StubController {
 function keydown(
   target: EventTarget,
   key: string,
-  modifiers: { ctrl?: boolean; shift?: boolean; alt?: boolean } = {},
+  modifiers: { ctrl?: boolean; shift?: boolean; alt?: boolean; meta?: boolean } = {},
 ): boolean {
   const event = new KeyboardEvent('keydown', {
     key,
     ctrlKey: modifiers.ctrl ?? false,
     shiftKey: modifiers.shift ?? false,
     altKey: modifiers.alt ?? false,
+    metaKey: modifiers.meta ?? false,
     bubbles: true,
     cancelable: true,
   });
@@ -328,5 +329,67 @@ describe('the far end field', () => {
     keydown(editField, 'ArrowUp');
 
     expect(controller.reported).toEqual([]);
+  });
+});
+
+// **Measured 2026-09-03**, VoiceOver 15.0 on macOS 15.0, at a real `bash` while the far end
+// held the line: `Cmd+K` did not open Connect, it put a `k` on the far end's command line,
+// and `Cmd+C` did not copy, it put a `c` there. Both halves of the fix are asserted here,
+// and the second is the one that matters: a chord the platform owns must also go
+// **unprevented**, or `Cmd+K` merely stops doing anything at all (spec 37, decision 2).
+describe('a chord the platform owns (spec 37)', () => {
+  it('sends nothing to the far end and lets the accelerator through', () => {
+    for (const key of ['k', 'c', 'v', 'w', 'q', '/']) {
+      controller.reset();
+
+      const prevented = keydown(farEndField, key, { meta: true });
+
+      expect(controller.reported).toEqual([]);
+      expect(prevented).toBe(false);
+    }
+  });
+
+  // The edit field forwards exactly two keys, and both have a `Cmd` spelling on the platform
+  // where this bites — `Cmd+C` is copy and `Cmd+D` is a system chord. Neither is `Ctrl`.
+  it('reports neither of the edit field two keys when the platform modifier is held', () => {
+    for (const key of ['c', 'd']) {
+      controller.reset();
+
+      const prevented = keydown(editField, key, { meta: true });
+
+      expect(controller.reported).toEqual([]);
+      expect(prevented).toBe(false);
+    }
+  });
+
+  // Layer 1 keeps its exact spelling, so a platform chord that happens to contain it is the
+  // platform's rather than silently Acter's (spec 37, decision 3).
+  it('leaves the line owner alone when the platform modifier is held', () => {
+    const prevented = keydown(farEndField, 'k', { ctrl: true, shift: true, meta: true });
+
+    expect(controller.owners).toBe(0);
+    expect(controller.reported).toEqual([]);
+    expect(prevented).toBe(false);
+  });
+
+  it('still toggles the line owner for the chord without it', () => {
+    const prevented = keydown(farEndField, 'k', { ctrl: true, shift: true });
+
+    expect(controller.owners).toBe(1);
+    expect(prevented).toBe(true);
+  });
+
+  // The condition this spec adds removes nothing: `Ctrl` and `Alt` are what a terminal
+  // carries, and in far-end-line mode plain `Ctrl+C` is the interrupt by another road.
+  it('leaves Ctrl and Alt keystrokes reaching the far end untouched', () => {
+    keydown(farEndField, 'c', { ctrl: true });
+    keydown(farEndField, 'b', { alt: true });
+    keydown(farEndField, 'a');
+
+    expect(controller.reported).toEqual([
+      { key: { Char: 'c' }, ctrl: true, shift: false, alt: false },
+      { key: { Char: 'b' }, ctrl: false, shift: false, alt: true },
+      { key: { Char: 'a' }, ctrl: false, shift: false, alt: false },
+    ]);
   });
 });

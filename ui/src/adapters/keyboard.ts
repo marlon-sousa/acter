@@ -89,6 +89,13 @@ export function bindKeys(
     if (isLayerOne(event)) {
       return;
     }
+    // **The platform's own chord goes to the platform, unsent and unprevented** (spec 37).
+    // Returning before `preventDefault` is the whole of the fix: swallowing it would stop
+    // the character reaching the far end and still leave `Cmd+K` doing nothing at all,
+    // which is the same defect in different clothes.
+    if (platformOwns(event)) {
+      return;
+    }
     const key = keyOf(event);
     if (key === null) {
       // A key with no measured spelling goes nowhere rather than going as a guess: the far
@@ -128,8 +135,26 @@ function isFarEndToggle(event: KeyboardEvent): boolean {
     (event.key === 'k' || event.key === 'K') &&
     event.ctrlKey &&
     event.shiftKey &&
-    !event.altKey
+    !event.altKey &&
+    !platformOwns(event)
   );
+}
+
+// A chord carrying the platform's own modifier — Command on macOS, the Windows key on
+// Windows — and therefore not a keystroke this application may claim (spec 37, decision 1).
+//
+// **Measured 2026-09-03**, VoiceOver 15.0 on macOS 15.0, at a real `bash` while the far end
+// held the line: `Cmd+K` did not open Connect, it put a `k` on the far end's command line,
+// and `Cmd+C` did not copy, it put a `c` there. The line then ran as typed. M3's checklist
+// had passed both, because in local-line mode this listener is not in the path.
+//
+// **`metaKey` and not `altKey`, and the word between them is a trap.** In terminal
+// vocabulary Meta *is* Alt, which is why DESIGN's layer 3 says "Alt combos (Meta keys)" and
+// means the `ESC`-prefixed sequences a far end genuinely reads; in the DOM `metaKey` is
+// Command or the Windows key, which no terminal has ever received. This is the second, and
+// `Ctrl` and `Alt` stay the far end's untouched.
+function platformOwns(event: KeyboardEvent): boolean {
+  return event.metaKey;
 }
 
 // DESIGN's layer 1: the `Ctrl+Shift` combinations that are Acter's own, in both states.
@@ -153,7 +178,8 @@ function isReportable(event: KeyboardEvent): boolean {
     (event.key === 'c' || event.key === 'd') &&
     event.ctrlKey &&
     !event.shiftKey &&
-    !event.altKey
+    !event.altKey &&
+    !platformOwns(event)
   );
 }
 

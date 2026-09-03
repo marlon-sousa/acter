@@ -611,6 +611,20 @@ per-profile (muscle memory must not change between sessions).
 3. **Interactive mode passes everything that isn't layer 1 to the app**, including
    plain Ctrl+C (SIGINT via PTY), Alt combos (Meta keys), and Escape.
 
+**Under all three layers: a chord carrying the platform's own modifier is the platform's —
+Decided 2026-09-03.** Command on macOS, the Windows key on Windows. Acter neither sends it
+to a far end nor prevents it, in any mode, so the accelerator behind it fires and the menu
+item runs. This is not a fourth layer: it is the boundary the other three sit inside, because
+a terminal has never received either key and the desktop underneath is entitled to them.
+
+It is written down because the layers are stated in terminal vocabulary, where **Meta means
+Alt** — layer 3 says so two lines above, and means the `ESC`-prefixed sequences a far end
+genuinely reads. The DOM's `metaKey` is the other key entirely, and reading one as the other
+is exactly what went wrong: measured 2026-09-03 with the far end holding the line, `Cmd+C`
+typed a `c` into a remote shell instead of copying and `Cmd+K` typed a `k` instead of opening
+Connect — undoing, from the keyboard, the reason M3 put an Edit menu in the macOS bar at all.
+Alt and Ctrl are unaffected and stay the far end's.
+
 ### Default bindings
 
 - **Ctrl+Shift+E** — toggle interactive / non-interactive mode. **Decided.** (Moved

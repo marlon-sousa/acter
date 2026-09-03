@@ -3941,6 +3941,205 @@ And the two that only became visible afterwards:
     33.1 — VoiceOver told that nothing has keyboard focus — was measured on an unbundled
     binary, which is a confound this entry removes before that one is judged.
 
+36. **M5, the far end's line is audible on macOS.** Spec: none yet → specify first. Raised by
+    the user 2026-09-03: in remote-keys mode they could hear neither the keys they typed nor
+    the keys they deleted. It reproduces everywhere and it is the frontend's, not the
+    terminal's.
+
+    **Measured 2026-09-03** (VoiceOver, macOS 15.0, silent capture, `user` persona), against
+    a real `bash` over SSH to the `docker/ssh` rig with the session set up, and again against
+    a local `bash` on this Mac with the setup skipped. The two are identical, so neither the
+    transport nor shell integration is in it. Typing `e`, `c`, `h`: **nothing spoken**, with
+    `VO-F4` reading the row back as `ech`, so every key reached the far end and its echo
+    arrived. `Backspace`: **nothing spoken**. What *is* spoken: the completing `Tab`
+    (`o`, then `não selecionadas`), every caret move (`Left Arrow` said `o`, the character it
+    moved over), the output of a command, and its verdict.
+
+    **The rule behind the inconsistency**: VoiceOver speaks when the caret or the selection
+    moves *and the text did not change*. Every render that changes the text is silent, and
+    takes the caret announcement down with it. NVDA never needed the text change — it speaks
+    typed characters from its own keyboard hook — which is exactly what spec 28, decision 2
+    measured and built the mode on, and it is a fact about that reader rather than about
+    editable elements.
+
+    **Six variants were driven in Safari with no terminal in the path** (the probe is
+    `ui/probes/element_probe.html`'s macOS counterpart, to be committed with this entry).
+    The shipped shape — `contenteditable`, keys prevented, `textContent` written — is silent
+    for typing, deleting, completion *and* the arrows. The same field with nothing prevented
+    gives full native echo, including the deleted character, which is the control proving
+    VoiceOver's typing feedback is on. **Applying the far end's answer as a real editing
+    command** (`execCommand insertText`, backward `delete`) so WebKit sees an ordinary edit
+    is **also silent** — the obvious fix, measured and refused. A live region fed the whole
+    row says `e`, `ec`, `ech`, which is decision 3's verbosity confirmed on a second reader.
+    A live region fed **only what changed** says `e`, `c`, `h`, then `o` for the completion:
+    one utterance per keystroke, about half a second behind the key.
+
+    **So the deliverable is an announcement channel that exists on macOS and nowhere else**,
+    fed the delta — the character that arrived, the character that went, what a completion
+    added — and *not* fed on caret-only moves, which VoiceOver already speaks and which would
+    double. On Windows nothing changes: feeding one there would say everything twice, which
+    decision 3 measured before this entry existed.
+
+    **That amends spec 28.** "The mode uses no live region at all" is true of NVDA and false
+    here, so the amendment rides in this entry's PR rather than being worked around quietly.
+    What it does **not** touch is DESIGN's rule that Acter detects no screen reader: the
+    switch is the operating system, which the frontend already asks the backend for
+    (`shell.platform()`, used by `applyPlatformText` since M3).
+
+    **How the two behaviours are selected** — the shape this lane has used since M1, and the
+    reason it is written down here rather than decided at implementation time. `FarEndFieldView`
+    is already a port. The macOS behaviour is a **decorator** implementing that port and
+    wrapping `FarEndFieldDom`, adding only the announcement; the composition root picks the
+    wrapped one when the platform answers `macos` and the bare one otherwise. No `#[cfg]`, no
+    branch in a controller, no second frontend, and both adapters are unit-testable on any
+    machine — which is the property `offered(os)` and `system_menu(os)` were given for exactly
+    this reason.
+
+    **Readers vary, and the platform is a proxy for the reader rather than the answer.**
+    Raised by the user 2026-09-03, and it is the right objection: what actually differs is not
+    macOS and Windows, it is what a *reader* does with a change the application makes, and
+    Windows has more than one reader. So the thing to name is the **duty**, not the platform:
+    either the reader speaks what was typed and Acter must stay quiet, or the reader speaks
+    nothing Acter does not say and Acter owes the words. NVDA is the first kind, VoiceOver the
+    second, and JAWS, Narrator and Orca have not been measured.
+
+    **Neither branch can be detected, and that is the load-bearing fact.** No platform offers
+    "which reader is running and what will it announce": Windows' `SPI_GETSCREENREADER` answers
+    that *something* is listening, macOS answers whether the accessibility API is on, and
+    neither says what the reader will do with a programmatic text change. Feature detection
+    cannot help either — there is no way to write a row and ask whether it was spoken. So a
+    detected answer would be a guess wearing an API's clothes, and DESIGN's rule that Acter
+    detects no screen reader stands for a reason rather than by habit.
+
+    **What is proposed instead, and it needs approving before the spec is written**: the duty
+    is a value with a per-platform default and a setting that overrides it. `echo_duty(os,
+    preference)` is a pure policy in the core, asserted on any machine, exactly as
+    `offered(os)` and `system_menu(os)` are; the frontend asks for it once and the composition
+    root wraps the far-end field or does not. The default is the reader that platform's users
+    overwhelmingly run — NVDA on Windows, VoiceOver on macOS — and the setting is what a
+    listener on JAWS reaches for if this lands wrong for them.
+
+    **The failure the setting exists to prevent is double speech**, which is worse than
+    silence: a reader that speaks typed characters, plus an Acter that also speaks them, says
+    every keystroke twice and there is no way to hear past it. That is decision 3's finding on
+    NVDA and it is why the wrong default must be reachable and reversible rather than merely
+    unlikely — so the setting has to be findable by ear, which makes the Help topic part of
+    this entry rather than a follow-up.
+
+    **One field, not a profile of them.** The temptation is a record of duties — echo,
+    deletion, completion, caret — one row per reader. Only the echo duty has been measured to
+    vary, and this project's own rule is that a distinction nobody measured is a distinction
+    nobody should ship, so the value carries what was measured and grows a field when a
+    measurement earns it.
+
+    **What the entry still has to decide**: where the delta comes from. The adapter can diff
+    the row it holds against the row it is given, which needs no protocol change and is a
+    guess about nothing (it compares two strings it owns); or the domain, which knows which
+    key was pressed, can carry it in the event. Measure the first, because it is smaller, and
+    say so if the far end's redraws make it lie.
+
+    **What already works on macOS, so nobody measures it twice**: the connection sentence,
+    the once-only "Remote process keys" sentence, focus landing on the command line when a
+    session starts, a command's output, a failing command's verdict, the completing `Tab`, and
+    every caret key.
+
+36.1. **Text that arrives as one event is dropped in far-end mode.** Spec: none yet →
+    specify first. `keyboard.ts`'s `keyOf` sends a character key only when `event.key` is
+    exactly one character, and everything longer "goes nowhere rather than going wrong" —
+    which is right for `PageUp` and wrong for an event carrying several characters at once.
+    Dictation, Voice Control and an IME commit all arrive that way, and on macOS the first two
+    are ordinary equipment.
+
+    **Found by accident and worth saying how**, because it cost this entry's parent two wrong
+    findings: the screen-reader bridge's `type_text` injects a whole string as one event, so
+    every burst-typed command in the first hour of measuring vanished, and the missing output
+    that followed looked like a defect in the buffer. Six real key presses 120 ms apart all
+    arrive. A paste already has its own path (spec 28, decision 10); this is the same problem
+    without a `paste` event to hang it on.
+
+37. **Done** — a chord the platform owns is never a keystroke for the far end. Spec:
+    [37-a-chord-the-platform-owns.md](specs/37-a-chord-the-platform-owns.md).
+    **On macOS every Command chord was typed into the far end.** **Measured 2026-09-03** in a
+    real session: `Cmd+K` did not open Connect, it put a `k` on the far end's command line;
+    `Cmd+C` did not copy, it put a `c` there. The line then ran as `abcdefkc`.
+
+    **The cause is one missing condition.** `keyboard.ts`'s far-end listener exempts layer 1
+    (`Ctrl+Shift`) and nothing else, so a `Cmd+…` chord is read as its letter, sent to the far
+    end, and `preventDefault`ed — which also stops the platform's own accelerator, so the
+    menu item never fires either. M3's checklist found `Cmd+K`, `Cmd+/` and `Cmd+C` all
+    working, and that is not a contradiction: it was run in local-line mode, where this
+    listener is not in the path.
+
+    **It is small, and it was the first thing fixed in this lane**: a chord a listener presses
+    for their platform's own shortcut must never become input to a remote shell. The entry says
+    what the rule is rather than patching one key — which modifiers are the platform's — and
+    DESIGN's keystroke map is where that landed.
+
+    **The rule turned out not to need a platform argument at all**, which is smaller than the
+    entry expected. The Windows key is the platform's on Windows exactly as Command is on
+    macOS, and `event.metaKey` is both; neither is a modifier a terminal has ever carried. So
+    one condition is true everywhere: no `os`, no second adapter, no `data-platform`.
+
+    **Both halves matter and only the second is the fix.** Not sending the chord stops the
+    stray character; not *preventing* it is what makes the accelerator fire. A version that
+    only did the first would have left `Cmd+K` doing nothing at all, which is the same defect
+    wearing different clothes.
+
+    **Verified 2026-09-03 in a real session** — a `bash` over SSH to the `docker/ssh` rig, the
+    session set up, the far end holding the line — with the row and the focus read out of the
+    accessibility API rather than through a screen reader, because the bridge was in use by
+    somebody else at the time. With `ech` standing on the far end's line: `Cmd+C` left the row
+    at `ech`, `Cmd+/` opened the help topic on its first heading, `Cmd+K` opened the Connect
+    dialog on its Terminal row, and leaving that dialog came back to a command line still
+    reading `ech`. Nothing ordinary was lost: `Tab` completed it to `echo `, `hi` typed onto
+    the end, `Enter` ran it and cleared the row, and `Ctrl+Shift+K` handed the keyboard back.
+
+    **And heard, 2026-09-03**, the same session driven through VoiceOver 15.0 (silent
+    capture, `user` persona) so that what a person hears is recorded beside what the tree
+    said: with `ech` on the far end's line, `Cmd+C` said **"Copy"** — the Edit menu's own item
+    firing, where before it typed a `c` — `Cmd+/` said **"Acter Help"** and landed on a
+    level-2 heading in the dialog, and `Cmd+K` said **"Connect…"** and landed in the connect
+    list. `Escape` came back to a command line still reading `ech` both times. Ordinary keys
+    were untouched: `Tab` said **"o selecionado"** as it completed to `echo `, `Enter` ran it
+    and the far end's **"hi"** was spoken, and `Ctrl+Shift+K` answered **"Acter process
+    keys."**
+
+    Both halves of that run are the agent's own observation through the screen-readers
+    bridge, which is what the checklist rule allows; nothing here needed a sense the bridge
+    cannot capture.
+
+38. **The set-up dialog reads its whole command aloud on macOS.** Spec: none yet → specify
+    first. **Measured 2026-09-03**, opening a local `bash` session: the dialog announced
+    itself and then read the setup command escape by escape — around forty utterances of
+    `printf backslash 033]133;C backslash 033 backslash backslash`, `underscore underscore
+    acter underscore started`, and so on — and then read it a second time. Fifteen seconds of
+    shell escapes before anything else can be done, on a dialog whose question is one sentence
+    long.
+
+    **The command is deliberately walkable character by character** (spec B9.5), and that is
+    not in question; what is, is a reader that reads all of it on arrival without being asked.
+    The first step is to find out whether VoiceOver is reading the dialog's whole contents on
+    open or whether the command's own markup asks for it, and the answer decides whether this
+    is a `data-platform` matter or a change to the dialog for everyone.
+
+39. **Four smaller things the same run measured, each its own fix.** Spec: none yet →
+    specify first. All 2026-09-03, VoiceOver 15.0, silent capture, `user` persona.
+
+    - **The Connect button is not in the tab order until a shell is chosen.** With the
+      Terminal row selected and no shell picked, `Tab` goes from the set-up checkbox to the
+      help button to **Cancel**, and nothing says why. Arrowing the shell list once puts
+      Connect back. A control that is absent rather than disabled-and-explained is the failure
+      B5.4, decision 2 wrote `(not available)` into a label to avoid.
+    - **F6 does not toggle back.** It moves focus to the Results region and, pressed again
+      there, leaves it there; `Escape` is what returns to the command line. A9 calls F6 a
+      toggle.
+    - **Every connect-list row is announced twice** — `SSH`, `SSH, selecionado (2 de 6)`,
+      then both again.
+    - **The set-up dialog announced itself in one run and not in another.** In the first,
+      keyboard focus stayed on the web-content root, nothing was spoken, and the dialog was
+      only findable by reading the whole window; in the second it read itself immediately.
+      Inconsistent between runs, so the first step is a reproduction rather than a fix.
+
 ## Convergence (requires B4, B5 and B6 all Done)
 
 Spec: none yet → specify when unblocked. The container swaps the scripted fake
