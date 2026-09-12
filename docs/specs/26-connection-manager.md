@@ -772,19 +772,29 @@ platform, and the tag shape is what makes this not a gap: `macos-v1.0.0` gets a 
 the day there is one to run. Bundling and signing for macOS are entry 35's (M4), and a job that
 built an unbundled binary and called it a release would be shipping something nobody signed.
 
-**L. The installer shipped the wrong program, and then shipped two.** `acter-app` built two
-binaries: the program, and `src/bin/menu_spike.rs`, A7's measurement harness whose own first
-line says it is not shipped. Nothing told the bundler which was which, so the first
-installer built from this workflow put `menu_spike.exe` under `%LOCALAPPDATA%\Acter` and
-nothing else. Naming the real one — `[[bin]] name = "acter"` and `mainBinaryName` in
-`tauri.conf.json` — fixed that half, and installing again showed the other half: Tauri
-bundles *every* binary a package declares, so the spike was still there beside `acter.exe`.
-The harness is an `examples/` program now, run with
-`cargo run -p acter-app --example menu_spike`, so the package declares one binary and the
-installer holds one program.
+**L. The installer shipped a spike that should not have been in the tree at all.**
+`acter-app` built two binaries: the program, and `src/bin/menu_spike.rs`, A7's measurement
+harness whose own first line says it is not shipped. Nothing told the bundler which was
+which, so the first installer built from this workflow put `menu_spike.exe` under
+`%LOCALAPPDATA%\Acter` and nothing else. Naming the real one — `[[bin]] name = "acter"` and
+`mainBinaryName` in `tauri.conf.json` — fixed which program was installed, and installing
+again showed the spike still sitting beside `acter.exe`, because Tauri bundles *every*
+binary a package declares.
 
-Both halves were found by building the installer and installing it, which is what
-definition of done 10 asks for and what no test in this repository could have answered.
+**The spike is deleted, and it was the question the user asked that got there.** A7's own
+spec says of it: "the spike was reverted once the questions were answered — this section is
+what it left behind." `git log --follow` gives the file two commits: this one, and A9's,
+which is about the window title and has nothing to do with menus. So it was left in a
+working tree on 2026-08-24, swept into an unrelated commit the next day, and sat in
+`src/bin/` for eighteen days with nothing referencing it — no spec, no test, no script. The
+measurement it existed for is written up in A7 with its numbers and its three controls, and
+a spike worth re-running is one written against whatever Tauri version is current then. So
+the package declares one binary because it has one, and the `[[bin]]` line now buys the
+*name* — `acter.exe`, which the README and the portable zip both promise — rather than a
+choice between two.
+
+All of it was found by building the installer and installing it, which is what definition
+of done 10 asks for and what no test in this repository could have answered.
 
 **M. The installer carries the tag's version, not `tauri.conf.json`'s.** The same build
 showed it: the tag said 1.0.0, About said "Version 1.0.0.", and Installed apps said 0.1.0,

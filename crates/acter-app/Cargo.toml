@@ -6,12 +6,15 @@ edition.workspace = true
 license.workspace = true
 
 # **The program a user runs is `acter`**, which is the name the README and the portable zip
-# already promise. Found by building the installer and installing it (spec 26, definition of
-# done 10): with nothing naming it, the bundler installed `menu_spike.exe` — A7's
-# measurement harness, whose own first line says it is not shipped — because it took the
-# first binary the crate declared. The harness is an example now rather than a binary, for
-# the same finding's second half: Tauri bundles *every* binary a package declares, so a
-# second one is a second program in the installer whatever it is called.
+# already promise and which the package name alone would not give.
+#
+# Named here because of what building the installer showed (spec 26, definition of done 10):
+# the crate had a second binary, A7's menu spike, and with nothing saying which was the
+# program the bundler installed the spike and nothing else. The spike is deleted — it had
+# been reverted once its measurement was written into A7's spec and came back by accident in
+# an unrelated commit — so what this line now buys is the name rather than the choice. It
+# stays because the name is a promise made in three places, and `tauri.conf.json`'s
+# `mainBinaryName` says the same thing to the bundler.
 [[bin]]
 name = "acter"
 path = "src/main.rs"

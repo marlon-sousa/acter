@@ -3292,16 +3292,19 @@ thing to pick up once the adapters land, not merely the next number.
       cannot — connecting to WSL means choosing a distribution, and `ACTER_SHELL=wsl`
       produces a `Program` profile, which is saveable. So the wire field went away again and
       what stays is the domain rule, for the reason a total function needs one.
-    - **The installer shipped the wrong binary, and building it is how that was found.**
-      `acter-app` built the program and A7's menu spike, whose own first line says it is
-      not shipped; nothing told the bundler which was which, so the first installer built
-      from the new workflow installed `menu_spike.exe` and nothing else. Naming the main
-      binary `acter` fixed that, and installing again showed the rest: Tauri bundles every
-      binary a package declares, so the spike is an example now rather than a binary. The same build showed the installer calling itself
-      0.1.0 while About said 1.0.0, because the file name comes from a version in
-      `tauri.conf.json` that nobody bumps; the workflow now writes the tag's number into an
-      overriding config. Neither could have been caught by a test in this repository, and
-      both were caught by definition of done 10 being done rather than assumed.
+    - **The installer shipped a spike, and building it is how that was found.** `acter-app`
+      built the program and A7's menu spike, whose own first line says it is not shipped;
+      nothing told the bundler which was which, so the first installer built from the new
+      workflow installed `menu_spike.exe` and nothing else. Naming the main binary `acter`
+      fixed which program, and installing again showed the spike still beside it, because
+      Tauri bundles every binary a package declares. **The spike is deleted**: A7 says it
+      was reverted once its measurement was written up, and `git log --follow` shows it came
+      back in an unrelated commit the next day and sat there for eighteen days with nothing
+      referencing it. The same build showed the installer calling itself 0.1.0 while About
+      said 1.0.0, because the file name comes from a version in `tauri.conf.json` that
+      nobody bumps; the workflow now writes the tag's number into an overriding config.
+      None of it could have been caught by a test in this repository, and all of it was
+      caught by definition of done 10 being done rather than assumed.
     - **A release tag may say which pre-release it is.** Asked for by the user: the three
       numbers are still required and still numeric, and after them a suffix is allowed, so
       `windows-v1.0.0-beta` is the release `1.0.0-beta`. The work is not in permitting the
