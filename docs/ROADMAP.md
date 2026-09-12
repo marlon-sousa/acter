@@ -3270,7 +3270,7 @@ thing to pick up once the adapters land, not merely the next number.
 
 26.1. **Done** — the settings folder and the launch switch. Spec:
     [26-connection-manager.md](specs/26-connection-manager.md), decisions 1 to 6 and 20.
-    Merged as PR #PLACEHOLDER (2026-09-12). The spec itself lands in this PR, per the process
+    Merged as PR #62 (2026-09-12). The spec itself lands in this PR, per the process
     rule that a spec travels with the code it contracts for.
 
     **Where Acter writes is now one rule, and it is a pure function.** `records_directory`
