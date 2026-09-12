@@ -175,6 +175,33 @@ export const config: WebdriverIO.Config = {
     const configPath = join(configDir, 'transcript.json');
     writeFileSync(configPath, JSON.stringify(fastTranscript()));
 
+    // **A settings folder of this worker's own** (spec 26, decision 3). The variable exists
+    // precisely so a suite is not run against whatever this machine happens to hold: a run
+    // that saved a connection into the developer's real folder would change what their next
+    // manual pass meets, and two workers sharing one folder would see each other's writes.
+    //
+    // It holds one saved connection to start with, so the Connect dialog has something to
+    // list and `connect.spec.ts` can drive the saved-connection flow without saving first.
+    // A scripted one, because it is the only far end this suite can actually start.
+    const settingsDir = join(configDir, 'settings');
+    mkdirSync(settingsDir, { recursive: true });
+    writeFileSync(
+      join(settingsDir, 'settings.json'),
+      JSON.stringify({
+        format: 1,
+        connections: [
+          {
+            name: 'the fake',
+            target: { target: 'Scripted', scenario: 'builtin' },
+            set_up: 'Yes',
+            line_owner: 'FarEnd',
+          },
+        ],
+        host_keys: [],
+        offer_to_save: true,
+      }),
+    );
+
     // `ACTER_SHELL` is cleared, not merely left unset. The parent environment is spread
     // in, and that variable exists precisely so a manual accessibility run can export it —
     // so a developer who did would have every spec here silently retargeted at a real
@@ -187,6 +214,7 @@ export const config: WebdriverIO.Config = {
         ACTER_SHELL: undefined,
         TAURI_WEBDRIVER_PORT: String(port),
         ACTER_TRANSCRIPT: configPath,
+        ACTER_SETTINGS_DIR: settingsDir,
       },
       stdio: 'ignore',
     });

@@ -30,6 +30,16 @@
     }
   },
   "bundle": {
-    "active": false
+    "active": true,
+    "targets": ["nsis"],
+    "publisher": "Marlon Brandão de Sousa",
+    "shortDescription": "An accessible terminal for screen reader users.",
+    "copyright": "© 2026 Marlon Brandão de Sousa",
+    "licenseFile": "../../LICENSE",
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser"
+      }
+    }
   }
 }

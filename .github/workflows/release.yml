@@ -1,0 +1,106 @@
+name: Release
+
+# **A release is built when two things are true, and this workflow is what knows them**
+# (spec 26, decision 21): the commit is on the main branch, and it carries a tag shaped
+# `<platform>-vx.y.z`. Nothing else produces a release, and the binary is not asked to work
+# any of this out — `container::version` reads what the build stamped and nothing more.
+#
+# **A tag per platform**, so `windows-v1.0.0` and `macos-v1.0.0` are the same release of the
+# same product for two machines. A listener hears "Version 1.0.0" on either, because the
+# platform is a fact about which file they downloaded rather than about which Acter they are
+# running.
+#
+# **Two builds, and that is the cost of decision 3.** The installer's binary and the zip's
+# binary are not the same file: whether a copy is portable is decided when it is built, so
+# the portable zip is compiled with the `portable` Cargo feature and the installer's build is
+# not. When there is a certificate, both get signed; there is none yet, and a SmartScreen
+# warning is a known cost said in the README rather than worked around.
+
+# **Windows only, for now, and the tag shape is why that is not a gap.** A tag names the
+# platform it is for, so `macos-v1.0.0` will trigger a job of its own the day there is one
+# to run — bundling and signing for macOS are entry 35's (M4), and a job that built an
+# unbundled binary and called it a release would be shipping something nobody signed.
+on:
+  push:
+    tags:
+      - 'windows-v*'
+
+jobs:
+  windows:
+    name: Windows installer and portable zip
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # **`fetch-depth: 0`, and it is required twice over.** The default is a shallow
+          # clone with no tags, so nothing in CI could see a tag at all — and the ancestry
+          # check below needs the history to answer with.
+          fetch-depth: 0
+
+      # **Prove the tagged commit is on main**, rather than trusting that tags are only ever
+      # made there. A tag on a branch nobody reviewed would otherwise ship as a release.
+      - name: The tag must be on main
+        shell: bash
+        run: |
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::${GITHUB_REF_NAME} is not on main, so it is not a release."
+            exit 1
+          fi
+          echo "${GITHUB_REF_NAME} is on main."
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Build the frontend
+        run: npm -w acter-ui run build
+
+      # **The installer**: Tauri's NSIS target with `installMode` set to `currentUser`, so
+      # installing never asks for administrator rights and the copy lands under
+      # `%LOCALAPPDATA%`. No `portable` feature, so it keeps its settings with the account's
+      # own configuration (spec 26, decision 3).
+      - name: Build the installer
+        env:
+          # **Which tag this build is for, said rather than worked out.** With a tag per
+          # platform, `windows-v1.0.0` and `macos-v1.0.0` sit on the same commit and
+          # `git describe` would pick one of them by its own rules rather than the one being
+          # built. `vergen-gitcl` lets any value it emits be overridden by an environment
+          # variable of the same name, which is what this is.
+          VERGEN_GIT_DESCRIBE: ${{ github.ref_name }}
+        run: npm run tauri -- build
+
+      # **The portable package**: a zip holding `acter.exe` and nothing else, from a second
+      # build carrying the `portable` feature — which is what makes decision 3 true. A copy
+      # built without it would keep its settings with the account's configuration wherever
+      # the zip was unpacked to.
+      - name: Build the portable binary
+        env:
+          VERGEN_GIT_DESCRIBE: ${{ github.ref_name }}
+        run: >
+          cargo build --release -p acter-app
+          --features custom-protocol,portable
+          --target-dir target/portable
+
+      - name: Make the portable zip
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force portable-package | Out-Null
+          Copy-Item target/portable/release/acter-app.exe portable-package/acter.exe
+          Compress-Archive -Path portable-package/acter.exe `
+            -DestinationPath "acter-$($env:GITHUB_REF_NAME)-portable.zip" -Force
+
+      - name: Publish
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            target/release/bundle/nsis/*.exe
+            acter-*-portable.zip
+          fail_on_unmatched_files: true

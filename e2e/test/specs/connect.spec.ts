@@ -1,6 +1,12 @@
-// Role: e2e spec — the Connect dialog, driven end to end in the real WebView2 window:
-// the menu opens it, the list comes from the real `connectable()` command over IPC, and
-// choosing one really replaces the session behind the window (spec A8).
+// Role: e2e spec — the two connect dialogs, driven end to end in the real WebView2
+// window: the menu opens them, their lists come from the real `connectable()` and `saved()`
+// commands over IPC, and choosing from either really replaces the session behind the
+// window (specs A8 and 26).
+//
+// **There are two since spec 26** (decision 17). File → Connect opens the list of saved
+// connection names; File → New connection opens the list of kinds, which is the dialog this
+// spec drove before. The suite's worker writes a settings fixture holding one saved
+// connection (`wdio.conf.ts`), so the saved-connection flow has something to list.
 //
 // **This is the half of B7's shape that only an E2E can prove.** The actions are unit
 // tested with a fake factory and the dialog is unit tested with a fake action; what neither
@@ -25,7 +31,7 @@ function focusedId(): Promise<string> {
 
 /** The embedded WebDriver synthesizes untrusted key events; the app's own listeners take
  * them, which is everything this spec is about. */
-function press(key: string, on = 'connect-kinds') {
+function press(key: string, on = 'new-kinds') {
   return browser.execute(
     (k: string, id: string) => {
       const target = document.getElementById(id) ?? document.body;
@@ -38,11 +44,11 @@ function press(key: string, on = 'connect-kinds') {
   );
 }
 
-function dialogIsOpen(): Promise<boolean> {
+function dialogIsOpen(which = 'new-connection-dialog'): Promise<boolean> {
   return browser.execute(
-    () =>
-      (document.getElementById('connect-dialog') as HTMLDialogElement | null)?.open ===
-      true,
+    (id: string) =>
+      (document.getElementById(id) as HTMLDialogElement | null)?.open === true,
+    which,
   );
 }
 
@@ -59,7 +65,7 @@ function failureIsOpen(): Promise<boolean> {
 function rows(): Promise<Row[]> {
   return browser.execute(() =>
     Array.from(
-      document.querySelectorAll<HTMLElement>('#connect-kinds [role="option"]'),
+      document.querySelectorAll<HTMLElement>('#new-kinds [role="option"]'),
     ).map((option) => ({
       label: option.textContent ?? '',
       // A row the machine cannot start says so in its name, which is B5.4's decision and
@@ -71,7 +77,16 @@ function rows(): Promise<Row[]> {
 
 function panelTitle(): Promise<string> {
   return browser.execute(
-    () => document.getElementById('connect-panel-title')?.textContent ?? '',
+    () => document.getElementById('new-panel-title')?.textContent ?? '',
+  );
+}
+
+/** The saved connection names, as the Connect dialog rendered them (spec 26). */
+function savedNames(): Promise<string[]> {
+  return browser.execute(() =>
+    Array.from(
+      document.querySelectorAll<HTMLElement>('#connect-names [role="option"]'),
+    ).map((option) => option.textContent ?? ''),
   );
 }
 
@@ -81,17 +96,28 @@ function windowTitle(): Promise<string> {
   );
 }
 
-/** Walk the menu bar to Connect and activate it, then wait for the dialog. The list comes
- * back over IPC, so the waiting is the part that has to be right on a slow machine. */
-async function openConnect(): Promise<void> {
+/** Walk the menu bar to one of the two items and activate it, then wait for its dialog.
+ * The list comes back over IPC, so the waiting is the part that has to be right on a slow
+ * machine. */
+async function openFromTheMenu(item: string, dialog: string): Promise<void> {
   await browser.execute(() => document.getElementById('command-input')?.focus());
   await press('F10', 'command-input');
   await press('ArrowDown', 'menu-acter');
-  await press('Enter', 'menu-connect');
-  await browser.waitUntil(dialogIsOpen, {
+  await press('Enter', item);
+  await browser.waitUntil(() => dialogIsOpen(dialog), {
     timeout: 15_000,
-    timeoutMsg: 'the Connect dialog never opened',
+    timeoutMsg: `${dialog} never opened`,
   });
+}
+
+/** File → New connection: the list of kinds. */
+function openNewConnection(): Promise<void> {
+  return openFromTheMenu('menu-new-connection', 'new-connection-dialog');
+}
+
+/** File → Connect: the list of saved names (spec 26, decision 12). */
+function openConnect(): Promise<void> {
+  return openFromTheMenu('menu-connect', 'new-connection-dialog');
 }
 
 /** Move the selection to the row whose label matches, and answer whether it was there. */
@@ -108,17 +134,17 @@ async function chooseKind(label: string): Promise<boolean> {
   return true;
 }
 
-describe('the Connect dialog', () => {
+describe('the New connection dialog', () => {
   beforeEach(async () => {
     await browser.execute(() => {
       const dialog = document.getElementById(
-        'connect-dialog',
+        'new-connection-dialog',
       ) as HTMLDialogElement | null;
       dialog?.close();
     });
     await browser.waitUntil(async () => !(await dialogIsOpen()), {
       timeout: 15_000,
-      timeoutMsg: 'the Connect dialog would not close between tests',
+      timeoutMsg: 'the New connection dialog would not close between tests',
     });
     await useActersLine();
     await browser.execute(() => document.getElementById('command-input')?.focus());
@@ -127,7 +153,7 @@ describe('the Connect dialog', () => {
   /** The whole path: the real menu bar, the real command, and a list built from what this
    * machine actually has. */
   it('opens from the menu with a list the backend answered', async () => {
-    await openConnect();
+    await openNewConnection();
 
     const listed = await rows();
     expect(listed.length).toBeGreaterThan(0);
@@ -139,20 +165,20 @@ describe('the Connect dialog', () => {
   });
 
   it('focuses the list rather than the dialog, so the first thing said is a kind', async () => {
-    await openConnect();
+    await openNewConnection();
 
-    await expect(await focusedId()).toBe('connect-kinds');
+    await expect(await focusedId()).toBe('new-kinds');
   });
 
   /** Decision 2, end to end: the panel changes with the kind and focus stays on the list.
    * A list you cannot arrow through without leaving it is not a list. */
   it('arrows the kinds, changing the panel without moving focus', async () => {
-    await openConnect();
+    await openNewConnection();
     const before = await panelTitle();
 
     await press('End');
 
-    await expect(await focusedId()).toBe('connect-kinds');
+    await expect(await focusedId()).toBe('new-kinds');
     const selected = await browser.execute(
       () =>
         document.querySelector('[role="option"][aria-selected="true"]')?.textContent ??
@@ -168,10 +194,10 @@ describe('the Connect dialog', () => {
   /** **What only this suite can assert**: choosing a kind really replaces the session, and
    * the window renames itself with the label the connect list used. */
   it('connects to a scripted session and renames the window for it', async () => {
-    await openConnect();
+    await openNewConnection();
     expect(await chooseKind('Scripted: builtin')).toBe(true);
 
-    await browser.execute(() => document.getElementById('connect-start')?.click());
+    await browser.execute(() => document.getElementById('new-start')?.click());
 
     await browser.waitUntil(async () => !(await dialogIsOpen()), {
       timeout: 15_000,
@@ -200,7 +226,7 @@ describe('the Connect dialog', () => {
    * defect. The path itself is covered without a machine by the dialog's own suite and by
    * the router tests. */
   it('keeps itself open when the connection could not be started', async () => {
-    await openConnect();
+    await openNewConnection();
     const missing = (await rows()).find((row) => !row.available);
     if (missing === undefined) {
       console.log(
@@ -211,7 +237,7 @@ describe('the Connect dialog', () => {
     expect(await chooseKind(missing.label)).toBe(true);
     const before = await windowTitle();
 
-    await browser.execute(() => document.getElementById('connect-start')?.click());
+    await browser.execute(() => document.getElementById('new-start')?.click());
 
     // **A failure is acknowledged rather than announced** (ARCHITECTURE, dialogs, rule 10):
     // it opens a modal that has to be dismissed, and the connect dialog is busy behind it
@@ -240,10 +266,10 @@ describe('the Connect dialog', () => {
   });
 
   it('cancels back to the edit field without connecting', async () => {
-    await openConnect();
+    await openNewConnection();
     const before = await windowTitle();
 
-    await browser.execute(() => document.getElementById('connect-cancel')?.click());
+    await browser.execute(() => document.getElementById('new-cancel')?.click());
 
     await browser.waitUntil(async () => !(await dialogIsOpen()), {
       timeout: 15_000,
@@ -261,18 +287,18 @@ describe('the Connect dialog', () => {
    * what is asserted here is that both are focusable at all, which is what makes the order
    * possible; that Tab walks it is the NVDA pass's to confirm. */
   it('has a panel and a Connect button that can hold focus', async () => {
-    await openConnect();
+    await openNewConnection();
 
     const reachable = await browser.execute(() => {
-      const ids = ['connect-panel', 'connect-start', 'connect-cancel'];
+      const ids = ['new-panel', 'new-start', 'new-cancel'];
       return ids.map((id) => {
         document.getElementById(id)?.focus();
         return document.activeElement?.id ?? '';
       });
     });
 
-    expect(reachable).toEqual(['connect-panel', 'connect-start', 'connect-cancel']);
-    await expect(await $('#connect-dialog').isDisplayed()).toBe(true);
+    expect(reachable).toEqual(['new-panel', 'new-start', 'new-cancel']);
+    await expect(await $('#new-connection-dialog').isDisplayed()).toBe(true);
   });
 });
 
@@ -342,15 +368,171 @@ describe('what the window shows', () => {
   /** The dialog's keys belong to its widgets rather than to the reader's browse cursor, so
    * its contents sit in an application region (spec A10). Asserted on the structure because
    * what it changes is the reader's mode, which only the NVDA pass can hear. */
-  it('holds the Connect dialog in an application region', async () => {
+  it('holds both connect dialogs in an application region', async () => {
     const wrapped = await browser.execute(() => {
-      const region = document.querySelector('#connect-dialog [role="application"]');
+      const making = document.querySelector(
+        '#new-connection-dialog [role="application"]',
+      );
+      const saved = document.querySelector('#connect-dialog [role="application"]');
       return (
-        region?.contains(document.getElementById('connect-kinds')) === true &&
-        region?.contains(document.getElementById('connect-start')) === true
+        making?.contains(document.getElementById('new-kinds')) === true &&
+        making?.contains(document.getElementById('new-start')) === true &&
+        saved?.contains(document.getElementById('connect-names')) === true &&
+        saved?.contains(document.getElementById('connect-start')) === true
       );
     });
 
     expect(wrapped).toBe(true);
+  });
+});
+
+/**
+ * **The saved-connection flow, end to end** (spec 26, definition of done 6). This is the
+ * half only this suite can prove: a real menu item, a real `saved()` over the IPC bridge,
+ * a real settings document behind it, and a session actually started from a name.
+ *
+ * The fixture the worker writes holds one saved connection, `the fake`, pointing at the
+ * scripted far end — the only one this suite can start (`wdio.conf.ts`).
+ */
+describe('the Connect dialog', () => {
+  beforeEach(async () => {
+    await browser.execute(() => {
+      for (const id of ['connect-dialog', 'new-connection-dialog']) {
+        (document.getElementById(id) as HTMLDialogElement | null)?.close();
+      }
+    });
+    await browser.waitUntil(async () => !(await dialogIsOpen('connect-dialog')), {
+      timeout: 15_000,
+      timeoutMsg: 'the Connect dialog would not close between tests',
+    });
+    await useActersLine();
+    await browser.execute(() => document.getElementById('command-input')?.focus());
+  });
+
+  /** The names come from the real document through the real invoke. */
+  it('lists the saved connection the fixture holds', async () => {
+    await openConnect();
+
+    expect(await savedNames()).toEqual(['the fake']);
+  });
+
+  /**
+   * **Focus lands on the list**, so the first thing said is a saved connection's name
+   * rather than the dialog's title (decision 12).
+   */
+  it('focuses the names rather than the dialog', async () => {
+    await openConnect();
+
+    await expect(await focusedId()).toBe('connect-names');
+  });
+
+  /**
+   * **The panel is loaded from the row** (decision 13), which for a scripted connection
+   * is a kind with nothing to choose — so what this proves is that the row resolved to a
+   * profile at all and the dialog rendered its panel from it.
+   */
+  it('loads the panel and the checkbox from the saved row', async () => {
+    await openConnect();
+
+    const panel = await browser.execute(() => ({
+      title: document.getElementById('connect-panel-title')?.textContent ?? '',
+      setUp:
+        (document.getElementById('connect-set-up') as HTMLInputElement | null)
+          ?.checked === true,
+    }));
+
+    expect(panel.title).not.toBe('');
+    expect(panel.setUp).toBe(true);
+  });
+
+  /**
+   * **What only this suite can assert**: choosing a saved name really replaces the
+   * session, and the window renames itself for what it connected to.
+   */
+  it('connects to the saved connection and renames the window for it', async () => {
+    await openConnect();
+
+    await browser.execute(() => document.getElementById('connect-start')?.click());
+
+    await browser.waitUntil(async () => !(await dialogIsOpen('connect-dialog')), {
+      timeout: 15_000,
+      timeoutMsg: 'the dialog never closed after connecting',
+    });
+    await browser.waitUntil(
+      async () => (await windowTitle()) === 'Acter - Scripted: builtin',
+      {
+        timeout: 15_000,
+        timeoutMsg: `the window never renamed itself; it says ${await windowTitle()}`,
+      },
+    );
+  });
+
+  /**
+   * **Save connection writes into the real document**, and the name is there the next time
+   * the dialog is opened (definition of done 4). This is the round trip nothing below the
+   * E2E level can reach: a dialog, an invoke, a file, and a second read.
+   */
+  it('saves a session under a new name and lists it afterwards', async () => {
+    await openConnect();
+    await browser.execute(() => document.getElementById('connect-start')?.click());
+    await browser.waitUntil(async () => !(await dialogIsOpen('connect-dialog')), {
+      timeout: 15_000,
+      timeoutMsg: 'the dialog never closed after connecting',
+    });
+
+    const said = await browser.execute(async () => {
+      const invoke = (
+        window as unknown as {
+          __TAURI_INTERNALS__: {
+            invoke(command: string, args: unknown): Promise<unknown>;
+          };
+        }
+      ).__TAURI_INTERNALS__.invoke;
+      return (await invoke('save_connection', { name: 'saved by the suite' })) as string;
+    });
+
+    expect(said).toBe('Saved as saved by the suite.');
+
+    await openConnect();
+    expect(await savedNames()).toEqual(['saved by the suite', 'the fake']);
+  });
+
+  /** **Five buttons, and no Save among them** (decision 15). */
+  it('has Connect, Rename, Forget, New connection and Cancel, and no Save', async () => {
+    await openConnect();
+
+    const buttons = await browser.execute(() =>
+      Array.from(
+        document.querySelectorAll<HTMLElement>('#connect-dialog button'),
+      ).map((button) => button.textContent ?? ''),
+    );
+
+    expect(buttons).toEqual([
+      'Connect',
+      'Rename',
+      'Forget',
+      'New connection',
+      'Cancel',
+    ]);
+  });
+
+  /**
+   * **New connection closes this dialog first** (decision 15): dialogs do not stack, so
+   * Cancel from there returns to the window rather than to this list.
+   */
+  it('closes itself when New connection is chosen', async () => {
+    await openConnect();
+
+    await browser.execute(() => document.getElementById('connect-new')?.click());
+
+    await browser.waitUntil(async () => !(await dialogIsOpen('connect-dialog')), {
+      timeout: 15_000,
+      timeoutMsg: 'the Connect dialog stayed open under New connection',
+    });
+    await browser.waitUntil(async () => await dialogIsOpen('new-connection-dialog'), {
+      timeout: 15_000,
+      timeoutMsg: 'New connection never opened',
+    });
+    await browser.execute(() => document.getElementById('new-cancel')?.click());
   });
 });

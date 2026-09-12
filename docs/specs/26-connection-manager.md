@@ -667,6 +667,87 @@ who holds the keys is recorded at the moment of saving.
     per item, naming the reader version and the capture mode, and saying which items were
     agent-observed.
 
+## Amended in implementation
+
+The spec file lands in the pull request that implements it, and any change the
+implementation forced is written here rather than left in a commit message.
+
+**A. Acter's own record of host keys is in the settings document, not a file beside it.**
+Decision 2 said `known_hosts` stayed as it was, "unchanged in format". Asked for by the
+user on 2026-09-12, on reading the implementation: if the document is where everything
+Acter decides on a person's behalf lives, a record of which servers they told it to trust
+belongs in it. It is a typed list under `host_keys`, and each record is the host, the port,
+the kind of key, the **fingerprint** as `ssh-keygen -l` prints it, and the **day** it was
+accepted.
+
+The fingerprint rather than the key, because a base64 key is sixty-eight characters of
+noise and the fingerprint is what a provider printed, what a colleague read out, and what
+the dialog put in front of the user when they accepted it. Comparing a server's offer
+against it is the same operation either way. The algorithm is kept beside it because two
+behaviours need it: a key recorded under a *different* algorithm is an unknown key rather
+than a changed one, and the algorithms already on file are what Acter offers a server first
+so a familiar host is not asked about on every second connection. The day, because a record
+nobody can date cannot answer "when did I trust this?", which is the question somebody asks
+when a key changes.
+
+**B. The user's own `~/.ssh/known_hosts` is read into the same list, flagged.** Asked for
+in the same conversation. Anything asking what is known about a server now gets one answer
+rather than two to merge, and every row read out of that file carries
+`HostKeyOrigin::Native`. **B9's decision 5 is untouched**: a native record is never written
+into Acter's document, and that is structural rather than remembered — the origin is
+`#[serde(skip)]`, so a record in the document is Acter's own by construction, and the port's
+`accept` takes the facts rather than a record, so there is no native one to hand it.
+
+**C. `SavedTarget::Wsl` carries an optional distribution.** Decision 7 said a saved WSL
+connection remembers "the distribution name". `ProfileId::Shell { kind: Wsl }` — what
+`ACTER_SHELL=wsl` produces — is a real live session that names none, and Save connection
+has to be able to write down whatever is running. `None` means whatever distribution WSL
+calls the default, which is deliberately not the same as Acter deciding which one that is
+(spec B5.3).
+
+**D. The wire type and the port's type have different names.** Decision 10 and decision 11
+both called their answer `SavedConnections`, and they carry different facts: the port
+answers what the document holds, and `ConnectApi` answers that resolved against discovery,
+with the profile each panel loads from and whether this machine can start it now. The port's
+is `StoredConnections`; the wire keeps the spec's name.
+
+**E. The preference of decision 19 rides on `ConnectionStore`.** That decision deleted the
+separate `Preferences` port and said the settings object is what it would have been — so the
+two named actions reach it through the port the connect service already holds, rather than
+through a second seam over the same object.
+
+**F. A `SavedRow` carries the summary decision 13 describes.** The words a listener hears are
+composed in the domain, like every other spoken string on this seam, rather than assembled by
+the dialog from a `ProfileId`. It also uses commas where `ProfileId::label` uses a colon: that
+label names a row in a list of kinds, where the colon separates a category from a member,
+while this is said *after* the user's own name for the connection, as a description of it.
+
+**G. The settings object holds no packaging.** Decision 10 listed it among the runtime values
+with getters. It has exactly one consumer — the rule that decides where the folder is — and by
+the time the object exists that rule has run and left its answer in the standing. A getter
+nothing calls is a value nothing tests.
+
+**H. `KnownHosts`'s aside covers only the user's file now.** It used to name either record as
+one that could not be read. Acter's own can no longer fail on its own: it is part of the
+document, and a document that will not parse is reported where the saved connections are, in
+the sentence decision 16 specifies.
+
+**I. A name that is empty gets its own sentence.** Decision 8 gives one sentence, for the
+forbidden characters, and also forbids a name that is empty or only spaces. "A name cannot
+contain slash, backslash…" answers a question that person did not ask, so an empty name is
+refused with "A connection needs a name."
+
+**J. `settings/` is in `.gitignore`, and the router tests write to a temporary folder.** Found
+by this entry's own first test run: a development build keeps its settings in the folder it was
+started from, and `cargo test` starts in the crate directory — so the suite wrote a real
+`settings` folder into the working tree. Without the ignore, a `tauri dev` would put somebody's
+actual saved connections and accepted host keys there too.
+
+**K. The release workflow triggers on `windows-v*` only.** Decision 21 describes a tag per
+platform, and the tag shape is what makes this not a gap: `macos-v1.0.0` gets a job of its own
+the day there is one to run. Bundling and signing for macOS are entry 35's (M4), and a job that
+built an unbundled binary and called it a release would be shipping something nobody signed.
+
 ## Manual checklist (Windows, NVDA)
 
 Run against a fixture `ACTER_SETTINGS_DIR` holding a `settings.json` with one saved
