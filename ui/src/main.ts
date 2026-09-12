@@ -190,6 +190,7 @@ const saveConnectionDialog = new SaveConnectionDialog(
   byId<HTMLInputElement>('save-not-again'),
   byId<HTMLButtonElement>('save-ok'),
   byId<HTMLButtonElement>('save-cancel'),
+  windowChrome,
 );
 const renameConnectionDialog = new RenameConnectionDialog(
   byId<HTMLDialogElement>('rename-connection-dialog'),

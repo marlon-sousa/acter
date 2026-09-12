@@ -57,6 +57,23 @@ export class SaveConnectionDialog {
     private readonly notAgain: HTMLInputElement,
     private readonly save: HTMLButtonElement,
     private readonly cancel: HTMLButtonElement,
+    /**
+     * Where focus goes when this closes.
+     *
+     * **Found by the end-to-end suite, 2026-09-12.** This dialog opens over the *window*
+     * rather than over another dialog — from the File menu, and by itself after a new
+     * connection comes up — and without this, closing it left focus on nothing at all. The
+     * platform restores focus to whatever had it when `showModal` ran, and at that moment
+     * that is a control the window has since swapped out: a session hands the keys to the
+     * program, so the local edit field is hidden, and focusing a hidden element is a no-op
+     * (the lesson roadmap 28.3 and A10 both record). What a listener met was silence with
+     * nowhere to arrow from.
+     *
+     * The window's own landing decides where, which is the same object every other dialog
+     * here is handed: whichever command line is in front, or the Connect button when there
+     * is no session.
+     */
+    private readonly returnTo: { focus(): void },
   ) {
     this.dialog.addEventListener('keydown', (event) => keepTabInside(this.dialog, event));
     // **Enter saves, from the field.** The whole dialog is one text box and two buttons,
@@ -74,7 +91,10 @@ export class SaveConnectionDialog {
     // Escape, and every other way of closing, is "not now": nothing is saved and the
     // preference is still recorded if the box was ticked, because ticking it is a decision
     // about the *offer* rather than about this connection (decision 19).
-    this.dialog.addEventListener('close', () => this.answer(null));
+    this.dialog.addEventListener('close', () => {
+      this.answer(null);
+      this.returnTo.focus();
+    });
   }
 
   /**

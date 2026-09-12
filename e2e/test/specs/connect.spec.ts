@@ -110,6 +110,35 @@ async function openFromTheMenu(item: string, dialog: string): Promise<void> {
   });
 }
 
+/**
+ * **The offer to save, which a new connection now makes** (spec 26, decision 19).
+ *
+ * It opens after `connectTo` resolves, so every test that connects from New connection
+ * meets it — and it holds focus until somebody answers. "Not now" is the answer that leaves
+ * nothing saved, which is what a test about connecting wants.
+ *
+ * Answers whether it was there, so a test can assert the offer as well as get past it.
+ */
+async function notNow(): Promise<boolean> {
+  const offered = await browser
+    .waitUntil(async () => await dialogIsOpen('save-connection-dialog'), {
+      timeout: 10_000,
+      timeoutMsg: 'the offer to save never appeared',
+    })
+    .then(
+      () => true,
+      () => false,
+    );
+  if (offered) {
+    await browser.execute(() => document.getElementById('save-cancel')?.click());
+    await browser.waitUntil(
+      async () => !(await dialogIsOpen('save-connection-dialog')),
+      { timeout: 10_000, timeoutMsg: 'the offer to save would not close' },
+    );
+  }
+  return offered;
+}
+
 /** File → New connection: the list of kinds. */
 function openNewConnection(): Promise<void> {
   return openFromTheMenu('menu-new-connection', 'new-connection-dialog');
@@ -117,7 +146,7 @@ function openNewConnection(): Promise<void> {
 
 /** File → Connect: the list of saved names (spec 26, decision 12). */
 function openConnect(): Promise<void> {
-  return openFromTheMenu('menu-connect', 'new-connection-dialog');
+  return openFromTheMenu('menu-connect', 'connect-dialog');
 }
 
 /** Move the selection to the row whose label matches, and answer whether it was there. */
@@ -137,10 +166,9 @@ async function chooseKind(label: string): Promise<boolean> {
 describe('the New connection dialog', () => {
   beforeEach(async () => {
     await browser.execute(() => {
-      const dialog = document.getElementById(
-        'new-connection-dialog',
-      ) as HTMLDialogElement | null;
-      dialog?.close();
+      for (const id of ['new-connection-dialog', 'save-connection-dialog']) {
+        (document.getElementById(id) as HTMLDialogElement | null)?.close();
+      }
     });
     await browser.waitUntil(async () => !(await dialogIsOpen()), {
       timeout: 15_000,
@@ -210,12 +238,16 @@ describe('the New connection dialog', () => {
         timeoutMsg: `the window never renamed itself; it says ${await windowTitle()}`,
       },
     );
+    // **And Acter offers to save it, once** (spec 26, decision 19): this connection has no
+    // name, so the window asks for one before the listener does anything else. Saying not
+    // now leaves nothing saved, which is what the rest of this test is about.
+    await expect(await notNow()).toBe(true);
     // **On the program's line, not Acter's** (roadmap 28.7). A session hands the keys to
     // the far end as soon as there is one, so this is where a listener lands: the field
     // labelled "Command line" that the far end draws into, with Acter's `<input>` hidden.
     await browser.waitUntil(async () => (await focusedId()) === 'far-end-input', {
       timeout: 15_000,
-      timeoutMsg: "focus never landed on the program's line after connecting",
+      timeoutMsg: `focus never landed on the program's line; it is on ${await focusedId()}`,
     });
   });
 
@@ -397,7 +429,11 @@ describe('what the window shows', () => {
 describe('the Connect dialog', () => {
   beforeEach(async () => {
     await browser.execute(() => {
-      for (const id of ['connect-dialog', 'new-connection-dialog']) {
+      for (const id of [
+        'connect-dialog',
+        'new-connection-dialog',
+        'save-connection-dialog',
+      ]) {
         (document.getElementById(id) as HTMLDialogElement | null)?.close();
       }
     });

@@ -87,11 +87,14 @@ function connected(over: Partial<Connected> = {}): Connected {
 }
 
 let save: SaveConnectionDialog;
+/** How many times the dialog sent focus back to the window. */
+let returned: number;
 let rename: RenameConnectionDialog;
 let forget: ForgetConnectionDialog;
 
 beforeEach(() => {
   document.body.innerHTML = SKELETON;
+  returned = 0;
   for (const id of [
     'save-connection-dialog',
     'rename-connection-dialog',
@@ -107,6 +110,11 @@ beforeEach(() => {
     byId<HTMLInputElement>('save-not-again'),
     byId<HTMLButtonElement>('save-ok'),
     byId<HTMLButtonElement>('save-cancel'),
+    {
+      focus: () => {
+        returned += 1;
+      },
+    },
   );
   rename = new RenameConnectionDialog(
     byId<HTMLDialogElement>('rename-connection-dialog'),
@@ -196,6 +204,25 @@ describe('the Save dialog', () => {
     byId<HTMLDialogElement>('save-connection-dialog').close();
 
     await expect(asking).resolves.toEqual({ name: null, stopOffering: false });
+  });
+
+  /**
+   * **Closing puts focus back in the window** — found by the end-to-end suite on
+   * 2026-09-12, where it did not: this dialog opens over the window rather than over
+   * another dialog, and the platform restored focus to a control the window had since
+   * hidden, which is a no-op. A listener was left on nothing with nowhere to arrow from.
+   */
+  it('sends focus back to the window however it closes', async () => {
+    const cancelled = save.ask('work laptop', false);
+    click('save-cancel');
+    await cancelled;
+    expect(returned).toBe(1);
+
+    const saved = save.ask('work laptop', false);
+    click('save-ok');
+    await saved;
+    save.finish();
+    expect(returned).toBe(2);
   });
 
   /**
