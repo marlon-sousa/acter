@@ -12,6 +12,7 @@ import type {
   KeyPress,
   LineOwner,
   ProfileId,
+  SavedConnections,
   SessionEvent,
   SessionId,
   SetUp,
@@ -26,6 +27,17 @@ import type { QuestionView } from '../ports/question_view';
 import type { WindowView } from '../ports/window_view';
 import type { EditFieldView } from '../ports/edit_field_view';
 import type { FarEndFieldView } from '../ports/far_end_field_view';
+
+/**
+ * What the controller needs of the Save connection dialog when it offers (spec 26,
+ * decision 19).
+ *
+ * **Passed in rather than held**, so the controller knows about the offer and nothing
+ * about the dialog: the same rule the menu bar is written under.
+ */
+export interface SaveOffer {
+  (connected: Connected): Promise<{ stopOffering: boolean }>;
+}
 
 // Pinned announcement strings (spec decision 3). Every announced string is a domain
 // requirement; this module is their single source in the frontend. The dynamic ones
@@ -137,6 +149,16 @@ export function connectedMessage(label: string, note?: string | null): string {
 // Unreachable while Ctrl+C is both the only key reported and the only key bound. It is
 // still spoken, because the first thing a second reported key must not do is vanish.
 export const unboundKeyMessage = 'that key does nothing here';
+
+// **What File then Save connection says when there is no session behind the window** (spec
+// 26, decision 18). It does not open a dialog: there is nothing to name, and a dialog that
+// opened onto that would be a dialog whose only honest content is a refusal.
+//
+// It is in the same register as every other unconnected sentence, and it is the backend's
+// words too — the service refuses the same call with the same string, because input can
+// arrive from somewhere that never saw a menu (ARCHITECTURE, dialogs rule 3).
+export const nothingToSaveMessage =
+  'Nothing is connected, so there is nothing to save.';
 
 // **What handing the keyboard to the far end costs and buys, said once rather than left to
 // be discovered** (spec 28, decision 1). Neither sentence names a mode: what changes for the
@@ -338,10 +360,14 @@ export class AppController {
    * to decide with it: the connect dialog closes on success and stays open on failure, so
    * the user is left somewhere they can choose again (spec A8, decision 4).
    */
-  async connectTo(id: ProfileId, setUp: SetUp = 'Yes'): Promise<boolean> {
+  async connectTo(
+    id: ProfileId,
+    setUp: SetUp = 'Yes',
+    origin: string | null = null,
+  ): Promise<boolean> {
     let connected: Connected;
     try {
-      connected = await this.connect.use(id, setUp, {
+      connected = await this.connect.use(id, setUp, origin, {
         // **Said while it happens, because a listener with no feedback cannot tell a slow
         // network from a dead one** (spec B9, decision 6). These are the backend's own
         // sentences: only it knows which stage a connection has reached.
@@ -365,6 +391,91 @@ export class AppController {
     }
     await this.show(connected);
     return true;
+  }
+
+  /** Every saved connection, for whoever is rendering the Connect dialog. */
+  saved(): Promise<SavedConnections> {
+    return this.connect.saved();
+  }
+
+  /**
+   * Offer to save the session that has just come up, once (spec 26, decision 19).
+   *
+   * **Three conditions, all of them true or nothing happens**: the session has no origin,
+   * the preference is not set, and the far end is one that could be saved at all — a
+   * release build never offers to save a scripted session, because it could not list one
+   * to start again.
+   *
+   * **Called after the connection sentence has been said**, so the order a listener hears
+   * is the connection, then who has the keys, then the receipt. The connection is the news,
+   * the keys are what the next keypress needs, and the save is a receipt.
+   */
+  async offerToSave(ask: SaveOffer): Promise<void> {
+    const connected = this.connection;
+    if (connected === null || connected.saved_as !== null) {
+      return;
+    }
+    if (!(await this.connect.offerToSave())) {
+      return;
+    }
+    const answer = await ask(connected);
+    // **The checkbox is recorded whichever button they pressed** (decision 19): ticking it
+    // is a decision about the offer rather than about this connection.
+    if (answer.stopOffering) {
+      await this.connect.stopOfferingToSave();
+    }
+  }
+
+  /**
+   * Save the live session under this name, and answer the sentence to say — or `null`
+   * when it was refused, in which case the sentence has been announced and the dialog is
+   * the caller's to keep open (spec 26, decision 18).
+   */
+  async saveConnection(name: string): Promise<string | null> {
+    try {
+      const said = await this.connect.saveConnection(name);
+      // The window now knows the session has a name, so it stops offering to save it and
+      // the Save dialog prefills with it next time.
+      if (this.connection !== null) {
+        this.connection = { ...this.connection, saved_as: name.trim() };
+      }
+      return said;
+    } catch (why) {
+      this.announcer.announce(reason(why));
+      return null;
+    }
+  }
+
+  /**
+   * What the launch asked to connect to, carried out here rather than at startup
+   * (spec 26, decision 20).
+   *
+   * **The window is what acts on it**, so a saved SSH connection asks its host-key and
+   * password questions in front of the person who can answer them — which is what B9
+   * already requires of every SSH attempt. A name nothing is saved under opens the window
+   * unconnected and says so, because a windowed binary has no console to print to.
+   *
+   * Answers whether a connection was started, so the caller knows whether to say what the
+   * window is on.
+   */
+  async carryOutTheLaunchSwitch(): Promise<boolean> {
+    const asked = await this.connect.requestedAtLaunch();
+    if (asked === null) {
+      return false;
+    }
+    if (asked.request === 'Unknown') {
+      this.announcer.announce(asked.said);
+      return false;
+    }
+    const rows = (await this.connect.saved()).rows;
+    const row = rows.find((saved) => saved.name === asked.name);
+    if (row === undefined) {
+      // Saved a moment ago and forgotten a moment later, from another window. The
+      // sentence is the one the backend would have given, composed by nobody twice.
+      this.announcer.announce(`There is no saved connection named ${asked.name}.`);
+      return false;
+    }
+    return await this.connectTo(row.id, row.set_up, row.name);
   }
 
   /**
@@ -393,6 +504,11 @@ export class AppController {
         : keysGoToActerMessage,
     );
     return true;
+  }
+
+  /** Whether there is a session to save, which is what File then Save connection asks. */
+  get connectedNow(): Connected | null {
+    return this.connection;
   }
 
   /**
@@ -448,8 +564,13 @@ export class AppController {
     //
     // Done before the attach, so the far end owns the line from its first byte and the
     // prompt it draws is anchored rather than arriving at a window that has not decided yet.
-    await this.backend.setLineOwner(connected.session, 'FarEnd');
-    this.setLineOwner('FarEnd', false);
+    //
+    // **A saved connection's own choice wins over that default** (spec 26, decision 11,
+    // closing roadmap 28.8). The backend answers `line_owner` with what the saved
+    // connection asked for, and with the far end when nothing did — so this is still the
+    // one place the decision is applied, and there is still only one default.
+    await this.backend.setLineOwner(connected.session, connected.line_owner);
+    this.setLineOwner(connected.line_owner, false);
     await this.backend.attachSession(connected.session, (event) => {
       this.handleEvent(event);
     });

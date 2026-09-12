@@ -14,6 +14,11 @@
 /// about menus and nothing about sessions, windows or dialogs.
 export interface MenuActions {
   connect(): void;
+  /// The list of kinds, which is what Connect used to open (spec 26, decision 17).
+  newConnection(): void;
+  /// Name the session that is running. Unconnected it opens no dialog and says there is
+  /// nothing to save, which is the action's own business rather than this bar's.
+  saveConnection(): void;
   exit(): void;
   help(): void;
   about(): void;
@@ -192,6 +197,10 @@ export function installMenuBar(
     closeAll();
     if (item.id === 'menu-connect') {
       actions.connect();
+    } else if (item.id === 'menu-new-connection') {
+      actions.newConnection();
+    } else if (item.id === 'menu-save-connection') {
+      actions.saveConnection();
     } else if (item.id === 'menu-exit') {
       actions.exit();
     } else if (item.id === 'menu-acter-help') {

@@ -12,6 +12,12 @@ import { HelpDialog } from './adapters/help_dialog';
 import { bindKeys } from './adapters/keyboard';
 import { ConnectDialog } from './adapters/connect_dialog';
 import { ConnectingDialog } from './adapters/connecting_dialog';
+import { NewConnectionDialog } from './adapters/new_connection_dialog';
+import {
+  ForgetConnectionDialog,
+  RenameConnectionDialog,
+} from './adapters/rename_connection_dialog';
+import { SaveConnectionDialog, suggestion } from './adapters/save_connection_dialog';
 import { HostKeyDialog } from './adapters/host_key_dialog';
 import { MessageDialog } from './adapters/message_dialog';
 import { PasswordDialog } from './adapters/password_dialog';
@@ -21,7 +27,7 @@ import { installMenuBar } from './adapters/menu_bar';
 import { applyPlatformText } from './adapters/platform_text';
 import { installSystemMenu } from './adapters/system_menu';
 import { WindowChrome } from './adapters/window_chrome';
-import { AppController } from './controllers/app';
+import { AppController, nothingToSaveMessage } from './controllers/app';
 import {
   TauriBackend,
   TauriConnect,
@@ -156,26 +162,132 @@ const connectingDialog = new ConnectingDialog(
   byId<HTMLDialogElement>('connecting-dialog'),
   byId('connecting-what'),
 );
-// Connecting is three named backend actions and this is the thinnest caller of them: the
-// dialog renders what `connectable()` answered and hands a chosen profile back to the
-// controller, which owns the buffer, the titles and the words (spec A8).
-const connectDialog = new ConnectDialog(
-  byId<HTMLDialogElement>('connect-dialog'),
-  byId('connect-kinds'),
-  byId('connect-panel-title'),
-  byId('connect-panel-body'),
+// **New connection: A8's dialog, renamed** (spec 26, decision 17). Connecting is a set of
+// named backend actions and this is the thinnest caller of them: the dialog renders what
+// `connectable()` answered and hands a chosen profile back to the controller, which owns
+// the buffer, the titles and the words (spec A8).
+const newConnectionDialog = new NewConnectionDialog(
+  byId<HTMLDialogElement>('new-connection-dialog'),
+  byId('new-kinds'),
+  byId('new-panel-title'),
+  byId('new-panel-body'),
   connectApi,
-  (id, setUp) => controller.connectTo(id, setUp),
+  (id, setUp, origin) => controller.connectTo(id, setUp, origin),
   announcer,
   windowChrome,
   connectingDialog,
   helpDialog,
+  () => void afterConnecting(),
+);
+// The three dialogs that act on one saved connection each, built before the dialog that
+// opens them: it takes them rather than reaching for them, which is the rule every adapter
+// here is written under.
+const saveConnectionDialog = new SaveConnectionDialog(
+  byId<HTMLDialogElement>('save-connection-dialog'),
+  byId('save-why'),
+  byId<HTMLInputElement>('save-name'),
+  byId('save-also-later'),
+  byId<HTMLInputElement>('save-not-again'),
+  byId<HTMLButtonElement>('save-ok'),
+  byId<HTMLButtonElement>('save-cancel'),
+);
+const renameConnectionDialog = new RenameConnectionDialog(
+  byId<HTMLDialogElement>('rename-connection-dialog'),
+  byId<HTMLInputElement>('rename-name'),
+  byId<HTMLButtonElement>('rename-ok'),
+  byId<HTMLButtonElement>('rename-cancel'),
+);
+const forgetConnectionDialog = new ForgetConnectionDialog(
+  byId<HTMLDialogElement>('forget-connection-dialog'),
+  byId('forget-why'),
+  byId<HTMLButtonElement>('forget-ok'),
+  byId<HTMLButtonElement>('forget-cancel'),
+);
+// **Connect: the list of names somebody saved** (spec 26, decisions 12 to 16).
+const connectDialog = new ConnectDialog(
+  byId<HTMLDialogElement>('connect-dialog'),
+  byId('connect-names'),
+  byId('connect-empty'),
+  byId('connect-panel-title'),
+  byId('connect-panel-body'),
+  connectApi,
+  (id, setUp, origin) => controller.connectTo(id, setUp, origin),
+  announcer,
+  windowChrome,
+  connectingDialog,
+  {
+    rename: (name) => renameConnectionDialog.ask(name),
+    forget: (question) => forgetConnectionDialog.ask(question),
+  },
+  () => void newConnectionDialog.open(),
   () => void controller.announceConnection(),
 );
 // One handler, both buttons: the two windows are exclusive, so a listener never meets both,
 // and the action they run is the same one the menu item runs (spec A10).
 for (const id of ['connect-button', 'reconnect-button']) {
   byId(id).addEventListener('click', () => void connectDialog.open());
+}
+
+/**
+ * The three sentences a listener hears after a new connection, in order (spec 26,
+ * decision 19): the connection, who has the keys, and — when a save happened — the receipt.
+ *
+ * **The offer comes after the first two**, because the connection is the news, the keys are
+ * what the next keypress needs, and the save is a receipt. It is made only once per
+ * session and only for one nobody has named.
+ */
+async function afterConnecting(): Promise<void> {
+  controller.announceConnection();
+  await controller.offerToSave(async (connected) => {
+    const answer = await saveConnectionDialog.ask(suggestion(connected), true);
+    if (answer.name === null) {
+      return answer;
+    }
+    await saveUnder(answer.name, saveConnectionDialog);
+    return answer;
+  });
+}
+
+/**
+ * Save under this name, keeping the dialog open while the backend refuses.
+ *
+ * **A refusal keeps the dialog open with the sentence announced and focus back in the
+ * field** (decision 18), which is where trying something else begins. The words are the
+ * backend's, because a name can arrive from somewhere that never saw a dialog.
+ */
+async function saveUnder(name: string, dialog: SaveConnectionDialog): Promise<void> {
+  let asking = name;
+  for (;;) {
+    const said = await controller.saveConnection(asking);
+    if (said !== null) {
+      dialog.finish();
+      // The receipt, after the connection sentence and the keys sentence.
+      announcer.announce(said);
+      return;
+    }
+    dialog.refused();
+    const again = await dialog.ask(asking, false);
+    if (again.name === null) {
+      return;
+    }
+    asking = again.name;
+  }
+}
+
+/** File → Save connection, from the menu, at any time (decision 18). */
+async function saveConnection(): Promise<void> {
+  const connected = controller.connectedNow;
+  if (connected === null) {
+    // **No dialog at all**: there is nothing to name, and a dialog whose only honest
+    // content is a refusal is a dialog nobody should have to escape from.
+    announcer.announce(nothingToSaveMessage);
+    return;
+  }
+  const answer = await saveConnectionDialog.ask(suggestion(connected), false);
+  if (answer.name === null) {
+    return;
+  }
+  await saveUnder(answer.name, saveConnectionDialog);
 }
 const aboutDialog = new AboutDialog(
   byId<HTMLDialogElement>('about-dialog'),
@@ -187,6 +299,8 @@ const aboutDialog = new AboutDialog(
 // neither platform can drift from the other by an edit to one of them (spec M3, decision 5).
 const menuActions = {
   connect: () => void connectDialog.open(),
+  newConnection: () => void newConnectionDialog.open(),
+  saveConnection: () => void saveConnection(),
   exit: () => void shell.exit(),
   help: () => helpDialog.open(),
   about: () => void aboutDialog.open(),
@@ -242,4 +356,17 @@ bindKeys(
 // **Focus is the controller's now**, because where it belongs depends on which of the two
 // faces the window opens with: the edit field when a launch brought a session, the Connect
 // button when it did not (spec A10). `WindowChrome.showTerminal` places it as it shows.
-void controller.start();
+//
+// **And then the launch switch, carried out here rather than behind the window's back**
+// (spec 26, decision 20). `acter --connect <name>` becomes a request the backend answers
+// and this acts on, through the same call the Connect dialog makes — so a saved SSH
+// connection asks its host-key and password questions in front of the person who can
+// answer them, which is what B9 already requires of every SSH attempt. A name nothing is
+// saved under leaves the window unconnected and says so.
+void controller.start().then(async () => {
+  if (await controller.carryOutTheLaunchSwitch()) {
+    // The same three sentences a connection made from a dialog gets, in the same order —
+    // except that a saved connection already has a name, so nothing is offered.
+    await afterConnecting();
+  }
+});

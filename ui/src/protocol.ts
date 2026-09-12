@@ -594,8 +594,24 @@ export type LineRevision =
 
 /**  What a menu item Acter answers itself asks for. */
 export type MenuAction = 
-/**  Open the Connect dialog — the same action the button and the Windows menu run. */
+/**
+ *  Open the Connect dialog — the list of saved connection names, and the same action
+ *  the button and the Windows menu run.
+ */
 "Connect" | 
+/**
+ *  Open the New connection dialog: the list of kinds, which is what Connect used to
+ *  open (spec 26, decisions 17 and 22).
+ */
+"NewConnection" | 
+/**
+ *  Name the session that is running, and save it (spec 26, decision 18).
+ * 
+ *  **Unconnected it opens no dialog** and says there is nothing to save, which is the
+ *  frontend's decision to make because only it knows whether there is a session behind
+ *  the window.
+ */
+"SaveConnection" | 
 /**  Open the help topic, at its first section, exactly as F1 does. */
 "Help" | 
 /**  Open the About dialog. */

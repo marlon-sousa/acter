@@ -18,9 +18,11 @@ import type {
   Connected,
   KeyAck,
   KeyPress,
+  LaunchRequest,
   LineOwner,
   MenuAction,
   ProfileId,
+  SavedConnections,
   SessionEvent,
   SessionId,
   SetUp,
@@ -70,6 +72,7 @@ export class TauriConnect implements ConnectApi {
   use(
     id: ProfileId,
     setUp: SetUp,
+    origin: string | null,
     listener: ConnectListener = {},
   ): Promise<Connected> {
     return new Promise<Connected>((resolve, reject) => {
@@ -123,6 +126,7 @@ export class TauriConnect implements ConnectApi {
       void invoke<AttemptId>('use_profile', {
         profile: id,
         setUp,
+        origin,
         steps,
       }).then((started) => {
         // The id is needed before any answer can be sent, and a question can in principle
@@ -135,6 +139,37 @@ export class TauriConnect implements ConnectApi {
 
   connected(): Promise<Connected | null> {
     return invoke<Connected | null>('connected');
+  }
+
+  // 26's saved connections: named actions and typed answers, and no key-and-value surface
+  // anywhere (spec 26, decision 11). Each of the three that change something rejects with
+  // the sentence the backend wrote, which is the shape `use` already has.
+  saved(): Promise<SavedConnections> {
+    return invoke<SavedConnections>('saved');
+  }
+
+  saveConnection(name: string): Promise<string> {
+    return invoke<string>('save_connection', { name });
+  }
+
+  renameConnection(from: string, to: string): Promise<string> {
+    return invoke<string>('rename_connection', { from, to });
+  }
+
+  forgetConnection(name: string): Promise<string> {
+    return invoke<string>('forget_connection', { name });
+  }
+
+  offerToSave(): Promise<boolean> {
+    return invoke<boolean>('offer_to_save');
+  }
+
+  stopOfferingToSave(): Promise<void> {
+    return invoke('stop_offering_to_save');
+  }
+
+  requestedAtLaunch(): Promise<LaunchRequest | null> {
+    return invoke<LaunchRequest | null>('requested_at_launch');
   }
 }
 

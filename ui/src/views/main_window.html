@@ -55,11 +55,28 @@
             >Acter</span
           >
           <ul role="menu" aria-label="Acter" hidden>
-            <!-- Connect comes before Exit because it is what this menu is mostly opened
-                 for: since B7 a window starts connected to nothing, and this item is the
-                 only way out of that state (spec A8). -->
+            <!-- Connect comes before the rest because it is what this menu is mostly
+                 opened for: since B7 a window starts connected to nothing, and this item
+                 is the way out of that state (spec A8).
+
+                 **New connection and Save connection joined it with spec 26** (decision
+                 22), in that order: Connect is the list of names somebody saved, New
+                 connection is the list of kinds, and Save connection names the session
+                 that is running. Neither new item takes a global shortcut on Windows,
+                 because which keystroke Acter claims is a keystroke-map decision and
+                 DESIGN's own three-layer rule owns it. -->
             <li role="none">
               <span role="menuitem" id="menu-connect" tabindex="-1">Connect</span>
+            </li>
+            <li role="none">
+              <span role="menuitem" id="menu-new-connection" tabindex="-1"
+                >New connection</span
+              >
+            </li>
+            <li role="none">
+              <span role="menuitem" id="menu-save-connection" tabindex="-1"
+                >Save connection</span
+              >
             </li>
             <li role="none">
               <span role="menuitem" id="menu-exit" tabindex="-1">Exit</span>
@@ -237,14 +254,18 @@
     </footer>
     <!-- About. A modal <dialog> rather than a native window: the platform traps focus
          and answers Escape for us, and it stays inside the webview, which is the whole
-         reason the menu bar above is in the document too (spec A7). Its four facts are
-         filled from the build by adapters/about_dialog.ts. -->
+         reason the menu bar above is in the document too (spec A7). Its facts are
+         filled from the build by adapters/about_dialog.ts — including what this build is
+         and where Acter keeps its settings, which is the cheapest answer to "where did
+         that go" for somebody who cannot go looking with a file manager (spec 26,
+         decision 5). -->
     <dialog id="about-dialog" aria-labelledby="about-title">
       <h1 id="about-title">About Acter</h1>
       <p id="about-name"></p>
       <p id="about-version"></p>
       <p id="about-copyright"></p>
       <p id="about-licence"></p>
+      <p id="about-settings"></p>
       <button id="about-close" type="button">Close</button>
     </dialog>
     <!-- Help. A modal <dialog> for About's reasons, and **deliberately not an application
@@ -287,9 +308,9 @@
            reason (spec B9): it names what is here and how to move through it, and the
            sections stay where a heading key can find them. -->
       <p id="help-summary">
-        Six short sections: what Acter is, moving around the window, who gets your keys,
-        connecting to a shell, sessions Acter has set up, and the dialog that asks. Use your
-        reader's heading key to move between them.
+        Seven short sections: what Acter is, moving around the window, who gets your keys,
+        connecting to a shell, saving a connection, sessions Acter has set up, and the
+        dialog that asks. Use your reader's heading key to move between them.
       </p>
 
       <!-- Focusable so the dialog can land on it, and out of the tab order because it is a
@@ -323,8 +344,9 @@
       </p>
       <p data-platform="macos">
         F1 opens this help, and so does Command and slash. Acter's menus are in the menu bar
-        at the top of the screen, with the rest of the Mac's menus: Connect is in the File
-        menu, and Command and K opens it from anywhere in the window.
+        at the top of the screen, with the rest of the Mac's menus: Connect, New connection
+        and Save connection are in the File menu, and Command and K, Command and N and
+        Command and S open them from anywhere in the window.
       </p>
       <p>
         Ctrl+C, pressed in the command line, stops the command that is running. In the
@@ -363,15 +385,17 @@
 
       <h2>Connecting to a shell</h2>
       <p>
-        A window with nothing running has one button, Connect. It opens a dialog with a list
-        of the kinds of shell you can start: Command Prompt, PowerShell, WSL, and a shell on
-        another computer over SSH.
+        There are two dialogs. Connect is the list of connections you have saved, and New
+        connection is the list of the kinds of shell you can start: Command Prompt,
+        PowerShell, WSL, and a shell on another computer over SSH. Both are in the File
+        menu, and the Connect button in an empty window opens the first of them.
       </p>
       <p>
         Some kinds need something more before they can start. WSL needs to know which
         distribution, PowerShell which edition, and SSH the computer and the account. That is
-        what the panel below the list is for, and it starts with nothing chosen, so nothing
-        is ever connected to on your behalf. Enter connects, from anywhere in the dialog.
+        what the panel below the list is for. In New connection it starts with nothing
+        chosen, so nothing is ever connected to on your behalf. Enter connects, from anywhere
+        in either dialog.
       </p>
       <p>
         While the connection is being made, a dialog says so and names what it is connecting
@@ -381,6 +405,42 @@
       <p>
         When a session ends, because you typed exit or the shell stopped, everything it
         printed stays in the results area and the Connect button comes back.
+      </p>
+
+      <!-- **Saved connections** (spec 26, decision 23). The section the entry rewrote this
+           topic for: what a saved connection is, that a password is never in one, that
+           editing the panel is for this attempt only, and where the settings folder is. -->
+      <h2>Saving a connection</h2>
+      <p>
+        A connection you have saved has a name you chose. Choosing that name in the Connect
+        dialog fills the panel in with everything the connection needs, so starting it again
+        is arrow and Enter.
+      </p>
+      <p>
+        Acter offers to save a connection once, just after a new one comes up. Only a
+        connection that actually worked is offered, so a name in your list is a name that
+        connected at least once. If you say Not now, nothing is saved and you can still save
+        it later from the File menu, under Save connection. The offer has a box for turning
+        it off altogether; the File menu item goes on working either way.
+      </p>
+      <p>
+        Changing something in the panel before you press Connect changes that one attempt
+        and nothing else. If you change a port and want to keep it, connect first and then
+        choose Save connection from the File menu, with the same name.
+      </p>
+      <p>
+        A password is never saved, and neither is a key passphrase. Both are asked for when
+        you connect, every time.
+      </p>
+      <p>
+        Rename gives a connection a different name. Forget removes it from the list, and
+        asks first, because it is the one thing here you cannot undo. Nothing on the computer
+        the connection reached is changed by either.
+      </p>
+      <p>
+        Everything Acter writes down — your saved connections, and the servers you told it to
+        trust — is in one folder. Help, then About Acter, reads out where that folder is on
+        this computer and how Acter came to be using it.
       </p>
 
       <!-- **The section the Connect dialog's Help button opens at**, which is why this
@@ -448,99 +508,206 @@
 
       <button id="help-close" type="button">Close</button>
     </dialog>
-    <!-- Connect. A modal <dialog> for About's reasons, and one more of its own: a failed
-         connection has to leave the user somewhere they can try again, which a submenu
-         that closed on activation could never do (spec A8, decision 4).
+    <!-- Connect. **The list of connection names somebody saved** (spec 26, decisions 12
+         to 16). It used to be the list of *kinds*, which is now New connection below; the
+         division is what the whole entry is about, because connecting to something you have
+         connected to before should be picking a name off a list rather than walking a list
+         of kinds and refilling a form.
 
-         **Two parts**: a list of connection kinds, and a panel below it holding whatever
-         that kind needs — nothing for cmd, the installed distributions for WSL, and the
-         reason plus the instructions for a kind this machine cannot start. Both are filled
-         by adapters/connect_dialog.ts from `connectable()`, asked fresh every time this
-         opens, so a distribution installed while Acter is running appears with no restart.
+         **Two parts**, exactly as New connection has: the names, and the shared panel
+         under them loaded from whichever name the listener is on — the SSH form filled in,
+         the distribution or edition selected, the checkbox as it was saved. Editing any of
+         it changes this attempt and writes nothing; keeping the change is File then Save
+         connection afterwards.
+
+         **Five buttons**: Connect, Rename, Forget, New connection and Cancel. There is no
+         Save, because saving happens from a live session and nowhere else.
+
+         **With nothing saved it still opens**, with the list replaced by a sentence saying
+         what to do about that and focus on New connection. The same place says so when the
+         settings document could not be read, naming both files. -->
+    <dialog id="connect-dialog" aria-labelledby="connect-title">
+      <!-- **The whole dialog is an application region**, not just its listbox, for the
+           reason New connection's is: NVDA reads a document in browse mode, where the
+           arrows move its own cursor and Enter acts on that cursor rather than on the
+           focus, and it switches to focus mode by itself only if the user left that setting
+           on. The role goes on a `div` inside rather than on the `<dialog>` itself, which
+           must keep announcing as a dialog. -->
+      <div role="application" aria-label="Connect">
+        <h1 id="connect-title">Connect</h1>
+        <!-- **Named "Saved connections"** (decision 12), because the dialog is already
+             called Connect and a list called the same thing says nothing new. -->
+        <ul
+          id="connect-names"
+          role="listbox"
+          aria-label="Saved connections"
+          tabindex="0"
+        ></ul>
+        <!-- What the dialog says instead of a list, when there is nothing in one. It is
+             prose to be read and it is focusable for the instructions panel's reason:
+             inside an application region prose cannot be arrowed, so without a tab stop
+             the one thing a listener needs here would be unreachable. -->
+        <p id="connect-empty" tabindex="0" hidden></p>
+        <div
+          id="connect-panel"
+          role="group"
+          aria-labelledby="connect-panel-title"
+          tabindex="-1"
+        >
+          <h2 id="connect-panel-title">Options</h2>
+          <div id="connect-panel-body"></div>
+        </div>
+        <!-- The set-up checkbox, loaded from the row like everything else in the panel
+             (spec B9.5, decision 9; spec 26, decision 13). Unticking it here changes this
+             attempt; keeping the change is Save connection afterwards. -->
+        <p>
+          <input id="connect-set-up" type="checkbox" checked />
+          <label for="connect-set-up"
+            >Let Acter set this session up so it can tell you more about what you
+            run</label
+          >
+        </p>
+        <button id="connect-start" type="button">Connect</button>
+        <button id="connect-rename" type="button">Rename</button>
+        <button id="connect-forget" type="button">Forget</button>
+        <button id="connect-new" type="button">New connection</button>
+        <button id="connect-cancel" type="button">Cancel</button>
+      </div>
+      <!-- This dialog's own live region, and it is not a duplicate. `showModal` makes
+           everything outside the dialog inert, so the announcer's region at the end of the
+           document changes where no reader is listening — measured with NVDA on
+           2026-08-26. The announcer finds this by its `data-live-region` attribute while
+           the dialog is open. -->
+      <div data-live-region aria-live="polite" class="visually-hidden"></div>
+    </dialog>
+    <!-- New connection. **A8's Connect dialog, renamed and otherwise unchanged** (spec 26,
+         decision 17): a list of connection kinds, the same panel under it, and no name
+         field — naming happens after the connection is up, because only a connection that
+         actually came up is worth saving.
+
+         A modal <dialog> for About's reasons, and one more of its own: a failed connection
+         has to leave the user somewhere they can try again, which a submenu that closed on
+         activation could never do (spec A8, decision 4).
 
          **Enter connects, from anywhere in it that is not a button.** Pressing Enter after
          making a choice is what every dialog on this platform does, and one that answers it
          in a single control is one you learn by failing — reported by the user on
          2026-08-26, who chose a distribution in the panel and got nothing. -->
-    <dialog id="connect-dialog" aria-labelledby="connect-title">
-      <!-- **The whole dialog is an application region**, not just its listbox. NVDA reads a
-           document in browse mode, where the arrows move its own cursor and Enter acts on
-           that cursor rather than on the focus — and it switches to focus mode by itself
-           only if the user left that setting on, which is a setting rather than a guarantee.
-           A dialog whose arrows and Enter depend on somebody's configuration is not a
-           dialog. The wrapper says the keys in here belong to the widget.
-
-           The role goes on a `div` inside rather than on the `<dialog>` itself, which must
-           keep announcing as a dialog.
-
-           **What it costs, and what pays for it.** Inside an application region prose cannot
-           be arrowed, so the instructions panel — which is read-only text a listener has to
-           be able to *read* — is focusable, and Tab reaches it. That is the price of the
-           arrows working for everybody rather than only for people who have changed a
-           setting. -->
-      <div role="application" aria-label="Connect">
-      <h1 id="connect-title">Connect</h1>
-      <ul
-        id="connect-kinds"
-        role="listbox"
-        aria-label="Connection kind"
-        tabindex="0"
-      ></ul>
-      <!-- The panel names itself, because what it holds changes as the kind changes and a
-           section a listener tabs into unannounced is the trap decision 2 exists to answer.
-           Its heading text is rewritten with its contents. -->
-      <div
-        id="connect-panel"
-        role="group"
-        aria-labelledby="connect-panel-title"
-        tabindex="-1"
-      >
-        <h2 id="connect-panel-title">Options</h2>
-        <div id="connect-panel-body"></div>
-      </div>
-      <!-- **The checkbox authorises, and the dialog it opens discloses** (spec B9.5,
-           decision 9). Ticked by default, because that is what makes an ordinary user hear a
-           told when a command failed without knowing the words this project uses.
-           A heading for each command is not what it buys — a session has those either way,
-           which the user caught this comment's own sentence claiming on 2026-08-30. Unticking it has to be reachable *without* the dialog ever appearing,
-           which is why it is here rather than only inside the dialog.
-
-           It sits between the panel and the buttons so Tab reaches it on the way to Connect,
-           which is the order somebody works through this dialog in. Its label is a whole
-           sentence for the reason every string in this product is: it is read aloud. -->
-      <p>
-        <input id="connect-set-up" type="checkbox" checked />
-        <label for="connect-set-up"
-          >Let Acter set this session up so it can tell you more about what you
-          run</label
+    <dialog id="new-connection-dialog" aria-labelledby="new-connection-title">
+      <div role="application" aria-label="New connection">
+        <h1 id="new-connection-title">New connection</h1>
+        <ul
+          id="new-kinds"
+          role="listbox"
+          aria-label="Connection kind"
+          tabindex="0"
+        ></ul>
+        <!-- The panel names itself, because what it holds changes as the kind changes and a
+             section a listener tabs into unannounced is the trap A8's decision 2 exists to
+             answer. Its heading text is rewritten with its contents. -->
+        <div
+          id="new-panel"
+          role="group"
+          aria-labelledby="new-panel-title"
+          tabindex="-1"
         >
-      </p>
-      <!-- **A way to find out what the box above does, next to the box** — reported by the
-           user on 2026-08-30. The checkbox is ticked by default and its label is one
-           sentence; what it actually turns on, what it costs to turn off, and the fact that
-           nothing runs without being shown first are three more, and an announcement is not
-           where any of that belongs. This opens the help topic that says it, at the section
-           that says it, and comes back to this button when it closes (spec A13, decision 2:
-           explained where a listener can read it at their own pace).
+          <h2 id="new-panel-title">Options</h2>
+          <div id="new-panel-body"></div>
+        </div>
+        <!-- **The checkbox authorises, and the dialog it opens discloses** (spec B9.5,
+             decision 9). Ticked by default, because that is what makes an ordinary user be
+             told when a command failed without knowing the words this project uses.
+             Unticking it has to be reachable *without* the dialog ever appearing, which is
+             why it is here rather than only inside the dialog.
 
-           It is a button rather than a link because there is nowhere to go: it opens a
-           dialog in this window. -->
-      <button id="connect-set-up-help" type="button">
-        Help with setting a session up
-      </button>
-      <button id="connect-start" type="button">Connect</button>
-      <button id="connect-cancel" type="button">Cancel</button>
+             It sits between the panel and the buttons so Tab reaches it on the way to
+             Connect, which is the order somebody works through this dialog in. -->
+        <p>
+          <input id="new-set-up" type="checkbox" checked />
+          <label for="new-set-up"
+            >Let Acter set this session up so it can tell you more about what you
+            run</label
+          >
+        </p>
+        <!-- **A way to find out what the box above does, next to the box** — reported by
+             the user on 2026-08-30. It opens the help topic that says it, at the section
+             that says it, and comes back to this button when it closes. -->
+        <button id="new-set-up-help" type="button">
+          Help with setting a session up
+        </button>
+        <button id="new-start" type="button">Connect</button>
+        <button id="new-cancel" type="button">Cancel</button>
       </div>
-      <!-- This dialog's own live region, and it is not a duplicate. `showModal` makes
-           everything outside the dialog inert, so the announcer's region at the end of the
-           document changes where no reader is listening — measured with NVDA on 2026-08-26,
-           where arrowing this list said nothing about the panel at all. The announcer
-           finds this by its `data-live-region` attribute while the dialog is open. -->
-      <div
-        data-live-region
-        aria-live="polite"
-        class="visually-hidden"
-      ></div>
+      <div data-live-region aria-live="polite" class="visually-hidden"></div>
+    </dialog>
+    <!-- Save connection (spec 26, decisions 18 and 19). One field, and the two shapes it
+         comes in: File then Save connection, and the offer Acter makes once after a new
+         connection comes up. In the offering shape the paragraph and the checkbox appear,
+         and Cancel reads "Not now" — there is nothing to cancel, and a listener who meets
+         Cancel on an offer they did not ask for is being told they interrupted something.
+
+         **Focus opens on the field with its text selected**, so typing replaces the
+         suggestion and a listener who likes it presses Enter. A refusal keeps the dialog
+         open with the sentence announced and focus back in the field, which is where
+         trying something else begins. -->
+    <dialog
+      id="save-connection-dialog"
+      aria-labelledby="save-connection-title"
+      aria-describedby="save-why"
+    >
+      <div role="application" aria-label="Save connection">
+        <h1 id="save-connection-title">Save connection</h1>
+        <p id="save-why"></p>
+        <label for="save-name">Name</label>
+        <input id="save-name" type="text" autocomplete="off" spellcheck="false" />
+        <p id="save-also-later" hidden></p>
+        <p hidden>
+          <input id="save-not-again" type="checkbox" />
+          <label for="save-not-again">Do not offer to save new connections</label>
+        </p>
+        <button id="save-ok" type="button">Save</button>
+        <button id="save-cancel" type="button">Cancel</button>
+      </div>
+      <div data-live-region aria-live="polite" class="visually-hidden"></div>
+    </dialog>
+    <!-- Rename connection (spec 26, decision 15). One field, prefilled and selected, and
+         two buttons. A collision or an illegal name is refused with the backend's own
+         sentence, announced by the dialog underneath. -->
+    <dialog
+      id="rename-connection-dialog"
+      aria-labelledby="rename-connection-title"
+      aria-describedby="rename-why"
+    >
+      <div role="application" aria-label="Rename connection">
+        <h1 id="rename-connection-title">Rename connection</h1>
+        <p id="rename-why">
+          Give this connection a different name. It is the same connection either way.
+        </p>
+        <label for="rename-name">Name</label>
+        <input id="rename-name" type="text" autocomplete="off" spellcheck="false" />
+        <button id="rename-ok" type="button">Rename</button>
+        <button id="rename-cancel" type="button">Cancel</button>
+      </div>
+    </dialog>
+    <!-- Forget connection (spec 26, decision 15). **The one thing in this product nobody
+         can undo**, which is why it asks. The question names the row and says what does
+         *not* change, because "forget" said of a connection is ambiguous in the
+         frightening direction — somebody has to know that nothing on the far end is
+         touched.
+
+         **Focus opens on Cancel**, so the answer Enter gives is the one that keeps the
+         connection, and the destructive button is one Tab away rather than unreachable. -->
+    <dialog
+      id="forget-connection-dialog"
+      aria-label="Forget connection"
+      aria-describedby="forget-why"
+    >
+      <div role="application" aria-label="Forget connection">
+        <h1>Forget connection</h1>
+        <p id="forget-why"></p>
+        <button id="forget-ok" type="button">Forget</button>
+        <button id="forget-cancel" type="button">Cancel</button>
+      </div>
     </dialog>
     <!-- **What is happening while a connection is being made** — reported by the user on
          2026-08-30, who pressed Enter on a connection kind and was put back on the list of

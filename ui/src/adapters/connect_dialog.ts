@@ -1,542 +1,241 @@
-// Role: adapter (DOM) — the Connect dialog: a list of connection kinds, a panel holding
-// whatever the chosen kind needs, and the three steps of connecting.
+// Role: adapter (DOM) — the Connect dialog: a list of the connection names somebody saved,
+// the shared panel loaded from whichever they are on, and five buttons.
 //
-// **Why this is a dialog and not a submenu** (spec A8). A submenu is the better shape for a
-// pure choice, and connecting to cmd or PowerShell is one. Connecting over SSH is not: a
-// host, a port, a user and a key are a form, and no submenu holds one. The alternatives were
-// two surfaces for one action — worst of all for somebody learning the application by ear —
-// or one surface that carries both.
+// **This is what File → Connect opens since spec 26** (decisions 12 to 16). It used to open
+// the list of *kinds*, which is now File → New connection and lives in
+// `new_connection_dialog.ts`. The division is what the whole entry is about: connecting to
+// something you have connected to before is picking a name off a list, and it should not
+// mean walking a list of kinds and refilling a form.
 //
-// It also earns its shape a second time on failure. A submenu that failed had nowhere to
-// put the user back; this stays open with the reason announced and focus where they can
-// choose something else.
+// **The list is alphabetical, without case, and stable** (decision 12). A listener learns
+// positions, so the order is never most-recent-first: a list that reorders itself under
+// somebody is a list they have to read from the top every time. Focus lands on the first
+// name, so the everyday case is open, arrow, Enter.
 //
-// **It does not hold the listener while the connection is made** (reported 2026-08-30). It
-// stays open, its controls unavailable, underneath a dialog that says what is happening —
-// because being sent back to the list of kinds you have just pressed Enter on is this dialog
-// saying that nothing happened, for as long as a cold distribution takes to come up.
+// **Arrowing loads the panel and never moves focus** (decision 13), and the panel is loaded
+// with the row's own values: the SSH form filled in, the distribution or edition selected,
+// the set-up checkbox as it was saved.
 //
-// **The kinds and the variants are a deliberate division** (decision 3). This module knows
-// what a kind *looks like* — that is what a view is for, and a backend describing its own
-// controls would be a user interface written in Rust and reachable by no test. It knows no
-// variants at all: which PowerShell editions are installed, which distributions exist, which
-// connections the user saved are all `connectable()`'s answer, asked fresh every time this
-// opens so a distribution installed while Acter is running appears without a restart.
+// **Edits in the panel apply to this attempt only** (decision 14). Changing the port and
+// pressing Connect connects to that port and writes nothing; keeping the change is File →
+// Save connection afterwards, which the help says in one sentence.
+//
+// **There is no Save here** (decision 15), because saving happens from a live session and
+// nowhere else — so there is one way to save rather than two.
 
+import { ConnectionPanel, kindFor } from './connection_panel';
 import { keepTabInside } from './dialog_tab';
 import { OptionList } from './option_list';
 import type { AnnouncerView } from '../ports/announcer_view';
 import type { ConnectApi } from '../ports/connect_api';
-import type { HelpView } from '../ports/help_view';
-import type { Connectable, ProfileId, SetUp } from '../protocol';
-
-/** What the panel says when the chosen kind needs nothing. */
-const NO_OPTIONS = 'no options';
-
-/** The section of the help topic that explains the checkbox this dialog carries. */
-const SET_UP_TOPIC = 'help-setting-up';
-
-/** What is missing when a kind with variants has none of them chosen. */
-function chooseOneFirst(row: Connectable): string {
-  return `choose a ${noun(row)} first`;
-}
+import type { Connectable, ProfileId, SavedRow, SetUp } from '../protocol';
 
 /**
- * The fields an SSH connection needs, in the order they are filled in.
+ * What the dialog says where the list would be when nothing is saved (decision 16).
  *
- * **Three fields and a port, rather than one box holding `user@host:port`.** A spelling has
- * to be parsed and can be got wrong, and getting it wrong for somebody who cannot see the
- * box is a silent failure; these are the facts themselves (spec B9). The port is filled in
- * with 22, because that is what it is unless somebody moved it.
+ * **The empty list says what to do about itself**, which is the unconnected window's own
+ * rule: one place to learn, and nothing that leaves a listener in front of a container with
+ * no contents and no next step.
  */
-const SSH_FIELDS = [
-  { name: 'host', label: 'Host', type: 'text', value: '' },
-  { name: 'port', label: 'Port', type: 'number', value: '22' },
-  { name: 'user', label: 'Account', type: 'text', value: '' },
-] as const;
+export const NOTHING_SAVED =
+  'No saved connections yet. New connection starts one, and Acter offers to save it once ' +
+  'it is up.';
 
-/** Whether this row is the one that needs a form. */
-function isSsh(row: Connectable): boolean {
-  return row.id.profile === 'Ssh';
-}
-/** What it says for a kind this machine cannot start; the instructions follow it. */
+/** What is said when a row that is not available is arrowed onto (decision 13). */
 const NOT_AVAILABLE = 'not available';
-/** The heading over the SSH form — what the panel *is*, rather than how many boxes. */
-const DETAILS = 'Connection details';
 
-/**
- * What a listener is told the panel now holds when they arrow onto a kind.
- *
- * **Counted and named, not just "options"**: "2 distributions" tells somebody whether it is
- * worth tabbing into the panel at all, which "the panel changed" does not. The noun comes
- * from the variants' own shape, which is this side's knowledge by decision 3 — the backend
- * says which things exist, the frontend says what they are called on screen.
- */
-export function panelSummary(row: Connectable): string {
-  if (!row.available) {
-    return NOT_AVAILABLE;
-  }
-  // **The one kind that is a form rather than a choice** (spec A8, decision 1), and the
-  // one whose panel is not a count of anything: three empty boxes is how much typing there
-  // is, not what there is to choose between.
-  if (isSsh(row)) {
-    return DETAILS;
-  }
-  if (row.variants.length === 0) {
-    return NO_OPTIONS;
-  }
-  const count = row.variants.length;
-  return `${count} ${noun(row)}${count === 1 ? '' : 's'}`;
-}
-
-/**
- * Whether arrowing onto this row is worth saying anything about.
- *
- * **Only when the kind cannot be started at all — A8 decision 2 reversed on use,
- * 2026-08-26**, reported by the user driving the real dialog: "better to remove these
- * announcements for all list items", with "not available" kept.
- *
- * That decision announced what the panel now holds, on the reasoning that a section
- * changing silently under a listener is a trap. The reasoning was sound and the case it
- * was built on turns out to be rare: most rows have nothing worth saying, so what the
- * summary actually adds is a second utterance between every arrow press and the next,
- * paid on every navigation for a benefit that lands occasionally. "No options" is a
- * sentence about a container that is empty; "3 fields" counts boxes nobody chooses
- * between. Both are the panel talking about itself.
- *
- * What survives is the one that is a fact rather than a description: a kind this machine
- * cannot start says so, and the instructions under it are the point of the panel.
- */
-function worthSaying(row: Connectable): boolean {
-  return !row.available;
-}
-
-/**
- * What this kind's variants are called on screen.
- *
- * **The frontend's knowledge, by A8's decision 3**: the backend says which things exist, and
- * what they are called in a user interface is this side's. It is read off the variant's own
- * shape rather than from the row, because that is the fact that decides it — a distribution
- * is a distribution whichever kind carried it.
- */
-function noun(row: Connectable): string {
-  const variant = row.variants[0]?.id;
-  switch (variant?.profile) {
-    case 'Distribution':
-      return 'distribution';
-    // **Two shapes, one noun, since B5.7.** A variant that names a kind is an edition this
-    // machine does not have; one that names an *install* is an edition it does, carrying the
-    // file the list already resolved (spec B5.7, decision 1). Both are editions to a
-    // listener, and the panel would otherwise call them "options" on every machine that has
-    // PowerShell at all.
-    //
-    // **Except on a Mac, where the same two shapes carry shells** (spec M2). A Terminal row's
-    // variants are `/bin/zsh` and its neighbours, and calling those editions would name them
-    // after a Windows product a listener has never met. The kind is what decides it, which is
-    // the fact this switch was already reading one level up.
-    case 'Shell':
-    case 'Install':
-      return variant.kind === 'Terminal' ? 'shell' : 'edition';
-    default:
-      return 'option';
-  }
+/** What Forget asks before it does the one thing here nobody can undo (decision 15). */
+export function forgetting(name: string): string {
+  return (
+    `Forget ${name}? It is removed from this list. Nothing on the computer it connected ` +
+    'to changes.'
+  );
 }
 
 /** What the dialog needs of whoever actually connects: did it work. */
-export interface ConnectAction {
+export interface ConnectSaved {
   /**
-   * Start this profile. Resolves true when the window is on it now, false when it could
-   * not be started — in which case the reason has already been announced and this dialog
-   * stays open (decision 4).
-   *
-   * `setUp` is the checkbox below the panel: whether this connection may run one command
-   * inside the session once it is established (spec B9.5, decision 9). It travels with the
-   * attempt rather than being stored, because there is no profile store to keep it in until
-   * B8 — which is also why it is read here, at the moment Connect is pressed, rather than
-   * remembered anywhere.
+   * Start this profile, as the saved connection `origin` — so who holds the line follows
+   * what was saved, and the window does not offer to save something it already has a name
+   * for (spec 26, decisions 11 and 19).
    */
-  (id: ProfileId, setUp: SetUp): Promise<boolean>;
+  (id: ProfileId, setUp: SetUp, origin: string | null): Promise<boolean>;
+}
+
+/** What it needs of the two dialogs it opens on top of itself. */
+export interface Asking {
+  /** Ask for a new name, prefilled and selected, and answer it or `null` for cancel. */
+  rename(name: string): Promise<string | null>;
+  /**
+   * Put this question, and answer whether they said yes.
+   *
+   * **It takes the question rather than the name**, because the words are this module's:
+   * they sit beside the empty-list sentence, where every other string this dialog says
+   * lives, rather than in the composition root — which constructs objects and decides no
+   * wording at all.
+   */
+  forget(question: string): Promise<boolean>;
 }
 
 export class ConnectDialog {
-  private rows: Connectable[] = [];
-  /** Whether an attempt is in flight, so a second one cannot be started into it. */
+  private rows: SavedRow[] = [];
+  /** What this machine offers, so a saved row can be loaded into the same panel. */
+  private kinds: Connectable[] = [];
   private attempting = false;
-  /**
-   * The panel's own list, while the chosen kind has variants to put in one.
-   *
-   * Rebuilt with the panel rather than kept and refilled, because the panel is rebuilt: a
-   * list belonging to the kind before this one is exactly the choice that must not survive.
-   */
-  private variants: OptionList | null = null;
-  /** The kinds, as the one widget they have always been (spec A8, decision 2). */
-  private readonly kindList: OptionList;
+  private readonly nameList: OptionList;
+  private readonly panel: ConnectionPanel;
 
   constructor(
     private readonly dialog: HTMLDialogElement,
-    private readonly kinds: HTMLElement,
-    private readonly panelTitle: HTMLElement,
-    private readonly panelBody: HTMLElement,
+    private readonly names: HTMLElement,
+    private readonly empty: HTMLElement,
+    panelTitle: HTMLElement,
+    panelBody: HTMLElement,
     private readonly connect: ConnectApi,
-    private readonly start: ConnectAction,
+    private readonly start: ConnectSaved,
     private readonly announcer: AnnouncerView,
     private readonly returnTo: { focus(): void },
-    // **Where Enter goes now** (reported 2026-08-30): the dialog that says a connection is
-    // being made, rather than the list of kinds this used to bounce back to.
     private readonly connecting: { show(label: string): void; hide(): void },
-    // And what the Help button beside the set-up checkbox opens, at the section about it.
-    private readonly help: HelpView,
-    // What names the far end the listener is now on, called after this dialog has closed and
-    // focus has gone back to the edit field (roadmap 13.3). The words are the controller's;
-    // when they are said is this dialog's, because only it knows when it is out of the way.
+    private readonly asking: Asking,
+    /** What New connection opens, after this dialog has closed (decision 15). */
+    private readonly newConnection: () => void,
     private readonly sayConnected: () => void = () => {},
   ) {
-    // Escape is the platform's, and so is closing; where focus belongs afterwards is not,
-    // because what opened this was a menu that no longer exists (spec A7, decision 3).
-    this.dialog.addEventListener('close', () => this.returnTo.focus());
-    // Tab past the last control lands on the dialog's own document rather than cycling —
-    // measured with NVDA 2026.1.1 on 2026-08-26, where Tab past Cancel announced "dialog
-    // Connect" and left the reader nowhere. The platform does not do this for us.
-    this.dialog.addEventListener('keydown', (event) =>
-      keepTabInside(this.dialog, event),
-    );
-    this.dialog.addEventListener('keydown', (event) => this.enterConnects(event));
-    // Arrowing the kinds moves the selection and never moves focus, which is the widget
-    // rather than this module: `OptionList` owns the keys, the ids and the marking, and
-    // both lists in this dialog are one now (reported 2026-08-30).
-    this.kindList = new OptionList(this.kinds, 'connect-kind', () => {
-      this.showPanel();
-      this.describe();
+    this.panel = new ConnectionPanel(panelTitle, panelBody, announcer, 'saved', {
+      changed: () => this.followTheChoice(),
     });
-    this.dialog
-      .querySelector('#connect-cancel')
-      ?.addEventListener('click', () => this.dialog.close());
-    this.dialog
-      .querySelector('#connect-start')
-      ?.addEventListener('click', () => void this.chosen());
-    // The one control here that opens something rather than doing something: what the
-    // checkbox above it turns on is four sentences, and an announcement is not where any of
-    // them belong (spec A13, decision 2). Focus comes back to this button, because the
-    // dialog it opens sits on top of one that is still here.
-    const helpButton = this.dialog.querySelector<HTMLElement>('#connect-set-up-help');
-    helpButton?.addEventListener('click', () =>
-      this.help.open({ topic: SET_UP_TOPIC, returnTo: helpButton }),
+    this.dialog.addEventListener('close', () => this.returnTo.focus());
+    this.dialog.addEventListener('keydown', (event) => keepTabInside(this.dialog, event));
+    this.dialog.addEventListener('keydown', (event) => this.enterConnects(event));
+    this.nameList = new OptionList(this.names, 'connect-name', () =>
+      this.showPanel(true),
     );
+    this.on('#connect-cancel', () => this.dialog.close());
+    this.on('#connect-start', () => void this.chosen());
+    this.on('#connect-rename', () => void this.rename());
+    this.on('#connect-forget', () => void this.forget());
+    // **It closes this one first, because dialogs do not stack** (decision 15). Cancel from
+    // the New connection dialog returns to the window rather than to this list, which is
+    // one dialog to escape from rather than two.
+    this.on('#connect-new', () => {
+      this.dialog.close();
+      this.newConnection();
+    });
+  }
+
+  private on(selector: string, act: () => void): void {
+    this.dialog.querySelector(selector)?.addEventListener('click', act);
   }
 
   /**
-   * Open it, with the list asked for afresh.
+   * Open it, with the saved connections and the machine's kinds asked for afresh.
    *
-   * Opening an already-open dialog throws `InvalidStateError` and throws it silently into a
-   * `void` call, and a menu item chosen twice is an ordinary thing — so this answers rather
-   * than breaking, exactly as the About dialog does.
+   * Both are asked every time for `connectable`'s reason (spec B7, decision 6): a
+   * distribution installed while Acter was open, and a connection saved in another window,
+   * are both true the next time this opens without a restart.
    */
   async open(): Promise<void> {
     if (this.dialog.open) {
       return;
     }
-    this.rows = await this.connect.connectable();
-    this.render();
+    await this.reload();
     this.dialog.showModal();
-    // Focus goes to the list rather than to the dialog, so the first thing a listener hears
-    // after the dialog names itself is the kind they are on rather than a container.
-    this.kinds.focus();
-    // **Only if there is something in the panel**, unlike a kind *change*, which always
-    // says what the panel now holds. The reader reads the dialog as it opens, and a
-    // live region inside it that already has text is read along with everything else —
-    // so an unconditional announcement here was heard twice, a second apart (measured
-    // with NVDA 2026.1.1 on 2026-08-26). Nothing is hidden by staying quiet: an empty
-    // panel is not a change a listener has to be told about on arrival.
-    if (this.hasPanelContent()) {
-      this.describe();
-    }
+    this.focusStart();
   }
 
-  private hasPanelContent(): boolean {
-    const row = this.row;
-    return row !== undefined && worthSaying(row);
-  }
-
-  /** The kinds, as options; the panel, for whichever is chosen. */
-  private render(): void {
-    // Selected from the first render rather than only when the selection moves: it is what
-    // makes the reader announce the kind — with its position in the list — as focus arrives,
-    // which is a listbox naming itself rather than this module announcing it.
-    //
-    // **A kind is always chosen and a variant is not.** Opening onto a kind is opening onto
-    // something you can connect to; opening onto a distribution would be the browser
-    // choosing for you, which is the whole of the 2026-08-30 report.
-    this.kindList.fill({
-      labels: this.rows.map((row) => row.label),
+  /** Ask again and redraw, which is what Rename and Forget do to themselves. */
+  private async reload(): Promise<void> {
+    const [saved, kinds] = await Promise.all([
+      this.connect.saved(),
+      this.connect.connectable(),
+    ]);
+    this.rows = saved.rows;
+    this.kinds = kinds;
+    // **The one place a document that would not parse is reported** (decisions 9 and 16).
+    // It takes the place of the empty-list sentence, names both files and says what was
+    // wrong with the first — because there is nothing saved either way, and the difference
+    // is whether the person should go looking for a file.
+    this.empty.textContent = saved.unreadable ?? NOTHING_SAVED;
+    this.empty.hidden = this.rows.length > 0;
+    this.names.hidden = this.rows.length === 0;
+    this.nameList.fill({
+      labels: this.rows.map((row) => row.name),
       selected: this.rows.length === 0 ? null : 0,
     });
-    this.showPanel();
+    // **Nothing is announced here** (decision 13): what a listener hears as the dialog
+    // opens is the name focus lands on, said by the listbox itself. An announcement on top
+    // of that was heard twice, a second apart, when A8 tried it in the kinds dialog.
+    this.showPanel(false);
   }
 
-  private get row(): Connectable | undefined {
-    const at = this.kindList.chosen();
+  /**
+   * Where focus lands as the dialog opens: the first name, or New connection when there is
+   * nothing to arrow (decision 16).
+   */
+  private focusStart(): void {
+    if (this.rows.length === 0) {
+      this.dialog.querySelector<HTMLElement>('#connect-new')?.focus();
+      return;
+    }
+    this.names.focus();
+  }
+
+  private get row(): SavedRow | undefined {
+    const at = this.nameList.chosen();
     return at === null ? undefined : this.rows[at];
   }
 
   /**
-   * The panel for the chosen kind: nothing at all when it needs nothing, a list of its
-   * variants when it has them, and what to do about it when this machine cannot start it.
+   * Load the panel from the row the listener is on, and say the one line describing it
+   * (decision 13).
    *
-   * The variants are a `<select>` deliberately. A second listbox would be a second widget
-   * needing its own arrow handling and its own mode, where a combo box is something a
-   * listener can open with `Alt+Down` and arrow from any mode — one of the gestures the
-   * platform's accessibility contract assumes every user has.
+   * The set-up checkbox goes with it, because it is one of the two settings a saved
+   * connection holds and the panel it belongs beside has just been loaded from the same
+   * row.
    */
-  private showPanel(): void {
+  private showPanel(announce: boolean): void {
     const row = this.row;
     if (row === undefined) {
+      this.panel.show(undefined, null, null);
       return;
     }
-    this.panelTitle.textContent = panelSummary(row);
-    const document = this.panelBody.ownerDocument;
-    this.panelBody.replaceChildren();
-    // The list that was here belonged to the kind before this one, and a choice made in it
-    // is exactly what must not survive into this one.
-    this.variants = null;
-    // The button comes back on the way out of a kind that could be incomplete — a form, or
-    // a list nobody had chosen from — and the branches that build one of those ask
-    // `formFilled` for themselves before they are done.
-    const start = this.dialog.querySelector<HTMLButtonElement>('#connect-start');
-    if (start !== null && !this.attempting) {
-      start.disabled = false;
-    }
-
-    if (!row.available) {
-      // The instructions are prose to be *read*: what is missing, what to type, and where
-      // (spec B5.4, decision 4). They are the backend's words, not this module's.
-      this.panelBody.append(this.instructions(row.instructions ?? ''));
-      return;
-    }
-    if (isSsh(row)) {
-      this.showSshForm();
-      return;
-    }
-    if (row.variants.length === 0) {
-      return;
-    }
-    // **A list, and not a combo box** — asked for by the user on 2026-08-30, and it retires
-    // A8's amendment D. That amendment chose a `<select>` because a second listbox would be
-    // a second widget with its own arrow handling; the arrow handling turned out to be worth
-    // sharing rather than avoiding, and it lives in `OptionList` now.
-    //
-    // What the list buys is the state a combo box cannot hold: **nothing selected**. A
-    // `<select>` selects its first option for you, so a listener who chose WSL and pressed
-    // Enter connected to whichever distribution came first — a choice they never made and
-    // never heard. Spelling that as an option reading "not chosen" worked and read badly:
-    // it is a row in a list of things you can connect to that is not a thing you can connect
-    // to. A list simply starts with none of them chosen.
-    const list = document.createElement('ul');
-    list.id = 'connect-variant';
-    list.setAttribute('role', 'listbox');
-    list.tabIndex = 0;
-    // Capitalised because it names a control rather than counting things: "Distribution",
-    // "Edition". The summary above it does the counting.
-    const which = noun(row);
-    list.setAttribute(
-      'aria-label',
-      which.charAt(0).toUpperCase() + which.slice(1),
+    this.panel.show(
+      kindFor(this.kinds, row.id),
+      row.id,
+      row.available ? null : row.instructions,
     );
-    this.panelBody.append(list);
-    // **A variant can be unavailable while its kind is not** — PowerShell 7 on a machine
-    // that only has Windows PowerShell — so what to do about it has to appear when it is
-    // chosen, and be *said*, because a panel that changes silently under a listener is the
-    // trap decision 2 exists to answer.
-    this.variants = new OptionList(list, 'connect-variant', () => {
-      this.showVariantInstructions(row);
-      // Connect follows the choice, exactly as it follows the SSH form: there is nothing to
-      // connect to until one is made.
-      this.formFilled();
-      const chosen = this.variant(row);
-      if (chosen !== undefined && !chosen.available) {
-        this.announcer.announce(NOT_AVAILABLE);
-      }
-    });
-    this.variants.fill({
-      labels: row.variants.map((variant) => variant.label),
-      selected: null,
-    });
-    this.showVariantInstructions(row);
-    // The button follows the panel here exactly as it follows the SSH form: this one has
-    // just been rebuilt with nothing chosen in it, so there is nothing to connect to yet.
-    this.formFilled();
-  }
-
-  /**
-   * The form for a far end that is not on this machine.
-   *
-   * **Ordinary labelled inputs, and no widget of its own.** A text box inside an
-   * application region is one of the few things that behaves identically in every reading
-   * mode, so this is the part of the dialog that needs the least explaining — which is
-   * exactly what a form asking for a host and an account should be.
-   */
-  private showSshForm(): void {
-    const document = this.panelBody.ownerDocument;
-    for (const field of SSH_FIELDS) {
-      const label = document.createElement('label');
-      label.htmlFor = `connect-ssh-${field.name}`;
-      label.textContent = field.label;
-      const input = document.createElement('input');
-      input.id = `connect-ssh-${field.name}`;
-      input.type = field.type;
-      input.value = field.value;
-      // Nothing here is remembered between openings: a saved connection is B8's, and a
-      // form that half-remembered would be a form a listener has to check before trusting.
-      input.autocomplete = 'off';
-      // **The button follows the form** — reported by the user on 2026-08-26: "why is the
-      // connect button ever enabled when information isn't complete?"
-      input.addEventListener('input', () => this.formFilled());
-      this.panelBody.append(label, input);
+    this.setUpBox(row.set_up);
+    if (!announce) {
+      return;
     }
-    this.formFilled();
+    // **The kind and what identifies it, in one line** (decision 13) — composed in the
+    // domain, because every other spoken string on this seam is. A row that cannot be
+    // started says so instead, which is the fact rather than the description.
+    this.announcer.announce(row.available ? row.summary : NOT_AVAILABLE);
   }
 
-  /**
-   * Keep Connect available only while there is something to connect to.
-   *
-   * **A8 decision 4 does not reach this case, and applying it here was the mistake.** That
-   * decision keeps Connect enabled for a kind this machine cannot start, so pressing it
-   * answers with the instructions — useful, because nothing you do in the dialog changes
-   * that. An empty host is not that: it is a form you have not finished, and the answer is
-   * not information you lacked, and the old shape only told you after a round trip you had
-   * to wait for.
-   *
-   * **What a disabled button is not is an announcement**, and the note here used to claim
-   * otherwise: "tabbing to it and hearing 'unavailable' says the form is incomplete".
-   * Measured with NVDA 2026.1.1 on 2026-08-30 — Tab went from the Help button straight to
-   * Cancel, because `keepTabInside` filters disabled controls out of the cycle, which it
-   * does deliberately and for a good reason of its own. So a listener never meets the
-   * disabled button at all, and what tells them is `chosen`'s sentence when Enter cannot
-   * connect. The button being unavailable is still right; it is simply not the thing that
-   * speaks.
-   *
-   * The backend keeps refusing an empty host with its own sentence, because a profile can
-   * arrive from somewhere that is not this form.
-   */
-  private formFilled(): void {
+  /** Connect follows the panel exactly as it does in the New connection dialog. */
+  private followTheChoice(): void {
     const start = this.dialog.querySelector<HTMLButtonElement>('#connect-start');
-    if (start === null) {
+    if (start === null || this.attempting) {
       return;
     }
-    start.disabled = !this.startable();
+    start.disabled = this.row === undefined || !this.panel.startable();
   }
 
-  /**
-   * Whether there is something to connect to at all.
-   *
-   * **One condition, asked in both places** — reported by the user on 2026-08-26: pressing
-   * Enter on the SSH row with every field blank started an attempt and answered with the
-   * backend's error, because `enterConnects` reaches `chosen` directly and never consulted
-   * the button it was standing in for. A disabled button that Enter walks straight past is
-   * not a disabled button; it is a lie told to whoever tabbed to it.
-   *
-   * Every kind that is not a form is startable as it stands, which is what the `true` at
-   * the end says: only the row that asks for details can be incomplete.
-   */
-  private startable(): boolean {
-    const row = this.row;
-    if (row === undefined) {
-      return true;
+  private setUpBox(set_up: SetUp): void {
+    const box = this.dialog.querySelector<HTMLInputElement>('#connect-set-up');
+    if (box !== null) {
+      box.checked = set_up === 'Yes';
     }
-    // **A kind with variants is incomplete until one of them is chosen** (reported
-    // 2026-08-30), which is the SSH form's rule reaching the other shape of the same
-    // question: a panel nobody has answered is a panel nobody has answered, whether it asks
-    // for a host or for a distribution.
-    if (!isSsh(row) && row.variants.length > 0) {
-      return this.variant(row) !== undefined;
-    }
-    if (!isSsh(row)) {
-      return true;
-    }
-    const filled = (name: string): boolean =>
-      (this.panelBody
-        .querySelector<HTMLInputElement>(`#connect-ssh-${name}`)
-        ?.value.trim() ?? '') !== '';
-    return filled('host') && filled('user');
   }
 
-  /** What the form was filled in with, as the profile that starts it. */
-  private sshProfile(fallback: ProfileId): ProfileId {
-    const read = (name: string): string =>
-      this.panelBody
-        .querySelector<HTMLInputElement>(`#connect-ssh-${name}`)
-        ?.value.trim() ?? '';
-    const host = read('host');
-    if (host === '') {
-      // **Left to the backend to refuse**, with the sentence it already has for an unfilled
-      // form — one path, one place the words are decided, and no disabled control that
-      // reads differently from how it looks (the reasoning decision 4 applies to an
-      // unavailable kind).
-      return fallback;
-    }
-    const port = Number(read('port'));
-    return {
-      profile: 'Ssh',
-      host,
-      port: Number.isFinite(port) && port > 0 ? port : 22,
-      user: read('user'),
-    };
+  private setUp(): SetUp {
+    const box = this.dialog.querySelector<HTMLInputElement>('#connect-set-up');
+    return box === null || box.checked ? 'Yes' : 'No';
   }
 
-  /** What to do about the chosen variant, when there is nothing to be done with it. */
-  private showVariantInstructions(row: Connectable): void {
-    const existing = this.panelBody.querySelector('[data-instructions]');
-    existing?.remove();
-    const chosen = this.variant(row);
-    if (chosen === undefined || chosen.available) {
-      return;
-    }
-    this.panelBody.append(this.instructions(chosen.instructions ?? ''));
-  }
-
-  /**
-   * Read-only prose, made focusable.
-   *
-   * The dialog is an application region, and prose inside one cannot be arrowed — so without
-   * a tab stop the one thing a user of an unavailable kind actually needs would be
-   * unreachable.
-   */
-  private instructions(text: string): HTMLElement {
-    const said = this.panelBody.ownerDocument.createElement('p');
-    said.setAttribute('data-instructions', '');
-    said.tabIndex = 0;
-    said.textContent = text;
-    return said;
-  }
-
-  /**
-   * Say what the panel now holds (decision 2).
-   *
-   * **The kind itself is not repeated here**, because the listbox has already said it: the
-   * reader announces the option and its position from `aria-activedescendant`, and an
-   * announcement that began with the label again made a listener hear "Command Prompt" twice
-   * for one arrow press (measured with NVDA 2026.1.1 on 2026-08-26). What this adds is the
-   * half no widget can say for itself — that a second control below has changed.
-   */
-  private describe(): void {
-    const row = this.row;
-    if (row === undefined || !worthSaying(row)) {
-      return;
-    }
-    this.announcer.announce(panelSummary(row));
-  }
-
-  /**
-   * **Enter is the dialog's default action, from anywhere in it.**
-   *
-   * It used to be handled on the kinds list alone, which meant a user who tabbed into the
-   * panel, chose a distribution and pressed Enter got nothing at all — reported by the user
-   * on 2026-08-26, choosing Debian. Pressing Enter after making a choice is what every
-   * dialog on this platform does, and a dialog that answers it in one of its controls and
-   * not the others is one you have to learn by failing.
-   *
-   * A button is left alone, because it answers Enter itself: catching it here would connect
-   * when the user pressed Cancel.
-   */
+  /** Enter connects from anywhere in the dialog that is not a button, as today. */
   private enterConnects(event: KeyboardEvent): void {
     if (event.key !== 'Enter') {
       return;
@@ -549,84 +248,121 @@ export class ConnectDialog {
   }
 
   /**
-   * Connect to what is chosen: the variant if the panel offered any, the kind itself
-   * otherwise — which for WSL means whatever distribution WSL calls the default.
+   * Connect to the name the listener is on, with whatever the panel now holds.
    *
-   * **A kind this machine cannot start is not a special case here**, and deliberately. The
-   * button stays enabled and the call goes through, because the backend refuses it with the
-   * very instructions the panel is showing — one path, one place the words are decided, and
-   * no disabled control that reads differently from how it looks.
+   * **The panel's current values, and nothing is written** (decision 14): changing the port
+   * and pressing Connect connects to that port, and keeping the change is File → Save
+   * connection afterwards.
    */
   private async chosen(): Promise<void> {
     const row = this.row;
-    if (row === undefined) {
+    if (row === undefined || this.attempting) {
       return;
     }
-    // **Nothing in here can be pressed while an attempt is running** — reported by the
-    // user on 2026-08-26, who was left focused on the Connect button for the seconds a
-    // connection took, and could press it again into the attempt already in flight. For
-    // somebody navigating by focus, sitting on a control called Connect *is* being told
-    // that connecting has not started.
-    //
-    // It also covers the gap between two questions: the password dialog closes, the next
-    // one does not exist yet, and without this there is a moment where focus falls back
-    // onto live controls belonging to a conversation still in progress.
-    if (this.attempting) {
-      return;
-    }
-    // **Not silently, though.** A disabled Connect says what it says only to somebody who
-    // tabs to it, and Enter is the key this dialog answers from everywhere — so an Enter
-    // that cannot connect says what is missing rather than nothing at all, which is the
-    // difference between a dialog you learn and one you learn by failing.
-    if (!this.startable()) {
-      if (!isSsh(row) && row.variants.length > 0) {
-        this.announcer.announce(chooseOneFirst(row));
+    if (!this.panel.startable()) {
+      const missing = this.panel.missing();
+      if (missing !== null) {
+        this.announcer.announce(missing);
       }
       return;
     }
-    // **Forward, into the dialog that says what is happening** — reported by the user on
-    // 2026-08-30, who pressed Enter and was put back on the list of kinds. Shown before the
-    // controls are disabled, so focus moves into it rather than off a control that is being
-    // taken away underneath it.
-    this.connecting.show(this.chosenLabel(row));
+    this.connecting.show(row.name);
     this.busy(true);
-    const started = await this.start(this.profile(row), this.setUp());
+    const started = await this.start(
+      this.panel.profile(row.id),
+      this.setUp(),
+      // **The name this attempt started from** (decision 11), so who holds the line
+      // follows what was saved and the window does not offer to save it again.
+      row.name,
+    );
     this.busy(false);
     this.connecting.hide();
     if (started) {
-      // Closing puts focus back in the edit field.
       this.dialog.close();
-      // **And only now is the far end named** (roadmap 13.3 and 23.13, fixed 2026-08-30).
-      // The sentence describes the window the listener is now in rather than the dialog they
-      // have left, and saying it while these dialogs were still up was how it went missing:
-      // it drained into a dialog's live region that was taken away underneath it, or into the
-      // document's in the same millisecond that region came back. Both are lost, and the
-      // second is why the order alone is not enough — a region that has just returned eats
-      // the first change made to it, so the announcer is told to spend a wordless one first.
       this.announcer.documentReturned();
       this.sayConnected();
       return;
     }
-    // **Back to the list, not left on whatever was pressed** — reported by the user on
-    // 2026-08-26, who was returned to the Cancel button after a connection was refused.
-    // Decision 4 keeps this dialog open on failure precisely so somebody can choose again,
-    // and a listener parked on Cancel has been handed the one control that gives up.
-    this.kinds.focus();
-    this.describe();
+    this.names.focus();
   }
 
   /**
-   * Make the dialog unusable while a connection is being made, and usable again after.
+   * Rename the row the listener is on, and put focus back on it (decision 15).
    *
-   * The controls are *disabled* rather than merely ignored, so a reader says so rather than
-   * leaving somebody pressing a button that answers nothing. It matters for the seconds
-   * this dialog is underneath the connecting one, and for anybody who presses Escape out of
-   * that and arrives back here while the attempt is still running.
-   *
-   * **It no longer moves focus** (reported 2026-08-30). Sending focus to the list of kinds
-   * was this dialog telling a listener that pressing Enter had achieved nothing; the
-   * connecting dialog is where focus goes now, and it is opened before this is called.
+   * A refusal is announced and the row stays where it was: the backend keeps the words,
+   * because a name can arrive from somewhere that never saw this dialog.
    */
+  private async rename(): Promise<void> {
+    const row = this.row;
+    if (row === undefined) {
+      return;
+    }
+    const to = await this.asking.rename(row.name);
+    if (to === null) {
+      this.names.focus();
+      return;
+    }
+    await this.answered(
+      this.connect.renameConnection(row.name, to),
+      // **Focus returns to the renamed row**, which is where the listener was.
+      (rows) => rows.findIndex((named) => named.name === to.trim()),
+    );
+  }
+
+  /**
+   * Forget the row the listener is on, after asking once (decision 15).
+   *
+   * **Focus lands on the row that follows**, or on New connection when the list is empty:
+   * a listener who removed a row is still working through the list, and putting them back
+   * at the top would make them find their place again.
+   */
+  private async forget(): Promise<void> {
+    const row = this.row;
+    if (row === undefined) {
+      return;
+    }
+    if (!(await this.asking.forget(forgetting(row.name)))) {
+      this.names.focus();
+      return;
+    }
+    const at = this.nameList.chosen() ?? 0;
+    await this.answered(this.connect.forgetConnection(row.name), () => at);
+  }
+
+  /**
+   * Say what the backend answered, redraw, and put focus where the decision says.
+   *
+   * **Both halves are sentences a listener hears**, which is why one path serves the two
+   * actions: the words are the backend's, and what this owns is when they are said and
+   * where focus lands afterwards.
+   */
+  private async answered(
+    acting: Promise<string>,
+    landing: (rows: SavedRow[]) => number,
+  ): Promise<void> {
+    let said: string;
+    try {
+      said = await acting;
+    } catch (why) {
+      this.announcer.announce(typeof why === 'string' ? why : String(why));
+      this.names.focus();
+      return;
+    }
+    await this.reload();
+    if (this.rows.length === 0) {
+      this.announcer.announce(said);
+      this.dialog.querySelector<HTMLElement>('#connect-new')?.focus();
+      return;
+    }
+    // Clamped, because forgetting the last row leaves the index past the end and the row
+    // that follows it is then the one before it.
+    const at = Math.min(Math.max(landing(this.rows), 0), this.rows.length - 1);
+    this.nameList.select(at);
+    this.names.focus();
+    this.announcer.announce(said);
+  }
+
+  /** Make the dialog unusable while a connection is being made, and usable again after. */
   private busy(connecting: boolean): void {
     this.attempting = connecting;
     this.dialog.setAttribute('aria-busy', String(connecting));
@@ -635,46 +371,8 @@ export class ConnectDialog {
     )) {
       control.disabled = connecting;
     }
-  }
-
-  /**
-   * Whether this connection may set its session up, as the checkbox says right now.
-   *
-   * **Ticked by default, and unticking it is reachable without any dialog appearing** (spec
-   * B9.5, decision 9) — which is the whole reason this control is here rather than only
-   * inside the dialog that discloses the command. A missing checkbox reads as ticked, for the
-   * reason every default in this file does: the ordinary case is the one that has to work
-   * when something is not where it was expected.
-   */
-  private setUp(): SetUp {
-    const box = this.dialog.querySelector<HTMLInputElement>('#connect-set-up');
-    return box === null || box.checked ? 'Yes' : 'No';
-  }
-
-  private profile(row: Connectable): ProfileId {
-    if (isSsh(row)) {
-      return this.sshProfile(row.id);
+    if (!connecting) {
+      this.followTheChoice();
     }
-    // The kind itself when it offers nothing to choose between, and otherwise the variant
-    // that was chosen — which `startable` has already established there is one of.
-    return this.variant(row)?.id ?? row.id;
-  }
-
-  /**
-   * Which variant is chosen, or `undefined` while none is.
-   *
-   * One place asks the combo box, because three used to and each read the empty value its
-   * own way. `Number('')` is `0`, which is exactly the wrong answer here: it is the first
-   * variant, which is what "nothing chosen" must never mean again.
-   */
-  private variant(row: Connectable): Connectable['variants'][number] | undefined {
-    const at = this.variants?.chosen();
-    return at === undefined || at === null ? undefined : row.variants[at];
-  }
-
-  /** What the listener is connecting to, in the words the connection will use itself. */
-  private chosenLabel(row: Connectable): string {
-    const variant = this.variant(row);
-    return variant === undefined ? row.label : `${row.label}: ${variant.label}`;
   }
 }

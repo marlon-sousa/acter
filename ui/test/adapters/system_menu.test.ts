@@ -31,6 +31,8 @@ function menuEvents(): {
 function actions() {
   return {
     connect: vi.fn(),
+    newConnection: vi.fn(),
+    saveConnection: vi.fn(),
     exit: vi.fn(),
     help: vi.fn(),
     about: vi.fn(),

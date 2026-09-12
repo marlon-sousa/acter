@@ -54,6 +54,8 @@ pub(crate) fn install<R: Runtime>(builder: Builder<R>, os: &str) -> Builder<R> {
 fn id_of(action: MenuAction) -> &'static str {
     match action {
         MenuAction::Connect => "acter-connect",
+        MenuAction::NewConnection => "acter-new-connection",
+        MenuAction::SaveConnection => "acter-save-connection",
         MenuAction::Help => "acter-help",
         MenuAction::About => "acter-about",
     }
@@ -61,10 +63,18 @@ fn id_of(action: MenuAction) -> &'static str {
 
 /// Which action an id names, or `None` for an item Acter did not put there.
 fn action_of(id: &str) -> Option<MenuAction> {
-    [MenuAction::Connect, MenuAction::Help, MenuAction::About]
-        .into_iter()
-        .find(|action| id_of(*action) == id)
+    EVERY_ACTION.into_iter().find(|action| id_of(*action) == id)
 }
+
+/// Every action, so the round trip below covers all of them rather than the three that
+/// happened to exist when it was written.
+const EVERY_ACTION: [MenuAction; 5] = [
+    MenuAction::Connect,
+    MenuAction::NewConnection,
+    MenuAction::SaveConnection,
+    MenuAction::Help,
+    MenuAction::About,
+];
 
 fn build<R: Runtime>(app: &AppHandle<R>, layout: &[SystemMenu]) -> tauri::Result<Menu<R>> {
     let menus = layout
@@ -141,7 +151,7 @@ mod tests {
     /// with an id and comes back as the action it was built from.
     #[test]
     fn every_action_survives_being_written_into_an_id_and_read_back() {
-        for action in [MenuAction::Connect, MenuAction::Help, MenuAction::About] {
+        for action in EVERY_ACTION {
             assert_eq!(action_of(id_of(action)), Some(action));
         }
     }
@@ -150,7 +160,7 @@ mod tests {
     /// look right while doing the wrong thing.
     #[test]
     fn no_two_actions_share_an_id() {
-        let ids = [MenuAction::Connect, MenuAction::Help, MenuAction::About].map(id_of);
+        let ids = EVERY_ACTION.map(id_of);
         let mut sorted = ids.to_vec();
         sorted.sort_unstable();
         sorted.dedup();

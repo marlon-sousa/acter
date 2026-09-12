@@ -64,6 +64,20 @@ export class OptionList {
     return this.at;
   }
 
+  /**
+   * Move the selection without telling anybody, which is what a list that has just been
+   * refilled needs.
+   *
+   * **It does not call `chose`**, and that is the difference from arrowing: the caller
+   * moving the selection already knows it moved, and the announcement that follows a real
+   * arrow press would be a second utterance nobody asked for (spec 26, decision 15, where
+   * Rename and Forget put focus back on a row and say what happened once).
+   */
+  select(at: number | null): void {
+    this.at = at === null || at < 0 || at >= this.count ? null : at;
+    this.mark();
+  }
+
   focus(): void {
     this.element.focus();
   }
