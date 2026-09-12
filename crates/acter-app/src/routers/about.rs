@@ -114,6 +114,11 @@ mod tests {
 
     /// Every standing has a sentence, and every sentence ends where the thought does — the
     /// line runs straight into whatever the dialog says next otherwise.
+    ///
+    /// **The run of spaces is asserted because one got in**, from a line continuation a
+    /// formatting pass unwrapped: the sentence still read correctly and carried eighteen
+    /// spaces in the middle of it, which nothing in the previous version of this test could
+    /// see.
     #[test]
     fn every_standing_is_a_finished_sentence() {
         for standing in [
@@ -124,9 +129,10 @@ mod tests {
         ] {
             let said = standing.said();
             assert!(said.ends_with('.'), "{said}");
+            assert!(said.starts_with("Acter"), "it says who it is about: {said}");
             assert!(
-                said.starts_with("Acter") || said.starts_with("This system"),
-                "it says who it is about: {said}"
+                !said.contains("  "),
+                "a sentence is spoken, so it carries no run of spaces: {said}"
             );
         }
     }

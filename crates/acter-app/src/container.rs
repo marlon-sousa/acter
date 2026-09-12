@@ -103,12 +103,13 @@ const WSL_CLIENT: &str = "wsl.exe";
 /// did live under it are Acter's own records rather than anything a user configured.
 const SETTINGS_DIR: &str = "ACTER_SETTINGS_DIR";
 
-/// The folder whose existence beside the program means this copy of Acter is portable
-/// (spec 26, decision 3), and the name of the settings folder itself in every case.
+/// The name of the settings folder, wherever it turns out to be (spec 26, decision 2).
 ///
-/// **Acter never creates it beside the program.** The portable package ships with it empty,
-/// and a user who wants an installed Acter to become portable makes it by hand — so a folder
-/// nobody asked for cannot turn an installed copy portable behind their back.
+/// **It is a name and not a signal.** Until 2026-09-12 the presence of this folder beside the
+/// program was what decided whether Acter was portable, and it is not: a folder called
+/// `settings` is a thing that exists in plenty of directories, so a copy run from one of them
+/// would have quietly read and written somebody else's store, and the person least able to
+/// notice is the one this product is for. What decides is [`packaging`].
 const SETTINGS: &str = "settings";
 
 /// The one switch a launch takes: `acter --connect <name>` (spec 26, decision 20).
@@ -160,16 +161,32 @@ pub(crate) struct SettingsFolder {
 /// Why the settings folder is where it is — the second half of the line About reads out.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Standing {
-    /// A `settings` folder beside the program, which is what a portable copy is.
+    /// This copy was packaged portable, so its settings are beside the program.
     Portable,
-    /// No such folder, so this copy was installed and keeps its settings with the rest of
-    /// this account's application data.
+    /// This copy was packaged for an installer, so its settings are with the rest of this
+    /// account's application data.
     Installed,
-    /// [`SETTINGS_DIR`] named a folder, which wins over both of the above.
+    /// [`SETTINGS_DIR`] named a folder, which wins over the packaging either way.
     Directed,
-    /// An operating system nobody has chosen a folder for, so Acter writes where it was
-    /// started from — the behaviour that shipped before there was a settings folder at all.
+    /// Nowhere else to put them: an operating system nobody has chosen a folder for, or a
+    /// portable copy that cannot tell where its own program is. Acter writes where it was
+    /// started from, which is the behaviour that shipped before there was a settings folder.
     WhereItStarted,
+}
+
+/// How this copy of Acter was packaged: the whole of the portable question, decided when the
+/// binary was built rather than guessed at when it runs (spec 26, decision 3).
+///
+/// **The packaging is the fact, so the package is what says it.** An installer put a copy
+/// somewhere and a zip did not, and nothing a running program can see on disk distinguishes
+/// those two reliably — a marker beside the executable can be created by accident, copied
+/// into place, or left behind by an unzip nobody meant to keep.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Packaging {
+    /// Built for the portable zip: `cargo build --features portable`.
+    Portable,
+    /// Built for the installer, and for every ordinary development build.
+    Installed,
 }
 
 impl Standing {
@@ -185,7 +202,8 @@ impl Standing {
             }
             Standing::Directed => "Acter was told where to keep its settings.",
             Standing::WhereItStarted => {
-                "This system has no settings folder of its own for Acter, so Acter uses the                  folder it was started from."
+                "Acter has nowhere of its own to keep its settings on this system, so it uses \
+                 the folder it was started from."
             }
         }
     }
@@ -973,13 +991,17 @@ fn acter_known_hosts() -> PathBuf {
 ///
 /// **[`SETTINGS_DIR`] first, always** (spec 26, decision 3) — it is what points development,
 /// the suites and the NVDA fixture at a directory made for them, and it must win over
-/// whatever the machine would otherwise choose. An empty value is not a folder and is
+/// whatever the packaging would otherwise choose. An empty value is not a folder and is
 /// ignored, so a variable somebody cleared rather than unset does not send Acter's records
-/// to the root of the filesystem.
+/// to the root of the filesystem. It is also the one way to make a copy keep its settings
+/// somewhere the packaging did not choose, which is what a user converting an installed copy
+/// by hand now does.
 ///
-/// **Otherwise the program says which**: a `settings` folder beside it means this copy is
-/// portable and that folder is the answer; no such folder means it was installed, and the
-/// answer is where this operating system keeps an application's data.
+/// **Otherwise the packaging says which** (decision 3, revised 2026-09-12): a portable build
+/// keeps them beside the program, an installed one keeps them where this operating system
+/// keeps an application's data. **Nothing on disk is consulted**, which is the point — the
+/// rule this replaced read a folder beside the executable, and a folder is something a
+/// directory can happen to contain.
 ///
 /// The world is read here and the rule is [`records_directory`], which is pure.
 pub(crate) fn settings_directory() -> SettingsFolder {
@@ -989,33 +1011,48 @@ pub(crate) fn settings_directory() -> SettingsFolder {
             standing: Standing::Directed,
         };
     }
-    // The directory the running program is in, which is the only thing that can say whether
-    // this copy is portable. A build that cannot say where it lives is treated as installed,
-    // because inventing a portable folder for it would put somebody's records where nobody
-    // chose to put them.
+    // Where the running program is, which a portable copy needs and an installed one does
+    // not. Nothing is asked of the filesystem: this is the path the operating system already
+    // knows, and whether anything exists at it is nobody's question here.
     let program = env::current_exe()
         .ok()
         .and_then(|exe| exe.parent().map(Path::to_path_buf));
-    let portable = program
-        .as_deref()
-        .is_some_and(|directory| portable_settings(consts::OS, directory).is_dir());
     records_directory(
         consts::OS,
         env::var_os("APPDATA"),
         env::var_os("HOME"),
         program.as_deref(),
-        portable,
+        packaging(),
     )
 }
 
-/// Where a portable `settings` folder would be, for a program running from this directory.
+/// How this build was packaged.
+///
+/// **One expression rather than a gated pair of functions**, which is ARCHITECTURE's
+/// platform-divergence rule taken at its word: prefer no gate at all where the answer is a
+/// value. `cfg!` is a compile-time boolean, so this costs nothing at runtime, and both arms
+/// are still compiled — which is what a `#[cfg]` on the function would have thrown away,
+/// leaving the branch this build is not one of the packagings for unreachable, unmentioned
+/// and, in a portable build, reported as dead code.
+///
+/// Everything above it takes the answer as a *value*, so `records_directory` is tested for
+/// both packagings whichever one is being compiled.
+fn packaging() -> Packaging {
+    if cfg!(feature = "portable") {
+        Packaging::Portable
+    } else {
+        Packaging::Installed
+    }
+}
+
+/// Where a portable copy keeps its settings, given the directory its program runs from.
 ///
 /// **Beside the `.app` bundle on macOS rather than inside it** (spec 26, decision 3). A file
-/// written inside a bundle breaks its signature the moment M4 signs it, so the folder that
-/// makes a Mac copy portable sits next to `Acter.app`, three levels above the executable in
+/// written inside a bundle breaks its signature the moment M4 signs it, so a portable Mac
+/// copy writes next to `Acter.app`, three levels above the executable in
 /// `Acter.app/Contents/MacOS`.
 ///
-/// A macOS build that is *not* in a bundle is beside its own executable like every other
+/// A macOS build that is *not* in a bundle writes beside its own executable like every other
 /// platform, because there is no bundle to be outside of.
 fn portable_settings(os: &str, program: &Path) -> PathBuf {
     match os {
@@ -1044,30 +1081,37 @@ fn beside_the_bundle(program: &Path) -> Option<&Path> {
     bundle.parent()
 }
 
-/// Where this operating system keeps Acter's settings, given what its environment said, where
-/// the program is, and whether a portable folder is really beside it.
+/// Where Acter keeps its settings, given how this copy was packaged, what the environment
+/// said, and where the program is.
 ///
 /// **A conditional expression rather than a conditional module**, per ARCHITECTURE's
 /// platform-divergence rule: the answer is one path per platform, so it needs no adapter — but
 /// it does need to be *testable*, and reading the environment inside a `#[cfg]` is what makes
 /// a wrong answer invisible until somebody runs the product on that platform. So the world is
 /// read at the edge above and this is pure, which is what lets one machine assert both
-/// platforms' answers (spec 26, decision 4).
+/// platforms' answers and both packagings (spec 26, decision 4).
 ///
-/// An operating system nobody has chosen a folder for keeps the behaviour that shipped: the
-/// records go in the directory Acter was started from. It is named as its own standing rather
-/// than dressed up as an installation, because the About dialog says this out loud.
+/// A portable copy that cannot tell where its own program is, and an operating system nobody
+/// has chosen a folder for, both keep the behaviour that shipped: the records go in the
+/// directory Acter was started from. That is named as its own standing rather than dressed up
+/// as an installation, because the About dialog says this out loud.
 fn records_directory(
     os: &str,
     appdata: Option<OsString>,
     home: Option<OsString>,
     program: Option<&Path>,
-    portable: bool,
+    packaging: Packaging,
 ) -> SettingsFolder {
-    if let Some(beside) = program.filter(|_| portable) {
-        return SettingsFolder {
-            path: portable_settings(os, beside),
-            standing: Standing::Portable,
+    if packaging == Packaging::Portable {
+        return match program {
+            Some(beside) => SettingsFolder {
+                path: portable_settings(os, beside),
+                standing: Standing::Portable,
+            },
+            None => SettingsFolder {
+                path: PathBuf::from("."),
+                standing: Standing::WhereItStarted,
+            },
         };
     }
     let installed = match os {
@@ -1284,7 +1328,7 @@ mod tests {
         let appdata = || Some(OsString::from(r"C:\Users\someone\AppData\Roaming"));
         let home = || Some(OsString::from("/Users/someone"));
 
-        let windows = records_directory("windows", appdata(), home(), None, false);
+        let windows = records_directory("windows", appdata(), home(), None, Packaging::Installed);
         assert_eq!(
             windows.path,
             PathBuf::from(r"C:\Users\someone\AppData\Roaming")
@@ -1294,7 +1338,7 @@ mod tests {
         );
         assert_eq!(windows.standing, Standing::Installed);
 
-        let macos = records_directory("macos", appdata(), home(), None, false);
+        let macos = records_directory("macos", appdata(), home(), None, Packaging::Installed);
         assert_eq!(
             macos.path,
             PathBuf::from("/Users/someone")
@@ -1307,11 +1351,16 @@ mod tests {
         assert_eq!(macos.standing, Standing::Installed);
     }
 
-    /// **A `settings` folder beside the program is what portable means** (spec 26,
-    /// decision 3), and it wins over the folder this account would otherwise get — including
-    /// on a machine that has a perfectly good one.
+    /// **A portable build keeps its settings beside the program** (spec 26, decision 3), and
+    /// that wins over the folder this account would otherwise get — including on a machine
+    /// that has a perfectly good one.
+    ///
+    /// **The packaging is an argument, not a `#[cfg]`**, which is the whole reason this test
+    /// can exist in a build that was not packaged portable. The rule this replaced asked the
+    /// filesystem instead, and a folder called `settings` is a thing a directory can happen to
+    /// contain.
     #[test]
-    fn a_settings_folder_beside_the_program_makes_this_copy_portable() {
+    fn a_portable_build_keeps_its_settings_beside_the_program() {
         let beside = PathBuf::from(r"D:\portable\acter");
 
         let folder = records_directory(
@@ -1319,11 +1368,36 @@ mod tests {
             Some(OsString::from(r"C:\Users\someone\AppData\Roaming")),
             None,
             Some(&beside),
-            true,
+            Packaging::Portable,
         );
 
         assert_eq!(folder.path, beside.join("settings"));
         assert_eq!(folder.standing, Standing::Portable);
+    }
+
+    /// **And an installed build ignores a `settings` folder beside the program entirely**,
+    /// which is the accident the packaging rule exists to close: a copy run from a directory
+    /// that happens to hold one used to read and write that folder instead of the user's own,
+    /// and say nothing about it anywhere but the About dialog.
+    #[test]
+    fn an_installed_build_ignores_a_settings_folder_beside_the_program() {
+        let beside = PathBuf::from(r"D:\downloads\some folder that has a settings folder in it");
+
+        let folder = records_directory(
+            "windows",
+            Some(OsString::from(r"C:\Users\someone\AppData\Roaming")),
+            None,
+            Some(&beside),
+            Packaging::Installed,
+        );
+
+        assert_eq!(
+            folder.path,
+            PathBuf::from(r"C:\Users\someone\AppData\Roaming")
+                .join("acter")
+                .join("settings")
+        );
+        assert_eq!(folder.standing, Standing::Installed);
     }
 
     /// **On macOS the portable folder is beside the bundle, never inside it** (spec 26,
@@ -1337,7 +1411,7 @@ mod tests {
             None,
             Some(OsString::from("/Users/someone")),
             Some(&inside),
-            true,
+            Packaging::Portable,
         );
 
         assert_eq!(folder.path, PathBuf::from("/Volumes/Acter/settings"));
@@ -1364,9 +1438,43 @@ mod tests {
     #[test]
     fn a_machine_that_says_nothing_about_itself_writes_where_it_was_started() {
         for os in ["windows", "macos", "linux"] {
-            let folder = records_directory(os, None, None, None, false);
+            let folder = records_directory(os, None, None, None, Packaging::Installed);
             assert_eq!(folder.path, PathBuf::from("."), "{os}");
             assert_eq!(folder.standing, Standing::WhereItStarted, "{os}");
+        }
+    }
+
+    /// A portable copy that cannot tell where its own program is has no folder to be beside,
+    /// and it says so rather than inventing one: the alternative is writing somebody's saved
+    /// connections into whichever directory the launcher happened to pick.
+    #[test]
+    fn a_portable_build_that_cannot_find_its_program_says_where_it_started() {
+        let folder = records_directory(
+            "windows",
+            Some(OsString::from(r"C:\Users\someone\AppData\Roaming")),
+            None,
+            None,
+            Packaging::Portable,
+        );
+
+        assert_eq!(folder.path, PathBuf::from("."));
+        assert_eq!(folder.standing, Standing::WhereItStarted);
+    }
+
+    /// **The packaging gate, asserted rather than assumed**, in the shape
+    /// [`only_a_debug_build_offers_a_scripted_session`] already has: what the feature says and
+    /// what the build does are one decision, and this pins them together in whichever
+    /// configuration is being compiled.
+    #[test]
+    fn only_a_build_packaged_portable_is_portable() {
+        if cfg!(feature = "portable") {
+            assert_eq!(packaging(), Packaging::Portable);
+        } else {
+            assert_eq!(
+                packaging(),
+                Packaging::Installed,
+                "an ordinary build and the installer's build are the same thing"
+            );
         }
     }
 

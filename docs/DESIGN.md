@@ -292,22 +292,31 @@ keys; `explained_shells`, the shells this person has said not to be asked about 
 record of somebody's own decisions, and they stay inspectable and deletable with the tools
 they already have.
 
-**Portable or installed is decided by a folder named `settings` beside the program.** If it
-is there, Acter is portable and that folder is the settings folder. If it is not, Acter is
-installed, and the folder is `%APPDATA%\acter\settings` on Windows and
-`~/Library/Application Support/acter/settings` on macOS. On a Mac the folder that makes a
-copy portable sits beside the `.app` bundle rather than inside it, because a file written
-inside a bundle breaks the signature the moment the bundle is signed.
+**Portable or installed is decided when the binary is built, and never guessed at when it
+runs.** The packaging is the fact: an installer put a copy somewhere and a zip did not. So the
+package declares it — the portable zip is built with a Cargo feature the installer's build
+does not have — and a running Acter asks nothing of the filesystem. A portable copy keeps its
+settings beside the program, and on a Mac beside the `.app` bundle rather than inside it,
+because a file written inside a bundle breaks the signature the moment the bundle is signed.
+An installed copy keeps them in `%APPDATA%\acter\settings` on Windows and
+`~/Library/Application Support/acter/settings` on macOS.
 
-**Acter never creates the portable folder.** The portable package ships with it empty, and a
-user who wants an installed Acter to become portable makes it by hand — so a folder nobody
-asked for cannot quietly move somebody's records. An installed Acter creates its own folder
-on the first write rather than at startup, so a machine Acter was only ever run on, and never
-saved anything from, has no folder.
+**The first version of this decision inferred it from disk, and that was wrong.** It said a
+folder named `settings` beside the program made a copy portable. A folder with that name is
+something plenty of directories happen to contain, so a copy run from one of them would have
+read and written that store rather than the user's own, and the marker was also the storage —
+the saved connections would simply appear to be gone. For an audience that cannot glance at a
+folder to check, an accident that silently relocates their data is the wrong thing to trade
+for the convenience of converting a copy by hand.
 
-**`ACTER_SETTINGS_DIR` wins over both.** It is what points development, the automated suites
-and the manual NVDA passes at a directory made for them: a pass whose saved connections depend
-on what this machine happens to have is not repeatable and cannot be compared across two runs.
+**Acter creates the folder on the first write rather than at startup**, whichever kind of copy
+it is, so a machine Acter was only ever run on, and never saved anything from, has no folder.
+
+**`ACTER_SETTINGS_DIR` wins over the packaging.** It is what points development, the automated
+suites and the manual NVDA passes at a directory made for them: a pass whose saved connections
+depend on what this machine happens to have is not repeatable and cannot be compared across two
+runs. It is also how somebody keeps their settings somewhere the packaging did not choose,
+which is what converting a copy by hand means now.
 
 **The folder is said where a user can read it.** The About dialog reads out the path and
 whether Acter is running portable or installed. It is the cheapest answer to "where did that

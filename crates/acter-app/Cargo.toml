@@ -41,6 +41,16 @@ tauri-plugin-wdio-webdriver = "1"
 # root `test:e2e` script. Do not add it to a default feature set.
 custom-protocol = ["tauri/custom-protocol"]
 
+# What the portable package is built with (spec 26, decision 3, revised 2026-09-12).
+# Whether Acter is portable or installed is a fact about the *package*, so the package
+# declares it and the running program never guesses: with this feature ON the settings
+# folder is beside the program, with it OFF it is where this operating system keeps an
+# account's application data. Off by default, so an ordinary build and the installer's
+# build are the same thing and only the zip's build differs. The rule itself takes the
+# answer as a value, so both branches are tested by `cargo test` either way — see
+# `container::records_directory`.
+portable = []
+
 [dev-dependencies]
 # `#[tokio::test]` for the system clock adapter, the one place real time is touched.
 tokio = { version = "1", features = ["macros", "rt", "sync", "time"] }

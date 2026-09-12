@@ -3276,16 +3276,33 @@ thing to pick up once the adapters land, not merely the next number.
     **Where Acter writes is now one rule, and it is a pure function.** `records_directory`
     already took the operating system and the environment as arguments so that both platforms
     could be asserted from whichever one the suite runs on; it grows the executable's
-    directory and the portable test, and answers a folder *and* how it got there — portable,
-    installed, pointed at by `ACTER_SETTINGS_DIR`, or the folder Acter was started from on a
-    system nobody has chosen one for. Six tests cover the lot, including that a portable Mac
-    keeps its settings **beside** `Acter.app` rather than inside it, where a written file
-    would break the signature M4 will put on the bundle.
+    directory and the packaging, and answers a folder *and* how it got there — portable,
+    installed, pointed at by `ACTER_SETTINGS_DIR`, or the folder Acter was started from when
+    there is nowhere else. Eight tests cover the lot, including that a portable Mac keeps its
+    settings **beside** `Acter.app` rather than inside it, where a written file would break the
+    signature M4 will put on the bundle.
+
+    **Decision 3 changed shape before it shipped, and the spec records why.** It first made
+    the *presence* of a `settings` folder beside the program the gate. The user rejected that
+    on reading the implementation: it infers a fact about the package from a side effect on
+    disk, and a folder with that name is something plenty of directories happen to contain —
+    so a copy run from one of them would have silently used that store instead of the user's
+    own, with the About dialog the only place that said so. The packaging is now declared by
+    the build, through a `portable` Cargo feature the portable zip is compiled with and
+    nothing else is. It reaches the rule as a value from one small gated function, beside
+    `signatures` and `machine`, so an ordinary `cargo test` still covers both branches. The
+    cost, accepted: CI builds twice at 26.4, and converting a copy by hand is now
+    `ACTER_SETTINGS_DIR` rather than making a folder.
+
+    **One defect found in this PR's own first round and fixed in it.** The sentence About
+    reads when there is nowhere to keep settings had a run of eighteen spaces in the middle,
+    from a string continuation that a formatting pass unwrapped. The test asserted the
+    sentence's ending and its subject and could not see it; it asserts no run of spaces now.
 
     **`known_hosts` and `explained_shells` moved with it**, from `%APPDATA%\acter` to
     `%APPDATA%\acter\settings`, and both writers already create the folder on first write —
-    which is what decision 3 asks for, an installed Acter making its folder when it has
-    something to put in it rather than at startup.
+    which is what decision 3 asks for, Acter making its folder when it has something to put in
+    it rather than at startup.
 
     **`acter --connect <name>` is parsed here and carried out by the window.** The switch
     becomes a `LaunchRequest` the frontend collects at startup, rather than a session started
@@ -3322,10 +3339,10 @@ thing to pick up once the adapters land, not merely the next number.
 26.4. The installer and the portable package. Spec:
     [26-connection-manager.md](specs/26-connection-manager.md), decision 21 → implement it.
     Tauri's NSIS target with `installMode` set to `currentUser`, so installing never asks for
-    administrator rights; the portable zip built by CI, holding `acter.exe` and an empty
-    `settings` folder beside it, which is what makes the portable rule true on first run; and
-    the README saying how to install, how to run portable, and that SmartScreen will warn
-    until there is a certificate.
+    administrator rights; the portable zip built by CI from a second build carrying the
+    `portable` feature 26.1 declared, which is what makes the portable rule true; and the
+    README saying how to install, how to run portable, and that SmartScreen will warn until
+    there is a certificate.
 
 27. **Done** — B9, SSH: a far end that is not on this machine. Spec:
     [b9-ssh.md](specs/b9-ssh.md) — agreed 2026-08-26, implemented in four PRs (below). The five

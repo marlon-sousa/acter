@@ -26,8 +26,8 @@ reused below.
   own: saving writes the session as it stands.
 - **It is the first of the 1.0 beta set**, and the settings folder is in it because the
   connection store is the first thing Acter writes that a user would go looking for.
-- It touches lane 3 only where the settings folder lives on macOS and how a portable copy
-  is recognised there. Bundling, signing and the installer for macOS stay in entry 35 (M4).
+- It touches lane 3 only where the settings folder lives on macOS and where a portable copy
+  writes there. Bundling, signing and the installer for macOS stay in entry 35 (M4).
 
 ## What exists today, measured in the code
 
@@ -71,30 +71,54 @@ reused below.
      spec adds (decision 19). Same reasoning as `explained_shells`: inspectable and
      deletable with tools the user already has.
 
-3. **Portable or installed is decided by a folder named `settings` beside the program.** On
-   Windows, beside `acter.exe`. On macOS, beside the `.app` bundle rather than inside it,
-   because a file written inside the bundle breaks its signature the moment M4 signs it.
-   If that folder exists, Acter is portable and that folder is the settings folder. If it
-   does not, Acter is installed and the settings folder is:
-   - Windows: `%APPDATA%\acter\settings`;
-   - macOS: `~/Library/Application Support/acter/settings`.
+3. **Portable or installed is decided when the binary is built, and never guessed at when it
+   runs.** The packaging is the fact — an installer put a copy somewhere and a zip did not —
+   so the package declares it and the running program asks nothing of the filesystem. A
+   Cargo feature on `acter-app`, `portable`, off by default: an ordinary build and the
+   installer's build are the same thing, and only the zip's build is compiled with it
+   (decision 21). The settings folder is then:
+   - portable: `settings` beside the program. On Windows, beside `acter.exe`. On macOS,
+     beside the `.app` bundle rather than inside it, because a file written inside the
+     bundle breaks its signature the moment M4 signs it;
+   - installed, Windows: `%APPDATA%\acter\settings`;
+   - installed, macOS: `~/Library/Application Support/acter/settings`.
 
-   **Acter never creates the portable folder.** The portable package ships with it empty
-   (decision 21); a user who wants an installed Acter to become portable creates it by hand.
-   An installed Acter creates its own folder on first write, not at startup, so a machine
-   Acter was only ever run on and never saved anything from has no folder.
+   **Amended in implementation, 2026-09-12, before any of it shipped.** This decision first
+   said the gate was the *presence* of a folder named `settings` beside the program, and the
+   user rejected it on reading the implementation: it infers a fact about the package from a
+   side effect on disk. A folder called `settings` is a thing plenty of directories happen to
+   contain — a repository checkout, a shared tools folder, a memory stick another application
+   wrote to — and a copy run from one of them would have silently read and written that store
+   instead of the user's own. The marker was also the storage, so the accident did not merely
+   flip a mode: the saved connections would appear to have vanished, and the only place saying
+   otherwise is the About dialog, which a listener has no reason to open. A build-time answer
+   has no accident case at all. What it costs is that a user can no longer convert an
+   installed copy by hand, which the variable below covers.
 
-   **`ACTER_SETTINGS_DIR` wins over both**, exactly as `ACTER_PROFILES_DIR` did: it is what
-   points development, the suites and the NVDA fixture at a directory made for them, and a
-   manual pass whose saved connections depend on this machine's history is not repeatable.
+   **Acter creates the folder on first write, not at startup**, whichever it is, so a machine
+   Acter was only ever run on and never saved anything from has no folder. A portable copy
+   that cannot tell where its own program is — which nothing has been observed to do — writes
+   in the directory it was started from and says so, rather than inventing a location.
 
-4. **The rule is one pure function, and it is tested on both platforms without running on
-   either.** `records_directory` already takes the operating system and the environment as
-   arguments for this reason; it grows to take the executable's directory and whether a
-   `settings` folder exists there, and the composition root is the only caller that reads
-   the real answers. Its tests cover: portable on Windows, portable on macOS, installed on
-   both, the variable winning over both, and a platform with no answer falling back to the
-   working directory as it does today.
+   **`ACTER_SETTINGS_DIR` wins over the packaging**, exactly as `ACTER_PROFILES_DIR` did: it
+   is what points development, the suites and the NVDA fixture at a directory made for them,
+   and a manual pass whose saved connections depend on this machine's history is not
+   repeatable. It is also the one way to keep settings somewhere the packaging did not
+   choose, which is what a user converting a copy by hand now does. An empty value is ignored
+   rather than treated as a path.
+
+4. **The rule is one pure function, and it is tested for both platforms and both packagings
+   without being either.** `records_directory` already takes the operating system and the
+   environment as arguments for this reason; it grows the executable's directory and the
+   packaging, and the composition root is the only caller that reads the real answers. The
+   packaging reaches it as a *value*, from one small `#[cfg]`-gated function beside
+   `signatures` and `machine`, so an ordinary `cargo test` covers the portable branch too —
+   a `#[cfg]` inside the rule would have compiled half of it out of every test run. Its tests
+   cover: portable on Windows, portable on macOS staying outside the bundle, installed on
+   both, an installed build ignoring a `settings` folder beside it, the variable winning over
+   the packaging, a portable build that cannot find its program, a platform with no answer
+   falling back to the working directory as it does today, and the build's own answer matching
+   its feature.
 
 5. **The settings folder is said where a user can read it.** The About dialog gains one
    line, "Settings folder:" followed by the path, and whether Acter is running portable or
@@ -295,10 +319,12 @@ reused below.
 21. **The Windows installer is per user and never asks for administrator rights.** Tauri's
     NSIS target with `installMode` set to `currentUser`, installing under
     `%LOCALAPPDATA%`. `bundle.active` becomes true for Windows. The portable package is a
-    zip built by CI holding `acter.exe` and an empty `settings` folder beside it, which is
-    what makes decision 3 true on first run. Neither package is signed by this entry; a
-    SmartScreen warning is a known cost until a certificate exists, and it is said in the
-    README rather than worked around.
+    zip built by CI holding `acter.exe` and nothing else, built with
+    `--features portable`, which is what makes decision 3 true. **Two builds, and that is the
+    cost of decision 3's amendment**: the installer's binary and the zip's binary are not the
+    same file, so CI runs the build twice and, when there is a certificate, signs both.
+    Neither package is signed by this entry; a SmartScreen warning is a known cost until a
+    certificate exists, and it is said in the README rather than worked around.
 
 ### Menus and help
 
@@ -333,7 +359,9 @@ the first; the later ones amend it in place if implementation forces a change.
 
 - `crates/acter-app/src/container.rs`: `settings_directory()` replacing
   `profiles_directory()`, `records_directory` taking the executable directory and the
-  portable test, `ACTER_SETTINGS_DIR`, `--connect` parsed into a `LaunchRequest`.
+  packaging, `ACTER_SETTINGS_DIR`, `--connect` parsed into a `LaunchRequest`.
+- `crates/acter-app/Cargo.toml`: the `portable` feature decision 3 keys on. It is declared
+  in 26.1 because 26.1 is what reads it; the CI job that builds with it is 26.4's.
 - `crates/acter-core/src/entities/protocol_commands.rs`: `LaunchRequest`.
 - `crates/acter-core/src/ports/driving/connect_api.rs`: `requested_at_launch`.
 - The About dialog's settings-folder line: `ui/src/adapters/about_dialog.ts`,
@@ -394,9 +422,9 @@ flipped to Done by the PR that lands it; 28.8 closes by reference to decision 11
 
 ## Definition of done
 
-1. `settings_directory()` answers portable when a `settings` folder is beside the program,
-   installed otherwise, the variable over both, and is tested for both platforms as a pure
-   function. `known_hosts` and `explained_shells` are read from and written to it.
+1. `settings_directory()` answers portable when the build was packaged portable, installed
+   otherwise, the variable over both, and is tested for both platforms and both packagings as
+   a pure function. `known_hosts` and `explained_shells` are read from and written to it.
 2. `acter --connect <name>` starts that saved connection through the window, asking its
    questions there; an unknown name opens unconnected and says so.
 3. A saved connection round-trips through the filesystem adapter for every kind in
@@ -411,8 +439,9 @@ flipped to Done by the PR that lands it; 28.8 closes by reference to decision 11
    when the preference is set, and its checkbox writes the preference.
 8. Rename and Forget do what they say and put focus where decision 15 says.
 9. The About dialog says the settings folder and whether Acter is portable or installed.
-10. The Windows installer installs without elevation; the portable zip runs and writes into
-    its own `settings` folder.
+10. The Windows installer installs without elevation and keeps its settings with the
+    account's application data; the portable zip runs and writes into a `settings` folder
+    beside itself.
 11. `cargo fmt`, `cargo clippy --workspace --all-targets`, workspace tests, `npm -w acter-ui
     test`, `npm run typecheck` and the end-to-end suite green in every PR.
 12. The checklist below is run with NVDA on Windows in PR 26.3, its results in the PR body
