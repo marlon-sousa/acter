@@ -262,6 +262,13 @@ async function saveUnder(name: string, dialog: SaveConnectionDialog): Promise<vo
     const said = await controller.saveConnection(asking);
     if (said !== null) {
       dialog.finish();
+      // **The region is given something to lose first** (ARCHITECTURE, dialogs rule 13).
+      // Measured with NVDA 2026.1.1 on 2026-09-12: File then Save connection wrote the row
+      // and said nothing at all. A modal makes the rest of the document inert, so when it
+      // closes the live region returns with no earlier state a reader can compare against
+      // — and the first change carrying text is discarded. It is 13.3's finding exactly,
+      // met by a dialog 13.3 did not exist to cover.
+      announcer.documentReturned();
       // The receipt, after the connection sentence and the keys sentence.
       announcer.announce(said);
       return;

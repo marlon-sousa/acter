@@ -195,6 +195,10 @@ class FakeAnnouncer implements AnnouncerView {
   documentReturned(): void {
     this.returns += 1;
   }
+  /** Nothing is queued in a fake: it says everything the moment it is told. */
+  drained(): Promise<void> {
+    return Promise.resolve();
+  }
 }
 
 class FakeBeep implements BeepView {
@@ -646,6 +650,7 @@ describe('event rendering (decision 2)', () => {
         order.push('announce');
       },
       documentReturned: () => {},
+      drained: () => Promise.resolve(),
     };
     const controller = new AppController(
       backend,
@@ -1953,6 +1958,32 @@ describe('the connections somebody saved', () => {
 
     expect(backend.owners.at(-1)).toBe('FarEnd');
     expect(connect.origins.at(-1)).toBe(null);
+  });
+
+  /**
+   * **The offer waits for the two sentences to have been said** (decision 19's order).
+   * Found with NVDA 2026.1.1 on 2026-09-12: a modal makes the rest of the document inert,
+   * so a dialog that opens while an announcement is still queued sends it into the
+   * dialog's own region instead — and the keys sentence arrived after the offer had named
+   * itself. The connection is the news, the keys are what the next keypress needs, and the
+   * offer is a question about neither.
+   */
+  it('does not open the offer until the announcer has said everything', async () => {
+    const connect = new FakeConnect();
+    const { controller, announcer } = await makeApp(connect);
+    await controller.connectTo({ profile: 'Shell', kind: 'Cmd' });
+    const order: string[] = [];
+    announcer.drained = () => {
+      order.push('drained');
+      return Promise.resolve();
+    };
+
+    await controller.offerToSave(async () => {
+      order.push('offered');
+      return { stopOffering: false };
+    });
+
+    expect(order).toEqual(['drained', 'offered']);
   });
 
   /**

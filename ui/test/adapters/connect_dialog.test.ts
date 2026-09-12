@@ -33,7 +33,7 @@ const SKELETON = `
   <div role="application" aria-label="Connect">
     <h1 id="connect-title">Connect</h1>
     <ul id="connect-names" role="listbox" aria-label="Saved connections" tabindex="0"></ul>
-    <p id="connect-empty" tabindex="0" hidden></p>
+    <p id="connect-empty" hidden></p>
     <div id="connect-panel" role="group" aria-labelledby="connect-panel-title" tabindex="-1">
       <h2 id="connect-panel-title">Options</h2>
       <div id="connect-panel-body"></div>
@@ -175,6 +175,10 @@ class FakeAnnouncer implements AnnouncerView {
   }
   documentReturned(): void {
     this.said.push('document returned');
+  }
+  /** Nothing is queued in a fake: it says everything the moment it is told. */
+  drained(): Promise<void> {
+    return Promise.resolve();
   }
 }
 
@@ -343,6 +347,24 @@ describe('opening', () => {
     expect(byId('connect-empty').textContent).toBe(NOTHING_SAVED);
     expect(byId('connect-names').hidden).toBe(true);
     expect(document.activeElement?.id).toBe('connect-new');
+    // **And a reader says it as the dialog opens** (dialogs rule 5). Found with NVDA
+    // 2026.1.1 on 2026-09-12: without this the dialog announced its name and the button
+    // focus landed on, and the sentence was in the document and never said.
+    expect(
+      byId<HTMLDialogElement>('connect-dialog').getAttribute('aria-describedby'),
+    ).toBe('connect-empty');
+  });
+
+  /** And it is taken away again when there is a list, so a dialog with rows never reads
+   * out a sentence about being empty. */
+  it('describes itself with the empty sentence only while it is empty', async () => {
+    connect.rows = [row('Ada')];
+
+    await dialog.open();
+
+    expect(
+      byId<HTMLDialogElement>('connect-dialog').hasAttribute('aria-describedby'),
+    ).toBe(false);
   });
 
   /** The empty sentence says what to do, and it is one a reader can speak. */
@@ -664,6 +686,42 @@ describe('forgetting', () => {
     expect(byId('connect-empty').hidden).toBe(false);
     expect(document.activeElement?.id).toBe('connect-new');
     expect(announcer.announcements).toContain('Ada is no longer saved.');
+  });
+});
+
+describe('tabbing out of the list', () => {
+  /**
+   * **Found with NVDA 2026.1.1 on 2026-09-12**, driving this dialog as `user`: Tab from
+   * the names did nothing at all. The cycle landed on the sentence the dialog shows
+   * *instead of* its list — hidden whenever there is anything saved — and focusing a
+   * hidden element is a no-op, so the key was swallowed. It is the same failure
+   * `dialog_tab` already records for a disabled control, reached by a hidden one.
+   */
+  it('reaches the panel rather than the hidden empty sentence', async () => {
+    connect.rows = [ssh('work laptop', 2222)];
+    await dialog.open();
+
+    byId('connect-names').dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }),
+    );
+
+    expect(document.activeElement?.id).toBe('saved-ssh-host');
+  });
+
+  /**
+   * **And the empty sentence is never a tab stop at all** (ARCHITECTURE, dialogs rule 6):
+   * prose that needs reading belongs in the description, which is where it is.
+   */
+  it('never puts the empty sentence in the tab cycle', async () => {
+    await dialog.open();
+    byId('connect-new').focus();
+
+    byId('connect-new').dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }),
+    );
+
+    expect(document.activeElement?.id).toBe('connect-cancel');
+    expect(byId('connect-empty').hasAttribute('tabindex')).toBe(false);
   });
 });
 

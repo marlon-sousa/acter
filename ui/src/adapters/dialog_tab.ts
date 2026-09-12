@@ -35,9 +35,21 @@ export function keepTabInside(dialog: HTMLElement, event: KeyboardEvent): void {
   // selector list cost document order: the walk came back grouped by selector, buttons
   // before the combo box that precedes them on screen, which is a different bug in the same
   // line. Filtering afterwards keeps the order the document has.
+  //
+  // **And hidden ones, for the same reason and by the same measurement** (spec 26, found
+  // with NVDA 2026.1.1 on 2026-09-12, driving the Connect dialog as `user`). A hidden
+  // element with a `tabindex` still matches the selector and still cannot take focus, so
+  // the cycle landed on the sentence the dialog shows *instead of* its list — the one that
+  // is only there when nothing is saved — and Tab out of the list did nothing at all.
+  // `closest` rather than the element's own attribute, because what is hidden is usually a
+  // wrapper: the checkbox in the Save dialog's offering shape is hidden by the paragraph
+  // around it.
   const focusable = Array.from(
     dialog.querySelectorAll<HTMLElement>(FOCUSABLE),
-  ).filter((control) => !(control as HTMLButtonElement).disabled);
+  ).filter(
+    (control) =>
+      !(control as HTMLButtonElement).disabled && control.closest('[hidden]') === null,
+  );
   // **A dialog with no controls at all keeps the key too**, for the reason the
   // single-control case below swallows it: letting Tab through drops the reader into the
   // dialog's own document, which is the thing this function exists to prevent. The

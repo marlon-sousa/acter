@@ -212,6 +212,76 @@ describe('AnnouncerDom', () => {
  * So a caller that has just closed a dialog says so, and this adapter spends a wordless
  * change on re-establishing the baseline.
  */
+/**
+ * **Waiting for the announcer to have finished** (spec 26, decision 19). A dialog that
+ * opens while something is still queued takes it with it: a modal makes the rest of the
+ * document inert, so an announcement drains into a region nothing is listening to.
+ */
+describe('knowing when everything has been said', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    document.body.replaceChildren();
+  });
+
+  /** Nothing queued and nothing recently said: there is nothing to wait for. */
+  it('resolves at once when nothing has been said', async () => {
+    const announcer = new AnnouncerDom(makeRegion(), 0);
+
+    const settled = watch(announcer.drained());
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(settled()).toBe(true);
+  });
+
+  /** **It waits for every announcement, not only the ones already drained.** The
+   * connection sentence and the keys sentence are two calls, and the second is still in
+   * the queue when the first has gone out. */
+  it('waits until the queue is empty', async () => {
+    const region = makeRegion();
+    const announcer = new AnnouncerDom(region, 0);
+    announcer.announce('connected to the far end');
+    announcer.announce('who has the keys');
+
+    const settled = watch(announcer.drained());
+    await vi.advanceTimersByTimeAsync(0);
+    expect(settled()).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(DRAIN_SPACING_MS);
+    expect(region.children).toHaveLength(2);
+    expect(settled()).toBe(false);
+  });
+
+  /**
+   * **And one spacing beyond the last drain, which is the half that matters.** Measured
+   * with NVDA 2026.1.1 on 2026-09-12: resolving the moment the text was in the region left
+   * ten milliseconds before a modal opened on top of it, and the keys sentence was never
+   * spoken. Text in a region is not text that has been said.
+   */
+  it('gives the last announcement the same gap a second one would have given it', async () => {
+    const announcer = new AnnouncerDom(makeRegion(), 0);
+    announcer.announce('the only thing said');
+
+    const settled = watch(announcer.drained());
+    await vi.advanceTimersByTimeAsync(0);
+    expect(settled()).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(DRAIN_SPACING_MS);
+    expect(settled()).toBe(true);
+  });
+});
+
+/** Whether a promise has settled yet, without awaiting it. */
+function watch(waiting: Promise<void>): () => boolean {
+  let done = false;
+  void waiting.then(() => {
+    done = true;
+  });
+  return () => done;
+}
+
 describe('coming back from a dialog', () => {
   beforeEach(() => {
     vi.useFakeTimers();

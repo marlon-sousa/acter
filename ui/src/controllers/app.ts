@@ -418,6 +418,14 @@ export class AppController {
     if (!(await this.connect.offerToSave())) {
       return;
     }
+    // **Wait for the two sentences to have been said** (decision 19's order, and
+    // ARCHITECTURE's dialogs rule 13 read the other way round). A modal makes the rest of
+    // the document inert, so a dialog opening while an announcement is still queued sends
+    // it into that dialog's own region instead — measured with NVDA 2026.1.1 on
+    // 2026-09-12, where the keys sentence arrived after the offer had named itself. The
+    // connection is the news, the keys are what the next keypress needs, and the offer is
+    // a question about neither.
+    await this.announcer.drained();
     const answer = await ask(connected);
     // **The checkbox is recorded whichever button they pressed** (decision 19): ticking it
     // is a decision about the offer rather than about this connection.

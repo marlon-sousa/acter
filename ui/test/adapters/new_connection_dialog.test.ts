@@ -204,6 +204,10 @@ class FakeAnnouncer implements AnnouncerView {
   documentReturned(): void {
     this.said.push('document returned');
   }
+  /** Nothing is queued in a fake: it says everything the moment it is told. */
+  drained(): Promise<void> {
+    return Promise.resolve();
+  }
 }
 
 /** The dialog Enter goes to while a connection is being made (reported 2026-08-30). */

@@ -158,6 +158,21 @@ export class ConnectDialog {
     this.empty.textContent = saved.unreadable ?? NOTHING_SAVED;
     this.empty.hidden = this.rows.length > 0;
     this.names.hidden = this.rows.length === 0;
+    // **And it is what the dialog says as it opens** (ARCHITECTURE, dialogs rule 5).
+    // Measured with NVDA 2026.1.1 on 2026-09-12: with nothing saved the dialog announced
+    // its name and the button focus landed on, and nothing else — the sentence was in the
+    // document and a listener had to go and find it, which is prose most listeners will
+    // not find. It matters most for the half that is not the ordinary empty list: a
+    // document that would not parse names two files, and that is the one thing somebody
+    // needs to hear.
+    //
+    // **Removed again when there are rows**, so a dialog that has something in its list
+    // does not read out a sentence about being empty.
+    if (this.rows.length === 0) {
+      this.dialog.setAttribute('aria-describedby', this.empty.id);
+    } else {
+      this.dialog.removeAttribute('aria-describedby');
+    }
     this.nameList.fill({
       labels: this.rows.map((row) => row.name),
       selected: this.rows.length === 0 ? null : 0,

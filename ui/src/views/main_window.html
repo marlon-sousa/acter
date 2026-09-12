@@ -543,11 +543,18 @@
           aria-label="Saved connections"
           tabindex="0"
         ></ul>
-        <!-- What the dialog says instead of a list, when there is nothing in one. It is
-             prose to be read and it is focusable for the instructions panel's reason:
-             inside an application region prose cannot be arrowed, so without a tab stop
-             the one thing a listener needs here would be unreachable. -->
-        <p id="connect-empty" tabindex="0" hidden></p>
+        <!-- What the dialog says instead of a list, when there is nothing in one — and
+             what it says when the settings document would not parse, which names two
+             files (spec 26, decision 16).
+
+             **It is the dialog's description while it is showing, and not a tab stop**
+             (ARCHITECTURE, dialogs rule 6: prose that needs reading belongs in the
+             description). The adapter points `aria-describedby` at it when the list is
+             empty and takes the attribute away when it is not, so a reader speaks it as
+             the dialog opens and never speaks it over a dialog that has rows. Measured
+             with NVDA 2026.1.1 on 2026-09-12: as a plain paragraph it was in the document
+             and never said. -->
+        <p id="connect-empty" hidden></p>
         <div
           id="connect-panel"
           role="group"
