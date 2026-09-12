@@ -83,9 +83,20 @@ export class SaveConnectionDialog {
     this.dialog.addEventListener('keydown', (event) => {
       if (event.key === 'Enter' && (event.target as HTMLElement).closest('button') === null) {
         event.preventDefault();
-        this.answer(this.field.value);
+        // **Enter asks the same question the button does** — the lesson of 2026-08-26,
+        // where pressing Enter on an empty SSH form started an attempt because the key
+        // handler reached the action directly and never consulted the button it was
+        // standing in for.
+        if (this.nameable()) {
+          this.answer(this.field.value);
+        }
       }
     });
+    // **Save is disabled until there is a name to save under**, reported by the user on
+    // 2026-09-12. A button that can only fail is a button a listener spends a keystroke on
+    // to be told no; the backend's "A connection needs a name." is for a name arriving from
+    // somewhere that never saw this dialog, not for the ordinary empty field.
+    this.field.addEventListener('input', () => this.settleButton());
     this.save.addEventListener('click', () => this.answer(this.field.value));
     this.cancel.addEventListener('click', () => this.answer(null));
     // Escape, and every other way of closing, is "not now": nothing is saved and the
@@ -123,6 +134,7 @@ export class SaveConnectionDialog {
     // told they interrupted something.
     this.cancel.textContent = offering ? 'Not now' : 'Cancel';
     this.field.value = suggestion;
+    this.settleButton();
     return new Promise<SaveAnswer>((resolve) => {
       this.settle = resolve;
       this.dialog.showModal();
@@ -132,6 +144,22 @@ export class SaveConnectionDialog {
       this.field.focus();
       this.field.select();
     });
+  }
+
+  /**
+   * Whether there is a name to save under: one condition, asked everywhere the action can
+   * start (ARCHITECTURE, dialogs rules 1 and 2).
+   *
+   * Trimmed, because a field holding a space holds nothing a listener could tell apart from
+   * an empty one — and it is what the backend's own rule trims to.
+   */
+  private nameable(): boolean {
+    return this.field.value.trim() !== '';
+  }
+
+  /** Put the button in the state the field's contents call for. */
+  private settleButton(): void {
+    this.save.disabled = !this.nameable();
   }
 
   /**

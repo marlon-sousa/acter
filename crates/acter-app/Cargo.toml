@@ -5,6 +5,17 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+# **The program a user runs is `acter`**, which is the name the README and the portable zip
+# already promise. Found by building the installer and installing it (spec 26, definition of
+# done 10): with nothing naming it, the bundler installed `menu_spike.exe` — A7's
+# measurement harness, whose own first line says it is not shipped — because it took the
+# first binary the crate declared. The harness is an example now rather than a binary, for
+# the same finding's second half: Tauri bundles *every* binary a package declares, so a
+# second one is a second program in the installer whatever it is called.
+[[bin]]
+name = "acter"
+path = "src/main.rs"
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 # The version stamp (spec 26, decision 3). It shells out to git rather than linking a git

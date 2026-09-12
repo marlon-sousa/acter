@@ -159,13 +159,14 @@ per connection, for the reason decision 7 gives.
 
    **A release is named by its tag, and the tag names a platform.** Tags are
    `<platform>-vx.y.z`, so `windows-v1.0.0` and `macos-v1.0.0` are the same release of the
-   same product for two machines. **The version is the numeric triple and nothing else**: a
-   listener hears "Version 1.0.0" on either platform, because the platform is a fact about
+   same product for two machines. **The version is what follows the `v` and nothing else**:
+   a listener hears "Version 1.0.0" on either platform, because the platform is a fact about
    which file they downloaded rather than about which Acter they are running.
 
    So the function's rule, in order:
    - a describe string shaped `<platform>-vx.y.z`, with all three numbers numeric, is a
-     release, and the version is `x.y.z`;
+     release, and the version is `x.y.z` — optionally with a suffix after the third number,
+     so `<platform>-vx.y.z-beta` is the release `x.y.z-beta` (amendment O);
    - anything else with a commit behind it is `development-<short commit>`;
    - nothing at all is `CARGO_PKG_VERSION`, which is what a source tarball with no git has.
 
@@ -698,12 +699,35 @@ into Acter's document, and that is structural rather than remembered — the ori
 `#[serde(skip)]`, so a record in the document is Acter's own by construction, and the port's
 `accept` takes the facts rather than a record, so there is no native one to hand it.
 
-**C. `SavedTarget::Wsl` carries an optional distribution.** Decision 7 said a saved WSL
-connection remembers "the distribution name". `ProfileId::Shell { kind: Wsl }` — what
-`ACTER_SHELL=wsl` produces — is a real live session that names none, and Save connection
-has to be able to write down whatever is running. `None` means whatever distribution WSL
-calls the default, which is deliberately not the same as Acter deciding which one that is
-(spec B5.3).
+**C. A saved WSL connection always names a distribution, and one session cannot be saved
+at all.** Decision 7 said a saved WSL connection remembers "the distribution name".
+`ProfileId::Shell { kind: Wsl }` is a value the enum admits and names none, and the first
+cut of this work let it be written down as "whatever WSL calls the default". That was wrong,
+and the user said so: a row like that opens the default
+distribution, which is what New connection already does in one more keystroke, and it would
+quietly become a different machine the day somebody changed that default. The whole worth of
+a saved WSL connection is that it means *this* distribution, no questions.
+
+So `SavedTarget::Wsl` carries a required `distribution`, and `SavedTarget::of` answers a
+`Result`: for that one profile it answers the sentence "This session did not name a WSL
+distribution, so saving it would not give you anything to start again. Choose a distribution
+in New connection and save that."
+
+**No window can reach that sentence, and working out why is the rest of this amendment.**
+The first fix carried it to the frontend on a new `Connected.cannot_save`, so the offer to
+save could be withheld and File then Save connection could say why. The user asked the
+obvious question — connecting to WSL means choosing a distribution, so how was one ever
+saved without? — and the answer is that it is not: the New connection panel's Connect stays
+disabled until a variant is chosen, and for WSL the variants are the distributions, while a
+machine whose WSL names none answers WSL's instructions instead of starting anything. The
+one route that looked like an exception, `ACTER_SHELL=wsl`, is not one: it produces
+`ProfileId::Program`, which is saveable. So `cannot_save` guarded a state nothing could
+produce, and it is gone — field, controller branch and menu branch.
+
+What stays is the entity rule, because `ProfileId` admits `Shell { kind: Wsl }` whether or
+not anything constructs it, and a total function has to answer something. It answers the
+refusal rather than writing down "whatever WSL calls the default", and one service test
+holds that, saying in its own words that the window cannot reach it.
 
 **D. The wire type and the port's type have different names.** Decision 10 and decision 11
 both called their answer `SavedConnections`, and they carry different facts: the port
@@ -748,6 +772,50 @@ platform, and the tag shape is what makes this not a gap: `macos-v1.0.0` gets a 
 the day there is one to run. Bundling and signing for macOS are entry 35's (M4), and a job that
 built an unbundled binary and called it a release would be shipping something nobody signed.
 
+**L. The installer shipped the wrong program, and then shipped two.** `acter-app` built two
+binaries: the program, and `src/bin/menu_spike.rs`, A7's measurement harness whose own first
+line says it is not shipped. Nothing told the bundler which was which, so the first
+installer built from this workflow put `menu_spike.exe` under `%LOCALAPPDATA%\Acter` and
+nothing else. Naming the real one — `[[bin]] name = "acter"` and `mainBinaryName` in
+`tauri.conf.json` — fixed that half, and installing again showed the other half: Tauri
+bundles *every* binary a package declares, so the spike was still there beside `acter.exe`.
+The harness is an `examples/` program now, run with
+`cargo run -p acter-app --example menu_spike`, so the package declares one binary and the
+installer holds one program.
+
+Both halves were found by building the installer and installing it, which is what
+definition of done 10 asks for and what no test in this repository could have answered.
+
+**M. The installer carries the tag's version, not `tauri.conf.json`'s.** The same build
+showed it: the tag said 1.0.0, About said "Version 1.0.0.", and Installed apps said 0.1.0,
+because the file name and the uninstall entry come from a version in `tauri.conf.json` that
+nobody bumps. Decision 21's principle is that the tag is the single fact a release is built
+from, so the workflow now writes that number into an overriding config file and passes it to
+`tauri build`. A file rather than an inline `--config '{...}'`, which would have to survive
+both npm's argument forwarding and PowerShell's quoting.
+
+**N. Save and Rename disable their button while the field is empty.** Reported by the user
+on 2026-09-12: decision 18 says a refused name keeps the dialog open with the backend's
+sentence, and both dialogs were leaving Save enabled on an empty field so that pressing it
+earned "A connection needs a name." That is the New connection dialog's own rule, unfollowed
+by two dialogs written after it — one predicate, the button set from it, and Enter asking
+the same predicate rather than reaching the action directly, which is the defect reported
+against the SSH form on 2026-08-26. The backend sentence stays, for a name arriving from
+somewhere that never saw a dialog.
+
+**O. A release tag may carry a suffix after the three numbers.** Asked for by the user on
+2026-09-12. Decision 3 read the version as a numeric triple and nothing else, so
+`windows-v1.0.0-beta` would have been read out as a development build — and a beta somebody
+downloaded is a thing they are running, whose version they have to be able to report. The
+three numbers are still required and still numeric; after them, semver's own suffix rule
+applies, so `1.0.0-alpha`, `1.0.0-beta` and `1.0.0-rc.1` are all releases.
+
+**What makes this more than loosening a check** is that `git describe` writes a suffix of
+its own — the commits since the tag and the commit itself — onto whatever tag it found. So
+`1.0.0-2-gf49246c` and `1.0.0-beta-2-gf49246c` are both commits *past* a tag and both
+development builds, and the rule has to recognise that tail at the end of the string rather
+than merely permit suffixes. That is a function of its own with tests naming each shape.
+
 ## Manual checklist (Windows, NVDA)
 
 Run against a fixture `ACTER_SETTINGS_DIR` holding a `settings.json` with one saved
@@ -771,6 +839,8 @@ scripted connection and one saved SSH connection to the `docker/ssh` rig.
       connection, and File → Save connection still works.
 - [ ] Rename refuses the other row's name with the sentence, and accepts a new one, with
       focus back on the renamed row.
+- [ ] Emptying the field in Save, and in Rename, leaves a button Tab does not stop on, and
+      Enter from the field does nothing.
 - [ ] Forget asks once, removes the row, and focus lands on the next row or on New
       connection.
 - [ ] With the fixture emptied, the dialog says there are no saved connections and focus is
@@ -778,4 +848,10 @@ scripted connection and one saved SSH connection to the `docker/ssh` rig.
 - [ ] File → Save connection while unconnected announces that nothing is connected.
 - [ ] Help → About reads the settings folder path, how Acter came to be using it, and the
       version.
+- [ ] The installer, run from an ordinary account, installs without asking for
+      administrator rights, and About in the installed copy reads the version and says the
+      settings are kept with the account's other application data, naming that folder.
+- [ ] The portable copy, unzipped anywhere and run, reads the same version and says its
+      settings are kept beside the program, naming that folder — and connecting once leaves
+      a `settings` folder there and nothing in the account's configuration.
 - [ ] Human-only: nothing in any of the above played a sound that was not expected.

@@ -75,7 +75,16 @@ jobs:
           # built. `vergen-gitcl` lets any value it emits be overridden by an environment
           # variable of the same name, which is what this is.
           VERGEN_GIT_DESCRIBE: ${{ github.ref_name }}
-        run: npm run tauri -- build
+        # **The tag is also what the installer calls itself.** `tauri.conf.json` carries a
+        # version nobody bumps, and it is what names the file and what Windows shows in
+        # Installed apps — so without this the tag says 1.0.0, About says 1.0.0 and Add or
+        # remove programs says 0.1.0. The overriding config is written as a file rather than
+        # inline because `npm run -- --config '{...}'` has to survive two quoting passes.
+        shell: pwsh
+        run: |
+          $number = "$env:GITHUB_REF_NAME" -replace '^windows-v', ''
+          Set-Content -Path release-version.json -Value "{ ""version"": ""$number"" }"
+          npm run tauri -- build --config release-version.json
 
       # **The portable package**: a zip holding `acter.exe` and nothing else, from a second
       # build carrying the `portable` feature — which is what makes decision 3 true. A copy
@@ -93,7 +102,7 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force portable-package | Out-Null
-          Copy-Item target/portable/release/acter-app.exe portable-package/acter.exe
+          Copy-Item target/portable/release/acter.exe portable-package/acter.exe
           Compress-Archive -Path portable-package/acter.exe `
             -DestinationPath "acter-$($env:GITHUB_REF_NAME)-portable.zip" -Force
 

@@ -234,7 +234,7 @@ pub(crate) struct Version {
 }
 
 impl Version {
-    /// A release, named by its tag's numeric triple and nothing else.
+    /// A release, named by its tag's version and nothing else.
     ///
     /// **The platform is not in it** (decision 3). Tags are `<platform>-vx.y.z`, so
     /// `windows-v1.0.0` and `macos-v1.0.0` are the same release of the same product for two
@@ -1232,7 +1232,8 @@ fn stamped() -> Version {
 /// The rule turning what git said into the two things a person meets (decision 3).
 ///
 /// - a describe string shaped `<platform>-vx.y.z`, with all three numbers numeric, is a
-///   release, and the version is `x.y.z`;
+///   release, and the version is `x.y.z` — with an optional suffix after the third number,
+///   so `<platform>-vx.y.z-beta` is the release `x.y.z-beta`;
 /// - anything else with a commit behind it is `development-<short commit>`;
 /// - nothing at all is `CARGO_PKG_VERSION`, which is what a source tarball with no git has.
 ///
@@ -1254,22 +1255,64 @@ fn version(describe: Option<&str>, commit: Option<&str>, cargo: &str) -> Version
     }
 }
 
-/// The numeric triple in a release tag, or `None` for anything that is not one.
+/// The version in a release tag, or `None` for anything that is not one.
+///
+/// **Three numbers, and a suffix after them for a release that is not the final one**
+/// (asked for by the user on 2026-09-12): `windows-v1.0.0-beta` is a release and says so,
+/// because a beta somebody downloaded is a thing they are running and a version they have
+/// to be able to report. What the suffix may hold is semver's own rule — dot-separated
+/// runs of letters, digits and hyphens — so `1.0.0-rc.1` is a release too.
 fn released(describe: Option<&str>) -> Option<String> {
-    let (platform, number) = describe?.trim().rsplit_once("-v")?;
-    if platform.is_empty() {
+    // The *first* `-v`, because the platform never contains one and a suffix might.
+    let (platform, number) = describe?.trim().split_once("-v")?;
+    if platform.is_empty() || past_the_tag(number) {
         return None;
     }
-    let parts: Vec<&str> = number.split('.').collect();
+    let (triple, suffix) = match number.split_once('-') {
+        Some((triple, suffix)) => (triple, Some(suffix)),
+        None => (number, None),
+    };
+    let parts: Vec<&str> = triple.split('.').collect();
     let [major, minor, patch] = parts[..] else {
         return None;
     };
-    // Numeric and nothing else: `git describe` appends `-2-gf49246c` on a commit after the
-    // tag, and that is a development build rather than a release of `0-2-gf49246c`.
-    [major, minor, patch]
+    let numeric = [major, minor, patch]
         .iter()
-        .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
-        .then(|| number.to_owned())
+        .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()));
+    let named = suffix.is_none_or(|suffix| {
+        !suffix.is_empty()
+            && suffix.split('.').all(|part| {
+                !part.is_empty()
+                    && part
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+            })
+    });
+    (numeric && named).then(|| number.to_owned())
+}
+
+/// Whether `git describe` added its own tail, which means this commit is *past* the tag
+/// rather than on it.
+///
+/// **The tail is `-<commits since>-g<commit>`**, and telling it apart from a suffix
+/// somebody chose is the whole job here: `1.0.0-2-gf49246c` is two commits past
+/// `windows-v1.0.0` and is a development build, while `1.0.0-beta` is a release. Both are
+/// well-formed semver, so the shape of the tail is what answers it — and it has to be
+/// looked for at the end, because `1.0.0-beta-2-gf49246c` is two commits past the beta and
+/// is a development build as well.
+fn past_the_tag(number: &str) -> bool {
+    let Some((before, commit)) = number.rsplit_once('-') else {
+        return false;
+    };
+    let Some(hex) = commit.strip_prefix('g') else {
+        return false;
+    };
+    if hex.is_empty() || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return false;
+    }
+    before
+        .rsplit_once('-')
+        .is_some_and(|(_, since)| !since.is_empty() && since.bytes().all(|b| b.is_ascii_digit()))
 }
 
 /// The saved connection this launch asked for, from `acter --connect <name>` (spec 26,
@@ -1682,6 +1725,64 @@ mod tests {
             }
         }
 
+        /// **A release that is not the final one is still a release** (asked for by the
+        /// user on 2026-09-12): three numbers, then a suffix saying which pre-release it
+        /// is. Somebody running a beta is running something, and the version they report
+        /// has to say which one.
+        #[test]
+        fn a_tag_with_a_suffix_after_the_three_numbers_is_a_release() {
+            for (tag, number) in [
+                ("windows-v1.0.0-alpha", "1.0.0-alpha"),
+                ("windows-v1.0.0-beta", "1.0.0-beta"),
+                ("macos-v2.3.4-rc.1", "2.3.4-rc.1"),
+                ("windows-v1.0.0-beta-2", "1.0.0-beta-2"),
+            ] {
+                let version = version(Some(tag), Some("521c956"), CARGO);
+
+                assert_eq!(version.identifier, number, "{tag}");
+                assert_eq!(version.said, format!("Version {number}."), "{tag}");
+            }
+        }
+
+        /// **And a commit past a pre-release tag is still a development build.** This is the
+        /// one that makes the suffix hard: `git describe` writes `-2-gf49246c` after
+        /// whatever tag it found, so a suffix has to be told apart from that tail rather
+        /// than merely allowed.
+        #[test]
+        fn a_commit_past_a_pre_release_tag_is_not_that_pre_release() {
+            for tag in [
+                "windows-v1.0.0-2-gf49246c",
+                "windows-v1.0.0-beta-2-gf49246c",
+                "windows-v1.0.0-rc.1-14-g0803341",
+            ] {
+                let version = version(Some(tag), Some("521c956"), CARGO);
+
+                assert_eq!(
+                    version.identifier, "development-521c956",
+                    "{tag} is past the tag"
+                );
+            }
+        }
+
+        /// A suffix is letters, digits, hyphens and the dots between them, and a tag whose
+        /// suffix is anything else falls to the development case with the other malformed
+        /// ones.
+        #[test]
+        fn a_suffix_that_is_not_one_is_not_a_release() {
+            for tag in [
+                "windows-v1.0.0-",
+                "windows-v1.0.0-beta..1",
+                "windows-v1.0.0-beta.",
+                "windows-v1.0.0-be ta",
+            ] {
+                assert_eq!(
+                    version(Some(tag), Some("521c956"), CARGO).identifier,
+                    "development-521c956",
+                    "{tag} is not a release"
+                );
+            }
+        }
+
         /// Anything else with a commit behind it is a development build, and the commit is
         /// what a bug report carries.
         #[test]
@@ -1739,6 +1840,7 @@ mod tests {
         fn every_version_sentence_is_one_a_reader_can_speak() {
             for version in [
                 version(Some("windows-v1.0.0"), Some("521c956"), CARGO),
+                version(Some("windows-v1.0.0-beta"), Some("521c956"), CARGO),
                 version(None, Some("521c956"), CARGO),
                 version(None, None, CARGO),
             ] {

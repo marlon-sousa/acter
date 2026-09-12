@@ -154,6 +154,57 @@ describe('what the Save dialog suggests', () => {
 
 describe('the Save dialog', () => {
   /**
+   * **Save is disabled while there is no name to save under**, reported by the user on
+   * 2026-09-12: a button whose only possible outcome is a refusal costs a listener a
+   * keystroke to be told no. It is the New connection dialog's own rule, which this dialog
+   * was written after and did not follow (ARCHITECTURE, dialogs rule 1).
+   */
+  it('disables Save until the field holds a name', async () => {
+    const asking = save.ask('', false);
+    const ok = byId<HTMLButtonElement>('save-ok');
+    const field = byId<HTMLInputElement>('save-name');
+
+    expect(ok.disabled).toBe(true);
+
+    field.value = 'work laptop';
+    field.dispatchEvent(new Event('input'));
+    expect(ok.disabled).toBe(false);
+
+    // **Trimmed, because a field holding a space holds nothing a listener can tell apart
+    // from an empty one** — and it is what the backend's own name rule trims to.
+    field.value = '   ';
+    field.dispatchEvent(new Event('input'));
+    expect(ok.disabled).toBe(true);
+
+    click('save-cancel');
+    await asking;
+  });
+
+  /**
+   * **And Enter asks the same question the button does.** The defect of 2026-08-26,
+   * reported against the SSH form: a key handler that reaches the action directly makes a
+   * disabled button a lie told to whoever tabbed to it.
+   */
+  it('does nothing on Enter while there is no name', async () => {
+    const asking = save.ask('', false);
+    let settled = false;
+    void asking.then(() => {
+      settled = true;
+    });
+
+    byId('save-name').dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }),
+    );
+    await Promise.resolve();
+
+    expect(settled).toBe(false);
+    expect(byId<HTMLDialogElement>('save-connection-dialog').open).toBe(true);
+
+    click('save-cancel');
+    await asking;
+  });
+
+  /**
    * **Focus lands on the field with its text selected** (decision 18), so typing replaces
    * the suggestion and a listener who likes it presses Enter.
    */
@@ -325,6 +376,27 @@ describe('the Save dialog', () => {
 });
 
 describe('the Rename dialog', () => {
+  /** Rename is disabled while the field is empty, for the Save dialog's reason. */
+  it('disables Rename until the field holds a name', async () => {
+    const renaming = rename.ask('work laptop');
+    const ok = byId<HTMLButtonElement>('rename-ok');
+    const field = byId<HTMLInputElement>('rename-name');
+
+    expect(ok.disabled).toBe(false);
+
+    field.value = '';
+    field.dispatchEvent(new Event('input'));
+    expect(ok.disabled).toBe(true);
+
+    // And Enter is refused by the same predicate rather than around it.
+    field.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    await Promise.resolve();
+    expect(byId<HTMLDialogElement>('rename-connection-dialog').open).toBe(true);
+
+    click('rename-cancel');
+    await renaming;
+  });
+
   it('opens on the field with the old name prefilled and selected', async () => {
     const asking = rename.ask('work laptop');
 

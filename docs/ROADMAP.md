@@ -3282,9 +3282,32 @@ thing to pick up once the adapters land, not merely the next number.
       not. The user's own `~/.ssh/known_hosts` is read into the same list, flagged as
       native and never written; the flag is `#[serde(skip)]`, so a record in the document is
       Acter's own by construction rather than by remembering to check.
-    - **A saved WSL connection may name no distribution.** `ACTER_SHELL=wsl` produces a
-      live session that names none, and Save connection has to be able to write down
-      whatever is running.
+    - **A saved WSL connection always names a distribution, and the one session that names
+      none cannot be saved.** The first cut let a WSL profile that named none be written
+      down as "whatever WSL calls the default"; the user rejected it, and was right. Such a row
+      would open the default distribution, which is what New connection already does in one
+      more keystroke, and it would quietly mean a different machine the day somebody
+      changed that default. The first fix carried a reason to the frontend so the offer
+      could be withheld; the user then asked how such a session could arise at all, and it
+      cannot — connecting to WSL means choosing a distribution, and `ACTER_SHELL=wsl`
+      produces a `Program` profile, which is saveable. So the wire field went away again and
+      what stays is the domain rule, for the reason a total function needs one.
+    - **The installer shipped the wrong binary, and building it is how that was found.**
+      `acter-app` built the program and A7's menu spike, whose own first line says it is
+      not shipped; nothing told the bundler which was which, so the first installer built
+      from the new workflow installed `menu_spike.exe` and nothing else. Naming the main
+      binary `acter` fixed that, and installing again showed the rest: Tauri bundles every
+      binary a package declares, so the spike is an example now rather than a binary. The same build showed the installer calling itself
+      0.1.0 while About said 1.0.0, because the file name comes from a version in
+      `tauri.conf.json` that nobody bumps; the workflow now writes the tag's number into an
+      overriding config. Neither could have been caught by a test in this repository, and
+      both were caught by definition of done 10 being done rather than assumed.
+    - **A release tag may say which pre-release it is.** Asked for by the user: the three
+      numbers are still required and still numeric, and after them a suffix is allowed, so
+      `windows-v1.0.0-beta` is the release `1.0.0-beta`. The work is not in permitting the
+      suffix but in telling it apart from `git describe`'s own tail, which appends the
+      commits since the tag and the commit itself — `1.0.0-beta-2-gf49246c` is two commits
+      past the beta and is a development build.
     - **The version, and where the settings are, are said in words.** About reads
       "Development build, commit 521c956" rather than the identifier, and the identifier
       stays on the line because the dialog is copyable text and a bug report has to carry

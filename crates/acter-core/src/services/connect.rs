@@ -772,7 +772,7 @@ impl ConnectApi for ConnectService {
         }
         self.store.save(SavedConnection {
             name: name.to_owned(),
-            target: SavedTarget::of(&profile),
+            target: SavedTarget::of(&profile)?,
             set_up,
             line_owner,
         })?;
@@ -962,7 +962,7 @@ impl ConnectService {
                 edition,
                 provenance,
             } => self.edition(*edition, provenance.as_deref()),
-            SavedTarget::Wsl { distribution } => self.distribution(distribution.as_deref()),
+            SavedTarget::Wsl { distribution } => self.distribution(distribution),
             // A shell on this Mac, whichever one the account logs in to now: a saved
             // Terminal connection stores no shell precisely so that changing it changes
             // this (spec M2, decision 2).
@@ -1022,20 +1022,17 @@ impl ConnectService {
             .ok_or_else(|| edition.instructions().to_owned())
     }
 
-    /// One WSL distribution, or whichever WSL calls the default when none was named.
-    fn distribution(&self, named: Option<&str>) -> Result<ProfileId, String> {
+    /// One named WSL distribution, if this machine still has it.
+    ///
+    /// **A saved WSL connection always names one** (decision 7, corrected 2026-09-12): one
+    /// that did not would open whatever WSL calls the default, which is what New connection
+    /// already does, and would silently become a different machine the day somebody changed
+    /// that default.
+    fn distribution(&self, named: &str) -> Result<ProfileId, String> {
         let installed = self
             .machine
             .wsl_distributions()
             .map_err(|why| why.to_string())?;
-        let Some(named) = named else {
-            return match installed.is_empty() {
-                false => Ok(ProfileId::Shell {
-                    kind: ConnectionKind::Wsl,
-                }),
-                true => Err(ConnectionKind::Wsl.instructions().to_owned()),
-            };
-        };
         match installed.iter().any(|had| had == named) {
             true => Ok(ProfileId::Distribution {
                 name: named.to_owned(),
@@ -2953,7 +2950,7 @@ mod tests {
                     saved(
                         "linux",
                         SavedTarget::Wsl {
-                            distribution: Some("Ubuntu".to_owned()),
+                            distribution: "Ubuntu".to_owned(),
                         },
                     ),
                     saved(
@@ -3044,7 +3041,7 @@ mod tests {
                 vec![saved(
                     "linux",
                     SavedTarget::Wsl {
-                        distribution: Some("Fedora".to_owned()),
+                        distribution: "Fedora".to_owned(),
                     },
                 )],
             );
@@ -3280,6 +3277,74 @@ mod tests {
             assert_eq!(
                 refused,
                 "Nothing is connected, so there is nothing to save."
+            );
+        }
+
+        /// **A WSL session that named no distribution is refused, and nothing is written**
+        /// (decision 7, corrected 2026-09-12).
+        ///
+        /// **The window cannot reach this**, and that is the point of testing it here: the
+        /// only way to WSL in the product is to choose a distribution, because the panel's
+        /// Connect stays disabled until one is chosen and a machine with no distributions
+        /// answers WSL's instructions instead. What is left is a value the type admits, and
+        /// a total function has to answer something — so it answers the sentence rather
+        /// than writing down "whatever WSL calls the default", which is a row that would
+        /// mean a different machine the day somebody changed that default.
+        #[test]
+        fn a_wsl_session_with_no_distribution_is_refused_rather_than_written_down() {
+            let (service, store) = with_saved(FakeMachine::complete(), Vec::new());
+            service
+                .use_profile(
+                    &ProfileId::Shell {
+                        kind: ConnectionKind::Wsl,
+                    },
+                    SetUp::Yes,
+                    None,
+                    &unasked(),
+                )
+                .expect("wsl starts");
+
+            let refused = service
+                .save_connection("ubuntu")
+                .expect_err("there is nothing here to start again");
+
+            assert!(
+                refused.contains("New connection"),
+                "it says what to do: {refused}"
+            );
+            assert!(
+                store.saved().connections.is_empty(),
+                "and nothing was written down"
+            );
+        }
+
+        /// While a session that *did* name one saves as that distribution, which is the whole
+        /// point of the row: this one, no questions.
+        #[test]
+        fn a_wsl_session_that_named_a_distribution_saves_as_that_distribution() {
+            let (service, store) = with_saved(FakeMachine::complete(), Vec::new());
+            service
+                .use_profile(
+                    &ProfileId::Distribution {
+                        name: "Ubuntu".to_owned(),
+                    },
+                    SetUp::Yes,
+                    None,
+                    &unasked(),
+                )
+                .expect("the distribution starts");
+
+            service.save_connection("ubuntu").expect("it is saved");
+
+            assert_eq!(
+                store
+                    .saved()
+                    .connections
+                    .first()
+                    .map(|row| row.target.clone()),
+                Some(SavedTarget::Wsl {
+                    distribution: "Ubuntu".to_owned()
+                })
             );
         }
 

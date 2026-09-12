@@ -301,6 +301,7 @@ class FakeConnect implements ConnectApi {
   origins: (string | null)[] = [];
   /** What a saved connection asked for about the line, when one did. */
   lineOwner: LineOwner = 'FarEnd';
+  /** Why a session cannot be written down, when one cannot (spec 26, decision 19). */
   /** What the saved connections are, for the window that lists or launches them. */
   savedRows: SavedRow[] = [];
   /** What went wrong with the document, when a test is about decision 9. */

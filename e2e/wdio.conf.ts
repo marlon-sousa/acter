@@ -30,7 +30,7 @@ import { fileURLToPath } from 'node:url';
 // registered under debug_assertions only — release binaries carry no automation
 // surface. The frontend bundle is identical in both profiles.
 const appBinaryPath = fileURLToPath(
-  new URL('../target/debug/acter-app.exe', import.meta.url),
+  new URL('../target/debug/acter.exe', import.meta.url),
 );
 
 const BASE_PORT = 4600;

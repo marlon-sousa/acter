@@ -20,7 +20,7 @@ export class RenameConnectionDialog {
   constructor(
     private readonly dialog: HTMLDialogElement,
     private readonly field: HTMLInputElement,
-    rename: HTMLButtonElement,
+    private readonly rename: HTMLButtonElement,
     cancel: HTMLButtonElement,
   ) {
     this.dialog.addEventListener('keydown', (event) => keepTabInside(this.dialog, event));
@@ -32,10 +32,16 @@ export class RenameConnectionDialog {
         (event.target as HTMLElement).closest('button') === null
       ) {
         event.preventDefault();
-        this.answer(this.field.value);
+        // The same question the button answers, never a way around it.
+        if (this.nameable()) {
+          this.answer(this.field.value);
+        }
       }
     });
-    rename.addEventListener('click', () => this.answer(this.field.value));
+    // **Rename is disabled while the field is empty**, for the Save dialog's reason: the
+    // only thing pressing it could do is earn a refusal.
+    this.field.addEventListener('input', () => this.settleButton());
+    this.rename.addEventListener('click', () => this.answer(this.field.value));
     cancel.addEventListener('click', () => this.answer(null));
     // Escape, and every other way of closing, leaves the name as it was.
     this.dialog.addEventListener('close', () => this.answer(null));
@@ -47,12 +53,22 @@ export class RenameConnectionDialog {
    */
   ask(name: string): Promise<string | null> {
     this.field.value = name;
+    this.settleButton();
     return new Promise<string | null>((resolve) => {
       this.settle = resolve;
       this.dialog.showModal();
       this.field.focus();
       this.field.select();
     });
+  }
+
+  /** One condition, asked everywhere the action can start. */
+  private nameable(): boolean {
+    return this.field.value.trim() !== '';
+  }
+
+  private settleButton(): void {
+    this.rename.disabled = !this.nameable();
   }
 
   private answer(name: string | null): void {

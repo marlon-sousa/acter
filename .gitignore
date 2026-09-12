@@ -40,3 +40,12 @@ e2e/screenshots/
 # somebody's own saved connections and accepted host keys, so it is theirs and not the
 # repository's.
 settings/
+
+# The version the release workflow hands to `tauri build`, written from the tag (spec 26,
+# amendment M). It is a build artifact of a release run, not a file anybody edits.
+release-version.json
+
+# What a release run leaves beside the repository: the folder the zip is made from, and the
+# zip itself. Both are built by the workflow and neither is anybody's source.
+portable-package/
+acter-*-portable.zip

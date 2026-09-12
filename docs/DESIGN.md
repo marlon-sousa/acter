@@ -242,6 +242,12 @@ conversation 2026-09-12 with spec
   resolved again at connect time — so upgrading PowerShell does not break a connection the
   user saved a year ago. A saved WSL connection remembers the distribution's name; a saved
   SSH connection remembers host, port and account.
+- **A saved WSL connection always names a distribution.** Writing down "whatever WSL calls
+  the default" would give a row that does what New connection already does in one more
+  keystroke, and that would silently mean a different machine the day somebody changed their
+  default. A saved WSL connection is worth having because it means this distribution, no
+  questions — and nothing in the product can produce a WSL session that named none, because
+  choosing one is how connecting to WSL works.
 - **A password is never in it, and neither is a passphrase.** Both are asked at connect time,
   in the window, and the panel can never hold one. This is B9's decision 5 and it does not
   bend for convenience.
@@ -347,9 +353,17 @@ build stamped rather than the one Cargo compiled, and it is said in words: a lis
 
 **A release is named by its tag, and the tag names a platform.** Tags are
 `<platform>-vx.y.z`, so `windows-v1.0.0` and `macos-v1.0.0` are the same release of the same
-product for two machines. The version a listener hears is the numeric triple and nothing
+product for two machines. The version a listener hears is what follows the `v` and nothing
 else, because the platform is a fact about which file they downloaded rather than about which
 Acter they are running.
+
+**A release that is not the final one says which one it is**, amended 2026-09-12 at the
+user's asking: the three numbers may be followed by a suffix, so `windows-v1.0.0-beta` is a
+release and About reads "Version 1.0.0-beta." A beta somebody downloaded is a thing they are
+running, and the version they report has to say which. The suffix is semver's own — dot
+separated runs of letters, digits and hyphens — and what it must never be mistaken for is
+`git describe`'s own tail, which appends the commits since the tag and the commit itself:
+`1.0.0-beta-2-gf49246c` is two commits past the beta and is a development build.
 
 **A write that fails is a sentence, and it names the folder.** "Could not save the connection:
 the settings folder C:\path is not writable." Naming the folder is the whole point: a listener

@@ -41,6 +41,26 @@ const ILLEGAL: &str = "A name cannot contain slash, backslash, colon, star, ques
 /// which is the likelier mistake: a field left as it was found, or cleared and not refilled.
 const EMPTY: &str = "A connection needs a name.";
 
+/// What is said about a WSL session that named no distribution, which is the one profile
+/// here that cannot be written down.
+///
+/// Saving it would write down "whatever WSL calls the default", and starting *that* again
+/// is what New connection already does — so the row would answer nothing, and would quietly
+/// answer something different the day somebody changed their default.
+///
+/// **No window can reach this.** Connecting to WSL means choosing a distribution: the
+/// panel's Connect stays disabled until a variant is chosen, and the variants are the
+/// distributions, while a machine whose WSL names none answers WSL's instructions instead
+/// of starting anything. What is left is a value [`ProfileId`] admits and nothing
+/// constructs, and a total function has to answer something — so it answers this rather
+/// than writing nonsense down.
+///
+/// It says what to do instead all the same, because a refusal a listener cannot act on is
+/// a refusal that leaves them where they were.
+const NO_DISTRIBUTION: &str = "This session did not name a WSL distribution, so saving it \
+                               would not give you anything to start again. Choose a \
+                               distribution in New connection and save that.";
+
 /// One connection somebody saved: what to call it, what it reaches, and how it opens.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SavedConnection {
@@ -102,14 +122,15 @@ pub enum SavedTarget {
         #[serde(default)]
         provenance: Option<String>,
     },
-    /// Bash inside one WSL distribution.
-    Wsl {
-        /// The distribution's name, as `wsl.exe -l -q` spelled it — or `None` for whatever
-        /// distribution WSL calls the default, which is what a session started from
-        /// `ACTER_SHELL=wsl` is and what saving one has to be able to write down.
-        #[serde(default)]
-        distribution: Option<String>,
-    },
+    /// Bash inside one named WSL distribution.
+    ///
+    /// **The name is required, and that is the whole point of saving one** (spec 26,
+    /// decision 7, corrected 2026-09-12 at the user's asking). A saved WSL connection
+    /// earns its place by meaning "this distribution, no questions"; one that named none
+    /// would be a row that opens whatever WSL calls the default, which is what New
+    /// connection already does in one more keystroke — and which would silently become a
+    /// different machine the day somebody changed their default.
+    Wsl { distribution: String },
     /// A program named directly. No arguments field until something starts a program with
     /// arguments.
     Program { program: String },
@@ -135,13 +156,16 @@ pub enum SavedTarget {
 }
 
 impl SavedTarget {
-    /// What this profile is, written down.
+    /// What this profile is, written down — or the sentence to say when it cannot be.
     ///
     /// **The resolved file is deliberately dropped** (decision 7). An `Install` carries the
     /// file the list found; what survives here is the edition and the provenance, which is
     /// what can be matched against a machine that has changed since.
-    pub fn of(id: &ProfileId) -> Self {
-        match id {
+    ///
+    /// **One session cannot be written down at all**, and it is the one that names no WSL
+    /// distribution. See [`NO_DISTRIBUTION`].
+    pub fn of(id: &ProfileId) -> Result<Self, String> {
+        Ok(match id {
             ProfileId::Shell {
                 kind: ConnectionKind::Cmd,
             }
@@ -158,7 +182,7 @@ impl SavedTarget {
             } => Self::Terminal,
             ProfileId::Shell {
                 kind: ConnectionKind::Wsl,
-            } => Self::Wsl { distribution: None },
+            } => return Err(NO_DISTRIBUTION.to_owned()),
             ProfileId::Shell { kind } => Self::PowerShell {
                 edition: *kind,
                 provenance: None,
@@ -170,7 +194,7 @@ impl SavedTarget {
                 provenance: provenance.clone(),
             },
             ProfileId::Distribution { name } => Self::Wsl {
-                distribution: Some(name.clone()),
+                distribution: name.clone(),
             },
             ProfileId::Program { program } => Self::Program {
                 program: program.clone(),
@@ -183,7 +207,7 @@ impl SavedTarget {
             ProfileId::Scripted { name } => Self::Scripted {
                 scenario: name.clone(),
             },
-        }
+        })
     }
 
     /// The profile this target names, before any machine has been asked about it.
@@ -201,12 +225,9 @@ impl SavedTarget {
                 kind: ConnectionKind::Terminal,
             },
             Self::PowerShell { edition, .. } => ProfileId::Shell { kind: *edition },
-            Self::Wsl { distribution: None } => ProfileId::Shell {
-                kind: ConnectionKind::Wsl,
+            Self::Wsl { distribution } => ProfileId::Distribution {
+                name: distribution.clone(),
             },
-            Self::Wsl {
-                distribution: Some(name),
-            } => ProfileId::Distribution { name: name.clone() },
             Self::Program { program } => ProfileId::Program {
                 program: program.clone(),
             },
@@ -244,13 +265,7 @@ impl SavedTarget {
                 edition,
                 provenance: Some(which),
             } => format!("{}, {which}", edition.label()),
-            Self::Wsl {
-                distribution: Some(name),
-            } => format!("WSL, {name}"),
-            // It names no distribution because nothing here chose one: asking WSL for its
-            // default is deliberately not the same as this program deciding which one that
-            // is (spec B5.3).
-            Self::Wsl { distribution: None } => "WSL, the default distribution".to_owned(),
+            Self::Wsl { distribution } => format!("WSL, {distribution}"),
             Self::Program { program } => format!("Program, {program}"),
             // The account before the machine, because that is the order it is decided in,
             // and the port only when it is not the one every SSH server uses.
@@ -323,9 +338,6 @@ mod tests {
                 kind: ConnectionKind::Terminal,
             },
             ProfileId::Shell {
-                kind: ConnectionKind::Wsl,
-            },
-            ProfileId::Shell {
                 kind: ConnectionKind::PowerShellSeven,
             },
             ProfileId::Distribution {
@@ -345,13 +357,58 @@ mod tests {
         ];
 
         for id in cases {
-            let target = SavedTarget::of(&id);
+            let target = SavedTarget::of(&id).expect("every one of these can be saved");
             let json = serde_json::to_value(&target).expect("a target is written down");
             let back: SavedTarget = serde_json::from_value(json).expect("and read back");
 
             assert_eq!(back, target, "{id:?}");
             assert_eq!(target.profile(), id, "{id:?} names itself again");
         }
+    }
+
+    /// **A WSL session that named no distribution cannot be written down** (decision 7,
+    /// corrected 2026-09-12 at the user's asking).
+    ///
+    /// Saving it would write "whatever WSL calls the default", and starting *that* again is
+    /// what New connection already does in one more keystroke — so the row would answer
+    /// nothing, and would quietly answer something different the day somebody changed their
+    /// default. It is the one session in this product that cannot be saved, and what it
+    /// answers is a sentence saying what to do instead.
+    #[test]
+    fn a_wsl_session_with_no_distribution_cannot_be_saved_and_says_what_to_do() {
+        let refused = SavedTarget::of(&ProfileId::Shell {
+            kind: ConnectionKind::Wsl,
+        })
+        .expect_err("there is nothing here to start again");
+
+        assert_eq!(refused, NO_DISTRIBUTION);
+        assert!(refused.contains("New connection"), "{refused}");
+        assert!(refused.ends_with('.'), "it is read aloud: {refused}");
+        assert!(!refused.contains("  "), "with no run of spaces: {refused}");
+    }
+
+    /// And one that named a distribution is saved as that distribution, which is the whole
+    /// point of saving a WSL connection: this one, no questions.
+    #[test]
+    fn a_named_distribution_is_what_is_written_down_and_what_comes_back() {
+        let saved = SavedTarget::of(&ProfileId::Distribution {
+            name: "Ubuntu 24.04".to_owned(),
+        })
+        .expect("a named distribution is saveable");
+
+        assert_eq!(
+            saved,
+            SavedTarget::Wsl {
+                distribution: "Ubuntu 24.04".to_owned()
+            }
+        );
+        assert_eq!(
+            saved.profile(),
+            ProfileId::Distribution {
+                name: "Ubuntu 24.04".to_owned()
+            }
+        );
+        assert_eq!(saved.summary(), "WSL, Ubuntu 24.04");
     }
 
     /// **The file is dropped and the edition is kept**, which is what makes a saved
@@ -363,7 +420,8 @@ mod tests {
             kind: ConnectionKind::PowerShellSeven,
             program: r"C:\Program Files\PowerShell\7\pwsh.exe".to_owned(),
             provenance: Some("preview".to_owned()),
-        });
+        })
+        .expect("an install is saveable");
 
         assert_eq!(
             saved,
@@ -387,7 +445,8 @@ mod tests {
             kind: ConnectionKind::Terminal,
             program: "/bin/zsh".to_owned(),
             provenance: Some("zsh".to_owned()),
-        });
+        })
+        .expect("a Terminal shell is saveable");
 
         assert_eq!(saved, SavedTarget::Terminal);
         assert_eq!(
@@ -410,7 +469,7 @@ mod tests {
         );
         assert_eq!(
             SavedTarget::Wsl {
-                distribution: Some("Ubuntu".to_owned())
+                distribution: "Ubuntu".to_owned()
             }
             .summary(),
             "WSL, Ubuntu"
@@ -438,7 +497,9 @@ mod tests {
                 edition: ConnectionKind::WindowsPowerShell,
                 provenance: Some("Microsoft Store".to_owned()),
             },
-            SavedTarget::Wsl { distribution: None },
+            SavedTarget::Wsl {
+                distribution: "Debian".to_owned(),
+            },
             SavedTarget::Program {
                 program: "nu.exe".to_owned(),
             },

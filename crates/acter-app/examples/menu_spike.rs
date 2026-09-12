@@ -6,6 +6,10 @@
 //!   "app"           — the configured Acter page, menu bar attached, no session behind it.
 //!
 //! Reverted once the measurement is written into the spec.
+//!
+//! **An example rather than a binary** (spec 26, definition of done 10): Tauri bundles every
+//! binary a package declares, so while this lived in `src/bin` it was a second program in
+//! the installer. `cargo run -p acter-app --example menu_spike` is how it runs.
 
 use tauri::menu::{MenuBuilder, SubmenuBuilder};
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder, generate_context};
