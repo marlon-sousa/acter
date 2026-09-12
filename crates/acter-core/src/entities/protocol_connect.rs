@@ -187,7 +187,7 @@ pub enum ConnectAnswer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Secret, SessionId};
+    use crate::{LineOwner, Secret, SessionId};
     use serde_json::json;
 
     #[test]
@@ -219,6 +219,8 @@ mod tests {
                     label: "SSH: acter at acter-ssh".to_owned(),
                     note: None,
                     limit_explained: false,
+                    saved_as: None,
+                    line_owner: LineOwner::FarEnd,
                 },
             },
             ConnectStep::Failed {

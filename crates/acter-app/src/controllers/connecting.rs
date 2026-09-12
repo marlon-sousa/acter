@@ -51,13 +51,15 @@ impl Connecting {
     /// Everything after this reaches the window as steps on `steps`: what is happening,
     /// what is being asked, and finally whether there is a session. The invoke that called
     /// this is already free.
-    /// **`set_up` is the Connect dialog's checkbox**, travelling with the attempt because
-    /// there is no profile store to keep it in yet (spec B9.5, decisions 9 and 10). It is
-    /// carried rather than decided here: this controller owns attempts, not preferences.
+    /// **`set_up` is the Connect dialog's checkbox** (spec B9.5, decisions 9 and 10), and
+    /// **`origin` is the saved connection this attempt started from** (spec 26,
+    /// decision 11). Both are carried rather than decided here: this controller owns
+    /// attempts, not preferences and not the store.
     pub(crate) fn begin(
         &self,
         profile: ProfileId,
         set_up: SetUp,
+        origin: Option<String>,
         steps: Arc<dyn ConnectSink>,
     ) -> AttemptId {
         let attempt = AttemptId(self.next.fetch_add(1, Ordering::SeqCst));
@@ -76,7 +78,12 @@ impl Connecting {
         // waiting for a person, and parking a runtime worker on a human is how a runtime
         // starves. This is the pool that exists for exactly that.
         tauri::async_runtime::spawn_blocking(move || {
-            conversation.finished(connect.use_profile(&profile, set_up, &questions));
+            conversation.finished(connect.use_profile(
+                &profile,
+                set_up,
+                origin.as_deref(),
+                &questions,
+            ));
         });
         attempt
     }
@@ -161,6 +168,7 @@ mod tests {
             &self,
             _id: &ProfileId,
             _set_up: SetUp,
+            _origin: Option<&str>,
             questions: &Arc<dyn ConnectQuestions>,
         ) -> Result<Connected, String> {
             if self.asks {
@@ -177,6 +185,41 @@ mod tests {
         }
 
         fn connected(&self) -> Option<Connected> {
+            None
+        }
+
+        /// **Nothing about saved connections**, and that is the seam holding: this
+        /// controller is about an attempt somebody started, and where a name came from is
+        /// answered by the service the attempt reaches.
+        fn saved(&self) -> acter_core::SavedConnections {
+            acter_core::SavedConnections {
+                rows: Vec::new(),
+                unreadable: None,
+            }
+        }
+
+        fn save_connection(&self, _name: &str) -> Result<String, String> {
+            unreachable!("this controller never saves")
+        }
+
+        fn rename_connection(&self, _from: &str, _to: &str) -> Result<String, String> {
+            unreachable!("this controller never renames")
+        }
+
+        fn forget_connection(&self, _name: &str) -> Result<String, String> {
+            unreachable!("this controller never forgets")
+        }
+
+        fn offer_to_save(&self) -> bool {
+            true
+        }
+
+        fn stop_offering_to_save(&self) -> Result<(), String> {
+            unreachable!("this controller records no preference")
+        }
+
+        /// Nothing on the command line: a launch switch is answered elsewhere.
+        fn requested_at_launch(&self) -> Option<acter_core::LaunchRequest> {
             None
         }
     }
@@ -202,7 +245,7 @@ mod tests {
             outcome: Err("Acter could not reach acter-ssh on port 2222.".to_owned()),
         });
 
-        connecting.begin(scripted(), SetUp::Yes, watcher);
+        connecting.begin(scripted(), SetUp::Yes, None, watcher);
 
         let ConnectStep::Failed { why } = steps.recv_timeout(PATIENCE).expect("it ends") else {
             panic!("a far end that will not start fails");
@@ -226,10 +269,12 @@ mod tests {
                 label: "Scripted: builtin".to_owned(),
                 note: None,
                 limit_explained: false,
+                saved_as: None,
+                line_owner: acter_core::LineOwner::FarEnd,
             }),
         });
 
-        connecting.begin(scripted(), SetUp::Yes, watcher);
+        connecting.begin(scripted(), SetUp::Yes, None, watcher);
 
         let ConnectStep::Arrived { connected } = steps.recv_timeout(PATIENCE).expect("it ends")
         else {
@@ -251,10 +296,12 @@ mod tests {
                 label: "SSH".to_owned(),
                 note: None,
                 limit_explained: false,
+                saved_as: None,
+                line_owner: acter_core::LineOwner::FarEnd,
             }),
         });
 
-        let attempt = connecting.begin(scripted(), SetUp::Yes, watcher);
+        let attempt = connecting.begin(scripted(), SetUp::Yes, None, watcher);
         let asked = steps.recv_timeout(PATIENCE).expect("it asks");
         assert!(matches!(asked, ConnectStep::Asked { .. }));
 
@@ -282,7 +329,7 @@ mod tests {
             outcome: Err("It did not start.".to_owned()),
         });
 
-        let attempt = connecting.begin(scripted(), SetUp::Yes, watcher);
+        let attempt = connecting.begin(scripted(), SetUp::Yes, None, watcher);
         steps.recv_timeout(PATIENCE).expect("it ends");
         connecting.ended(attempt);
         connecting.answer(attempt, ConnectAnswer::Trust);

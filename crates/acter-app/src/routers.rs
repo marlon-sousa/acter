@@ -30,11 +30,16 @@ mod tests {
     use tauri::webview::InvokeRequest;
     use tauri::{WebviewWindowBuilder, generate_handler};
 
-    use crate::container::{AppState, state};
+    use crate::adapters::Settings;
+    use crate::container::{AppState, SettingsFolder, Standing, Version, state};
 
     /// The scripted far end these tests connect to when they want a session: a debug build
     /// offers it, and no process is spawned to run it.
     const BUILTIN: &str = "builtin";
+
+    /// A settings folder nothing else in this run will use, so two tests writing at once
+    /// cannot see each other's connections.
+    static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
     /// Builds the app on the Tauri mock runtime with the real connect service wired into
     /// managed state, then invokes `cmd` through the real IPC pipeline — the same path a
@@ -65,9 +70,24 @@ mod tests {
 
     fn mock_app(session: bool) -> Mock {
         let runtime = tauri::async_runtime::handle();
+        // **A settings folder of this test's own** (spec 26, decision 3): the variable
+        // exists precisely so a suite is not run against whatever this machine happens to
+        // hold, and a test that saved a connection into the developer's real folder would
+        // be a test that changed what the next manual pass meets.
+        let settings = Arc::new(Settings::open(
+            SettingsFolder {
+                path: std::env::temp_dir().join(format!(
+                    "acter-routers-{}-{}",
+                    std::process::id(),
+                    NEXT.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                )),
+                standing: Standing::Directed,
+            },
+            Version::development("in-a-test"),
+        ));
         let service = {
             let _entered = runtime.inner().enter();
-            let service = Arc::new(state());
+            let service = Arc::new(state(&settings));
             if session {
                 service
                     .use_profile(
@@ -75,6 +95,7 @@ mod tests {
                             name: BUILTIN.to_owned(),
                         },
                         acter_core::SetUp::Yes,
+                        None,
                         &(Arc::new(acter_core::Unasked) as Arc<dyn acter_core::ConnectQuestions>),
                     )
                     .expect("the built-in scripted session starts");
@@ -86,6 +107,7 @@ mod tests {
             session: Arc::clone(&service) as Arc<dyn SessionApi>,
             connecting: Arc::new(crate::controllers::Connecting::new(Arc::clone(&connect))),
             connect,
+            settings,
         };
         let app = mock_builder()
             .manage(state)
@@ -99,7 +121,15 @@ mod tests {
                 super::use_profile,
                 super::answer_connect,
                 super::attempt_ended,
-                super::connected
+                super::connected,
+                super::about,
+                super::saved,
+                super::save_connection,
+                super::rename_connection,
+                super::forget_connection,
+                super::offer_to_save,
+                super::stop_offering_to_save,
+                super::requested_at_launch
             ])
             .build(mock_context(noop_assets()))
             .expect("failed to build the mock app");
@@ -258,6 +288,9 @@ mod tests {
                 // The Connect dialog's checkbox, which travels with the attempt (spec B9.5,
                 // decision 9). Ticked is what the dialog sends by default.
                 "setUp": "Yes",
+                // No saved connection behind it: this is New connection, which is the
+                // shape that has no origin (spec 26, decision 11).
+                "origin": null,
                 "steps": "__CHANNEL__:1",
             }),
         )
@@ -297,5 +330,135 @@ mod tests {
         .expect("answering something stale is not an error");
         invoke_on(&mock, "attempt_ended", json!({ "attempt": 99 }))
             .expect("ending something stale is not an error");
+    }
+
+    /// **The About dialog's facts, through the pipeline the dialog uses.** They stopped
+    /// being constants when the settings folder and the stamped version joined them
+    /// (spec 26, decisions 3 and 5): both come out of managed state, so what this pins is
+    /// that the state really reaches the router and that the lines a listener hears are
+    /// whole.
+    #[test]
+    fn about_answers_the_build_the_version_and_the_settings_folder() {
+        let out = invoke_unconnected("about", json!({})).expect("about should succeed");
+
+        assert_eq!(out["name"], "Acter");
+        let folder = out["settings_folder"]
+            .as_str()
+            .expect("the settings folder is a path a user can read out");
+        assert!(
+            !folder.trim().is_empty(),
+            "a folder nobody can name is no answer"
+        );
+        for line in ["settings_standing", "version_said"] {
+            let said = out[line].as_str().expect("{line} is a sentence");
+            assert!(said.ends_with('.'), "it is read aloud: {said}");
+            assert!(!said.contains("  "), "with no run of spaces: {said}");
+        }
+        assert!(
+            !out["version"]
+                .as_str()
+                .expect("a version")
+                .trim()
+                .is_empty(),
+            "a bug report has something to carry"
+        );
+    }
+
+    /// **The saved connections cross the wire as typed rows** (spec 26, decision 11), not
+    /// as a document the frontend reads. An empty document is the ordinary first run and
+    /// says nothing went wrong.
+    #[test]
+    fn saved_answers_rows_the_dialog_can_render() {
+        let out = invoke_unconnected("saved", json!({})).expect("saved should succeed");
+
+        assert!(
+            out["rows"].as_array().expect("rows is a list").is_empty(),
+            "nothing is saved in a fixture nobody wrote to"
+        );
+        assert_eq!(
+            out["unreadable"],
+            Value::Null,
+            "an ordinary first run has nothing to report"
+        );
+    }
+
+    /// **Both halves of `save_connection` are sentences a listener hears**, and the
+    /// refusal half crosses the wire as a rejected promise — which is what the dialog
+    /// already handles for a connection that could not be made.
+    #[test]
+    fn saving_with_nothing_connected_is_refused_over_the_wire_in_a_sentence() {
+        let why = invoke_unconnected("save_connection", json!({ "name": "work laptop" }))
+            .expect_err("there is nothing to save");
+
+        assert_eq!(
+            why.as_str().expect("a sentence"),
+            "Nothing is connected, so there is nothing to save."
+        );
+    }
+
+    /// And a session behind the window is saved, renamed and forgotten through the real
+    /// pipeline — three invokes, each answering the sentence to say.
+    #[test]
+    fn a_connection_is_saved_renamed_and_forgotten_through_the_real_invokes() {
+        let mock = mock_app(true);
+
+        let saved =
+            invoke_on(&mock, "save_connection", json!({ "name": "the fake" })).expect("it saves");
+        assert_eq!(saved, "Saved as the fake.");
+
+        let listed = invoke_on(&mock, "saved", json!({})).expect("saved should succeed");
+        let rows = listed["rows"].as_array().expect("rows is a list");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["name"], "the fake");
+        assert_eq!(rows[0]["summary"], "Scripted, builtin");
+        assert_eq!(rows[0]["available"], true);
+
+        let renamed = invoke_on(
+            &mock,
+            "rename_connection",
+            json!({ "from": "the fake", "to": "the other fake" }),
+        )
+        .expect("it renames");
+        assert_eq!(renamed, "the fake is now called the other fake.");
+
+        let forgotten = invoke_on(
+            &mock,
+            "forget_connection",
+            json!({ "name": "the other fake" }),
+        )
+        .expect("it forgets");
+        assert_eq!(forgotten, "the other fake is no longer saved.");
+
+        let listed = invoke_on(&mock, "saved", json!({})).expect("saved should succeed");
+        assert!(
+            listed["rows"]
+                .as_array()
+                .expect("rows is a list")
+                .is_empty()
+        );
+    }
+
+    /// **The preference of decision 19, through its two named invokes and no others.**
+    #[test]
+    fn the_offer_to_save_is_asked_and_answered_over_the_wire() {
+        let mock = mock_app(false);
+
+        let before = invoke_on(&mock, "offer_to_save", json!({})).expect("it is asked");
+        assert_eq!(before, Value::Bool(true), "nobody has said otherwise");
+
+        invoke_on(&mock, "stop_offering_to_save", json!({})).expect("the box is ticked");
+
+        let after = invoke_on(&mock, "offer_to_save", json!({})).expect("it is asked again");
+        assert_eq!(after, Value::Bool(false));
+    }
+
+    /// **An ordinary launch asks for nothing** (spec 26, decision 20). The suite runs with
+    /// no `--connect` on its own command line, so this is the answer the window opens on.
+    #[test]
+    fn an_ordinary_launch_carries_no_request_over_the_wire() {
+        let out = invoke_unconnected("requested_at_launch", json!({}))
+            .expect("requested_at_launch should succeed");
+
+        assert_eq!(out, Value::Null);
     }
 }

@@ -1654,8 +1654,8 @@ mod replacing_a_session {
     use std::sync::atomic::{AtomicU32, Ordering};
 
     use acter_core::{
-        Chosen, ConnectApi, ConnectQuestions, ConnectService, ProfileId, SessionFactory, Unchecked,
-        offered,
+        Chosen, ConnectApi, ConnectQuestions, ConnectService, ProfileId, RememberedConnections,
+        SessionFactory, Unchecked, offered,
     };
 
     use super::*;
@@ -1751,6 +1751,9 @@ mod replacing_a_session {
             Arc::new(Unchecked),
             offered("windows").to_vec(),
             Vec::new(),
+            // Nothing saved: these are about replacing a real shell, not about the
+            // connections somebody named.
+            Arc::new(RememberedConnections::default()),
         );
 
         service
@@ -1759,6 +1762,7 @@ mod replacing_a_session {
                     program: first.display().to_string(),
                 },
                 SetUp::Yes,
+                None,
                 &(Arc::new(Unasked) as Arc<dyn ConnectQuestions>),
             )
             .expect("the first shell starts");
@@ -1773,6 +1777,7 @@ mod replacing_a_session {
                     program: second.display().to_string(),
                 },
                 SetUp::Yes,
+                None,
                 &(Arc::new(Unasked) as Arc<dyn ConnectQuestions>),
             )
             .expect("the second shell starts");
@@ -1824,7 +1829,7 @@ mod what_this_machine_actually_has {
 
     use acter_core::{
         Chosen, ConnectApi, ConnectQuestions, ConnectService, ConnectionKind, ProfileId,
-        SessionFactory, offered,
+        RememberedConnections, SessionFactory, offered,
     };
     use acter_shells::{WindowsTrust, adapter_for};
 
@@ -1891,6 +1896,9 @@ mod what_this_machine_actually_has {
             Arc::new(WindowsTrust::new()),
             offered("windows").to_vec(),
             Vec::new(),
+            // Nothing saved: these are about replacing a real shell, not about the
+            // connections somebody named.
+            Arc::new(RememberedConnections::default()),
         );
 
         let connected = service
@@ -1899,6 +1907,7 @@ mod what_this_machine_actually_has {
                     kind: ConnectionKind::Cmd,
                 },
                 SetUp::Yes,
+                None,
                 &(Arc::new(Unasked) as Arc<dyn ConnectQuestions>),
             )
             .expect("cmd.exe is signed by Microsoft, so nobody has to be asked about it");
@@ -1922,6 +1931,9 @@ mod what_this_machine_actually_has {
             Arc::new(WindowsTrust::new()),
             offered("windows").to_vec(),
             Vec::new(),
+            // Nothing saved: these are about replacing a real shell, not about the
+            // connections somebody named.
+            Arc::new(RememberedConnections::default()),
         );
 
         let listed = service.connectable();
@@ -1941,6 +1953,7 @@ mod what_this_machine_actually_has {
             .use_profile(
                 &cmd.id,
                 SetUp::Yes,
+                None,
                 &(Arc::new(Unasked) as Arc<dyn ConnectQuestions>),
             )
             .expect("choosing the row starts it");

@@ -7,6 +7,14 @@ license.workspace = true
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+# The version stamp (spec 26, decision 3). It shells out to git rather than linking a git
+# library, so it costs a build dependency and no runtime one — and it has already done
+# everything around the two `git` calls that is not three lines: it emits the
+# `rerun-if-changed` instructions for the git head and for the ref that head points at, it
+# does not fail a build in a directory that is not a repository, and every value it emits
+# can be overridden by an environment variable of the same name, which is what the release
+# workflow sets so a tag-per-platform build knows which tag it is (decision 21).
+vergen-gitcl = "10"
 
 [dependencies]
 tauri = { version = "2", features = [] }
@@ -32,6 +40,17 @@ tokio = { version = "1", features = ["rt", "sync", "time"] }
 # it) — but registration in container.rs is #[cfg(debug_assertions)], so release
 # binaries never start the automation server.
 tauri-plugin-wdio-webdriver = "1"
+# Where this operating system keeps an account's configuration (spec 26, decision 3). It
+# asks the known-folder API on Windows, where reading `%APPDATA%` trusts a variable that can
+# be missing or redirected — and it collapses the per-platform branch in the installed case
+# to nothing, because both platforms answer their own base and both then join the same
+# suffix. Pinned to the major version Tauri already compiles, so this adds no second copy.
+dirs = "6"
+# The atomic write behind the settings document (spec 26, decision 9): the document goes to
+# a temporary file in the same folder and is renamed over the target, so a crash, a full
+# disk or a killed process cannot leave a half-written document — which with one file would
+# mean every saved connection at once. Already compiled here through Tauri.
+tempfile = "3"
 
 [features]
 # Standalone/production builds must serve the embedded frontend, not the Vite dev
@@ -40,6 +59,15 @@ tauri-plugin-wdio-webdriver = "1"
 # the embedded `frontendDist`. E2E and any distributable build enable it — see the
 # root `test:e2e` script. Do not add it to a default feature set.
 custom-protocol = ["tauri/custom-protocol"]
+
+# What the portable package is built with (spec 26, decision 3). How this copy of Acter was
+# packaged is decided when it is built and never guessed at when it runs: with this feature
+# on, the settings folder is beside the program; with it off, a release keeps its settings
+# where this operating system keeps an account's configuration. Off by default, so an
+# ordinary build and the installer's build are the same thing and only the zip's build
+# differs. The rule itself takes the packaging as a *value*, from one `cfg!` expression, so
+# an ordinary `cargo test` covers every branch either way — see `container::packaging`.
+portable = []
 
 [dev-dependencies]
 # `#[tokio::test]` for the system clock adapter, the one place real time is touched.

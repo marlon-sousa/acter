@@ -7,7 +7,7 @@
 //! handler is a design where connecting is untested. Naming the two operations puts the
 //! behaviour behind a seam a test can reach with no window, no webview and no screen reader
 //! in the way, and leaves the menu as the thinnest possible caller of them — which is also
-//! what the launch path calls when `--profile` names one (B8).
+//! what the launch path calls when `--connect` names a saved connection (spec 26).
 //!
 //! Separate from [`SessionApi`](crate::SessionApi) because it is a different conversation:
 //! that port is one session's input and output, and this one is about *which* session there
@@ -20,9 +20,21 @@
 
 use std::sync::Arc;
 
-use crate::{ConnectQuestions, Connectable, Connected, ProfileId, SetUp};
+use crate::{
+    ConnectQuestions, Connectable, Connected, LaunchRequest, ProfileId, SavedConnections, SetUp,
+};
 
-/// Connecting, as two actions and a question.
+/// Connecting, and the connections somebody saved.
+///
+/// **Named actions rather than a key-and-value surface** (spec 26, decision 11). The
+/// frontend never reads or writes the settings document: it calls one of these and gets a
+/// typed answer, exactly as it already does for `connectable` and `connected`. A stringly
+/// surface would give up the one guarantee that makes a new setting a compile error rather
+/// than a silent nothing, and it would let the frontend write keys with domain invariants
+/// behind them -- the name rule and the document's format among them -- at which point the
+/// backend can no longer promise what is in its own file. A named action is also where the
+/// spoken sentence lives. The cost, stated: a setting the frontend reads costs one invoke,
+/// and two if it is written there as well.
 pub trait ConnectApi: Send + Sync {
     /// Everything this machine offers, freshly asked each time.
     ///
@@ -64,10 +76,18 @@ pub trait ConnectApi: Send + Sync {
     /// listener is told when each command finished, and whether it worked. Ticked by
     /// default, and unticking it skips both the dialog and the setup — which is what makes
     /// refusing reachable without the dialog ever appearing.
+    ///
+    /// **`origin` is the saved connection this attempt started from**, or `None` for a new
+    /// one (spec 26, decision 11). It is the frontend's knowledge rather than something
+    /// this could work out, because the user may have edited the panel before pressing
+    /// Connect and the backend cannot know which row that came from. What it decides is two
+    /// things: who holds the line as the session opens, and whether the window offers to
+    /// save it.
     fn use_profile(
         &self,
         id: &ProfileId,
         set_up: SetUp,
+        origin: Option<&str>,
         questions: &Arc<dyn ConnectQuestions>,
     ) -> Result<Connected, String>;
 
@@ -78,4 +98,58 @@ pub trait ConnectApi: Send + Sync {
     /// it, and the two are different windows to open: one attaches, the other says it is
     /// empty and where to go.
     fn connected(&self) -> Option<Connected>;
+
+    /// Every saved connection, freshly read, with the sentence to say instead when the
+    /// document could not be parsed (spec 26, decisions 9 and 11).
+    ///
+    /// **Freshly read on every call**, for [`Self::connectable`]'s reason: what is saved
+    /// and what is installed both change while Acter is open. Availability is judged
+    /// against what discovery answers *now*, so a distribution that was uninstalled and an
+    /// edition that is gone are listed and unavailable rather than missing.
+    fn saved(&self) -> SavedConnections;
+
+    /// Write the live session down under this name, and answer the sentence to say.
+    ///
+    /// **The session as it stands** (decision 11): its profile, whether it was set up, and
+    /// whoever owns the line now. If `name` is the session's origin it replaces; if another
+    /// saved connection already has that name it refuses; and an illegal name is refused
+    /// with decision 8's sentence. On success the session's origin becomes `name`.
+    fn save_connection(&self, name: &str) -> Result<String, String>;
+
+    /// Give a saved connection a different name, and answer the sentence to say. Renaming
+    /// the live session's origin renames the origin too.
+    fn rename_connection(&self, from: &str, to: &str) -> Result<String, String>;
+
+    /// Remove one, and answer the sentence to say. **The one thing here nobody can undo**,
+    /// which is why the dialog asks first (decision 15).
+    fn forget_connection(&self, name: &str) -> Result<String, String>;
+
+    /// Whether a new connection that has just come up should offer to save itself
+    /// (decision 19).
+    ///
+    /// **Asked at the moment of the offer rather than at startup**, so a preference set in
+    /// another window is honoured without a restart -- `connectable`'s rule again.
+    fn offer_to_save(&self) -> bool;
+
+    /// Record that it should not, which is the offer's own checkbox and the only thing that
+    /// writes this. **File then Save connection is unaffected**, which is what the
+    /// paragraph beside the checkbox is there to say.
+    fn stop_offering_to_save(&self) -> Result<(), String>;
+
+    /// What `acter --connect <name>` asked for, or `None` for an ordinary launch (spec 26,
+    /// decision 20).
+    ///
+    /// **Asked rather than acted on, because the asking needs a window.** A saved SSH
+    /// connection stops partway to ask about a host key and then for a password, and there
+    /// is nobody to ask until the frontend is running -- which is what B9 already requires
+    /// of every SSH attempt. So the switch is answered here and carried out by the frontend
+    /// through the same call the Connect dialog makes, rather than started behind its back
+    /// at launch.
+    ///
+    /// A name nothing is saved under answers [`LaunchRequest::Unknown`], which is decided
+    /// here because deciding it needs the store.
+    ///
+    /// Asked once at startup, beside [`Self::connected`] and for its reason: a launch may
+    /// have brought a request with it, and a window that has one opens differently.
+    fn requested_at_launch(&self) -> Option<LaunchRequest>;
 }

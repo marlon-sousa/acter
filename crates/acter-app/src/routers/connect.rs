@@ -1,11 +1,17 @@
-//! Adapter: the connect Tauri routers — the three named actions of `ConnectApi`, each a
+//! Adapter: the connect Tauri routers — the named actions of `ConnectApi`, each a
 //! one-line `#[tauri::command]` delegating to the port in managed state.
 //!
 //! **These are the whole of "connecting" as far as the framework is concerned**, which is
-//! the point of B7's shape: a menu item, a dialog and a `--profile` switch are all callers
-//! of the same three, and a test calls them directly with no window and no webview. What
+//! the point of B7's shape: a menu item, a dialog and a `--connect` switch are all callers
+//! of the same actions, and a test calls them directly with no window and no webview. What
 //! stays untestable is only whether a menu *widget* exists and fires, which the NVDA pass
 //! observes.
+//!
+//! **Nothing here carries a key and a value** (spec 26, decision 11). The frontend never
+//! reads or writes the settings document: the saved connections arrive as typed rows and
+//! change through named actions, each answering the sentence a listener hears. A stringly
+//! surface would give up the one guarantee that makes a new setting a compile error rather
+//! than a silent nothing.
 //!
 //! **Since B9, starting a connection does not answer with one** (spec B9). Connecting can
 //! stop partway to ask a person about a host key or a password, so `use_profile` answers
@@ -19,7 +25,10 @@
 
 use std::sync::Arc;
 
-use acter_core::{AttemptId, ConnectAnswer, ConnectSink, Connectable, Connected, ProfileId, SetUp};
+use acter_core::{
+    AttemptId, ConnectAnswer, ConnectSink, Connectable, Connected, LaunchRequest, ProfileId,
+    SavedConnections, SetUp,
+};
 use tauri::ipc::Channel;
 use tauri::{State, command};
 
@@ -51,11 +60,13 @@ pub(crate) fn use_profile(
     state: State<'_, AppState>,
     profile: ProfileId,
     set_up: SetUp,
+    origin: Option<String>,
     steps: Channel<acter_core::ConnectStep>,
 ) -> AttemptId {
     state.connecting.begin(
         profile,
         set_up,
+        origin,
         Arc::new(ConnectSteps::new(steps)) as Arc<dyn ConnectSink>,
     )
 }
@@ -91,4 +102,69 @@ pub(crate) fn attempt_ended(state: State<'_, AppState>, attempt: AttemptId) {
 #[command]
 pub(crate) fn connected(state: State<'_, AppState>) -> Option<Connected> {
     state.connect.connected()
+}
+
+/// Every saved connection, freshly read and resolved against what this machine has now
+/// (spec 26, decision 11).
+#[command]
+pub(crate) fn saved(state: State<'_, AppState>) -> SavedConnections {
+    state.connect.saved()
+}
+
+/// Write the live session down under this name, and answer the sentence to say.
+///
+/// **A `Result`, because both halves are sentences a listener hears**: "Saved as X." on the
+/// way out, and the name rule or a collision on the way back (decisions 8 and 11). Tauri
+/// renders the error half as a rejected promise, which is what the dialog already handles
+/// for a connection that could not be made.
+#[command]
+pub(crate) fn save_connection(state: State<'_, AppState>, name: String) -> Result<String, String> {
+    state.connect.save_connection(&name)
+}
+
+/// Give a saved connection a different name.
+#[command]
+pub(crate) fn rename_connection(
+    state: State<'_, AppState>,
+    from: String,
+    to: String,
+) -> Result<String, String> {
+    state.connect.rename_connection(&from, &to)
+}
+
+/// Remove one — the one thing here nobody can undo, which is why the dialog asks first
+/// (decision 15).
+#[command]
+pub(crate) fn forget_connection(
+    state: State<'_, AppState>,
+    name: String,
+) -> Result<String, String> {
+    state.connect.forget_connection(&name)
+}
+
+/// Whether a new connection that has just come up should offer to save itself
+/// (decision 19).
+///
+/// **Asked at the moment of the offer rather than at startup**, so a preference set in
+/// another window is honoured without a restart — `connectable`'s rule again.
+#[command]
+pub(crate) fn offer_to_save(state: State<'_, AppState>) -> bool {
+    state.connect.offer_to_save()
+}
+
+/// Record that it should not, which is the offer's own checkbox.
+#[command]
+pub(crate) fn stop_offering_to_save(state: State<'_, AppState>) -> Result<(), String> {
+    state.connect.stop_offering_to_save()
+}
+
+/// What `acter --connect <name>` asked for, or `null` for an ordinary launch (spec 26,
+/// decision 20).
+///
+/// **Asked rather than acted on.** A saved SSH connection has to ask about a host key and
+/// then for a password, and there is nobody to ask until there is a window — so the switch
+/// becomes a request the window carries out through the same call the Connect dialog makes.
+#[command]
+pub(crate) fn requested_at_launch(state: State<'_, AppState>) -> Option<LaunchRequest> {
+    state.connect.requested_at_launch()
 }

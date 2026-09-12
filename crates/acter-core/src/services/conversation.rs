@@ -225,7 +225,7 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
-    use crate::{Connected, Fault, SessionId, Verdict};
+    use crate::{Connected, Fault, LineOwner, SessionId, Verdict};
 
     /// Long enough that a loaded machine is not what fails a test, short enough that a
     /// genuine deadlock is reported as one rather than hanging the suite.
@@ -491,6 +491,8 @@ mod tests {
             label: "SSH: acter at acter-ssh".to_owned(),
             note: None,
             limit_explained: false,
+            saved_as: None,
+            line_owner: LineOwner::FarEnd,
         }));
         conversation.finished(Err("Acter could not reach acter-ssh.".to_owned()));
 

@@ -34,3 +34,9 @@ e2e/screenshots/
 
 # Scratch: a PR body being drafted, never part of the tree.
 .pr-body.md
+
+# Where a development build keeps its settings (spec 26, decision 3): the folder Acter
+# was started from, which for `cargo run` and `tauri dev` is inside this tree. It holds
+# somebody's own saved connections and accepted host keys, so it is theirs and not the
+# repository's.
+settings/

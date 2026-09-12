@@ -35,9 +35,10 @@ use std::sync::{Arc, Mutex};
 
 use crate::{
     Chosen, ConnectApi, ConnectQuestions, Connectable, Connected, Connection, ConnectionKind,
-    EventSink, KeyAck, KeyPress, LineOwner, ProfileId, ProgramAnswer, ProgramQuestion, SessionApi,
-    SessionFactory, SessionId, SetUp, ShellInstall, Signatures, Started, SubmitAck, ThisComputer,
-    Variant, catalogue,
+    ConnectionStore, EventSink, KeyAck, KeyPress, LaunchRequest, LineOwner, ProfileId,
+    ProgramAnswer, ProgramQuestion, SavedConnection, SavedConnections, SavedRow, SavedTarget,
+    SessionApi, SessionFactory, SessionId, SetUp, ShellInstall, Signatures, Started, SubmitAck,
+    ThisComputer, Variant, catalogue, no_such_connection, refused, same_name,
 };
 
 /// The port every SSH server listens on unless somebody moved it, which is what the form
@@ -76,6 +77,20 @@ pub struct ConnectService {
     /// for the Windows list on a Mac and the macOS list on Windows, where the `#[cfg]`
     /// -selected constant this replaces made half of connecting unassertable on either.
     kinds: Vec<ConnectionKind>,
+    /// Where the saved connections are kept (spec 26, decision 10).
+    ///
+    /// **The port rather than the settings object.** That object also owns the folder, the
+    /// packaging and the version, and none of those are anything a service that decides
+    /// which session is live has business seeing — so what reaches here is the four actions
+    /// over saved connections and the one preference beside them.
+    store: Arc<dyn ConnectionStore>,
+    /// The name `acter --connect <name>` asked for, or `None` for an ordinary launch (spec
+    /// 26, decision 20).
+    ///
+    /// **The name as it was typed, and not a decision about it.** Reading the command line
+    /// is the composition root's privilege; deciding whether anything is saved under that
+    /// name belongs to whoever holds the store, which is this.
+    requested: Option<String>,
     /// Which session is live, or `None` for a window connected to nothing.
     current: Mutex<Option<Live>>,
     /// The session-id counter. Starts at 1, so 0 never names a session.
@@ -86,6 +101,19 @@ pub struct ConnectService {
 struct Live {
     id: SessionId,
     label: String,
+    /// What was started, kept so saving this session can write down what it is (spec 26,
+    /// decision 11). **The profile the attempt used**, not the row it may have come from:
+    /// the user may have edited the panel, and what is saved has to be what is running.
+    profile: ProfileId,
+    /// Whether this session was set up, which is one of the two settings a save records.
+    set_up: SetUp,
+    /// The saved connection this session was started from, or `None` for one nobody has
+    /// named yet. Saving under a new name changes it, which is what makes the offer appear
+    /// once.
+    origin: Option<String>,
+    /// Who holds the line *now*, which is the other setting a save records — "whoever owns
+    /// the line now" rather than whoever owned it when the session opened.
+    line_owner: LineOwner,
     /// What was said about this far end at connection, kept so a window asking what it is
     /// connected to gets the same answer it was given when it connected.
     note: Option<String>,
@@ -103,6 +131,7 @@ impl ConnectService {
         signatures: Arc<dyn Signatures>,
         kinds: Vec<ConnectionKind>,
         scripted: Vec<String>,
+        store: Arc<dyn ConnectionStore>,
     ) -> Self {
         Self {
             factory,
@@ -110,9 +139,23 @@ impl ConnectService {
             signatures,
             kinds,
             scripted,
+            store,
+            requested: None,
             current: Mutex::new(None),
             next: AtomicU32::new(1),
         }
+    }
+
+    /// The same service, with the name a launch asked to connect to (spec 26, decision 20).
+    ///
+    /// **Separate from [`Self::new`] because it is not a collaborator.** Every other
+    /// argument up there is something this service talks to for the life of the window;
+    /// this is one string a launch happened to carry, and threading it through every test
+    /// that is about something else would say it mattered to them.
+    #[must_use]
+    pub fn asked_for(mut self, name: Option<String>) -> Self {
+        self.requested = name;
+        self
     }
 
     /// The live session, but only if the caller is asking about the one that is live.
@@ -607,6 +650,7 @@ impl ConnectApi for ConnectService {
         &self,
         id: &ProfileId,
         set_up: SetUp,
+        origin: Option<&str>,
         questions: &Arc<dyn ConnectQuestions>,
     ) -> Result<Connected, String> {
         let chosen = self.chosen(id)?;
@@ -627,12 +671,25 @@ impl ConnectApi for ConnectService {
         // a file, which SSH does not have. The far end's comes first all the same, because
         // it is about what the user is now talking to rather than about how it was started.
         let note = note.or(agreed);
+        // **What the saved connection asked for, and the far end otherwise** (spec 26,
+        // decision 11). A session hands the keys to the program it reached unless somebody
+        // saved a connection that said not to, which is what closes roadmap 28.8 -- and the
+        // frontend applies this where it already decides that, so a saved choice wins over
+        // the default in one place rather than in two.
+        let line_owner = origin
+            .and_then(|named| self.remembered(named))
+            .map_or(LineOwner::FarEnd, |saved| saved.line_owner);
+        let origin = origin.map(ToOwned::to_owned);
         let next = SessionId(self.next.fetch_add(1, Ordering::SeqCst));
         let previous = {
             let mut current = self.current.lock().expect("session lock poisoned");
             current.replace(Live {
                 id: next,
                 label: label.clone(),
+                profile: id.clone(),
+                set_up,
+                origin: origin.clone(),
+                line_owner,
                 note: note.clone(),
                 limit_explained,
                 session,
@@ -645,6 +702,8 @@ impl ConnectApi for ConnectService {
             label,
             note,
             limit_explained,
+            saved_as: origin,
+            line_owner,
         })
     }
 
@@ -655,8 +714,169 @@ impl ConnectApi for ConnectService {
             label: live.label.clone(),
             note: live.note.clone(),
             limit_explained: live.limit_explained,
+            saved_as: live.origin.clone(),
+            line_owner: live.line_owner,
         })
     }
+
+    /// Every saved connection, resolved against what this machine has now (spec 26,
+    /// decision 11).
+    ///
+    /// **Freshly read on every call**, for `connectable`'s reason (spec B7, decision 6):
+    /// what is saved and what is installed both change while Acter is open, and a list
+    /// computed once at startup would be quietly wrong with no way for the user to notice.
+    ///
+    /// **Alphabetical and without case** (decision 12), and stable: a listener learns
+    /// positions, so the order is never most-recent-first.
+    fn saved(&self) -> SavedConnections {
+        let stored = self.store.saved();
+        let mut rows: Vec<SavedRow> = stored
+            .connections
+            .iter()
+            .map(|saved| self.row(saved))
+            .collect();
+        rows.sort_by_key(|row| row.name.to_lowercase());
+        SavedConnections {
+            rows,
+            unreadable: stored.unreadable,
+        }
+    }
+
+    /// Write the live session down under this name (decision 11).
+    ///
+    /// **What is written is the session as it stands**: the profile it was started from,
+    /// whether it was set up, and whoever owns the line now. That is what answers B9.5's
+    /// parked checkbox and roadmap 28.8 without either becoming a setting of its own.
+    fn save_connection(&self, name: &str) -> Result<String, String> {
+        let name = name.trim();
+        if let Some(why) = refused(name) {
+            return Err(why.to_owned());
+        }
+        let (profile, set_up, line_owner, origin) = {
+            let current = self.current.lock().expect("session lock poisoned");
+            let live = current.as_ref().ok_or_else(|| NOTHING_TO_SAVE.to_owned())?;
+            (
+                live.profile.clone(),
+                live.set_up,
+                live.line_owner,
+                live.origin.clone(),
+            )
+        };
+        // **Replacing its own origin is the ordinary case and is not a collision**: it is
+        // what File then Save connection does after somebody changed a port. Another row
+        // wearing the name is refused, because silently replacing a connection the user did
+        // not have open is the one mistake here nobody could undo.
+        let its_own = origin.as_deref().is_some_and(|had| same_name(had, name));
+        if !its_own && self.remembered(name).is_some() {
+            return Err(already_exists(name));
+        }
+        self.store.save(SavedConnection {
+            name: name.to_owned(),
+            target: SavedTarget::of(&profile),
+            set_up,
+            line_owner,
+        })?;
+        let mut current = self.current.lock().expect("session lock poisoned");
+        if let Some(live) = current.as_mut() {
+            live.origin = Some(name.to_owned());
+        }
+        Ok(format!("Saved as {name}."))
+    }
+
+    /// Give a saved connection a different name (decision 15).
+    fn rename_connection(&self, from: &str, to: &str) -> Result<String, String> {
+        let to = to.trim();
+        if let Some(why) = refused(to) {
+            return Err(why.to_owned());
+        }
+        let existing = self
+            .remembered(from)
+            .ok_or_else(|| no_such_connection(from))?;
+        // Renaming a row to a spelling of its own name -- "work" to "Work" -- is the row
+        // keeping its own name, not a collision with itself.
+        if !same_name(&existing.name, to) && self.remembered(to).is_some() {
+            return Err(already_exists(to));
+        }
+        self.store.rename(from, to)?;
+        let mut current = self.current.lock().expect("session lock poisoned");
+        if let Some(live) = current.as_mut()
+            && live
+                .origin
+                .as_deref()
+                .is_some_and(|had| same_name(had, from))
+        {
+            live.origin = Some(to.to_owned());
+        }
+        Ok(format!("{} is now called {to}.", existing.name))
+    }
+
+    /// Forget one -- the one thing here nobody can undo, which is why the dialog asks first
+    /// (decision 15).
+    ///
+    /// **The live session keeps running.** Forgetting the connection it was started from
+    /// only means nothing is saved under that name any more; what it costs is the offer to
+    /// save being made again, which is honest.
+    fn forget_connection(&self, name: &str) -> Result<String, String> {
+        let existing = self
+            .remembered(name)
+            .ok_or_else(|| no_such_connection(name))?;
+        self.store.forget(name)?;
+        let mut current = self.current.lock().expect("session lock poisoned");
+        if let Some(live) = current.as_mut()
+            && live
+                .origin
+                .as_deref()
+                .is_some_and(|had| same_name(had, name))
+        {
+            live.origin = None;
+        }
+        Ok(format!("{} is no longer saved.", existing.name))
+    }
+
+    /// Whether a new connection coming up should offer to save itself (decision 19).
+    fn offer_to_save(&self) -> bool {
+        self.store.offer_to_save()
+    }
+
+    /// Record that it should not, which is the offer dialog's own checkbox.
+    fn stop_offering_to_save(&self) -> Result<(), String> {
+        self.store.stop_offering_to_save()
+    }
+
+    /// What the launch asked to connect to, as the frontend will act on it (decision 20).
+    ///
+    /// **Nothing is started here.** This answers a question; the window is what makes the
+    /// call, so a saved SSH connection asks its host-key and password questions in front of
+    /// the person who can answer them.
+    ///
+    /// **The name that comes back is the document's spelling**, so the frontend can find
+    /// the row by name rather than having to know what two names being the same means.
+    fn requested_at_launch(&self) -> Option<LaunchRequest> {
+        let asked = self.requested.as_deref()?;
+        Some(match self.remembered(asked) {
+            Some(saved) => LaunchRequest::Connect { name: saved.name },
+            None => LaunchRequest::unknown(asked),
+        })
+    }
+}
+
+/// What a listener is told when Save connection is reached with no session behind the
+/// window (decision 18).
+///
+/// **The backend refuses it as well as the menu item declining to open a dialog**, which is
+/// ARCHITECTURE's dialogs rule 3: marking a control unavailable is a courtesy to the person
+/// at the keyboard, and input can arrive from somewhere that never saw a dialog.
+const NOTHING_TO_SAVE: &str = "Nothing is connected, so there is nothing to save.";
+
+/// What a listener is told when the name they chose is already on another row (decision 11).
+///
+/// **It says what to do about it**, because the alternative is a dialog that refuses and
+/// leaves somebody guessing whether the other row can be got rid of.
+fn already_exists(name: &str) -> String {
+    format!(
+        "A connection named {name} already exists. Choose another name, or forget that one \
+         first."
+    )
 }
 
 impl ConnectService {
@@ -688,6 +908,162 @@ impl ConnectService {
             },
         }
     }
+
+    /// The saved connection wearing this name, if any (spec 26, decision 8: without case).
+    ///
+    /// Read from the store rather than remembered, for the reason
+    /// [`ConnectApi::saved`](crate::ConnectApi::saved) is: another window may have written
+    /// one a moment ago.
+    fn remembered(&self, name: &str) -> Option<SavedConnection> {
+        self.store
+            .saved()
+            .connections
+            .into_iter()
+            .find(|saved| same_name(&saved.name, name))
+    }
+
+    /// One saved connection as the Connect dialog meets it: the profile its panel is loaded
+    /// from, resolved against what this machine has *now*, and whether it can be started.
+    ///
+    /// **This is decision 7's other half.** The document keeps the edition and the
+    /// provenance and never the file, so this is where a saved PowerShell connection finds
+    /// out where that edition lives today — and where a distribution somebody uninstalled
+    /// becomes a row that is listed, unavailable, and says what to do about it.
+    fn row(&self, saved: &SavedConnection) -> SavedRow {
+        let resolved = self.reachable(&saved.target);
+        SavedRow {
+            name: saved.name.clone(),
+            summary: saved.target.summary(),
+            set_up: saved.set_up,
+            line_owner: saved.line_owner,
+            id: match &resolved {
+                Ok(id) => id.clone(),
+                // The target as it stands, so the panel still opens on the right kind with
+                // the right fields filled in. Starting it is what is refused, and the
+                // instructions beside it say why.
+                Err(_) => saved.target.profile(),
+            },
+            available: resolved.is_ok(),
+            instructions: resolved.err(),
+        }
+    }
+
+    /// What this machine would start for a saved target now, or what to say about why it
+    /// cannot.
+    ///
+    /// **Availability is judged against what discovery answers now** (decision 11), which
+    /// is `connectable`'s rule applied to a list of names rather than a list of kinds: a
+    /// distribution that was uninstalled, an edition that is gone and a scripted scenario in
+    /// a release build are each listed and each unavailable.
+    fn reachable(&self, target: &SavedTarget) -> Result<ProfileId, String> {
+        match target {
+            SavedTarget::Cmd => self.installed(ConnectionKind::Cmd),
+            SavedTarget::PowerShell {
+                edition,
+                provenance,
+            } => self.edition(*edition, provenance.as_deref()),
+            SavedTarget::Wsl { distribution } => self.distribution(distribution.as_deref()),
+            // A shell on this Mac, whichever one the account logs in to now: a saved
+            // Terminal connection stores no shell precisely so that changing it changes
+            // this (spec M2, decision 2).
+            SavedTarget::Terminal => match self.machine.login_shells().is_empty() {
+                false => Ok(ProfileId::Shell {
+                    kind: ConnectionKind::Terminal,
+                }),
+                true => Err(ConnectionKind::Terminal.instructions().to_owned()),
+            },
+            // A program named directly is not in the catalogue and has no instructions to
+            // offer, so nothing here can say it is missing: the answer to a name that does
+            // not start is the transport's own sentence, at the moment somebody starts it.
+            SavedTarget::Program { .. } | SavedTarget::Ssh { .. } => Ok(target.profile()),
+            SavedTarget::Scripted { scenario } => {
+                match self.scripted.iter().any(|named| named == scenario) {
+                    true => Ok(target.profile()),
+                    false => Err(only_in_development(scenario)),
+                }
+            }
+        }
+    }
+
+    /// A kind that is one program, resolved to the file this machine has now.
+    fn installed(&self, kind: ConnectionKind) -> Result<ProfileId, String> {
+        self.install(kind.program())
+            .map(|install| ProfileId::Install {
+                kind,
+                program: install.program.display().to_string(),
+                provenance: None,
+            })
+            .ok_or_else(|| kind.instructions().to_owned())
+    }
+
+    /// One PowerShell edition, matched by the provenance the list showed when it was saved.
+    ///
+    /// **Matched rather than remembered** (decision 7): the file is resolved again, so a
+    /// PowerShell upgrade does not break a saved connection. A machine with one install of
+    /// the edition answers it whatever the provenance said, because
+    /// [`tell_apart`] gives that install no provenance at all — there is nothing to tell it
+    /// from.
+    fn edition(
+        &self,
+        edition: ConnectionKind,
+        provenance: Option<&str>,
+    ) -> Result<ProfileId, String> {
+        let installs = self.machine.installs(edition.program());
+        let ids = tell_apart(edition, &installs);
+        ids.iter()
+            .find(|id| match id {
+                ProfileId::Install {
+                    provenance: had, ..
+                } => had.as_deref() == provenance,
+                _ => false,
+            })
+            .or_else(|| ids.first())
+            .cloned()
+            .ok_or_else(|| edition.instructions().to_owned())
+    }
+
+    /// One WSL distribution, or whichever WSL calls the default when none was named.
+    fn distribution(&self, named: Option<&str>) -> Result<ProfileId, String> {
+        let installed = self
+            .machine
+            .wsl_distributions()
+            .map_err(|why| why.to_string())?;
+        let Some(named) = named else {
+            return match installed.is_empty() {
+                false => Ok(ProfileId::Shell {
+                    kind: ConnectionKind::Wsl,
+                }),
+                true => Err(ConnectionKind::Wsl.instructions().to_owned()),
+            };
+        };
+        match installed.iter().any(|had| had == named) {
+            true => Ok(ProfileId::Distribution {
+                name: named.to_owned(),
+            }),
+            false => Err(gone(named)),
+        }
+    }
+}
+
+/// What to say about a distribution that was saved and is not installed any more.
+///
+/// **A sentence of its own rather than WSL's generic one**, because the situation is
+/// different: this machine has WSL, and what it does not have is the distribution this
+/// connection names — so the instruction names it too.
+fn gone(distribution: &str) -> String {
+    format!(
+        "The WSL distribution {distribution} is not installed on this computer any more. \
+         Install it by running wsl --install -d {distribution} from an administrator Command \
+         Prompt, or forget this connection."
+    )
+}
+
+/// What to say about a scripted scenario in a build that never lists one.
+///
+/// **The same sentence the factory would answer with**, so a listener who meets it in the
+/// list and a listener who meets it on a launch switch hear one thing (spec B7, decision 7).
+fn only_in_development(scenario: &str) -> String {
+    format!("The scripted session {scenario} is only available in a development build of Acter.")
 }
 
 impl SessionApi for ConnectService {
@@ -729,8 +1105,23 @@ impl SessionApi for ConnectService {
     /// Handing the line over to a far end there is none of does nothing, and says nothing:
     /// the window with no session has already told the listener what it is, and it says so
     /// again for every line submitted into it.
+    ///
+    /// **It is also written down, since 26** (decision 11). Saving a connection records
+    /// whoever owns the line *now* rather than whoever owned it when the session opened, so
+    /// this is where the answer to that has to be kept — and it is kept beside the session
+    /// it belongs to, so replacing the session forgets it.
     fn set_line_owner(&self, session: SessionId, owner: LineOwner) {
-        if let Some(live) = self.live(session) {
+        let recorded = {
+            let mut current = self.current.lock().expect("session lock poisoned");
+            current
+                .as_mut()
+                .filter(|live| live.id == session)
+                .map(|live| {
+                    live.line_owner = owner;
+                    Arc::clone(&live.session)
+                })
+        };
+        if let Some(live) = recorded {
             live.set_line_owner(session, owner);
         }
     }
@@ -744,7 +1135,7 @@ impl SessionApi for ConnectService {
 
 #[cfg(test)]
 mod tests {
-    use crate::Unasked;
+    use crate::{RememberedConnections, Unasked};
 
     use std::collections::HashMap;
     use std::path::Path;
@@ -1135,6 +1526,9 @@ mod tests {
             // and it asks for it on whichever platform the suite happens to be running on.
             offered("windows").to_vec(),
             scripted.iter().map(|name| (*name).to_owned()).collect(),
+            // Nothing saved: what the store holds is its own question, and the tests that
+            // are about it hand one in below.
+            Arc::new(RememberedConnections::default()),
         );
         (Arc::new(service), factory, signatures)
     }
@@ -1153,6 +1547,7 @@ mod tests {
             Arc::clone(&signatures) as Arc<dyn Signatures>,
             offered("macos").to_vec(),
             Vec::new(),
+            Arc::new(RememberedConnections::default()),
         );
         (Arc::new(service), factory, signatures)
     }
@@ -1243,7 +1638,7 @@ mod tests {
                 "account",
             ),
         ] {
-            let Err(why) = service.use_profile(&profile, SetUp::Yes, &unasked()) else {
+            let Err(why) = service.use_profile(&profile, SetUp::Yes, None, &unasked()) else {
                 panic!("an unfilled form does not connect");
             };
             assert!(why.contains(expected), "it says what is missing: {why}");
@@ -1599,7 +1994,7 @@ mod tests {
             .clone();
 
         service
-            .use_profile(&bash.id, SetUp::Yes, &unasked())
+            .use_profile(&bash.id, SetUp::Yes, None, &unasked())
             .expect("a shell this Mac has starts");
 
         assert_eq!(
@@ -1622,6 +2017,7 @@ mod tests {
                     kind: ConnectionKind::Terminal,
                 },
                 SetUp::Yes,
+                None,
                 &unasked(),
             )
             .expect("the account's own shell starts");
@@ -1648,6 +2044,7 @@ mod tests {
                     kind: ConnectionKind::Terminal,
                 },
                 SetUp::Yes,
+                None,
                 &unasked(),
             )
             .expect_err("there is nothing to start");
@@ -1691,6 +2088,7 @@ mod tests {
             Arc::new(FakeSignatures::default()),
             offered("windows").to_vec(),
             Vec::new(),
+            Arc::new(RememberedConnections::default()),
         );
 
         service.connectable();
@@ -1738,7 +2136,7 @@ mod tests {
         };
 
         let connected = service
-            .use_profile(&id, SetUp::Yes, &unasked())
+            .use_profile(&id, SetUp::Yes, None, &unasked())
             .expect("cmd starts");
 
         assert_eq!(connected.label, "Command Prompt");
@@ -1773,6 +2171,7 @@ mod tests {
                     kind: ConnectionKind::Cmd,
                 },
                 SetUp::Yes,
+                None,
                 &unasked(),
             )
             .expect("cmd starts");
@@ -1784,6 +2183,7 @@ mod tests {
                     name: "Ubuntu".to_owned(),
                 },
                 SetUp::Yes,
+                None,
                 &unasked(),
             )
             .expect("Ubuntu starts");
@@ -1812,6 +2212,7 @@ mod tests {
                     kind: ConnectionKind::Cmd,
                 },
                 SetUp::Yes,
+                None,
                 &unasked(),
             )
             .expect("cmd starts");
@@ -1821,6 +2222,7 @@ mod tests {
                     kind: ConnectionKind::WindowsPowerShell,
                 },
                 SetUp::Yes,
+                None,
                 &unasked(),
             )
             .expect("PowerShell starts");
@@ -1853,6 +2255,7 @@ mod tests {
             Arc::new(FakeSignatures::default()),
             offered("windows").to_vec(),
             Vec::new(),
+            Arc::new(RememberedConnections::default()),
         );
         let working = service
             .use_profile(
@@ -1860,12 +2263,13 @@ mod tests {
                     kind: ConnectionKind::Cmd,
                 },
                 SetUp::Yes,
+                None,
                 &unasked(),
             )
             .expect("cmd starts");
 
         let why = service
-            .use_profile(&refused, SetUp::Yes, &unasked())
+            .use_profile(&refused, SetUp::Yes, None, &unasked())
             .expect_err("this one does not");
 
         assert_eq!(
@@ -1897,6 +2301,7 @@ mod tests {
                     kind: ConnectionKind::PowerShellSeven,
                 },
                 SetUp::Yes,
+                None,
                 &unasked(),
             )
             .expect_err("PowerShell 7 is not installed");
@@ -1920,6 +2325,7 @@ mod tests {
                     name: "Ubuntu".to_owned(),
                 },
                 SetUp::Yes,
+                None,
                 &unasked(),
             )
             .expect_err("there is no WSL to start it in");
@@ -1945,6 +2351,7 @@ mod tests {
                     kind: ConnectionKind::Cmd,
                 },
                 SetUp::Yes,
+                None,
                 &unasked(),
             )
             .expect("cmd starts");
@@ -1986,6 +2393,7 @@ mod tests {
                     kind: ConnectionKind::Cmd,
                 },
                 SetUp::Yes,
+                None,
                 &unasked(),
             )
             .expect("cmd starts");
@@ -2028,6 +2436,7 @@ mod tests {
                     kind: ConnectionKind::Cmd,
                 },
                 SetUp::Yes,
+                None,
                 &unasked(),
             )
             .expect("cmd starts");
@@ -2037,6 +2446,7 @@ mod tests {
                     kind: ConnectionKind::WindowsPowerShell,
                 },
                 SetUp::Yes,
+                None,
                 &unasked(),
             )
             .expect("PowerShell starts");
@@ -2069,6 +2479,7 @@ mod tests {
                     kind: ConnectionKind::Cmd,
                 },
                 SetUp::Yes,
+                None,
                 &unasked(),
             )
             .expect("cmd starts");
@@ -2167,6 +2578,7 @@ mod tests {
                     kind: ConnectionKind::Cmd,
                 },
                 SetUp::Yes,
+                None,
                 &questions,
             )
             .expect_err("saying nothing starts nothing");
@@ -2210,6 +2622,7 @@ mod tests {
                     kind: ConnectionKind::Cmd,
                 },
                 SetUp::Yes,
+                None,
                 &questions,
             )
             .expect("saying so starts it");
@@ -2238,6 +2651,7 @@ mod tests {
                     kind: ConnectionKind::Cmd,
                 },
                 SetUp::Yes,
+                None,
                 &unasked(),
             )
             .expect("cmd starts");
@@ -2267,6 +2681,7 @@ mod tests {
                     kind: ConnectionKind::Cmd,
                 },
                 SetUp::Yes,
+                None,
                 &(Arc::clone(&asking) as Arc<dyn ConnectQuestions>),
             )
             .expect("a file this machine trusts starts");
@@ -2440,7 +2855,7 @@ mod tests {
         };
 
         let connected = service
-            .use_profile(&chosen, SetUp::Yes, &unasked())
+            .use_profile(&chosen, SetUp::Yes, None, &unasked())
             .expect("the chosen install starts");
 
         assert_eq!(connected.label, r"PowerShell 7 (C:\tools\pwsh)");
@@ -2448,5 +2863,732 @@ mod tests {
             factory.opened.lock().unwrap()[0].program,
             Some(PathBuf::from(r"C:\tools\pwsh\pwsh.exe"))
         );
+    }
+
+    /// **The saved connections, end to end through the service** (spec 26, decisions 7 to
+    /// 12). Every one of these runs against a fake store and a fake machine, so what is
+    /// asserted is what a listener meets rather than what a filesystem did.
+    mod the_connections_somebody_saved {
+        use super::*;
+
+        use crate::{LineOwner, SavedConnection, SavedTarget, StoredConnections};
+
+        /// A service over a store a test filled in, and the store back so it can be asked
+        /// what became of it.
+        fn with_saved(
+            machine: FakeMachine,
+            saved: Vec<SavedConnection>,
+        ) -> (Arc<ConnectService>, Arc<RememberedConnections>) {
+            let store = Arc::new(RememberedConnections::holding(saved));
+            let service = ConnectService::new(
+                Arc::new(FakeFactory::default()),
+                Arc::new(machine),
+                Arc::new(FakeSignatures::default()),
+                offered("windows").to_vec(),
+                ["builtin".to_owned()].to_vec(),
+                Arc::clone(&store) as Arc<dyn ConnectionStore>,
+            );
+            (Arc::new(service), store)
+        }
+
+        fn saved(name: &str, target: SavedTarget) -> SavedConnection {
+            SavedConnection {
+                name: name.to_owned(),
+                target,
+                set_up: SetUp::Yes,
+                line_owner: LineOwner::FarEnd,
+            }
+        }
+
+        fn names(service: &ConnectService) -> Vec<String> {
+            service
+                .saved()
+                .rows
+                .into_iter()
+                .map(|row| row.name)
+                .collect()
+        }
+
+        fn row(service: &ConnectService, name: &str) -> SavedRow {
+            service
+                .saved()
+                .rows
+                .into_iter()
+                .find(|row| row.name == name)
+                .expect("the row is listed")
+        }
+
+        /// **Alphabetical, without case, and stable** (decision 12): a listener learns
+        /// positions, so the order is never most-recent-first.
+        #[test]
+        fn the_names_come_back_alphabetically_and_without_case() {
+            let (service, _) = with_saved(
+                FakeMachine::complete(),
+                vec![
+                    saved("work laptop", SavedTarget::Cmd),
+                    saved("Ada", SavedTarget::Cmd),
+                    saved("zoe", SavedTarget::Cmd),
+                    saved("Bob", SavedTarget::Cmd),
+                ],
+            );
+
+            assert_eq!(names(&service), ["Ada", "Bob", "work laptop", "zoe"]);
+        }
+
+        /// **Every kind round-trips through the store** (definition of done 3), and each
+        /// row comes back with the profile its panel is loaded from.
+        #[test]
+        fn every_kind_comes_back_as_a_row_the_panel_can_be_loaded_from() {
+            let (service, _) = with_saved(
+                FakeMachine::complete(),
+                vec![
+                    saved("prompt", SavedTarget::Cmd),
+                    saved(
+                        "seven",
+                        SavedTarget::PowerShell {
+                            edition: ConnectionKind::PowerShellSeven,
+                            provenance: None,
+                        },
+                    ),
+                    saved(
+                        "linux",
+                        SavedTarget::Wsl {
+                            distribution: Some("Ubuntu".to_owned()),
+                        },
+                    ),
+                    saved(
+                        "far",
+                        SavedTarget::Ssh {
+                            host: "example.org".to_owned(),
+                            port: 2222,
+                            account: "marlon".to_owned(),
+                        },
+                    ),
+                    saved(
+                        "fake",
+                        SavedTarget::Scripted {
+                            scenario: "builtin".to_owned(),
+                        },
+                    ),
+                ],
+            );
+
+            let listed = service.saved();
+            assert!(
+                listed.rows.iter().all(|row| row.available),
+                "this machine has all of them: {listed:?}"
+            );
+            assert!(
+                listed.rows.iter().all(|row| row.instructions.is_none()),
+                "a row that can be started explains nothing"
+            );
+            assert_eq!(
+                row(&service, "linux").id,
+                ProfileId::Distribution {
+                    name: "Ubuntu".to_owned()
+                }
+            );
+            assert_eq!(
+                row(&service, "far").summary,
+                "SSH, marlon at example.org, port 2222"
+            );
+            assert_eq!(listed.unreadable, None, "nothing went wrong with the file");
+        }
+
+        /// **A saved PowerShell connection survives its edition moving** (definition of
+        /// done 5): the document keeps the edition and never the file, so the row is
+        /// resolved against wherever the machine has it now.
+        #[test]
+        fn a_saved_powershell_connection_finds_its_edition_wherever_it_lives_now() {
+            let mut machine = FakeMachine::complete();
+            machine.extra.insert(
+                "pwsh.exe",
+                vec![install(
+                    r"D:\somewhere-else\pwsh.exe",
+                    Provenance::System,
+                    PathStanding::First,
+                )],
+            );
+            let (service, _) = with_saved(
+                machine,
+                vec![saved(
+                    "seven",
+                    SavedTarget::PowerShell {
+                        edition: ConnectionKind::PowerShellSeven,
+                        provenance: None,
+                    },
+                )],
+            );
+
+            let row = row(&service, "seven");
+
+            assert!(row.available);
+            assert_eq!(
+                row.id,
+                ProfileId::Install {
+                    kind: ConnectionKind::PowerShellSeven,
+                    program: r"D:\somewhere-else\pwsh.exe".to_owned(),
+                    provenance: None,
+                }
+            );
+        }
+
+        /// **And a saved distribution that is gone is listed, unavailable, with
+        /// instructions** (definition of done 5). It is listed rather than dropped for the
+        /// reason a missing kind is listed: a list that silently omits it teaches a
+        /// listener that Acter forgot it.
+        #[test]
+        fn a_distribution_that_was_uninstalled_is_listed_and_says_what_to_do() {
+            let (service, _) = with_saved(
+                FakeMachine::complete(),
+                vec![saved(
+                    "linux",
+                    SavedTarget::Wsl {
+                        distribution: Some("Fedora".to_owned()),
+                    },
+                )],
+            );
+
+            let row = row(&service, "linux");
+
+            assert!(!row.available);
+            let instructions = row.instructions.expect("it says what to do about it");
+            assert!(instructions.contains("Fedora"), "{instructions}");
+            assert!(instructions.ends_with('.'), "{instructions}");
+            assert!(!instructions.contains("  "), "{instructions}");
+            assert_eq!(
+                row.summary, "WSL, Fedora",
+                "and it still says what it was, so a listener knows which row this is"
+            );
+        }
+
+        /// A scripted scenario this build does not offer is the same shape: listed, not
+        /// available, and the sentence the factory would have answered with.
+        #[test]
+        fn a_scripted_scenario_this_build_does_not_offer_is_listed_as_unavailable() {
+            let (service, _) = with_saved(
+                FakeMachine::complete(),
+                vec![saved(
+                    "fake",
+                    SavedTarget::Scripted {
+                        scenario: "no-such-scenario".to_owned(),
+                    },
+                )],
+            );
+
+            let row = row(&service, "fake");
+
+            assert!(!row.available);
+            assert!(
+                row.instructions
+                    .expect("it says why")
+                    .contains("development build")
+            );
+        }
+
+        /// **A document that would not parse is reported where the list would be**
+        /// (decisions 9 and 16), and Acter starts with nothing saved.
+        #[test]
+        fn a_document_that_would_not_parse_reaches_the_dialog_as_a_sentence() {
+            let store = Arc::new(RememberedConnections::unreadable(
+                "Acter could not understand the connections it had saved.",
+            ));
+            let service = ConnectService::new(
+                Arc::new(FakeFactory::default()),
+                Arc::new(FakeMachine::complete()),
+                Arc::new(FakeSignatures::default()),
+                offered("windows").to_vec(),
+                Vec::new(),
+                store as Arc<dyn ConnectionStore>,
+            );
+
+            let listed = service.saved();
+
+            assert!(listed.rows.is_empty());
+            assert_eq!(
+                listed.unreadable.as_deref(),
+                Some("Acter could not understand the connections it had saved.")
+            );
+        }
+
+        /// **Saving writes the session as it stands** (decision 11): the profile it was
+        /// started from, whether it was set up, and whoever owns the line *now* — which is
+        /// what answers B9.5's parked checkbox and roadmap 28.8 at once.
+        #[test]
+        fn saving_writes_the_profile_the_set_up_choice_and_who_has_the_line_now() {
+            let (service, store) = with_saved(FakeMachine::complete(), Vec::new());
+            let connected = service
+                .use_profile(
+                    &ProfileId::Shell {
+                        kind: ConnectionKind::Cmd,
+                    },
+                    SetUp::No,
+                    None,
+                    &unasked(),
+                )
+                .expect("cmd starts");
+            service.set_line_owner(connected.session, LineOwner::Local);
+
+            let said = service.save_connection(" work laptop ").expect("it saves");
+
+            assert_eq!(said, "Saved as work laptop.", "the name is trimmed");
+            let written = &store.saved().connections[0];
+            assert_eq!(written.name, "work laptop");
+            assert_eq!(written.target, SavedTarget::Cmd);
+            assert_eq!(written.set_up, SetUp::No);
+            assert_eq!(
+                written.line_owner,
+                LineOwner::Local,
+                "whoever owns the line now, not whoever owned it when it opened"
+            );
+        }
+
+        /// And the session's origin becomes the name, so the window stops offering to save
+        /// it and knows what to prefill.
+        #[test]
+        fn saving_makes_the_name_the_sessions_origin() {
+            let (service, _) = with_saved(FakeMachine::complete(), Vec::new());
+            service
+                .use_profile(
+                    &ProfileId::Shell {
+                        kind: ConnectionKind::Cmd,
+                    },
+                    SetUp::Yes,
+                    None,
+                    &unasked(),
+                )
+                .expect("cmd starts");
+
+            service.save_connection("work laptop").expect("it saves");
+
+            assert_eq!(
+                service.connected().expect("still connected").saved_as,
+                Some("work laptop".to_owned())
+            );
+        }
+
+        /// **Saving over its own origin replaces**, which is what File then Save connection
+        /// does after somebody changed a port.
+        #[test]
+        fn saving_under_its_own_origin_replaces_rather_than_refusing() {
+            let (service, store) = with_saved(
+                FakeMachine::complete(),
+                vec![saved("work", SavedTarget::Cmd)],
+            );
+            service
+                .use_profile(
+                    &ProfileId::Shell {
+                        kind: ConnectionKind::Terminal,
+                    },
+                    SetUp::Yes,
+                    Some("work"),
+                    &unasked(),
+                )
+                .ok();
+
+            // The Terminal kind cannot start on this fake Windows machine, so the session
+            // this test needs is the one that can — started from the same origin.
+            service
+                .use_profile(
+                    &ProfileId::Shell {
+                        kind: ConnectionKind::Cmd,
+                    },
+                    SetUp::Yes,
+                    Some("work"),
+                    &unasked(),
+                )
+                .expect("cmd starts");
+
+            let said = service.save_connection("WORK").expect("it replaces");
+
+            assert_eq!(said, "Saved as WORK.");
+            assert_eq!(store.saved().connections.len(), 1, "one row, not two");
+        }
+
+        /// **Another row wearing the name is refused**, with a sentence saying what to do
+        /// about it — silently replacing a connection the user did not have open is the one
+        /// mistake here nobody could undo.
+        #[test]
+        fn saving_over_somebody_elses_name_is_refused_in_a_sentence() {
+            let (service, store) = with_saved(
+                FakeMachine::complete(),
+                vec![saved("work laptop", SavedTarget::Cmd)],
+            );
+            service
+                .use_profile(
+                    &ProfileId::Shell {
+                        kind: ConnectionKind::Cmd,
+                    },
+                    SetUp::Yes,
+                    None,
+                    &unasked(),
+                )
+                .expect("cmd starts");
+
+            let refused = service
+                .save_connection("Work Laptop")
+                .expect_err("that name is taken");
+
+            assert_eq!(
+                refused,
+                "A connection named Work Laptop already exists. Choose another name, or \
+                 forget that one first."
+            );
+            assert!(!refused.contains("  "), "it is read aloud: {refused}");
+            assert_eq!(
+                store.saved().connections.len(),
+                1,
+                "and nothing was written"
+            );
+        }
+
+        /// **An illegal name is refused with decision 8's sentence**, and the backend
+        /// refuses it whatever the dialog did — input can arrive from somewhere that never
+        /// saw one (ARCHITECTURE, dialogs rule 3).
+        #[test]
+        fn a_name_the_rule_forbids_is_refused_before_anything_is_written() {
+            let (service, store) = with_saved(FakeMachine::complete(), Vec::new());
+            service
+                .use_profile(
+                    &ProfileId::Shell {
+                        kind: ConnectionKind::Cmd,
+                    },
+                    SetUp::Yes,
+                    None,
+                    &unasked(),
+                )
+                .expect("cmd starts");
+
+            for bad in ["work/laptop", "  ", "work|laptop"] {
+                let refused = service.save_connection(bad).expect_err("it is refused");
+                assert!(refused.ends_with('.'), "{refused}");
+                assert!(!refused.contains("  "), "{refused}");
+            }
+            assert!(store.saved().connections.is_empty());
+        }
+
+        /// **Unconnected, there is nothing to save**, and the backend says so as well as
+        /// the menu item declining to open a dialog (decision 18).
+        #[test]
+        fn saving_with_no_session_behind_the_window_says_there_is_nothing_to_save() {
+            let (service, _) = with_saved(FakeMachine::complete(), Vec::new());
+
+            let refused = service
+                .save_connection("work laptop")
+                .expect_err("there is nothing to save");
+
+            assert_eq!(
+                refused,
+                "Nothing is connected, so there is nothing to save."
+            );
+        }
+
+        /// A store that cannot write answers its own sentence, and the service passes it
+        /// on rather than inventing one — naming the folder is the whole point (decision 6).
+        #[test]
+        fn a_save_that_cannot_be_written_says_the_stores_sentence() {
+            let store = Arc::new(RememberedConnections::refusing(
+                "Could not save the connection: the settings folder D:\\acter is not writable.",
+            ));
+            let service = ConnectService::new(
+                Arc::new(FakeFactory::default()),
+                Arc::new(FakeMachine::complete()),
+                Arc::new(FakeSignatures::default()),
+                offered("windows").to_vec(),
+                Vec::new(),
+                Arc::clone(&store) as Arc<dyn ConnectionStore>,
+            );
+            service
+                .use_profile(
+                    &ProfileId::Shell {
+                        kind: ConnectionKind::Cmd,
+                    },
+                    SetUp::Yes,
+                    None,
+                    &unasked(),
+                )
+                .expect("cmd starts");
+
+            let refused = service
+                .save_connection("work laptop")
+                .expect_err("the folder is not writable");
+
+            assert!(
+                refused.contains("D:\\acter"),
+                "it names the folder: {refused}"
+            );
+            assert_eq!(
+                service.connected().expect("still connected").saved_as,
+                None,
+                "a save that did not happen does not become the session's origin"
+            );
+        }
+
+        /// **A saved connection's line owner is what the session opens on** (decision 11),
+        /// which is what closes roadmap 28.8.
+        #[test]
+        fn a_saved_choice_about_the_line_wins_over_the_default() {
+            let (service, _) = with_saved(
+                FakeMachine::complete(),
+                vec![SavedConnection {
+                    line_owner: LineOwner::Local,
+                    ..saved("quiet", SavedTarget::Cmd)
+                }],
+            );
+
+            let connected = service
+                .use_profile(
+                    &ProfileId::Shell {
+                        kind: ConnectionKind::Cmd,
+                    },
+                    SetUp::Yes,
+                    Some("quiet"),
+                    &unasked(),
+                )
+                .expect("cmd starts");
+
+            assert_eq!(connected.line_owner, LineOwner::Local);
+            assert_eq!(connected.saved_as, Some("quiet".to_owned()));
+        }
+
+        /// And a new connection opens on the far end's line, which is what a session does
+        /// when nobody has said otherwise (roadmap 28.7).
+        #[test]
+        fn a_new_connection_opens_on_the_far_ends_line_and_has_no_origin() {
+            let (service, _) = with_saved(FakeMachine::complete(), Vec::new());
+
+            let connected = service
+                .use_profile(
+                    &ProfileId::Shell {
+                        kind: ConnectionKind::Cmd,
+                    },
+                    SetUp::Yes,
+                    None,
+                    &unasked(),
+                )
+                .expect("cmd starts");
+
+            assert_eq!(connected.line_owner, LineOwner::FarEnd);
+            assert_eq!(connected.saved_as, None, "nobody has named it");
+        }
+
+        /// **Renaming does what it says and moves the origin with it** (decision 15).
+        #[test]
+        fn renaming_answers_a_sentence_and_takes_the_live_origin_with_it() {
+            let (service, store) = with_saved(
+                FakeMachine::complete(),
+                vec![saved("work", SavedTarget::Cmd)],
+            );
+            service
+                .use_profile(
+                    &ProfileId::Shell {
+                        kind: ConnectionKind::Cmd,
+                    },
+                    SetUp::Yes,
+                    Some("work"),
+                    &unasked(),
+                )
+                .expect("cmd starts");
+
+            let said = service
+                .rename_connection("work", " home ")
+                .expect("it renames");
+
+            assert_eq!(said, "work is now called home.");
+            assert_eq!(store.saved().connections[0].name, "home");
+            assert_eq!(
+                service.connected().expect("still connected").saved_as,
+                Some("home".to_owned())
+            );
+        }
+
+        /// Renaming refuses a name another row has, and an illegal one, with the same two
+        /// sentences saving uses — one place decides those words.
+        #[test]
+        fn renaming_refuses_a_collision_and_an_illegal_name() {
+            let (service, store) = with_saved(
+                FakeMachine::complete(),
+                vec![
+                    saved("work", SavedTarget::Cmd),
+                    saved("home", SavedTarget::Cmd),
+                ],
+            );
+
+            let collision = service
+                .rename_connection("work", "HOME")
+                .expect_err("that name is taken");
+            assert!(collision.starts_with("A connection named HOME already exists."));
+
+            let illegal = service
+                .rename_connection("work", "wo:rk")
+                .expect_err("that name breaks the rule");
+            assert!(illegal.starts_with("A name cannot contain"));
+
+            let missing = service
+                .rename_connection("nothing", "something")
+                .expect_err("there is no such row");
+            assert_eq!(missing, "There is no saved connection named nothing.");
+
+            assert_eq!(names(&service), ["home", "work"], "and nothing moved");
+            assert_eq!(store.saved().connections.len(), 2);
+        }
+
+        /// Renaming a row to another spelling of its own name is the row keeping its name,
+        /// not a collision with itself.
+        #[test]
+        fn renaming_a_row_to_its_own_name_in_another_case_is_allowed() {
+            let (service, _) = with_saved(
+                FakeMachine::complete(),
+                vec![saved("work", SavedTarget::Cmd)],
+            );
+
+            service
+                .rename_connection("work", "Work")
+                .expect("it renames");
+
+            assert_eq!(names(&service), ["Work"]);
+        }
+
+        /// **Forgetting removes the row and lets the live session go on running**
+        /// (decision 15). What it costs is the offer to save being made again, which is
+        /// honest.
+        #[test]
+        fn forgetting_removes_the_row_and_leaves_the_session_running() {
+            let (service, store) = with_saved(
+                FakeMachine::complete(),
+                vec![saved("work", SavedTarget::Cmd)],
+            );
+            let connected = service
+                .use_profile(
+                    &ProfileId::Shell {
+                        kind: ConnectionKind::Cmd,
+                    },
+                    SetUp::Yes,
+                    Some("work"),
+                    &unasked(),
+                )
+                .expect("cmd starts");
+
+            let said = service.forget_connection("WORK").expect("it forgets");
+
+            assert_eq!(said, "work is no longer saved.");
+            assert!(store.saved().connections.is_empty());
+            let still = service.connected().expect("the session is still there");
+            assert_eq!(still.session, connected.session);
+            assert_eq!(still.saved_as, None, "it is no longer saved under anything");
+        }
+
+        #[test]
+        fn forgetting_a_row_that_is_not_there_says_so() {
+            let (service, _) = with_saved(FakeMachine::complete(), Vec::new());
+
+            assert_eq!(
+                service.forget_connection("work"),
+                Err("There is no saved connection named work.".to_owned())
+            );
+        }
+
+        /// **The offer's preference is a field in the document, reached by two named
+        /// actions and no others** (decision 19).
+        #[test]
+        fn the_offer_is_on_until_the_checkbox_says_otherwise() {
+            let (service, _) = with_saved(FakeMachine::complete(), Vec::new());
+
+            assert!(service.offer_to_save(), "nobody has said");
+            service.stop_offering_to_save().expect("the box is ticked");
+
+            assert!(!service.offer_to_save());
+        }
+
+        /// **`--connect <name>` is resolved against the store** (decision 20): a name
+        /// something is saved under becomes a request the window carries out, and one
+        /// nothing is saved under becomes a sentence.
+        #[test]
+        fn a_launch_switch_naming_a_saved_connection_becomes_a_request_to_connect() {
+            let store = Arc::new(RememberedConnections::holding(vec![saved(
+                "Work Laptop",
+                SavedTarget::Cmd,
+            )]));
+            let service = ConnectService::new(
+                Arc::new(FakeFactory::default()),
+                Arc::new(FakeMachine::complete()),
+                Arc::new(FakeSignatures::default()),
+                offered("windows").to_vec(),
+                Vec::new(),
+                store as Arc<dyn ConnectionStore>,
+            )
+            .asked_for(Some("work laptop".to_owned()));
+
+            assert_eq!(
+                service.requested_at_launch(),
+                Some(LaunchRequest::Connect {
+                    name: "Work Laptop".to_owned()
+                }),
+                "the document's spelling, so the frontend can find the row by name"
+            );
+            assert!(
+                service.connected().is_none(),
+                "nothing is started before there is a window to ask a password in"
+            );
+        }
+
+        #[test]
+        fn a_launch_switch_naming_nothing_saved_becomes_a_sentence() {
+            let service = ConnectService::new(
+                Arc::new(FakeFactory::default()),
+                Arc::new(FakeMachine::complete()),
+                Arc::new(FakeSignatures::default()),
+                offered("windows").to_vec(),
+                Vec::new(),
+                Arc::new(RememberedConnections::default()) as Arc<dyn ConnectionStore>,
+            )
+            .asked_for(Some("wrok laptop".to_owned()));
+
+            let LaunchRequest::Unknown { name, said } =
+                service.requested_at_launch().expect("the switch was given")
+            else {
+                panic!("nothing is saved under that name");
+            };
+
+            assert_eq!(name, "wrok laptop", "the name is kept as it was typed");
+            assert_eq!(said, "There is no saved connection named wrok laptop.");
+        }
+
+        /// And an ordinary launch asks for nothing at all, which is the window that opens
+        /// unconnected and says so.
+        #[test]
+        fn an_ordinary_launch_carries_no_request() {
+            let (service, _) = with_saved(FakeMachine::complete(), Vec::new());
+
+            assert_eq!(service.requested_at_launch(), None);
+        }
+
+        /// **The store is read afresh on every call** (decision 11, `connectable`'s rule):
+        /// a connection saved in another window while this one was open is there the next
+        /// time the list is asked for, without a restart.
+        #[test]
+        fn the_list_is_read_afresh_rather_than_remembered() {
+            let (service, store) = with_saved(FakeMachine::complete(), Vec::new());
+            assert_eq!(
+                service.saved(),
+                SavedConnections {
+                    rows: Vec::new(),
+                    unreadable: None
+                }
+            );
+
+            store
+                .save(saved("written elsewhere", SavedTarget::Cmd))
+                .expect("another window saved one");
+
+            assert_eq!(names(&service), ["written elsewhere"]);
+            assert_eq!(
+                store.saved(),
+                StoredConnections {
+                    connections: vec![saved("written elsewhere", SavedTarget::Cmd)],
+                    unreadable: None
+                }
+            );
+        }
     }
 }

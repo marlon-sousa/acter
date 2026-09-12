@@ -1,18 +1,31 @@
 //! Adapter: what Acter knows about a server's identity — which host keys have been seen
 //! before, which one *changed*, and where a newly accepted one is written down.
 //!
-//! **Two files, read the same way and written very differently** (spec B9, decision 5).
+//! **Two records, read the same way and written very differently** (spec B9, decision 5).
 //! Acter reads the user's own `~/.ssh/known_hosts` and **never writes it**: reading it
 //! means a host they already trust connects without being asked again, which is what stops
 //! a populated `known_hosts` turning into a sequence of prompts; not writing it means a bug
-//! here breaks Acter and not their `ssh`. What Acter accepts goes in a file of its own, in
-//! the same format, so it stays inspectable with the tools they already have.
+//! here breaks Acter and not their `ssh`. What Acter accepts goes in a record of its own.
 //!
-//! **Neither path is decided here.** Both are handed in, because resolving
-//! `%APPDATA%\acter` or `ACTER_PROFILES_DIR` is reading the environment, and this project
-//! reads the environment in exactly one place — the composition root (spec B8, decision 2).
-//! The reward is that every case below is testable against a directory made for the test,
-//! including the ones a developer's own machine could never be put into.
+//! **Acter's own record is in the settings document, since spec 26** (decision 2, as
+//! amended in implementation on 2026-09-12 at the user's asking). It used to be a second
+//! `known_hosts` file in OpenSSH's format; it is a typed list under one key of the one
+//! document now, and what reaches this module is [`HostKeyStore`] rather than a path. Two
+//! things follow, and both are improvements a listener can meet: the record is something a
+//! person can read — a host, a kind of key, the fingerprint the dialog showed them, and the
+//! day they said yes — and it is written through the same lock and the same atomic write as
+//! everything else Acter decides on their behalf.
+//!
+//! **The comparison is by fingerprint, and that is the same operation.** What was recorded
+//! is `ssh-keygen -l`'s spelling of the key; what a server offers is fingerprinted the same
+//! way and matched. It is what the dialog put in front of the user when they accepted, and
+//! what their hosting provider printed.
+//!
+//! **Neither record is located here.** The store is handed in and so is the user's path,
+//! because resolving either is reading the environment and this project reads the
+//! environment in exactly one place — the composition root. The reward is that every case
+//! below is testable against a record made for the test, including the ones a developer's
+//! own machine could never be put into.
 //!
 //! **A file that cannot be read is not a failure to connect.** It contributes nothing and
 //! says so, as an aside on the question the user is then asked. The alternative — refusing
@@ -22,31 +35,40 @@
 //! as an unknown one, and that is why the aside exists rather than being left implied: the
 //! user is told the comparison did not happen.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
+use std::sync::Arc;
 
-use acter_core::{HostKeyQuestion, HostKeyState, ended};
-use russh::keys::known_hosts::{known_host_keys_path, learn_known_hosts_path};
+use acter_core::{
+    AcceptedHostKey, HostKeyOrigin, HostKeyQuestion, HostKeyState, HostKeyStore, ended,
+};
+use russh::keys::known_hosts::known_host_keys_path;
 use russh::keys::{Algorithm, HashAlg, PublicKey};
 
 /// The two records of which servers are which.
 pub struct KnownHosts {
-    /// Acter's own file, read and appended to.
-    ours: PathBuf,
+    /// Acter's own record, in the settings document, read and added to.
+    ours: Arc<dyn HostKeyStore>,
     /// The user's own `known_hosts`, read and never written. `None` on a machine where
     /// there is no home directory to look in, which is not an error and not a question.
     theirs: Option<PathBuf>,
 }
 
-/// Which file a sentence is about, in words a listener can act on.
+/// Which record a sentence is about, in words a listener can act on.
 ///
-/// Neither says a path. A `known_hosts` path spoken aloud is a long string of directory
-/// names in which the one useful word — *whose* file it is — arrives last if at all.
-const OURS: &str = "Acter's own record of host keys";
+/// **It does not say a path.** A `known_hosts` path spoken aloud is a long string of
+/// directory names in which the one useful word — *whose* file it is — arrives last if at
+/// all.
+///
+/// **There is only one of these now, and that is spec 26's doing.** Acter's own record used
+/// to be a second file that could fail to be read on its own; it is part of the settings
+/// document since decision 2 was amended, and a document that will not parse is reported
+/// where the saved connections are, in a sentence naming both files (decision 16). So the
+/// only record that can be unreadable *here* is the one Acter does not own.
 const THEIRS: &str = "your own OpenSSH known hosts file";
 
 impl KnownHosts {
-    /// Both files, as the composition root resolved them.
-    pub fn new(ours: PathBuf, theirs: Option<PathBuf>) -> Self {
+    /// Both records, as the composition root resolved them.
+    pub fn new(ours: Arc<dyn HostKeyStore>, theirs: Option<PathBuf>) -> Self {
         Self { ours, theirs }
     }
 
@@ -60,33 +82,75 @@ impl KnownHosts {
     /// one has not changed identity, and calling that "the host key has changed" would
     /// spend the one alarming sentence this product has on a routine event.
     pub fn check(&self, host: &str, port: u16, offered: &PublicKey) -> Option<HostKeyQuestion> {
-        let mut recorded = Vec::new();
-        let mut unread = Vec::new();
-        for (path, whose) in self.files() {
-            match known_host_keys_path(host, port, path) {
-                Ok(found) => recorded.extend(found.into_iter().map(|(_, key)| key)),
-                Err(_) => unread.push(whose),
-            }
-        }
+        let mut unread = None;
+        let recorded = self.known(host, port, &mut unread);
+        let algorithm = offered.algorithm().to_string();
+        let offered = fingerprint(offered);
 
-        if recorded.iter().any(|key| key == offered) {
+        if recorded
+            .iter()
+            .any(|key| key.algorithm == algorithm && key.fingerprint == offered)
+        {
             return None;
         }
 
         let state = recorded
             .iter()
-            .find(|key| key.algorithm() == offered.algorithm())
+            .find(|key| key.algorithm == algorithm)
             .map_or(HostKeyState::Unknown, |key| HostKeyState::Changed {
-                recorded: fingerprint(key),
+                recorded: key.fingerprint.clone(),
             });
 
         Some(HostKeyQuestion {
             host: host.to_owned(),
             port,
-            fingerprint: fingerprint(offered),
+            fingerprint: offered,
             state,
-            aside: aside(&unread),
+            aside: aside(unread),
         })
+    }
+
+    /// Everything both records hold about this server, as one list, Acter's own first —
+    /// so a key Acter itself accepted is the one reported as recorded when both hold
+    /// something for it.
+    ///
+    /// **One list, and the origin says which half a row came from** (asked for by the
+    /// user, 2026-09-12). The user's own file is read into it, and every row from there is
+    /// [`HostKeyOrigin::Native`]: something to compare against and never something to write
+    /// down. Nothing here can write anyway — [`HostKeyStore::accept`] takes the facts
+    /// rather than a record — so the flag is what makes the halves *legible* rather than
+    /// what makes the guarantee.
+    ///
+    /// Anything that could not be read is named in `unread`, so the user is told the
+    /// comparison did not happen rather than left to infer it.
+    pub fn known(
+        &self,
+        host: &str,
+        port: u16,
+        unread: &mut Option<&'static str>,
+    ) -> Vec<AcceptedHostKey> {
+        let mut found: Vec<AcceptedHostKey> = self
+            .ours
+            .accepted()
+            .into_iter()
+            .filter(|had| had.is_for(host, port))
+            .collect();
+        if let Some(theirs) = self.theirs.as_deref() {
+            match known_host_keys_path(host, port, theirs) {
+                Ok(keys) => found.extend(keys.into_iter().map(|(_, key)| AcceptedHostKey {
+                    host: host.to_owned(),
+                    port,
+                    algorithm: key.algorithm().as_ref().to_owned(),
+                    fingerprint: fingerprint(&key),
+                    // `ssh` does not date its own file, and inventing a day for something
+                    // somebody else wrote would be inventing a fact.
+                    accepted: String::new(),
+                    origin: HostKeyOrigin::Native,
+                })),
+                Err(_) => *unread = Some(THEIRS),
+            }
+        }
+        found
     }
 
     /// Writes an accepted key into Acter's own file, so the same host is not asked about
@@ -100,12 +164,14 @@ impl KnownHosts {
     /// than only what failed: a key that could not be written down means being asked again
     /// next time, and a user who is told that will not think the question is a fault.
     pub fn remember(&self, host: &str, port: u16, key: &PublicKey) -> Result<(), String> {
-        learn_known_hosts_path(host, port, key, &self.ours).map_err(|why| {
-            ended(format!(
-                "Acter accepted the host key for {host} but could not write it down, so \
-                 this host will be asked about again next time. {why}"
-            ))
-        })
+        self.ours
+            .accept(host, port, key.algorithm().as_ref(), &fingerprint(key))
+            .map_err(|why| {
+                ended(format!(
+                    "Acter accepted the host key for {host} but could not write it down, so \
+                     this host will be asked about again next time. {why}"
+                ))
+            })
     }
 
     /// Which key algorithms are already recorded for this host, in the order they were
@@ -119,26 +185,18 @@ impl KnownHosts {
     /// connection.
     pub fn recorded_algorithms(&self, host: &str, port: u16) -> Vec<Algorithm> {
         let mut found: Vec<Algorithm> = Vec::new();
-        for (path, _) in self.files() {
-            let Ok(keys) = known_host_keys_path(host, port, path) else {
+        for recorded in self.known(host, port, &mut None) {
+            // An algorithm this build of the SSH library does not know is not one it could
+            // offer, so it is skipped rather than reported: a record written by a later
+            // Acter must not stop this one from connecting.
+            let Ok(algorithm) = Algorithm::new(&recorded.algorithm) else {
                 continue;
             };
-            for (_, key) in keys {
-                let algorithm = key.algorithm();
-                if !found.contains(&algorithm) {
-                    found.push(algorithm);
-                }
+            if !found.contains(&algorithm) {
+                found.push(algorithm);
             }
         }
         found
-    }
-
-    /// The files to consult, Acter's own first — so a key Acter itself accepted is the one
-    /// reported as recorded when both files hold something for the same host.
-    fn files(&self) -> Vec<(&Path, &'static str)> {
-        let mut files: Vec<(&Path, &'static str)> = vec![(self.ours.as_path(), OURS)];
-        files.extend(self.theirs.as_deref().map(|path| (path, THEIRS)));
-        files
     }
 }
 
@@ -152,17 +210,12 @@ fn fingerprint(key: &PublicKey) -> String {
     key.fingerprint(HashAlg::Sha256).to_string()
 }
 
-/// What to add to a question when a file could not be read, and nothing when both were.
-fn aside(unread: &[&str]) -> Option<String> {
-    match unread {
-        [] => None,
-        [one] => Some(format!(
-            "Acter could not read {one}, so a key recorded only there was not compared."
-        )),
-        [first, second, ..] => Some(format!(
-            "Acter could not read {first} or {second}, so no recorded key was compared."
-        )),
-    }
+/// What to add to a question when the user's own file could not be read, and nothing when
+/// it could.
+fn aside(unread: Option<&str>) -> Option<String> {
+    unread.map(|whose| {
+        format!("Acter could not read {whose}, so a key recorded only there was not compared.")
+    })
 }
 
 #[cfg(test)]
@@ -170,6 +223,7 @@ mod tests {
     use std::fs;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    use acter_core::RememberedHostKeys;
     use russh::keys::parse_public_key_base64;
 
     use super::*;
@@ -188,6 +242,26 @@ mod tests {
     /// What `ssh-keygen -l` says about `KEY_A`, so the fingerprint this module produces is
     /// pinned against the tool a user will compare it with rather than against itself.
     const FINGERPRINT_A: &str = "SHA256:IzJE9oHP7rabiNsCSTceP2l1jW8/4WESW2jkk+JFiOU";
+
+    /// Acter's own record, holding nothing.
+    ///
+    /// **In memory since spec 26** (decision 2, as amended in implementation), where this
+    /// record stopped being a second `known_hosts` file and became a typed list in the
+    /// settings document behind [`HostKeyStore`]. What the tests need of it has not
+    /// changed: a record made for the test, holding exactly what the test put in it.
+    fn ours() -> Arc<RememberedHostKeys> {
+        Arc::new(RememberedHostKeys::default())
+    }
+
+    /// Acter's own record, holding this key for the rig's host and port.
+    fn ours_holding(base64: &str) -> Arc<RememberedHostKeys> {
+        let recorded = RememberedHostKeys::default();
+        let key = key(base64);
+        recorded
+            .accept(HOST, PORT, key.algorithm().as_ref(), &fingerprint(&key))
+            .expect("a fixture is written");
+        Arc::new(recorded)
+    }
 
     /// `[127.0.0.1]:2222` and `KEY_A`, hashed by `ssh-keygen -H` — the shape of every line
     /// in the `known_hosts` of anybody who has `HashKnownHosts` turned on, which on most
@@ -226,11 +300,6 @@ mod tests {
             fs::write(&path, format!("{}\n", lines.join("\n"))).expect("a fixture is written");
             path
         }
-
-        /// A path in it that nothing has created.
-        fn missing(&self, name: &str) -> PathBuf {
-            self.0.join(name)
-        }
     }
 
     impl Drop for Scratch {
@@ -253,8 +322,7 @@ mod tests {
     /// every user meets this dialog.
     #[test]
     fn a_host_nobody_has_recorded_is_unknown() {
-        let scratch = Scratch::new();
-        let hosts = KnownHosts::new(scratch.missing("acter_known_hosts"), None);
+        let hosts = KnownHosts::new(ours(), None);
 
         let question = hosts
             .check(HOST, PORT, &key(KEY_A))
@@ -276,8 +344,7 @@ mod tests {
     /// The key Acter itself accepted last time: no question at all.
     #[test]
     fn a_key_acter_recorded_is_not_asked_about_again() {
-        let scratch = Scratch::new();
-        let hosts = KnownHosts::new(scratch.file("acter_known_hosts", &[&line(KEY_A)]), None);
+        let hosts = KnownHosts::new(ours_holding(KEY_A), None);
 
         assert_eq!(hosts.check(HOST, PORT, &key(KEY_A)), None);
     }
@@ -288,10 +355,7 @@ mod tests {
     #[test]
     fn a_key_the_user_already_trusts_is_not_asked_about() {
         let scratch = Scratch::new();
-        let hosts = KnownHosts::new(
-            scratch.missing("acter_known_hosts"),
-            Some(scratch.file("known_hosts", &[&line(KEY_A)])),
-        );
+        let hosts = KnownHosts::new(ours(), Some(scratch.file("known_hosts", &[&line(KEY_A)])));
 
         assert_eq!(hosts.check(HOST, PORT, &key(KEY_A)), None);
     }
@@ -302,10 +366,7 @@ mod tests {
     #[test]
     fn a_hashed_entry_matches_the_host_it_was_hashed_from() {
         let scratch = Scratch::new();
-        let hosts = KnownHosts::new(
-            scratch.missing("acter_known_hosts"),
-            Some(scratch.file("known_hosts", &[HASHED_A])),
-        );
+        let hosts = KnownHosts::new(ours(), Some(scratch.file("known_hosts", &[HASHED_A])));
 
         assert_eq!(hosts.check(HOST, PORT, &key(KEY_A)), None);
     }
@@ -315,8 +376,7 @@ mod tests {
     /// other for a person to compare them.
     #[test]
     fn a_different_key_of_the_same_kind_is_a_changed_key() {
-        let scratch = Scratch::new();
-        let hosts = KnownHosts::new(scratch.file("acter_known_hosts", &[&line(KEY_B)]), None);
+        let hosts = KnownHosts::new(ours_holding(KEY_B), None);
 
         let question = hosts
             .check(HOST, PORT, &key(KEY_A))
@@ -333,8 +393,7 @@ mod tests {
     /// say it has. Spending the alarming sentence on this would teach a user to ignore it.
     #[test]
     fn a_key_of_a_kind_nobody_recorded_is_unknown_rather_than_changed() {
-        let scratch = Scratch::new();
-        let hosts = KnownHosts::new(scratch.file("acter_known_hosts", &[&line(KEY_ECDSA)]), None);
+        let hosts = KnownHosts::new(ours_holding(KEY_ECDSA), None);
 
         let question = hosts
             .check(HOST, PORT, &key(KEY_A))
@@ -347,8 +406,7 @@ mod tests {
     /// 2222 and a different server may well be on 22 of the same machine.
     #[test]
     fn the_same_host_on_another_port_is_another_host() {
-        let scratch = Scratch::new();
-        let hosts = KnownHosts::new(scratch.file("acter_known_hosts", &[&line(KEY_A)]), None);
+        let hosts = KnownHosts::new(ours_holding(KEY_A), None);
 
         let question = hosts
             .check(HOST, 22, &key(KEY_A))
@@ -357,22 +415,73 @@ mod tests {
         assert_eq!(question.state, HostKeyState::Unknown);
     }
 
-    /// Accepting writes to Acter's file, creating it, and the same key is then silent.
+    /// Accepting writes to Acter's own record, and the same key is then silent.
     #[test]
     fn an_accepted_key_is_written_down_and_then_stops_asking() {
-        let scratch = Scratch::new();
-        let ours = scratch.missing("acter_known_hosts");
-        let hosts = KnownHosts::new(ours.clone(), None);
+        let ours = ours();
+        let hosts = KnownHosts::new(Arc::clone(&ours) as Arc<dyn HostKeyStore>, None);
 
         hosts
             .remember(HOST, PORT, &key(KEY_A))
-            .expect("a fresh file is written");
+            .expect("the record takes it");
 
-        assert!(ours.exists(), "the file is created rather than required");
+        let kept = ours.accepted();
+        assert_eq!(kept.len(), 1, "one record, and it is Acter's own");
+        assert!(kept[0].is_acters_own());
+        assert_eq!(kept[0].fingerprint, FINGERPRINT_A);
         assert_eq!(
             hosts.check(HOST, PORT, &key(KEY_A)),
             None,
             "what was just accepted is not asked about again"
+        );
+    }
+
+    /// **The user's file joins the same list, flagged as not Acter's to keep** (asked for
+    /// by the user, 2026-09-12). One answer rather than two to merge, and the origin is
+    /// what says which half a row came from.
+    #[test]
+    fn what_is_known_is_one_list_saying_which_half_each_row_came_from() {
+        let scratch = Scratch::new();
+        let hosts = KnownHosts::new(
+            ours_holding(KEY_B),
+            Some(scratch.file("known_hosts", &[&line(KEY_A)])),
+        );
+
+        let known = hosts.known(HOST, PORT, &mut None);
+
+        assert_eq!(known.len(), 2, "both records, in one list");
+        assert!(known[0].is_acters_own(), "Acter's own comes first");
+        assert!(!known[1].is_acters_own(), "and the user's own is native");
+        assert_eq!(known[1].fingerprint, FINGERPRINT_A);
+        assert!(
+            known[1].accepted.is_empty(),
+            "ssh does not date its file, and Acter does not invent a day for it"
+        );
+    }
+
+    /// **And nothing native is ever written down**, which is the whole reason the flag
+    /// exists: accepting a key writes Acter's own record and copies nothing out of the
+    /// user's file into it.
+    #[test]
+    fn nothing_read_out_of_the_users_file_is_ever_written_into_acters_record() {
+        let scratch = Scratch::new();
+        let ours = ours();
+        let hosts = KnownHosts::new(
+            Arc::clone(&ours) as Arc<dyn HostKeyStore>,
+            Some(scratch.file("known_hosts", &[&line(KEY_A)])),
+        );
+
+        hosts.check(HOST, PORT, &key(KEY_ECDSA));
+        hosts
+            .remember(HOST, PORT, &key(KEY_ECDSA))
+            .expect("the record takes it");
+
+        let kept = ours.accepted();
+        assert_eq!(kept.len(), 1, "only the one Acter was told to keep");
+        assert!(kept.iter().all(|had| had.is_acters_own()));
+        assert!(
+            kept.iter().all(|had| had.fingerprint != FINGERPRINT_A),
+            "the key that was only ever in the user's file stayed there"
         );
     }
 
@@ -384,7 +493,7 @@ mod tests {
         let scratch = Scratch::new();
         let theirs = scratch.file("known_hosts", &[&line(KEY_B)]);
         let before = fs::read(&theirs).expect("the fixture is readable");
-        let hosts = KnownHosts::new(scratch.missing("acter_known_hosts"), Some(theirs.clone()));
+        let hosts = KnownHosts::new(ours(), Some(theirs.clone()));
 
         hosts.check(HOST, PORT, &key(KEY_A));
         hosts
@@ -405,7 +514,7 @@ mod tests {
     fn a_file_that_cannot_be_read_is_an_aside_rather_than_a_failure() {
         let scratch = Scratch::new();
         let hosts = KnownHosts::new(
-            scratch.missing("acter_known_hosts"),
+            ours(),
             Some(scratch.file(
                 "known_hosts",
                 &[&format!("[{HOST}]:{PORT} ssh-ed25519 not-base64")],
@@ -430,7 +539,7 @@ mod tests {
     fn the_algorithms_already_on_file_are_reported_for_the_server_to_be_offered() {
         let scratch = Scratch::new();
         let hosts = KnownHosts::new(
-            scratch.file("acter_known_hosts", &[&line(KEY_ECDSA)]),
+            ours_holding(KEY_ECDSA),
             Some(scratch.file("known_hosts", &[&line(KEY_A)])),
         );
 

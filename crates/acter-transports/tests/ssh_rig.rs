@@ -33,6 +33,7 @@ use acter_core::{
     PacingConfig, PasswordQuestion, Secret, SessionApi, SessionEvent, SessionService, SshQuestions,
     Timer, Transport,
 };
+use acter_core::{HostKeyStore, RememberedHostKeys};
 use acter_term::AlacrittyEngine;
 use acter_transports::{KnownHosts, SshTarget, SshTransport};
 use tokio::sync::mpsc::{Receiver, channel};
@@ -149,23 +150,30 @@ impl Scratch {
     }
 
     /// A record of host keys with nothing in it: every host is unknown.
+    ///
+    /// **In memory since spec 26**, where Acter's own record moved out of a file of its own
+    /// and into the settings document behind a port. What the rig needs of it is unchanged:
+    /// a record made for the test, holding exactly what the test put in it.
     fn empty(&self) -> Arc<KnownHosts> {
-        Arc::new(KnownHosts::new(self.0.join("acter_known_hosts"), None))
+        Arc::new(KnownHosts::new(
+            Arc::new(RememberedHostKeys::default()),
+            None,
+        ))
     }
 
     /// A record holding some *other* key for the rig, which is what makes the server's real
     /// key a **changed** one — the security case, reached without rebuilding the container.
     fn holding_another_key(&self) -> Arc<KnownHosts> {
-        let path = self.0.join("acter_known_hosts");
-        fs::write(
-            &path,
-            format!(
-                "[{HOST}]:{PORT} ssh-ed25519 \
-                 AAAAC3NzaC1lZDI1NTE5AAAAIHKQ43TBPmSEIjzocj1VrRSKA4Vxa65wu0uNWQx49Tfk\n"
-            ),
-        )
-        .expect("a fixture is written");
-        Arc::new(KnownHosts::new(path, None))
+        let recorded = RememberedHostKeys::default();
+        recorded
+            .accept(
+                HOST,
+                PORT,
+                "ssh-ed25519",
+                "SHA256:IzJE9oHP7rabiNsCSTceP2l1jW8/4WESW2jkk+JFiOU",
+            )
+            .expect("a fixture is written");
+        Arc::new(KnownHosts::new(Arc::new(recorded), None))
     }
 }
 
