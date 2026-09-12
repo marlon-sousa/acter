@@ -30,7 +30,7 @@ mod tests {
     use tauri::webview::InvokeRequest;
     use tauri::{WebviewWindowBuilder, generate_handler};
 
-    use crate::container::{AppState, state};
+    use crate::container::{AppState, settings_directory, state};
 
     /// The scripted far end these tests connect to when they want a session: a debug build
     /// offers it, and no process is spawned to run it.
@@ -86,6 +86,7 @@ mod tests {
             session: Arc::clone(&service) as Arc<dyn SessionApi>,
             connecting: Arc::new(crate::controllers::Connecting::new(Arc::clone(&connect))),
             connect,
+            settings: settings_directory(),
         };
         let app = mock_builder()
             .manage(state)
@@ -99,7 +100,8 @@ mod tests {
                 super::use_profile,
                 super::answer_connect,
                 super::attempt_ended,
-                super::connected
+                super::connected,
+                super::about
             ])
             .build(mock_context(noop_assets()))
             .expect("failed to build the mock app");
@@ -280,6 +282,29 @@ mod tests {
         };
         assert_eq!(connected.label, "Scripted: builtin");
         assert_eq!(connected.session.0, 1, "the first session of this window");
+    }
+
+    /// **The About dialog's facts, through the pipeline the dialog uses.** They stopped
+    /// being a constant when the settings folder joined them (spec 26, decision 5): the
+    /// folder comes out of managed state, so what this pins is that the state really reaches
+    /// the router and that the line a listener hears is whole.
+    #[test]
+    fn about_answers_the_build_and_the_settings_folder() {
+        let out = invoke_unconnected("about", json!({})).expect("about should succeed");
+
+        assert_eq!(out["name"], "Acter");
+        assert_eq!(out["version"], env!("CARGO_PKG_VERSION"));
+        let folder = out["settings_folder"]
+            .as_str()
+            .expect("the settings folder is a path a user can read out");
+        assert!(
+            !folder.trim().is_empty(),
+            "a folder nobody can name is no answer"
+        );
+        let standing = out["settings_standing"]
+            .as_str()
+            .expect("whether Acter is portable or installed is a sentence");
+        assert!(standing.ends_with('.'), "it is read aloud: {standing}");
     }
 
     /// An answer for an attempt nobody is running is ignored rather than rejected: it is the

@@ -179,6 +179,12 @@ mod tests {
         fn connected(&self) -> Option<Connected> {
             None
         }
+
+        /// Nothing on the command line: this controller is about an attempt somebody
+        /// started from the window, and a launch switch is answered elsewhere.
+        fn requested_at_launch(&self) -> Option<acter_core::LaunchRequest> {
+            None
+        }
     }
 
     fn connecting(fake: Fake) -> Connecting {

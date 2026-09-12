@@ -1751,6 +1751,9 @@ mod replacing_a_session {
             Arc::new(Unchecked),
             offered("windows").to_vec(),
             Vec::new(),
+            // No `--connect` on the command line: this test is about the shells, not about
+            // what a launch asked for.
+            None,
         );
 
         service
@@ -1891,6 +1894,7 @@ mod what_this_machine_actually_has {
             Arc::new(WindowsTrust::new()),
             offered("windows").to_vec(),
             Vec::new(),
+            None,
         );
 
         let connected = service
@@ -1922,6 +1926,7 @@ mod what_this_machine_actually_has {
             Arc::new(WindowsTrust::new()),
             offered("windows").to_vec(),
             Vec::new(),
+            None,
         );
 
         let listed = service.connectable();

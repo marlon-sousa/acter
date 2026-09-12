@@ -14,10 +14,10 @@ pub use controllers::{Requests, SessionActor, SessionInput, Wake};
 pub use entities::{
     Announcement, AttemptId, CommandId, ConnectAnswer, ConnectQuestion, ConnectStep, Connectable,
     Connected, ConnectionKind, ConnectionState, ExitCode, Fault, Integration, Key, KeyAck,
-    KeyPress, LineId, LineOwner, LineRevision, MenuAction, Mode, Osc133Marker, PacingConfig,
-    PacingState, PathStanding, ProfileId, Provenance, Screen, SessionEvent, SessionId,
-    SessionIntent, SessionSetup, SessionState, SetUp, ShellInstall, ShellMarkers, Signer,
-    SubmitAck, TerminalItem, Variant, Verdict,
+    KeyPress, LaunchRequest, LineId, LineOwner, LineRevision, MenuAction, Mode, Osc133Marker,
+    PacingConfig, PacingState, PathStanding, ProfileId, Provenance, Screen, SessionEvent,
+    SessionId, SessionIntent, SessionSetup, SessionState, SetUp, ShellInstall, ShellMarkers,
+    Signer, SubmitAck, TerminalItem, Variant, Verdict,
 };
 // The pacing verdict is domain-internal since A6: `ReadMode` no longer crosses the wire,
 // so the items whose signatures mention it — `PacingAction`, `PacingOutcome`, `verdict`

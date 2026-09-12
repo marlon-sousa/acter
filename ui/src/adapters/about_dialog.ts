@@ -38,6 +38,12 @@ export class AboutDialog {
     this.fill('#about-version', `Version ${facts.version}`);
     this.fill('#about-copyright', facts.copyright);
     this.fill('#about-licence', `${facts.licence} licence`);
+    // One line rather than two: a listener arrowing this dialog hears where the folder is
+    // and how it got there together, which is the question they asked (spec 26, decision 5).
+    this.fill(
+      '#about-settings',
+      `Settings folder: ${facts.settings_folder}. ${facts.settings_standing}`,
+    );
     this.dialog.showModal();
   }
 

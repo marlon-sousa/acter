@@ -371,6 +371,43 @@ pub enum KeyAck {
     Unsupported,
 }
 
+/// What the command line asked this launch to connect to (spec 26, decision 20).
+///
+/// **Asked for by the backend and carried out by the frontend.** The composition root is
+/// the one place allowed to read the command line, and the window is the one place a
+/// connection can ask its questions — a saved SSH connection needs a host-key dialog and a
+/// password dialog, and there is no window to put either in until the frontend is running.
+/// So the switch becomes a value the frontend collects at startup and acts on through the
+/// same call the Connect dialog makes.
+///
+/// **A name nothing is saved under is a sentence rather than a silence.** A windowed binary
+/// has no console, so there is nowhere to print a usage error: the window opens unconnected
+/// and says what was asked for.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(tag = "request")]
+pub enum LaunchRequest {
+    /// Start this saved connection, exactly as choosing its row in the Connect dialog would.
+    Connect { name: String },
+    /// Nothing is saved under this name, and [`said`](Self::Unknown::said) is what the
+    /// unconnected window announces instead.
+    Unknown { name: String, said: String },
+}
+
+impl LaunchRequest {
+    /// The request for a name nothing is saved under, with the sentence already written.
+    ///
+    /// **The sentence is made here rather than by whoever discovers the name is unknown**,
+    /// so the words a listener hears are one string in one place — the same reason every
+    /// other refusal in this protocol carries its own sentence rather than a code somebody
+    /// downstream turns into words.
+    pub fn unknown(name: &str) -> Self {
+        Self::Unknown {
+            name: name.to_owned(),
+            said: format!("There is no saved connection named {name}."),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -589,5 +626,38 @@ mod tests {
         let back: Connected =
             serde_json::from_value(serde_json::to_value(&connected).unwrap()).unwrap();
         assert_eq!(connected, back);
+    }
+    /// The launch switch crosses the wire, so its shape is pinned like every other IPC
+    /// type: the frontend switches on the tag and must meet both arms.
+    #[test]
+    fn a_launch_request_names_what_was_asked_for_on_the_wire() {
+        let asked = LaunchRequest::Connect {
+            name: "work laptop".to_owned(),
+        };
+
+        assert_eq!(
+            serde_json::to_value(&asked).unwrap(),
+            json!({ "request": "Connect", "name": "work laptop" })
+        );
+        let back: LaunchRequest =
+            serde_json::from_value(serde_json::to_value(&asked).unwrap()).unwrap();
+        assert_eq!(asked, back);
+    }
+
+    /// **A name nothing is saved under is a whole sentence**, and it names what was asked
+    /// for: a listener who mistyped a name has nothing else to go on, because a windowed
+    /// binary printed no usage and no console saw the switch.
+    #[test]
+    fn an_unknown_name_is_a_sentence_that_says_which_name() {
+        let LaunchRequest::Unknown { name, said } = LaunchRequest::unknown("wrok laptop") else {
+            panic!("an unknown name is an unknown request");
+        };
+
+        assert_eq!(name, "wrok laptop", "the name is kept as it was typed");
+        assert_eq!(said, "There is no saved connection named wrok laptop.");
+        assert!(
+            said.ends_with('.'),
+            "it is read aloud, so it ends where the thought does"
+        );
     }
 }

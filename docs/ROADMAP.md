@@ -3229,28 +3229,103 @@ thing to pick up once the adapters land, not merely the next number.
     item that is not there yet. `ACTER_SHELL` and `ACTER_TRANSCRIPT` still connect at launch,
     which is what the suites and the manual passes use.
 
-26. B8, the profile store and `--profile`. **Resequenced 2026-08-24: this comes after
-    23.3 (WSL) rather than before it**, and it changes shape with the Connect dialog
-    (entry 13). Profiles stop being files a user hand-edits and become **saved
-    connections**: a connection is probed, and only one that actually came up is offered
-    for saving. A save flow with nothing behind it but cmd and PowerShell would save
-    nothing a user could not retype in a second, which is why WSL is what makes it worth
-    building. Spec:
-    [b8-profile-store.md](specs/b8-profile-store.md) — agreed in conversation 2026-08-23.
-    Profiles stop being a section of DESIGN and become files: JSON under `%APPDATA%\acter`
-    on Windows, with `ACTER_PROFILES_DIR` pointing somewhere else for development, tests and
-    the NVDA fixture — which is what makes a manual accessibility pass repeatable instead of
-    dependent on what this machine happens to have installed. Other operating systems get
-    their own locations when they get their own builds.
+26. The connection manager, and where Acter keeps its settings. Spec:
+    [26-connection-manager.md](specs/26-connection-manager.md) — agreed in conversation
+    2026-09-12 and committed with 26.1. **It supersedes
+    [b8-profile-store.md](specs/b8-profile-store.md)**, which was agreed 2026-08-23 and never
+    implemented; that file keeps a note at its top pointing here, because the reasoning it
+    records for JSON, for one file per connection and for a named failure is reused rather
+    than discarded.
 
-    Stored profiles join the discovered shells in what 25 lists, so a fresh install is
-    useful with no configuration and a configured one is the user's own.
+    **Resequenced 2026-08-24: this comes after 23.3 (WSL) rather than before it.** A save flow
+    with nothing behind it but cmd and PowerShell would save nothing a user could not retype
+    in a second, which is why WSL is what makes it worth building. Every prerequisite is now
+    Done: the kinds are discovered (B5.4, B5.7), WSL lists its distributions (23.3), SSH
+    exists (27), and the Connect dialog has a panel per kind (A8).
 
-    **And the one command-line switch**: `acter --profile <name>` starts that profile's
-    session. Arguments are parsed, never printed — a windowed binary has no console, so a
-    name that resolves to nothing opens the window unconnected and *says* what was wrong
-    with it. There is no `create` on the command line: profiles are files, and creating one
-    from a shell whose output nobody can see is not a workflow this audience needs.
+    **Profiles become saved connections, and the vocabulary is the first decision.** The
+    product's own dialog is called Connect and the thing a user names is what they connect
+    to; "profile" survives only inside the code, as the `ProfileId` type on the wire. So
+    `--profile` becomes `--connect`, and `ACTER_PROFILES_DIR` becomes `ACTER_SETTINGS_DIR`.
+
+    **File → Connect becomes a list of saved names**, each loading its own properties into
+    the panel a user can change before connecting; a new connection is made in a dialog of
+    its own; and once a connection is up Acter offers to save it, once. Nothing here ever
+    saves a password. Edits in the panel are for that attempt only, and keeping one is File →
+    Save connection afterwards.
+
+    **And everything Acter writes moves into one settings folder**: beside the program when
+    Acter runs portable, in this account's application-data folder when it is installed, and
+    wherever `ACTER_SETTINGS_DIR` points over both. The connection store is the first thing
+    Acter writes that a user would go looking for, which is why the folder is decided in the
+    same entry rather than after it.
+
+    **Two settings have been waiting for this entry to exist**, and both are answered without
+    a setting of their own, because saving writes the session as it stands: the set-up
+    checkbox that travels with the attempt (B9.5, decision 10), and 28.8's "who gets your keys
+    is not remembered per connection".
+
+    **It is the first of the 1.0 beta set**, and it is delivered in four PRs, in this order.
+    The entry flips to Done when the last of them lands.
+
+26.1. **Done** — the settings folder and the launch switch. Spec:
+    [26-connection-manager.md](specs/26-connection-manager.md), decisions 1 to 6 and 20.
+    Merged as PR #PLACEHOLDER (2026-09-12). The spec itself lands in this PR, per the process
+    rule that a spec travels with the code it contracts for.
+
+    **Where Acter writes is now one rule, and it is a pure function.** `records_directory`
+    already took the operating system and the environment as arguments so that both platforms
+    could be asserted from whichever one the suite runs on; it grows the executable's
+    directory and the portable test, and answers a folder *and* how it got there — portable,
+    installed, pointed at by `ACTER_SETTINGS_DIR`, or the folder Acter was started from on a
+    system nobody has chosen one for. Six tests cover the lot, including that a portable Mac
+    keeps its settings **beside** `Acter.app` rather than inside it, where a written file
+    would break the signature M4 will put on the bundle.
+
+    **`known_hosts` and `explained_shells` moved with it**, from `%APPDATA%\acter` to
+    `%APPDATA%\acter\settings`, and both writers already create the folder on first write —
+    which is what decision 3 asks for, an installed Acter making its folder when it has
+    something to put in it rather than at startup.
+
+    **`acter --connect <name>` is parsed here and carried out by the window.** The switch
+    becomes a `LaunchRequest` the frontend collects at startup, rather than a session started
+    behind the window's back: a saved SSH connection has to ask about a host key and then for
+    a password, and there is nobody to ask until there is a window. Both spellings of the
+    switch are accepted and every way of getting it wrong opens the window unconnected,
+    because a windowed binary has no console to print a usage message to.
+
+    **The About dialog says where the settings are**, in one line: the path, then whether
+    Acter is running portable or installed, as a whole sentence. It is the cheapest answer to
+    "where did that go" for somebody who cannot go looking with a file manager.
+
+    **What is deliberately not here**: a name that nothing is saved under still answers as a
+    request to connect rather than as `LaunchRequest::Unknown`, because deciding that needs
+    the store, and the store is 26.2. The sentence it will carry is written and tested in
+    `LaunchRequest::unknown`, so 26.2 wires it rather than writing it.
+
+26.2. The connection store. Spec:
+    [26-connection-manager.md](specs/26-connection-manager.md), decisions 7 to 11 → implement
+    it. `SavedConnection` and its serde shape, the `ConnectionStore` and `Preferences` driven
+    ports with their fakes, the filesystem adapters against a temporary directory, and the
+    five actions `ConnectApi` grows — `saved`, `save_connection`, `rename_connection`,
+    `forget_connection`, and `origin` on `use_profile`. It closes 28.8 by reference to
+    decision 11: who holds the keys is recorded at the moment of saving.
+
+26.3. The two dialogs, the save dialog and the menu. Spec:
+    [26-connection-manager.md](specs/26-connection-manager.md), decisions 12 to 19, 22 and 23
+    → implement it. The shared connection panel extracted from today's dialog, the
+    saved-connections dialog, the New connection dialog, Save connection, Rename, the Forget
+    confirmation, the two new menu items on both platforms, the offer after connecting, and
+    the help rewrite. It carries the spec's NVDA checklist in its PR body, run against a
+    fixture `ACTER_SETTINGS_DIR`, and the end-to-end suite for the saved-connection flow.
+
+26.4. The installer and the portable package. Spec:
+    [26-connection-manager.md](specs/26-connection-manager.md), decision 21 → implement it.
+    Tauri's NSIS target with `installMode` set to `currentUser`, so installing never asks for
+    administrator rights; the portable zip built by CI, holding `acter.exe` and an empty
+    `settings` folder beside it, which is what makes the portable rule true on first run; and
+    the README saying how to install, how to run portable, and that SmartScreen will warn
+    until there is a certificate.
 
 27. **Done** — B9, SSH: a far end that is not on this machine. Spec:
     [b9-ssh.md](specs/b9-ssh.md) — agreed 2026-08-26, implemented in four PRs (below). The five

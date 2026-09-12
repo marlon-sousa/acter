@@ -17,7 +17,7 @@
 
 use std::env;
 use std::env::consts;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -91,10 +91,28 @@ const SCRIPTED: &str = "scripted";
 /// same string, and `acter_shells::wsl::is_wsl` recognises either spelling.
 const WSL_CLIENT: &str = "wsl.exe";
 
-/// Where B8's profile store will live, read here for the one thing B9 needs from it: a place
-/// to write down a host key that was accepted. B8 inherits the variable rather than this
-/// inventing a second one.
-const PROFILES_DIR: &str = "ACTER_PROFILES_DIR";
+/// The variable that points Acter's settings folder somewhere else, and wins over both
+/// answers the machine would otherwise give (spec 26, decision 3).
+///
+/// It is what points development, the automated suites and the manual NVDA passes at a
+/// directory made for them: a pass whose saved connections depend on this machine's history
+/// is not repeatable and cannot be compared across two runs.
+///
+/// **It replaced `ACTER_PROFILES_DIR` outright and there is no alias** (spec 26, decision 1).
+/// Nothing shipped read the old name: a profile store was never built, and the two files that
+/// did live under it are Acter's own records rather than anything a user configured.
+const SETTINGS_DIR: &str = "ACTER_SETTINGS_DIR";
+
+/// The folder whose existence beside the program means this copy of Acter is portable
+/// (spec 26, decision 3), and the name of the settings folder itself in every case.
+///
+/// **Acter never creates it beside the program.** The portable package ships with it empty,
+/// and a user who wants an installed Acter to become portable makes it by hand — so a folder
+/// nobody asked for cannot turn an installed copy portable behind their back.
+const SETTINGS: &str = "settings";
+
+/// The one switch a launch takes: `acter --connect <name>` (spec 26, decision 20).
+const CONNECT: &str = "--connect";
 
 /// The file both records of host keys are kept in, in OpenSSH's own format so it stays
 /// inspectable with the tools a user already has.
@@ -119,6 +137,58 @@ pub(crate) struct AppState {
     /// yet, and it is not a question about what this machine offers. It is a conversation
     /// in flight (spec B9).
     pub(crate) connecting: Arc<Connecting>,
+    /// Where Acter keeps everything it writes, resolved once at startup.
+    ///
+    /// **Held rather than re-read, because reading it is the composition root's privilege**
+    /// and the About dialog is a router away from the environment. Resolved once is also
+    /// honest: a folder that changed under a running Acter would not move the files already
+    /// open in it.
+    pub(crate) settings: SettingsFolder,
+}
+
+/// Where Acter keeps everything it writes, and how it came to be there.
+///
+/// **A value in the composition root rather than a domain type**, because it is an answer
+/// about *this machine* — the same reason [`records_directory`] lives here. What the domain
+/// gets is a path, and what the About dialog gets is these two facts (spec 26, decision 5).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SettingsFolder {
+    pub(crate) path: PathBuf,
+    pub(crate) standing: Standing,
+}
+
+/// Why the settings folder is where it is — the second half of the line About reads out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Standing {
+    /// A `settings` folder beside the program, which is what a portable copy is.
+    Portable,
+    /// No such folder, so this copy was installed and keeps its settings with the rest of
+    /// this account's application data.
+    Installed,
+    /// [`SETTINGS_DIR`] named a folder, which wins over both of the above.
+    Directed,
+    /// An operating system nobody has chosen a folder for, so Acter writes where it was
+    /// started from — the behaviour that shipped before there was a settings folder at all.
+    WhereItStarted,
+}
+
+impl Standing {
+    /// What the About dialog says about it, as a whole sentence: this is read aloud, and
+    /// "portable" on its own is a word with no verb (CLAUDE.md).
+    pub(crate) fn said(self) -> &'static str {
+        match self {
+            Standing::Portable => {
+                "Acter is running portable, so its settings are beside the program."
+            }
+            Standing::Installed => {
+                "Acter is installed, so its settings are kept with your other application data."
+            }
+            Standing::Directed => "Acter was told where to keep its settings.",
+            Standing::WhereItStarted => {
+                "This system has no settings folder of its own for Acter, so Acter uses the                  folder it was started from."
+            }
+        }
+    }
 }
 
 pub fn run() {
@@ -214,6 +284,7 @@ pub(crate) fn connected_state() -> AppState {
         session: Arc::clone(&service) as Arc<dyn SessionApi>,
         connecting: Arc::new(Connecting::new(Arc::clone(&connect))),
         connect,
+        settings: settings_directory(),
     }
 }
 
@@ -225,6 +296,7 @@ pub(crate) fn state() -> ConnectService {
         signatures(),
         offered(consts::OS).to_vec(),
         scripted_profiles(),
+        requested_connection(env::args_os().skip(1)),
     )
 }
 
@@ -244,6 +316,9 @@ fn state_on(os: &str) -> ConnectService {
         signatures(),
         offered(os).to_vec(),
         scripted_profiles(),
+        // Nothing on the command line: what a launch asked for is [`requested_connection`]'s
+        // own question, and it is tested as one.
+        None,
     )
 }
 
@@ -885,57 +960,117 @@ fn far_end_note(shell: Option<&str>, outcome: SetUpOutcome) -> Note {
     }
 }
 
-/// Acter's own record of host keys, under the profile directory or wherever
-/// `ACTER_PROFILES_DIR` points.
+/// Acter's own record of host keys, in the settings folder (spec 26, decision 2).
 ///
 /// **Read here because this is where the environment is allowed in** (spec B8, decision 2),
 /// which is also why `KnownHosts` takes both paths rather than resolving them: the whole of
 /// the host-key behaviour is then testable against a directory made for the test.
 fn acter_known_hosts() -> PathBuf {
-    profiles_directory().join(KNOWN_HOSTS)
+    settings_directory().path.join(KNOWN_HOSTS)
 }
 
-/// The directory Acter keeps its own records in, until B8 has a profile store to keep them
-/// beside.
+/// The settings folder: everything Acter writes goes in it, and it says how it got there.
 ///
-/// **`ACTER_PROFILES_DIR` first, always** — it is what points development, the suites and the
-/// NVDA fixture at a directory made for them, and it must win over whatever the machine would
-/// otherwise choose (spec B8, decision 2).
+/// **[`SETTINGS_DIR`] first, always** (spec 26, decision 3) — it is what points development,
+/// the suites and the NVDA fixture at a directory made for them, and it must win over
+/// whatever the machine would otherwise choose. An empty value is not a folder and is
+/// ignored, so a variable somebody cleared rather than unset does not send Acter's records
+/// to the root of the filesystem.
 ///
-/// **Otherwise the place this operating system keeps an application's data.** Until M1 the
-/// only such place was `%APPDATA%`, with the current working directory as the last resort —
-/// which off Windows was not a last resort but the *only* answer, so a macOS Acter would have
-/// written its `known_hosts` and its record of explained shells into whatever directory it
-/// happened to be launched from. Two users, two shells, two different files, and none of them
-/// where anybody would look.
-fn profiles_directory() -> PathBuf {
-    env::var_os(PROFILES_DIR)
-        .map(PathBuf::from)
-        .or_else(|| records_directory(consts::OS, env::var_os("APPDATA"), env::var_os("HOME")))
-        // A platform nobody has chosen a directory for, which is every platform this does not
-        // build for. It keeps the behaviour that shipped rather than inventing one: the
-        // records go beside the binary's working directory, and an operating system joins by
-        // being named above rather than by falling somewhere plausible.
-        .unwrap_or_else(|| PathBuf::from("."))
+/// **Otherwise the program says which**: a `settings` folder beside it means this copy is
+/// portable and that folder is the answer; no such folder means it was installed, and the
+/// answer is where this operating system keeps an application's data.
+///
+/// The world is read here and the rule is [`records_directory`], which is pure.
+pub(crate) fn settings_directory() -> SettingsFolder {
+    if let Some(directed) = env::var_os(SETTINGS_DIR).filter(|named| !named.is_empty()) {
+        return SettingsFolder {
+            path: PathBuf::from(directed),
+            standing: Standing::Directed,
+        };
+    }
+    // The directory the running program is in, which is the only thing that can say whether
+    // this copy is portable. A build that cannot say where it lives is treated as installed,
+    // because inventing a portable folder for it would put somebody's records where nobody
+    // chose to put them.
+    let program = env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(Path::to_path_buf));
+    let portable = program
+        .as_deref()
+        .is_some_and(|directory| portable_settings(consts::OS, directory).is_dir());
+    records_directory(
+        consts::OS,
+        env::var_os("APPDATA"),
+        env::var_os("HOME"),
+        program.as_deref(),
+        portable,
+    )
 }
 
-/// Where this operating system keeps an application's own data, given what its environment
-/// said.
+/// Where a portable `settings` folder would be, for a program running from this directory.
+///
+/// **Beside the `.app` bundle on macOS rather than inside it** (spec 26, decision 3). A file
+/// written inside a bundle breaks its signature the moment M4 signs it, so the folder that
+/// makes a Mac copy portable sits next to `Acter.app`, three levels above the executable in
+/// `Acter.app/Contents/MacOS`.
+///
+/// A macOS build that is *not* in a bundle is beside its own executable like every other
+/// platform, because there is no bundle to be outside of.
+fn portable_settings(os: &str, program: &Path) -> PathBuf {
+    match os {
+        "macos" => beside_the_bundle(program).unwrap_or(program).join(SETTINGS),
+        _ => program.join(SETTINGS),
+    }
+}
+
+/// The directory holding the `.app` this executable is inside, or `None` when it is not
+/// inside one.
+fn beside_the_bundle(program: &Path) -> Option<&Path> {
+    if program.file_name() != Some(OsStr::new("MacOS")) {
+        return None;
+    }
+    let contents = program.parent()?;
+    if contents.file_name() != Some(OsStr::new("Contents")) {
+        return None;
+    }
+    let bundle = contents.parent()?;
+    if !bundle
+        .extension()
+        .is_some_and(|extension| extension == "app")
+    {
+        return None;
+    }
+    bundle.parent()
+}
+
+/// Where this operating system keeps Acter's settings, given what its environment said, where
+/// the program is, and whether a portable folder is really beside it.
 ///
 /// **A conditional expression rather than a conditional module**, per ARCHITECTURE's
 /// platform-divergence rule: the answer is one path per platform, so it needs no adapter — but
 /// it does need to be *testable*, and reading the environment inside a `#[cfg]` is what makes
-/// a wrong answer invisible until somebody runs the product on that platform. So the two
-/// variables are read at the edge above and this is pure.
+/// a wrong answer invisible until somebody runs the product on that platform. So the world is
+/// read at the edge above and this is pure, which is what lets one machine assert both
+/// platforms' answers (spec 26, decision 4).
 ///
-/// `None` for an operating system with no answer here, which the caller turns into the
-/// working directory.
+/// An operating system nobody has chosen a folder for keeps the behaviour that shipped: the
+/// records go in the directory Acter was started from. It is named as its own standing rather
+/// than dressed up as an installation, because the About dialog says this out loud.
 fn records_directory(
     os: &str,
     appdata: Option<OsString>,
     home: Option<OsString>,
-) -> Option<PathBuf> {
-    match os {
+    program: Option<&Path>,
+    portable: bool,
+) -> SettingsFolder {
+    if let Some(beside) = program.filter(|_| portable) {
+        return SettingsFolder {
+            path: portable_settings(os, beside),
+            standing: Standing::Portable,
+        };
+    }
+    let installed = match os {
         "windows" => appdata.map(|appdata| PathBuf::from(appdata).join("acter")),
         // Where macOS puts an application's own data, and where a Mac user would look for it.
         // `~/Library/Application Support` rather than a dotfile in the home directory: the
@@ -948,18 +1083,61 @@ fn records_directory(
                 .join("acter")
         }),
         _ => None,
+    };
+    match installed {
+        Some(directory) => SettingsFolder {
+            path: directory.join(SETTINGS),
+            standing: Standing::Installed,
+        },
+        None => SettingsFolder {
+            path: PathBuf::from("."),
+            standing: Standing::WhereItStarted,
+        },
     }
 }
 
-/// Where the record of explained shells is kept, under the same directory Acter's own
-/// `known_hosts` is (spec B9.5, decision 10).
+/// The saved connection this launch asked for, from `acter --connect <name>` (spec 26,
+/// decision 20).
+///
+/// **Parsed, never printed.** A windowed binary has no console, so there is nowhere to put a
+/// usage message: an argument this does not recognise is ignored, and a name nothing is saved
+/// under is answered in the window rather than on a stream nobody can hear.
+///
+/// `--connect=<name>` is accepted beside `--connect <name>`, because it is the other spelling
+/// a person types and the alternative is a window that opens unconnected and never says why.
+///
+/// Pure over the arguments it is given, so both spellings and every way of getting it wrong
+/// are tested without a launch.
+fn requested_connection<A: IntoIterator<Item = OsString>>(arguments: A) -> Option<String> {
+    let mut arguments = arguments.into_iter();
+    while let Some(argument) = arguments.next() {
+        let named = if argument == CONNECT {
+            arguments.next()
+        } else {
+            argument
+                .to_str()
+                .and_then(|argument| argument.strip_prefix(CONNECT))
+                .and_then(|rest| rest.strip_prefix('='))
+                .map(OsString::from)
+        };
+        if let Some(named) = named {
+            return named
+                .into_string()
+                .ok()
+                .map(|name| name.trim().to_owned())
+                .filter(|name| !name.is_empty());
+        }
+    }
+    None
+}
+
+/// Where the record of explained shells is kept, in the settings folder beside Acter's own
+/// `known_hosts` (spec B9.5, decision 10, and spec 26, decision 2).
 ///
 /// **Read here because this is where the environment is allowed in** (spec B8, decision 2),
 /// which is what makes the whole preference testable against a directory made for the test.
-/// `ACTER_PROFILES_DIR` points it elsewhere for development, tests and the NVDA fixture — the
-/// precedent B9 set for Acter's own record of host keys before B8 existed.
 fn explained_shells() -> PathBuf {
-    profiles_directory().join(EXPLAINED_SHELLS)
+    settings_directory().path.join(EXPLAINED_SHELLS)
 }
 
 /// The user's own `known_hosts`, which Acter reads and never writes (spec B9, decision 5) —
@@ -1090,47 +1268,197 @@ mod tests {
         assert_eq!(wired, named, "{} gets its own list", consts::OS);
     }
 
-    /// **Where Acter keeps its own records, per operating system** — the `known_hosts` it
-    /// writes and the shells it has explained.
+    /// **Where Acter keeps its settings, per operating system** — the `known_hosts` it
+    /// writes, the shells it has explained, and everything the connection store adds.
     ///
     /// **It is a test because the answer used to be silently wrong** (M1). Off Windows there
     /// was no branch at all, so the fallback fired and a macOS Acter wrote its records into
     /// whatever directory it was launched from: two launches, two directories, and a host key
     /// verified once and unknown the next time.
+    ///
+    /// **Both platforms asserted from whichever one this runs on** (spec 26, decision 4),
+    /// which is the whole reason the rule is a pure function taking the operating system
+    /// rather than a `#[cfg]`.
     #[test]
-    fn each_operating_system_keeps_acters_records_where_that_system_keeps_them() {
+    fn each_operating_system_keeps_acters_settings_where_that_system_keeps_them() {
         let appdata = || Some(OsString::from(r"C:\Users\someone\AppData\Roaming"));
         let home = || Some(OsString::from("/Users/someone"));
 
+        let windows = records_directory("windows", appdata(), home(), None, false);
         assert_eq!(
-            records_directory("windows", appdata(), home()),
-            Some(PathBuf::from(r"C:\Users\someone\AppData\Roaming").join("acter")),
+            windows.path,
+            PathBuf::from(r"C:\Users\someone\AppData\Roaming")
+                .join("acter")
+                .join("settings"),
             "Windows keeps it under the roaming profile"
         );
+        assert_eq!(windows.standing, Standing::Installed);
+
+        let macos = records_directory("macos", appdata(), home(), None, false);
         assert_eq!(
-            records_directory("macos", appdata(), home()),
-            Some(
-                PathBuf::from("/Users/someone")
-                    .join("Library")
-                    .join("Application Support")
-                    .join("acter")
-            ),
+            macos.path,
+            PathBuf::from("/Users/someone")
+                .join("Library")
+                .join("Application Support")
+                .join("acter")
+                .join("settings"),
             "macOS keeps it where Finder and Time Machine expect it, not in a dotfile"
         );
-        assert_eq!(
-            records_directory("linux", appdata(), home()),
+        assert_eq!(macos.standing, Standing::Installed);
+    }
+
+    /// **A `settings` folder beside the program is what portable means** (spec 26,
+    /// decision 3), and it wins over the folder this account would otherwise get — including
+    /// on a machine that has a perfectly good one.
+    #[test]
+    fn a_settings_folder_beside_the_program_makes_this_copy_portable() {
+        let beside = PathBuf::from(r"D:\portable\acter");
+
+        let folder = records_directory(
+            "windows",
+            Some(OsString::from(r"C:\Users\someone\AppData\Roaming")),
             None,
-            "and an operating system nobody has chosen a directory for says so"
+            Some(&beside),
+            true,
+        );
+
+        assert_eq!(folder.path, beside.join("settings"));
+        assert_eq!(folder.standing, Standing::Portable);
+    }
+
+    /// **On macOS the portable folder is beside the bundle, never inside it** (spec 26,
+    /// decision 3): a file written inside `Acter.app` breaks the signature M4 will put on it.
+    #[test]
+    fn a_portable_mac_keeps_its_settings_outside_the_bundle() {
+        let inside = PathBuf::from("/Volumes/Acter/Acter.app/Contents/MacOS");
+
+        let folder = records_directory(
+            "macos",
+            None,
+            Some(OsString::from("/Users/someone")),
+            Some(&inside),
+            true,
+        );
+
+        assert_eq!(folder.path, PathBuf::from("/Volumes/Acter/settings"));
+        assert_eq!(folder.standing, Standing::Portable);
+        assert!(
+            !folder.path.starts_with("/Volumes/Acter/Acter.app"),
+            "nothing Acter writes goes inside its own bundle"
         );
     }
 
-    /// The machine that has neither variable — a service account, a stripped environment —
-    /// gets no directory rather than a path built from an empty string.
+    /// A Mac build that is not in a bundle — every development launch — has no bundle to be
+    /// outside of, so its portable folder is beside the executable like everywhere else.
     #[test]
-    fn a_machine_that_says_nothing_about_itself_is_not_given_a_directory() {
-        for os in ["windows", "macos"] {
-            assert_eq!(records_directory(os, None, None), None, "{os}");
+    fn a_mac_build_outside_a_bundle_looks_beside_the_program() {
+        assert_eq!(
+            portable_settings("macos", Path::new("/Users/someone/acter/target/debug")),
+            PathBuf::from("/Users/someone/acter/target/debug/settings")
+        );
+    }
+
+    /// The machine that says nothing about itself — a service account, a stripped
+    /// environment — writes where it was started from rather than into a path built out of an
+    /// empty string, and the About dialog has a sentence for that.
+    #[test]
+    fn a_machine_that_says_nothing_about_itself_writes_where_it_was_started() {
+        for os in ["windows", "macos", "linux"] {
+            let folder = records_directory(os, None, None, None, false);
+            assert_eq!(folder.path, PathBuf::from("."), "{os}");
+            assert_eq!(folder.standing, Standing::WhereItStarted, "{os}");
         }
+    }
+
+    /// **What a launch asked to connect to, in both spellings a person types** (spec 26,
+    /// decision 20). Nothing here starts anything: the switch becomes a request the window
+    /// carries out, so a saved SSH connection can ask its questions where somebody can hear
+    /// them.
+    #[test]
+    fn the_launch_switch_names_the_saved_connection_it_asked_for() {
+        let asked = |arguments: &[&str]| {
+            requested_connection(arguments.iter().map(|argument| OsString::from(*argument)))
+        };
+
+        assert_eq!(
+            asked(&["--connect", "work laptop"]).as_deref(),
+            Some("work laptop")
+        );
+        assert_eq!(
+            asked(&["--connect=work laptop"]).as_deref(),
+            Some("work laptop"),
+            "the other spelling of the same switch"
+        );
+        assert_eq!(
+            asked(&["--connect", " work laptop "]).as_deref(),
+            Some("work laptop"),
+            "a name is trimmed, because a trailing space is invisible to the person who typed it"
+        );
+    }
+
+    /// An ordinary launch, and every way of getting the switch wrong: all of them open the
+    /// window unconnected, because a windowed binary has no console to print a usage message
+    /// to and an argument nobody recognises is not worth refusing to start over.
+    #[test]
+    fn a_launch_that_names_nothing_asks_for_nothing() {
+        let asked = |arguments: &[&str]| {
+            requested_connection(arguments.iter().map(|argument| OsString::from(*argument)))
+        };
+
+        assert_eq!(asked(&[]), None, "an ordinary launch");
+        assert_eq!(
+            asked(&["--connect"]),
+            None,
+            "the switch with no name after it"
+        );
+        assert_eq!(
+            asked(&["--connect", "   "]),
+            None,
+            "a name that is only spaces"
+        );
+        assert_eq!(
+            asked(&["--verbose", "work"]),
+            None,
+            "an argument nobody reads"
+        );
+        assert_eq!(
+            asked(&["--connected", "work"]),
+            None,
+            "a switch that is not this one"
+        );
+    }
+
+    /// **The whole point of the switch: what the frontend is handed.** The composition root
+    /// parses the name and the service answers it as a request, which the window carries out
+    /// through the same call the Connect dialog makes.
+    #[test]
+    fn a_named_connection_reaches_the_frontend_as_a_request_rather_than_a_session() {
+        let service = ConnectService::new(
+            Arc::new(Shells::new()),
+            machine(),
+            signatures(),
+            offered(consts::OS).to_vec(),
+            scripted_profiles(),
+            Some("work laptop".to_owned()),
+        );
+
+        assert_eq!(
+            service.requested_at_launch(),
+            Some(acter_core::LaunchRequest::Connect {
+                name: "work laptop".to_owned()
+            })
+        );
+        assert!(
+            service.connected().is_none(),
+            "nothing is started before there is a window to ask a password in"
+        );
+    }
+
+    /// And an ordinary launch asks for nothing at all, which is the window that opens
+    /// unconnected and says so.
+    #[test]
+    fn an_ordinary_launch_carries_no_request() {
+        assert_eq!(state_on(consts::OS).requested_at_launch(), None);
     }
 
     /// **The release gate, asserted rather than assumed.** What a build offers and what it

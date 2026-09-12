@@ -35,9 +35,9 @@ use std::sync::{Arc, Mutex};
 
 use crate::{
     Chosen, ConnectApi, ConnectQuestions, Connectable, Connected, Connection, ConnectionKind,
-    EventSink, KeyAck, KeyPress, LineOwner, ProfileId, ProgramAnswer, ProgramQuestion, SessionApi,
-    SessionFactory, SessionId, SetUp, ShellInstall, Signatures, Started, SubmitAck, ThisComputer,
-    Variant, catalogue,
+    EventSink, KeyAck, KeyPress, LaunchRequest, LineOwner, ProfileId, ProgramAnswer,
+    ProgramQuestion, SessionApi, SessionFactory, SessionId, SetUp, ShellInstall, Signatures,
+    Started, SubmitAck, ThisComputer, Variant, catalogue,
 };
 
 /// The port every SSH server listens on unless somebody moved it, which is what the form
@@ -76,6 +76,15 @@ pub struct ConnectService {
     /// for the Windows list on a Mac and the macOS list on Windows, where the `#[cfg]`
     /// -selected constant this replaces made half of connecting unassertable on either.
     kinds: Vec<ConnectionKind>,
+    /// The saved connection `acter --connect <name>` asked for, or `None` for an ordinary
+    /// launch (spec 26, decision 20).
+    ///
+    /// **The name as it was typed, not a decision about it.** Reading the command line is
+    /// the composition root's privilege, and deciding whether anything is saved under that
+    /// name belongs to whoever holds the store — which is this service, once 26.2 gives it
+    /// one. Until then every name is answered as a request to connect, and a name nothing
+    /// is saved under becomes [`LaunchRequest::unknown`] there rather than here.
+    requested: Option<String>,
     /// Which session is live, or `None` for a window connected to nothing.
     current: Mutex<Option<Live>>,
     /// The session-id counter. Starts at 1, so 0 never names a session.
@@ -103,6 +112,7 @@ impl ConnectService {
         signatures: Arc<dyn Signatures>,
         kinds: Vec<ConnectionKind>,
         scripted: Vec<String>,
+        requested: Option<String>,
     ) -> Self {
         Self {
             factory,
@@ -110,6 +120,7 @@ impl ConnectService {
             signatures,
             kinds,
             scripted,
+            requested,
             current: Mutex::new(None),
             next: AtomicU32::new(1),
         }
@@ -657,6 +668,17 @@ impl ConnectApi for ConnectService {
             limit_explained: live.limit_explained,
         })
     }
+
+    /// What the launch asked to connect to, as the frontend will act on it.
+    ///
+    /// **Nothing is started here** (spec 26, decision 20). This answers a question; the
+    /// window is what makes the call, so a saved SSH connection asks its host-key and
+    /// password questions in front of the person who can answer them.
+    fn requested_at_launch(&self) -> Option<LaunchRequest> {
+        self.requested
+            .as_ref()
+            .map(|name| LaunchRequest::Connect { name: name.clone() })
+    }
 }
 
 impl ConnectService {
@@ -1135,6 +1157,9 @@ mod tests {
             // and it asks for it on whichever platform the suite happens to be running on.
             offered("windows").to_vec(),
             scripted.iter().map(|name| (*name).to_owned()).collect(),
+            // No `--connect` on the command line: what a launch asked for is its own
+            // question, and the tests that are about it name a connection below.
+            None,
         );
         (Arc::new(service), factory, signatures)
     }
@@ -1153,6 +1178,7 @@ mod tests {
             Arc::clone(&signatures) as Arc<dyn Signatures>,
             offered("macos").to_vec(),
             Vec::new(),
+            None,
         );
         (Arc::new(service), factory, signatures)
     }
@@ -1691,6 +1717,7 @@ mod tests {
             Arc::new(FakeSignatures::default()),
             offered("windows").to_vec(),
             Vec::new(),
+            None,
         );
 
         service.connectable();
@@ -1853,6 +1880,7 @@ mod tests {
             Arc::new(FakeSignatures::default()),
             offered("windows").to_vec(),
             Vec::new(),
+            None,
         );
         let working = service
             .use_profile(

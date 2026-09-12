@@ -237,14 +237,17 @@
     </footer>
     <!-- About. A modal <dialog> rather than a native window: the platform traps focus
          and answers Escape for us, and it stays inside the webview, which is the whole
-         reason the menu bar above is in the document too (spec A7). Its four facts are
-         filled from the build by adapters/about_dialog.ts. -->
+         reason the menu bar above is in the document too (spec A7). Its facts are
+         filled from the build by adapters/about_dialog.ts — including where Acter keeps
+         its settings, which is the cheapest answer to "where did that go" for somebody
+         who cannot go looking with a file manager (spec 26, decision 5). -->
     <dialog id="about-dialog" aria-labelledby="about-title">
       <h1 id="about-title">About Acter</h1>
       <p id="about-name"></p>
       <p id="about-version"></p>
       <p id="about-copyright"></p>
       <p id="about-licence"></p>
+      <p id="about-settings"></p>
       <button id="about-close" type="button">Close</button>
     </dialog>
     <!-- Help. A modal <dialog> for About's reasons, and **deliberately not an application

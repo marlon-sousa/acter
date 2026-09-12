@@ -20,13 +20,14 @@ const SKELETON = `
     <p id="about-version"></p>
     <p id="about-copyright"></p>
     <p id="about-licence"></p>
+    <p id="about-settings"></p>
     <button id="about-close" type="button">Close</button>
   </dialog>
   <input id="command-input" />
 `;
 
-/** The build's answer, stubbed. The point of the port is that these four strings are
- * never typed into the page, so the test supplies values the HTML could not have. */
+/** The build's answer, stubbed. The point of the port is that none of these strings are
+ * ever typed into the page, so the test supplies values the HTML could not have. */
 class StubShell implements AppShell {
   asked = 0;
 
@@ -37,6 +38,8 @@ class StubShell implements AppShell {
       version: '9.9.9-from-the-build',
       copyright: '© 2026 Marlon Brandão de Sousa',
       licence: 'MIT',
+      settings_folder: 'D:\\portable\\acter\\settings',
+      settings_standing: 'Acter is running portable, so its settings are beside the program.',
     });
   }
 
@@ -100,7 +103,7 @@ beforeEach(() => {
 });
 
 describe('what it says', () => {
-  it('reads its four facts from the build rather than from the page', async () => {
+  it('reads its facts from the build rather than from the page', async () => {
     await open();
 
     expect(shell.asked).toBe(1);
@@ -118,6 +121,18 @@ describe('what it says', () => {
 
     expect(said('about-version')).toBe('Version 9.9.9-from-the-build');
     expect(said('about-licence')).toBe('MIT licence');
+  });
+
+  /** **Where Acter keeps what it writes, in one line** (spec 26, decision 5). The path and
+   * whether this copy is portable are two facts only the backend has, and a listener asking
+   * "where did that go" wants both in the same breath. */
+  it('says where the settings folder is and how it got there', async () => {
+    await open();
+
+    expect(said('about-settings')).toBe(
+      'Settings folder: D:\\portable\\acter\\settings. ' +
+        'Acter is running portable, so its settings are beside the program.',
+    );
   });
 
   it('is open once it has been asked to open', async () => {

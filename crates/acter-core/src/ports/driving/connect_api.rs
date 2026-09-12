@@ -7,7 +7,7 @@
 //! handler is a design where connecting is untested. Naming the two operations puts the
 //! behaviour behind a seam a test can reach with no window, no webview and no screen reader
 //! in the way, and leaves the menu as the thinnest possible caller of them — which is also
-//! what the launch path calls when `--profile` names one (B8).
+//! what the launch path calls when `--connect` names a saved connection (spec 26).
 //!
 //! Separate from [`SessionApi`](crate::SessionApi) because it is a different conversation:
 //! that port is one session's input and output, and this one is about *which* session there
@@ -20,9 +20,9 @@
 
 use std::sync::Arc;
 
-use crate::{ConnectQuestions, Connectable, Connected, ProfileId, SetUp};
+use crate::{ConnectQuestions, Connectable, Connected, LaunchRequest, ProfileId, SetUp};
 
-/// Connecting, as two actions and a question.
+/// Connecting, as two actions and two questions.
 pub trait ConnectApi: Send + Sync {
     /// Everything this machine offers, freshly asked each time.
     ///
@@ -78,4 +78,18 @@ pub trait ConnectApi: Send + Sync {
     /// it, and the two are different windows to open: one attaches, the other says it is
     /// empty and where to go.
     fn connected(&self) -> Option<Connected>;
+
+    /// What `acter --connect <name>` asked for, or `None` for an ordinary launch (spec 26,
+    /// decision 20).
+    ///
+    /// **Asked rather than acted on, because the asking needs a window.** A saved SSH
+    /// connection stops partway to ask about a host key and then for a password, and there
+    /// is nobody to ask until the frontend is running — which is what B9 already requires
+    /// of every SSH attempt. So the switch is answered here and carried out by the frontend
+    /// through the same call the Connect dialog makes, rather than started behind its back
+    /// at launch.
+    ///
+    /// Asked once at startup, beside [`Self::connected`] and for its reason: a launch may
+    /// have brought a request with it, and a window that has one opens differently.
+    fn requested_at_launch(&self) -> Option<LaunchRequest>;
 }

@@ -1,5 +1,15 @@
 # B8 — the profile store, and `--profile`
 
+> **Superseded on 2026-09-12 by
+> [26-connection-manager.md](26-connection-manager.md), and never implemented.** That spec
+> is the contract for roadmap entry 26. This file stays because the reasoning it records is
+> reused there rather than discarded: JSON, one file per profile, a malformed file named
+> rather than swallowed, and a directory the environment can point somewhere else. What
+> changed is the vocabulary and the shape around it — a profile is a **saved connection**,
+> the switch is `--connect`, the store lives in a **settings folder** that holds everything
+> Acter writes, and saving is offered once after a connection comes up rather than being a
+> file a user hand-edits. Read this one for the why; read that one for what was built.
+
 Roadmap entry 26, lane 2. Agreed in conversation 2026-08-23, in the conversation that
 introduced actions and profiles. Depends on 25 (B7), whose actions it feeds.
 

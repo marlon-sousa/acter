@@ -11,6 +11,13 @@ export interface AboutFacts {
   version: string;
   copyright: string;
   licence: string;
+  /// Where Acter keeps everything it writes (spec 26, decision 5). A path, said as a path:
+  /// the sentence around it is the dialog's, and whether this copy is portable or installed
+  /// is the next field, because only the backend can know.
+  settings_folder: string;
+  /// Whether Acter is running portable or installed, as a whole sentence the dialog reads
+  /// out after the path.
+  settings_standing: string;
 }
 
 export interface AppShell {
