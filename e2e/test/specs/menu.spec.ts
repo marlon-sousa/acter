@@ -173,15 +173,32 @@ describe('the About dialog', () => {
 
   /** The whole path: menu bar, into a menu, activate, and a dialog carrying facts that
    * came from the Rust side rather than from the page. */
-  it('opens from the menu and reads four facts from the build', async () => {
+  it('opens from the menu and reads its facts from the build', async () => {
     await openAbout();
 
     const dialog = await $('#about-dialog');
     // The name is filled by the adapter from the `about` command; the HTML ships empty.
     await expect(await dialog.getText()).toContain('Acter');
-    await expect(await dialog.getText()).toContain('Version');
     await expect(await dialog.getText()).toContain('MIT licence');
     await expect(await dialog.getText()).toContain('Marlon Brandão de Sousa');
+    // **The version is the one the build stamped, said in words** (spec 26, decision 5).
+    // A release reads "Version 1.0.0."; a development build — which is every build this
+    // suite ever drives, since it targets the debug profile — reads "Development build,
+    // commit" and the short commit. Asserting either would pin this suite to one of them,
+    // so what it pins is the shape both have: a sentence, then the identifier a bug report
+    // carries.
+    const said = await browser.execute(
+      () => document.getElementById('about-version')?.textContent ?? '',
+    );
+    await expect(/^(Version|Development build, commit) .+\. \S+$/.test(said)).toBe(true);
+    // **And where Acter keeps its settings**, in one line: the path, then a whole sentence
+    // saying how it came to be using it. This suite runs against a fixture folder, so what
+    // it says is that it was told — which is the standing `ACTER_SETTINGS_DIR` produces.
+    const settings = await browser.execute(
+      () => document.getElementById('about-settings')?.textContent ?? '',
+    );
+    await expect(settings).toContain('Settings folder: ');
+    await expect(settings).toContain('Acter was told where to keep its settings.');
   });
 
   /** Measured through NVDA before it was fixed: Tab left the only control for the
@@ -277,10 +294,10 @@ describe('the Help dialog', () => {
     });
 
     await expect(shape.applications).toBe(0);
-    // Six since 2026-09-02, when "Who gets your keys" was added (roadmap 28.7): what Acter
-    // is, moving around the window, who gets your keys, connecting, the two kinds of
-    // session, and the dialog that asks.
-    await expect(shape.headings).toBe(6);
+    // Seven since spec 26, when "Saving a connection" was added (decision 23): what Acter
+    // is, moving around the window, who gets your keys, connecting, saving a connection,
+    // the two kinds of session, and the dialog that asks.
+    await expect(shape.headings).toBe(7);
     await expect(shape.describedBy).toBe('help-summary');
   });
 

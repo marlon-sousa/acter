@@ -20,13 +20,14 @@ const SKELETON = `
     <p id="about-version"></p>
     <p id="about-copyright"></p>
     <p id="about-licence"></p>
+    <p id="about-settings"></p>
     <button id="about-close" type="button">Close</button>
   </dialog>
   <input id="command-input" />
 `;
 
-/** The build's answer, stubbed. The point of the port is that these four strings are
- * never typed into the page, so the test supplies values the HTML could not have. */
+/** The build's answer, stubbed. The point of the port is that none of these strings is
+ * ever typed into the page, so the test supplies values the HTML could not have. */
 class StubShell implements AppShell {
   asked = 0;
 
@@ -35,8 +36,12 @@ class StubShell implements AppShell {
     return Promise.resolve({
       name: 'Acter',
       version: '9.9.9-from-the-build',
+      version_said: 'Version 9.9.9-from-the-build.',
       copyright: '© 2026 Marlon Brandão de Sousa',
       licence: 'MIT',
+      settings_folder: 'D:\\portable\\acter\\settings',
+      settings_standing:
+        'Acter is running portable, so its settings are kept beside the program.',
     });
   }
 
@@ -116,7 +121,13 @@ describe('what it says', () => {
   it('says the version and the licence as words, not as bare values', async () => {
     await open();
 
-    expect(said('about-version')).toBe('Version 9.9.9-from-the-build');
+    // **The sentence, then the identifier** (spec 26, decision 5). What is read out is a
+    // sentence, because `development-521c956` is a value and nothing should try to spell a
+    // commit aloud; the identifier stays on the line because the dialog is copyable text
+    // and a bug report has to be able to carry it.
+    expect(said('about-version')).toBe(
+      'Version 9.9.9-from-the-build. 9.9.9-from-the-build',
+    );
     expect(said('about-licence')).toBe('MIT licence');
   });
 

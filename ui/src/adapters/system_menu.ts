@@ -24,6 +24,12 @@ export function installSystemMenu(
       case 'Connect':
         actions.connect();
         break;
+      case 'NewConnection':
+        actions.newConnection();
+        break;
+      case 'SaveConnection':
+        actions.saveConnection();
+        break;
       case 'Help':
         actions.help();
         break;

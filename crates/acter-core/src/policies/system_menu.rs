@@ -144,6 +144,21 @@ fn macos() -> Vec<SystemMenu> {
                     label: "Connect…",
                     accelerator: Some("CmdOrCtrl+K"),
                 },
+                // **The platform's own spellings for new and save** (spec 26,
+                // decision 22): on a Mac those two keys mean those two things in every
+                // application, and one that bound them elsewhere would be the surprise.
+                // Windows takes neither, because which keystroke Acter claims there is a
+                // keystroke-map decision DESIGN owns.
+                MenuItem::Acter {
+                    action: MenuAction::NewConnection,
+                    label: "New connection…",
+                    accelerator: Some("CmdOrCtrl+N"),
+                },
+                MenuItem::Acter {
+                    action: MenuAction::SaveConnection,
+                    label: "Save connection…",
+                    accelerator: Some("CmdOrCtrl+S"),
+                },
                 MenuItem::Separator,
                 MenuItem::Standard(Standard::CloseWindow),
             ],
@@ -248,19 +263,59 @@ mod tests {
 
     /// Connect is reachable from the menu bar whatever the window is showing, which it is
     /// not today: the button exists only in the unconnected window.
+    ///
+    /// **And the two items spec 26 adds are beside it, in that order** (decision 22):
+    /// Connect is the list of names, New connection is the list of kinds, and Save
+    /// connection names the session that is running.
     #[test]
-    fn connect_is_in_the_menu_and_is_in_file() {
-        let file = system_menu("macos")
+    fn connect_new_connection_and_save_connection_are_the_file_menu() {
+        let acters: Vec<MenuAction> = file_menu()
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                MenuItem::Acter { action, .. } => Some(*action),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(
+            acters,
+            [
+                MenuAction::Connect,
+                MenuAction::NewConnection,
+                MenuAction::SaveConnection
+            ]
+        );
+    }
+
+    /// **The platform's own keys for its own two verbs** (decision 22). On a Mac Command
+    /// and N means new and Command and S means save in every application, so an Acter that
+    /// bound them elsewhere would be the surprise.
+    #[test]
+    fn new_and_save_take_the_shortcuts_a_mac_user_already_presses() {
+        let file = file_menu();
+
+        for (action, keys) in [
+            (MenuAction::NewConnection, "CmdOrCtrl+N"),
+            (MenuAction::SaveConnection, "CmdOrCtrl+S"),
+        ] {
+            let found = file.items.iter().find_map(|item| match item {
+                MenuItem::Acter {
+                    action: named,
+                    accelerator,
+                    ..
+                } if *named == action => *accelerator,
+                _ => None,
+            });
+            assert_eq!(found, Some(keys), "{action:?}");
+        }
+    }
+
+    fn file_menu() -> SystemMenu {
+        system_menu("macos")
             .into_iter()
             .find(|menu| menu.title == "File")
-            .expect("macOS has a File menu");
-        assert!(matches!(
-            file.items.first(),
-            Some(MenuItem::Acter {
-                action: MenuAction::Connect,
-                ..
-            })
-        ));
+            .expect("macOS has a File menu")
     }
 
     /// Every variant is reachable, and none twice: an action with no item cannot be chosen,
@@ -272,7 +327,13 @@ mod tests {
         found.sort_by_key(|action| format!("{action:?}"));
         assert_eq!(
             found,
-            [MenuAction::About, MenuAction::Connect, MenuAction::Help]
+            [
+                MenuAction::About,
+                MenuAction::Connect,
+                MenuAction::Help,
+                MenuAction::NewConnection,
+                MenuAction::SaveConnection
+            ]
         );
     }
 

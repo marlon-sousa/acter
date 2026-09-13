@@ -156,6 +156,39 @@ export class AnnouncerDom implements AnnouncerView {
     this.announce(SILENT_MARKER);
   }
 
+  /**
+   * Resolve once the queue is empty and the last announcement has had its own gap.
+   *
+   * **Polled rather than promised at the point of queueing**, because what a caller wants
+   * to know is when *everything* has gone out, and announcements can be added after the
+   * wait began — the connection sentence and the keys sentence are two calls.
+   *
+   * **And one spacing beyond the last drain, which is the half that matters.** Measured
+   * with NVDA 2026.1.1 on 2026-09-12: resolving the moment the text was in the region left
+   * ten milliseconds before a modal opened on top of it, and the keys sentence was never
+   * spoken. Text in a region is not text that has been said. [`DRAIN_SPACING_MS`] is
+   * already this file's answer to "how much gap does a reader need to treat two changes as
+   * two", and a dialog taking the region away is a change like any other — so the last
+   * announcement is owed the same gap it would have been owed by a second announcement.
+   */
+  drained(): Promise<void> {
+    return new Promise<void>((resolve) => {
+      const settle = (): void => {
+        if (this.queue.length === 0 && !this.drainScheduled) {
+          const owed = this.lastDrainAt + DRAIN_SPACING_MS - Date.now();
+          if (owed <= 0) {
+            resolve();
+            return;
+          }
+          setTimeout(settle, owed);
+          return;
+        }
+        setTimeout(settle, DRAIN_SPACING_MS);
+      };
+      settle();
+    });
+  }
+
   // The spacing is a gap BETWEEN announcements, not a delay before each one: an
   // announcement arriving into an idle region has nothing to share a mutation batch with,
   // so it drains on the next turn with no added wait. Only an announcement following a

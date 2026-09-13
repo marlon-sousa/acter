@@ -34,6 +34,17 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Test
         run: cargo test --workspace
+      # **The portable build, checked and tested as its own configuration** (spec 26,
+      # decision 3). A Cargo feature makes a second build of the product, and the rule
+      # ARCHITECTURE's platform-divergence section names — a configuration nobody runs is a
+      # configuration nobody tests — applies to a packaging as much as to a platform. It is
+      # cheap here because the rule itself takes the packaging as a *value*, so what these
+      # two steps catch is the compile-time half: dead code the feature leaves unreachable,
+      # and a `packaging()` that answers the wrong thing.
+      - name: Clippy (portable)
+        run: cargo clippy -p acter-app --all-targets --features portable -- -D warnings
+      - name: Test (portable)
+        run: cargo test -p acter-app --features portable
       - name: Protocol bindings up to date
         # `cargo test --workspace` above re-ran the generator (tests/protocol_bindings.rs),
         # rewriting ui/src/protocol.ts from the acter-core types. If the committed

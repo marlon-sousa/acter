@@ -16,7 +16,9 @@ import type {
   ConnectQuestion,
   Connectable,
   Connected,
+  LaunchRequest,
   ProfileId,
+  SavedConnections,
   SetUp,
 } from '../protocol';
 
@@ -57,10 +59,68 @@ export interface ConnectApi {
    *
    * `setUp` is the Connect dialog's checkbox: whether this connection may run one command
    * inside the session once it is established, so a listener is told when each command has
-   * finished and, where the shell can say it, whether it worked (spec B9.5, decision 9). It travels with the attempt rather
-   * than being stored, because there is no profile store to keep it in until B8.
+   * finished and, where the shell can say it, whether it worked (spec B9.5, decision 9). It
+   * travels with the attempt, and is written down only when somebody saves the connection.
+   *
+   * `origin` is the saved connection this attempt started from, or `null` for a new one
+   * (spec 26, decision 11). It is this side's knowledge, because the user may have edited
+   * the panel before pressing Connect and the backend cannot know which row that came from
+   * — and it decides two things: who holds the line as the session opens, and whether the
+   * window offers to save it.
    */
-  use(id: ProfileId, setUp: SetUp, listener?: ConnectListener): Promise<Connected>;
+  use(
+    id: ProfileId,
+    setUp: SetUp,
+    origin: string | null,
+    listener?: ConnectListener,
+  ): Promise<Connected>;
   /** Which far end this window is on, or `null` for a window connected to nothing. */
   connected(): Promise<Connected | null>;
+
+  /**
+   * Every saved connection, freshly read, with the sentence to say instead when the
+   * document could not be parsed (spec 26, decisions 9 and 11).
+   *
+   * **Rows rather than a document.** Nothing here reads or writes the settings file: the
+   * backend answers typed rows and takes named actions, which is what makes a new setting
+   * a compile error rather than a silent nothing.
+   */
+  saved(): Promise<SavedConnections>;
+
+  /**
+   * Write the live session down under this name, and answer the sentence to say.
+   *
+   * **Rejects with a sentence** when the name is taken, breaks the name rule, or nothing is
+   * connected — the same shape `use` has, and the same reason: the words are the backend's,
+   * because only it knows what was wrong.
+   */
+  saveConnection(name: string): Promise<string>;
+
+  /** Give a saved connection a different name, and answer the sentence to say. */
+  renameConnection(from: string, to: string): Promise<string>;
+
+  /** Remove one, and answer the sentence to say. Nobody can undo this. */
+  forgetConnection(name: string): Promise<string>;
+
+  /**
+   * Whether a new connection that has just come up should offer to save itself
+   * (spec 26, decision 19).
+   *
+   * **Asked at the moment of the offer** rather than at startup, so a preference set in
+   * another window is honoured without a restart.
+   */
+  offerToSave(): Promise<boolean>;
+
+  /** Record that it should not, which is the offer's own checkbox and nothing else. */
+  stopOfferingToSave(): Promise<void>;
+
+  /**
+   * What `acter --connect <name>` asked for, or `null` for an ordinary launch (spec 26,
+   * decision 20).
+   *
+   * **The window is what carries it out**, through the same call the Connect dialog makes,
+   * so a saved SSH connection asks its host-key and password questions in front of the
+   * person who can answer them.
+   */
+  requestedAtLaunch(): Promise<LaunchRequest | null>;
 }

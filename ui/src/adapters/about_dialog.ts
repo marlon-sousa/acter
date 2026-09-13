@@ -35,9 +35,21 @@ export class AboutDialog {
     }
     const facts = await this.shell.about();
     this.fill('#about-name', facts.name);
-    this.fill('#about-version', `Version ${facts.version}`);
+    // **The sentence rather than the identifier** (spec 26, decision 5). It used to be
+    // "Version" and whatever Cargo said; the build stamps the real one now, and
+    // `development-521c956` is a value a listener should not have to hear spelled out.
+    // The identifier is still in the dialog, on the same line, because this is copyable
+    // text and a bug report has to be able to carry it.
+    this.fill('#about-version', `${facts.version_said} ${facts.version}`);
     this.fill('#about-copyright', facts.copyright);
     this.fill('#about-licence', `${facts.licence} licence`);
+    // One line rather than two: a listener arrowing this dialog hears where the folder is
+    // and how it got there together, which is the question they asked (spec 26,
+    // decision 5).
+    this.fill(
+      '#about-settings',
+      `Settings folder: ${facts.settings_folder}. ${facts.settings_standing}`,
+    );
     this.dialog.showModal();
   }
 

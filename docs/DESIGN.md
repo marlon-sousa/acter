@@ -224,13 +224,47 @@ individually), so cd, environment, and aliases persist between commands.
 - Phase 2: shell-native completion as an adapter capability (PowerShell TabExpansion2,
   bash compgen). Richer, but fiddly to query without disturbing the live session.
 
-## Configuration: profiles — **Decided**
+## Saved connections — **Decided, revised 2026-09-12**
 
-- A **profile** bundles a transport + shell adapter + settings (auto-read threshold,
-  beep/announcement preferences, starting directory, ...).
-- A **Defaults profile** holds baseline settings; concrete profiles (PowerShell, cmd,
-  WSL, an SSH host) inherit from it and override selectively.
-- A **session** is an instance of a profile and can override settings further at
+**This section was called "Configuration: profiles", and the rename is the decision.** The
+product's own dialog is called Connect, and the thing a user names is what they connect to.
+"Profile" survives only inside the code, as the `ProfileId` type on the wire. Agreed in
+conversation 2026-09-12 with spec
+[26-connection-manager.md](specs/26-connection-manager.md).
+
+- A **saved connection** is a name, a target, and the two settings a session has: whether
+  Acter may set the session up so it can report how commands went, and who holds the keys
+  when it opens. They live together in one JSON document in the settings folder below,
+  under one lock and one write path — because two stores are two things that can disagree
+  about whether a write happened.
+- **What the target holds is the kind's own facts, and never a resolved file path.** A saved
+  PowerShell connection remembers the edition and where the list found it, and the file is
+  resolved again at connect time — so upgrading PowerShell does not break a connection the
+  user saved a year ago. A saved WSL connection remembers the distribution's name; a saved
+  SSH connection remembers host, port and account.
+- **A saved WSL connection always names a distribution.** Writing down "whatever WSL calls
+  the default" would give a row that does what New connection already does in one more
+  keystroke, and that would silently mean a different machine the day somebody changed their
+  default. A saved WSL connection is worth having because it means this distribution, no
+  questions — and nothing in the product can produce a WSL session that named none, because
+  choosing one is how connecting to WSL works.
+- **A password is never in it, and neither is a passphrase.** Both are asked at connect time,
+  in the window, and the panel can never hold one. This is B9's decision 5 and it does not
+  bend for convenience.
+- **A name is something a listener hears.** It cannot contain slash, backslash, colon, star,
+  question mark, quote, less than, greater than or bar, it cannot be empty, and two names
+  that differ only in case are one name — because every name here is read aloud, and two
+  rows a listener cannot tell apart are worse than a refusal.
+- **Editing the panel before connecting changes that attempt and nothing on disk.** Changing
+  a port and pressing Connect connects to that port; keeping the change is saving it
+  afterwards, from the File menu.
+- **Saving is offered once, after the connection is up**, and from File → Save connection at
+  any time thereafter. Nothing is saved before it has been proved to work.
+- A **Defaults profile** holding baseline settings that concrete connections inherit from is
+  still the shape settings will take when there are settings worth inheriting. Entry 26 built
+  none of it: a saved connection holds the two settings a session actually has, because
+  settings nothing reads are settings nothing tests.
+- A **session** is an instance of a saved connection and can override settings further at
   runtime via a per-session configuration screen.
 - **Tabs are coming:** each tab is one session. (Non-visual tab navigation UX is an
   open question.)
@@ -253,6 +287,89 @@ individually), so cd, environment, and aliases persist between commands.
 - Measured on the extracted grid text (trailing whitespace trimmed), never raw PTY
   bytes — escape sequences and prompt redraws would inflate the count.
 - Configurable per profile / per session like any other setting.
+
+## Where Acter keeps its settings — **Decided 2026-09-12**
+
+Agreed in conversation 2026-09-12, with spec
+[26-connection-manager.md](specs/26-connection-manager.md), decisions 2 to 6. The connection
+store is the first thing Acter writes that a user would go looking for, so this is the entry
+that decides where everything Acter writes lives.
+
+**One settings folder, and one document in it.** `settings.json` holds everything Acter
+decides on a person's behalf: the saved connections, the servers whose identity they
+accepted, and whether Acter should offer to save a new connection. Beside it are
+`settings-previous.json`, the document as it was before the last successful write;
+`settings-unreadable.json`, which exists only when something went wrong; and
+`explained_shells`, the shells this person has said not to be asked about again, still one
+name per line. That last one is deliberately not folded in: it is a set rather than a
+scalar, it works, and moving it would be a format change with nothing user-visible to show
+for it.
+
+**Acter's own record of host keys is in the document**, amended 2026-09-12 at the user's
+asking from a first version that left it a second `known_hosts` file. Each record is the
+host, the port, the kind of key, the fingerprint as `ssh-keygen -l` prints it, and the day
+it was accepted — which is a record a person can open and compare, and which answers "when
+did I trust this?" as the old file could not. **The user's own `~/.ssh/known_hosts` is read
+into the same list and never written**: it is not Acter's record, and a copy of it inside
+Acter's document would be stale the moment `ssh` changed it.
+
+**How this copy was packaged is decided when it is built, and never guessed at when it
+runs.** Three packagings, and the folder follows from them: a **development** build — any
+debug build — keeps its settings in a `settings` folder in the directory Acter was started
+from, so a developer needs no variable set to get a sane answer; a **portable** copy keeps
+them beside the program, and on a Mac beside the `.app` bundle rather than inside it,
+because a file written inside a bundle breaks the signature the moment the bundle is
+signed; an **installed** copy keeps them under the folder this operating system keeps an
+account's configuration in, which is `%APPDATA%\acter` on Windows and
+`~/Library/Application Support/acter` on macOS. The portable zip is built with a Cargo
+feature the installer's build does not have, so a running Acter asks nothing of the
+filesystem.
+
+**The first version of this decision inferred it from disk, and that was wrong.** It said a
+folder named `settings` beside the program made a copy portable. A folder with that name is
+something plenty of directories happen to contain, so a copy run from one of them would have
+read and written that store rather than the user's own, and the marker was also the storage —
+the saved connections would simply appear to be gone. For an audience that cannot glance at a
+folder to check, an accident that silently relocates their data is the wrong thing to trade
+for the convenience of converting a copy by hand. It also left development with no answer of
+its own, which is why there are three cases and not two.
+
+**Acter creates the folder on the first write rather than at startup**, whichever kind of copy
+it is, so a machine Acter was only ever run on, and never saved anything from, has no folder.
+
+**`ACTER_SETTINGS_DIR` wins over the packaging.** It is what points development, the automated
+suites and the manual NVDA passes at a directory made for them: a pass whose saved connections
+depend on what this machine happens to have is not repeatable and cannot be compared across two
+runs. It is also how somebody keeps their settings somewhere the packaging did not choose,
+which is what converting a copy by hand means now.
+
+**The folder and the version are said where a user can read them.** The About dialog reads out
+the path and then a whole sentence saying how Acter came to be using it — running portable,
+installed, a development build, or told where. It is the cheapest answer to "where did that go"
+for somebody who cannot go looking with a file manager. The version beside it is the one the
+build stamped rather than the one Cargo compiled, and it is said in words: a listener hears
+"Version 1.0.0" on a release and "Development build, commit 521c956" otherwise, because
+`development-521c956` is a value and not a sentence.
+
+**A release is named by its tag, and the tag names a platform.** Tags are
+`<platform>-vx.y.z`, so `windows-v1.0.0` and `macos-v1.0.0` are the same release of the same
+product for two machines. The version a listener hears is what follows the `v` and nothing
+else, because the platform is a fact about which file they downloaded rather than about which
+Acter they are running.
+
+**A release that is not the final one says which one it is**, amended 2026-09-12 at the
+user's asking: the three numbers may be followed by a suffix, so `windows-v1.0.0-beta` is a
+release and About reads "Version 1.0.0-beta." A beta somebody downloaded is a thing they are
+running, and the version they report has to say which. The suffix is semver's own — dot
+separated runs of letters, digits and hyphens — and what it must never be mistaken for is
+`git describe`'s own tail, which appends the commits since the tag and the commit itself:
+`1.0.0-beta-2-gf49246c` is two commits past the beta and is a development build.
+
+**A write that fails is a sentence, and it names the folder.** "Could not save the connection:
+the settings folder C:\path is not writable." Naming the folder is the whole point: a listener
+whose Program Files is read-only cannot see a red squiggle. And a document that will not parse
+is moved aside and named rather than written over, because the first save after a corruption
+would otherwise destroy the evidence silently.
 
 ## Application menu and connecting — **Decided**
 
@@ -313,7 +430,11 @@ native design and stops being true.
 
 Two menus, and no more until something earns one:
 
-- **File** — Connect (see below), Exit.
+- **File** — Connect (see below), New connection, Save connection, Exit. The last two
+  arrived with entry 26: Connect is the list of connections the user saved, New connection
+  opens the list of kinds Connect used to open, and Save connection names the session that
+  is running. Neither takes a global shortcut on Windows, because which keystroke Acter
+  claims is a keystroke-map decision and this document's own three-layer rule owns it.
 - **Help** — About Acter. A menu holding one item rather than a top-level item that acts,
   because a menu bar entry that fires instead of opening is a surprise to anyone navigating
   by arrow keys.
@@ -333,8 +454,10 @@ has is its own kind of surprise. Acter, File, Edit, View, Window and Help. **Edi
 decoration** — macOS routes a webview's own copy and paste through the menu bar, so a bar
 without it takes Cmd+C out of the command line.
 
-**Acter's own three items open Acter's own dialogs**: Connect (Cmd+K, the platform's
-"connect to server"), Acter Help (Cmd+/), and About Acter. Help is **not** the conventional
+**Acter's own items open Acter's own dialogs**: Connect (Cmd+K, the platform's "connect to
+server"), New connection (Cmd+N) and Save connection (Cmd+S) under File, Acter Help (Cmd+/),
+and About Acter. New and save take the platform's own spellings, because on a Mac those two
+keys mean those two things in every application. Help is **not** the conventional
 Cmd+? because macOS reserves that for the search field it injects into every Help menu, and
 that binding wins — measured 2026-09-02, with the help never opening. The HTML dialogs rather than the
 native About panel, for the reason the next section gives — and because the native panel
@@ -405,13 +528,22 @@ decision's worry, and it is a solved problem rather than an accepted cost: chang
 kind announces what the panel now holds, and Tab from the kind list lands in it. A silent
 swap of controls is the trap; a spoken one is a form.
 
-**Saving comes after it works, not before.** A connection is *probed* — attempted for real —
-and only a connection that came up is offered for saving. This is what turns profiles from
-files a user hand-edits into something the application creates: the saved connections
-appear as their own kind in the list, and the profile section above stops describing a
-thing only an editor can make. It also settles the ordering: **the JSON profile store is
-built after WSL lands**, because a save flow with only cmd and PowerShell behind it saves
-nothing a user could not retype in a second.
+**Since 2026-09-12 this is two dialogs, and saving comes after it works** (spec
+[26-connection-manager.md](specs/26-connection-manager.md), decisions 12 to 19). The dialog
+above is what File → New connection opens, unchanged. **File → Connect opens a different
+one**, whose main list is the saved connection names in alphabetical order, with the same
+panel under it loaded from whichever name the user has arrowed onto — the SSH form filled
+in, the distribution or edition selected, the set-up checkbox as it was saved. Its buttons
+are Connect, Rename, Forget, New connection and Cancel; there is no Save, because saving
+happens from a live session and nowhere else. With nothing saved yet it still opens, saying
+so and putting focus on New connection.
+
+**A connection is probed before it is named.** Only a connection that actually came up is
+offered for saving, and the offer arrives once — after the connection sentence and after
+who has the keys, as a receipt — with a checkbox for somebody who never wants to be asked
+again. Saving from the File menu is unaffected by that checkbox, and it is the only other
+way to save, so there is one way to save rather than two. This is what turns profiles from
+files a user hand-edits into something the application creates.
 
 **A failed connection is spoken and leaves the running session alone.** Connecting at
 runtime makes a shell that will not start an ordinary event rather than a startup panic,
@@ -419,8 +551,11 @@ and that is the requirement this dialog puts on the action behind it.
 
 The frontend hardcodes no list. The backend answers what can be connected to: shells
 discovered on this machine — cmd, each installed PowerShell edition, one entry per
-installed WSL distribution — joined with the connections the user has saved. The scripted
-fake sessions join the list in debug builds, which is what the profiles section promised:
+installed WSL distribution. The connections the user has saved are the *other* dialog's
+list since entry 26, rather than rows in this one: a name somebody chose and a kind Acter
+discovered are two different things to arrow past, and mixing them made the everyday case —
+open, arrow, Enter — into a walk through a list of kinds. The scripted fake sessions join
+the list of kinds in debug builds, which is what the saved connections section promised:
 the fake is a permanent, selectable session kind rather than a launch-time environment
 variable.
 
@@ -497,11 +632,22 @@ whether some contexts still take them; and what a listener hears when they land 
 field with the letters live, since typing `h` there must insert an `h` rather than jump. Both
 are the entry's to measure, and both are about the words the help will use.
 
-### Acter starts unconnected, and `--profile` is the only switch — **Decided**
+### Acter starts unconnected, and `--connect` is the only switch — **Decided, revised 2026-09-12**
 
 Launched with no arguments, Acter opens a window with **no session**: nothing is spawned
-until the user connects. Launched as `acter --profile <name>`, it starts that profile's
-session immediately.
+until the user connects. Launched as `acter --connect <name>`, it starts that saved
+connection.
+
+**The switch was `--profile` until 2026-09-12**, and it is renamed for the reason the whole
+vocabulary is: what a user names is a connection. It is also carried out differently from the
+way that one was described. The backend parses the name and *answers* it; the window is what
+acts on it, through the same call the Connect dialog makes. So a saved SSH connection asks
+its host-key question and its password question in the window, in front of the person who can
+answer them, and nothing is spawned before there is a window to ask in — which is what B9
+already requires of every SSH attempt.
+
+**A name nothing is saved under opens the window unconnected and says so**, naming what was
+asked for.
 
 **An unconnected window must say so.** It announces that it is not connected and what to do
 about it. A window that opens onto silence is the failure shape this product can least
@@ -562,14 +708,14 @@ one place. The rules above are then per-tab: a tab whose session ended keeps its
 loses its edit field, and a window with no tabs at all is the Connect button.
 
 **Command-line arguments are parsed, never printed.** Acter is a windowed binary with no
-console attached, so `--profile something-that-does-not-exist` cannot report itself on
+console attached, so `--connect something-that-is-not-saved` cannot report itself on
 stdout — and should not want to. The window opens, unconnected, and *says* what was wrong
 with the name. Failures belong where the user is, spoken, which is the same rule the rest
 of this document applies to shells that will not start.
 
-There is deliberately **no `create profile` on the command line**: profiles are files, and
-creating one from a shell nobody can see the output of is not a workflow this audience
-needs. Editing them is hand-editing today and an in-app flow when one earns its place.
+There is deliberately **no way to create a saved connection from the command line**: a
+connection is saved from a session that is running, and creating one from a shell nobody can
+see the output of is not a workflow this audience needs.
 
 ## Keystroke map
 

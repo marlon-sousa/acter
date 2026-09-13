@@ -3229,28 +3229,116 @@ thing to pick up once the adapters land, not merely the next number.
     item that is not there yet. `ACTER_SHELL` and `ACTER_TRANSCRIPT` still connect at launch,
     which is what the suites and the manual passes use.
 
-26. B8, the profile store and `--profile`. **Resequenced 2026-08-24: this comes after
-    23.3 (WSL) rather than before it**, and it changes shape with the Connect dialog
-    (entry 13). Profiles stop being files a user hand-edits and become **saved
-    connections**: a connection is probed, and only one that actually came up is offered
-    for saving. A save flow with nothing behind it but cmd and PowerShell would save
-    nothing a user could not retype in a second, which is why WSL is what makes it worth
-    building. Spec:
-    [b8-profile-store.md](specs/b8-profile-store.md) — agreed in conversation 2026-08-23.
-    Profiles stop being a section of DESIGN and become files: JSON under `%APPDATA%\acter`
-    on Windows, with `ACTER_PROFILES_DIR` pointing somewhere else for development, tests and
-    the NVDA fixture — which is what makes a manual accessibility pass repeatable instead of
-    dependent on what this machine happens to have installed. Other operating systems get
-    their own locations when they get their own builds.
+26. **Done** — the connection manager, and where Acter keeps its settings. Spec:
+    [26-connection-manager.md](specs/26-connection-manager.md) — agreed in conversation
+    2026-09-12 and committed with the implementation. **One pull request rather than the
+    five it was first laid out as**, chosen by the user and recorded in the spec's "Files
+    touched": the pieces are useless apart, and a settings object nothing reads or dialogs
+    with nothing behind them are each harder to judge than the whole. **It supersedes
+    [b8-profile-store.md](specs/b8-profile-store.md)**, which was agreed 2026-08-23 and
+    never implemented; that file keeps a note at its top pointing here, because the
+    reasoning it records for JSON, for a named failure and for a store the environment can
+    point elsewhere is reused rather than discarded.
 
-    Stored profiles join the discovered shells in what 25 lists, so a fresh install is
-    useful with no configuration and a configured one is the user's own.
+    **Resequenced 2026-08-24: this comes after 23.3 (WSL) rather than before it.** A save
+    flow with nothing behind it but cmd and PowerShell would save nothing a user could not
+    retype in a second.
 
-    **And the one command-line switch**: `acter --profile <name>` starts that profile's
-    session. Arguments are parsed, never printed — a windowed binary has no console, so a
-    name that resolves to nothing opens the window unconnected and *says* what was wrong
-    with it. There is no `create` on the command line: profiles are files, and creating one
-    from a shell whose output nobody can see is not a workflow this audience needs.
+    **Profiles became saved connections, and the vocabulary was the first decision.** The
+    product's own dialog is called Connect and the thing a user names is what they connect
+    to; "profile" survives only inside the code, as the `ProfileId` type on the wire. So
+    `--profile` became `--connect`, and `ACTER_PROFILES_DIR` became `ACTER_SETTINGS_DIR`.
+
+    **File → Connect is a list of saved names**, alphabetical and without case, with the
+    shared panel under it loaded from whichever name the listener is on: the SSH form
+    filled in, the distribution or edition selected, the checkbox as it was saved. Arrowing
+    announces the kind and what identifies it, in one line composed in the domain. Editing
+    the panel changes that attempt and writes nothing. File → New connection is A8's dialog
+    renamed, and it is where a connection with no name yet is started. Rename, Forget and
+    the offer to save each put focus where spec decision 15 says.
+
+    **Everything Acter writes moved into one settings folder holding one JSON document**,
+    and where that folder is follows from how the copy was packaged: the folder Acter was
+    started from for a development build, beside the program for a portable one, the
+    account's own configuration folder for an installed one, and `ACTER_SETTINGS_DIR` over
+    all three. The rule is a pure function taking the operating system, the packaging, the
+    configuration directory, the program's directory and the working directory — and the
+    packaging reaches it as a value from one `cfg!` expression, so an ordinary `cargo test`
+    asserts both platforms and all three packagings from whichever machine runs it.
+
+    **Two settings that had been waiting for this entry are answered without a setting of
+    their own**, because saving writes the session as it stands: B9.5's set-up checkbox,
+    and 28.8's "who gets your keys is not remembered per connection" — which this closes by
+    reference to spec decision 11.
+
+    **Three things changed shape during implementation, and the spec records each under
+    "Amended in implementation".**
+
+    - **Acter's own record of host keys moved into the document too**, asked for by the
+      user against decision 2's first version, which had left it a `known_hosts` file
+      beside it. Each record is now the host, the port, the kind of key, the fingerprint as
+      `ssh-keygen -l` prints it, and the day it was accepted — a record somebody can open
+      and compare, and one that answers "when did I trust this?" as a file of base64 could
+      not. The user's own `~/.ssh/known_hosts` is read into the same list, flagged as
+      native and never written; the flag is `#[serde(skip)]`, so a record in the document is
+      Acter's own by construction rather than by remembering to check.
+    - **A saved WSL connection always names a distribution, and the one session that names
+      none cannot be saved.** The first cut let a WSL profile that named none be written
+      down as "whatever WSL calls the default"; the user rejected it, and was right. Such a row
+      would open the default distribution, which is what New connection already does in one
+      more keystroke, and it would quietly mean a different machine the day somebody
+      changed that default. The first fix carried a reason to the frontend so the offer
+      could be withheld; the user then asked how such a session could arise at all, and it
+      cannot — connecting to WSL means choosing a distribution, and `ACTER_SHELL=wsl`
+      produces a `Program` profile, which is saveable. So the wire field went away again and
+      what stays is the domain rule, for the reason a total function needs one.
+    - **The installer shipped a spike, and building it is how that was found.** `acter-app`
+      built the program and A7's menu spike, whose own first line says it is not shipped;
+      nothing told the bundler which was which, so the first installer built from the new
+      workflow installed `menu_spike.exe` and nothing else. Naming the main binary `acter`
+      fixed which program, and installing again showed the spike still beside it, because
+      Tauri bundles every binary a package declares. **The spike is deleted**: A7 says it
+      was reverted once its measurement was written up, and `git log --follow` shows it came
+      back in an unrelated commit the next day and sat there for eighteen days with nothing
+      referencing it. The same build showed the installer calling itself 0.1.0 while About
+      said 1.0.0, because the file name comes from a version in `tauri.conf.json` that
+      nobody bumps; the workflow now writes the tag's number into an overriding config.
+      None of it could have been caught by a test in this repository, and all of it was
+      caught by definition of done 10 being done rather than assumed.
+    - **A release tag may say which pre-release it is.** Asked for by the user: the three
+      numbers are still required and still numeric, and after them a suffix is allowed, so
+      `windows-v1.0.0-beta` is the release `1.0.0-beta`. The work is not in permitting the
+      suffix but in telling it apart from `git describe`'s own tail, which appends the
+      commits since the tag and the commit itself — `1.0.0-beta-2-gf49246c` is two commits
+      past the beta and is a development build.
+    - **The version, and where the settings are, are said in words.** About reads
+      "Development build, commit 521c956" rather than the identifier, and the identifier
+      stays on the line because the dialog is copyable text and a bug report has to carry
+      something.
+
+    **What was measured.** The whole entry lands with 450 tests in `acter-core`, 92 in
+    `acter-app` — seven new invokes, each through the real `MockRuntime` pipeline — and 438
+    in the frontend, up from 381. The settings adapter is tested against a temporary
+    directory: the atomic write, the previous copy kept, a document that will not parse
+    moved aside and named, and a write that cannot happen answering a sentence that names
+    the folder. The end-to-end suite gained the saved-connection flow against a fixture
+    `ACTER_SETTINGS_DIR` its worker writes.
+
+    **One defect the suites found in this entry's own work.** The router tests wrote a real
+    `settings` folder into `crates/acter-app`, because a development build keeps its
+    settings where it was started from and `cargo test` starts there. They use a temporary
+    folder of their own now, and `settings/` is in `.gitignore` — without it a `tauri dev`
+    would put somebody's actual saved connections and accepted host keys into the working
+    tree.
+
+    **The installer and the portable package** land here too: Tauri's NSIS target with
+    `installMode` set to `currentUser`, so installing never asks for administrator rights,
+    and a zip built by CI from a second build carrying the `portable` feature — which is
+    what makes the folder rule true. Neither is signed; the README says so rather than
+    working around it. The release workflow checks out with `fetch-depth: 0`, proves the
+    tagged commit is on main, and tells `vergen-gitcl` which tag it is building, because
+    with a tag per platform two tags sit on the same commit and `git describe` would pick
+    one by its own rules.
 
 27. **Done** — B9, SSH: a far end that is not on this machine. Spec:
     [b9-ssh.md](specs/b9-ssh.md) — agreed 2026-08-26, implemented in four PRs (below). The five
@@ -4738,15 +4826,23 @@ bargain 22.11 and 23.14 struck, and both paid.
       history, whose completion, and when Acter's line is worth taking back. One sentence is
       what you hear; the dialog is what you can re-read.
 
-28.8. **Who gets your keys is not remembered per connection.** Spec: none yet → deferred
-    deliberately. **Raised 2026-09-02 by the user in the same conversation as 28.7**, and
-    parked by them: "this will come later".
+28.8. **Done** — who gets your keys is remembered per connection. Spec:
+    [26-connection-manager.md](specs/26-connection-manager.md), decision 11. **Raised
+    2026-09-02 by the user in the same conversation as 28.7**, parked by them with "this
+    will come later", and closed by entry 26 without a setting of its own.
 
-    A saved connection that always wants Acter's line — a slow `ssh`, a far end with no line
-    editor — has to be told so every time it is opened. The state is per session by design
-    (a mode carried across connections would change what a key does in a shell the user never
-    chose it for), and what is missing is the *saved* half: a connection remembering the
-    answer it was given last time.
+    **What was missing was the saved half.** The state is per session by design — a mode
+    carried across connections would change what a key does in a shell the user never chose
+    it for — and there was nowhere to keep the answer a connection had been given last time.
+    There is now: a saved connection records who owns the line at the moment of saving,
+    alongside whether Acter may set the session up, and `Connected` carries that back so the
+    window applies it where it already decides which owner a new session starts on. A saved
+    choice wins over the default there; a connection nobody has saved still opens on the far
+    end's line.
+
+    **No new setting, and that is the point.** Saving writes the session as it stands, so a
+    connection that always wants Acter's line is made by taking the line and then saving —
+    which is the same gesture as keeping a changed port.
 
 28.9. **Done** — a trailing space was invisible, so deleting one was silent. Spec:
     [28-far-end-line-mode.md](specs/28-far-end-line-mode.md), amendment K. **Found 2026-09-02

@@ -14,8 +14,9 @@ use std::path::PathBuf;
 
 use acter_core::{
     AttemptId, CommandId, ConnectAnswer, ConnectQuestion, ConnectStep, Connectable, Connected,
-    ConnectionKind, ConnectionState, ExitCode, Key, KeyAck, KeyPress, LineId, LineOwner,
-    LineRevision, MenuAction, Mode, ProfileId, SessionEvent, SessionId, SetUp, SubmitAck, Variant,
+    ConnectionKind, ConnectionState, ExitCode, Key, KeyAck, KeyPress, LaunchRequest, LineId,
+    LineOwner, LineRevision, MenuAction, Mode, ProfileId, SavedConnections, SavedRow, SessionEvent,
+    SessionId, SetUp, SubmitAck, Variant,
 };
 use specta::Types;
 use specta_typescript::Typescript;
@@ -79,7 +80,16 @@ fn render() -> String {
         // invoke, and it is registered for the reason `SetUp` is: the frontend's switch over
         // it must be exhaustive, so a menu item added with no dialog behind it fails to
         // compile instead of reaching a listener as an item that does nothing.
-        .register::<MenuAction>();
+        .register::<MenuAction>()
+        // 26's saved connections. `SavedRow` comes along through `SavedConnections`, and
+        // `LaunchRequest` is the answer to an invoke of its own — both are registered by
+        // hand for the reason every other type here is: the whole protocol is emitted, not
+        // only the parts something happens to reference. The frontend's switch over a
+        // launch request must be exhaustive, so a variant added with nothing to do about it
+        // fails to compile rather than opening a window that says nothing.
+        .register::<SavedConnections>()
+        .register::<SavedRow>()
+        .register::<LaunchRequest>();
 
     Typescript::default()
         .header(HEADER)

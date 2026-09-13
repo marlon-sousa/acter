@@ -8,9 +8,22 @@
 
 export interface AboutFacts {
   name: string;
+  /// What a bug report carries: `1.0.0`, or `development-521c956` (spec 26, decision 5).
+  /// It is in the dialog because the dialog is copyable text; what is *read out* is the
+  /// sentence below it, because an identifier is a value and not a sentence.
   version: string;
+  /// The version as a listener hears it: "Version 1.0.0." or "Development build, commit
+  /// 521c956."
+  version_said: string;
   copyright: string;
   licence: string;
+  /// Where Acter keeps everything it writes (spec 26, decision 5). A path, said as a path:
+  /// the sentence around it is the dialog's, and how this copy came to be using it is the
+  /// next field, because only the backend can know.
+  settings_folder: string;
+  /// How Acter came to be using that folder, as a whole sentence the dialog reads out
+  /// after the path.
+  settings_standing: string;
 }
 
 export interface AppShell {

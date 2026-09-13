@@ -17,15 +17,15 @@
 
 use std::env;
 use std::env::consts;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use acter_core::{
-    Chosen, Clock, ConnectApi, ConnectQuestions, ConnectService, ConnectionKind, Explained,
-    PacingConfig, ProfileId, SessionApi, SessionFactory, SessionService, SetUp, SetupAnswer,
-    SetupQuestion, ShellAdapter, ShellFacts, ShellLaunch, Signatures, SshQuestions, Started,
-    ThisComputer, Transport, Unasked, offered,
+    Chosen, Clock, ConnectApi, ConnectQuestions, ConnectService, ConnectionKind, ConnectionStore,
+    Explained, HostKeyStore, PacingConfig, ProfileId, SessionApi, SessionFactory, SessionService,
+    SetUp, SetupAnswer, SetupQuestion, ShellAdapter, ShellFacts, ShellLaunch, Signatures,
+    SshQuestions, Started, ThisComputer, Transport, Unasked, offered,
 };
 #[cfg(target_os = "macos")]
 use acter_shells::AppleTrust;
@@ -43,7 +43,7 @@ use acter_transports::{
 };
 use tauri::{Builder, generate_context, generate_handler};
 
-use crate::adapters::{ExplainedShells, SystemClock, install_system_menu};
+use crate::adapters::{ExplainedShells, Settings, SystemClock, install_system_menu};
 use crate::controllers::Connecting;
 
 /// The environment variable choosing which simulated session to run: a built-in name, or
@@ -91,19 +91,33 @@ const SCRIPTED: &str = "scripted";
 /// same string, and `acter_shells::wsl::is_wsl` recognises either spelling.
 const WSL_CLIENT: &str = "wsl.exe";
 
-/// Where B8's profile store will live, read here for the one thing B9 needs from it: a place
-/// to write down a host key that was accepted. B8 inherits the variable rather than this
-/// inventing a second one.
-const PROFILES_DIR: &str = "ACTER_PROFILES_DIR";
+/// Where Acter keeps everything it writes, when somebody says (spec 26, decision 3).
+///
+/// **It wins over the packaging, exactly as `ACTER_PROFILES_DIR` did**: it is what points
+/// the suites and the NVDA fixture at a directory made for them, and a manual pass whose
+/// saved connections depend on this machine's history is not repeatable. It is also the one
+/// way to keep settings somewhere the packaging did not choose, which is what converting a
+/// copy by hand means now. An empty value is ignored rather than treated as a path, so a
+/// variable somebody cleared rather than unset does not send Acter's records to the root of
+/// the filesystem.
+///
+/// **Nothing shipped reads the old name, so there is no alias** (decision 1).
+const SETTINGS_DIR: &str = "ACTER_SETTINGS_DIR";
 
-/// The file both records of host keys are kept in, in OpenSSH's own format so it stays
-/// inspectable with the tools a user already has.
-const KNOWN_HOSTS: &str = "known_hosts";
+/// The name of the settings folder, wherever it turns out to be (decision 2).
+///
+/// **It is a name and not a signal.** An earlier version of decision 3 made the *presence*
+/// of a folder with this name beside the program mean the copy was portable, and that
+/// inferred a fact about the package from a side effect on disk. What decides is
+/// [`packaging`].
+const SETTINGS: &str = "settings";
 
-/// The file listing the shells this person has said not to be asked about again, one name per
-/// line (spec B9.5, decision 10). Beside `known_hosts` and for the same reason: a record of a
-/// person's own decisions, kept somewhere they can read and empty it.
-const EXPLAINED_SHELLS: &str = "explained_shells";
+/// The one switch a launch takes: `acter --connect <name>` (decision 20).
+const CONNECT: &str = "--connect";
+
+/// The name of the thing this product writes its settings under, inside whatever folder the
+/// operating system keeps an account's configuration in.
+const ACTER: &str = "acter";
 
 /// The two things every router reaches: the session that is live, and the actions that
 /// change which one that is.
@@ -119,6 +133,132 @@ pub(crate) struct AppState {
     /// yet, and it is not a question about what this machine offers. It is a conversation
     /// in flight (spec B9).
     pub(crate) connecting: Arc<Connecting>,
+    /// Everything Acter writes, and the two build facts a listener can be told (spec 26,
+    /// decision 10).
+    ///
+    /// **The About router holds the object itself** rather than a copy of its answers,
+    /// because the runtime values are the only thing it wants — and it must not ask the
+    /// environment a second time, since a second lookup could name a folder the files are
+    /// not in.
+    pub(crate) settings: Arc<Settings>,
+}
+
+/// Where Acter keeps everything it writes, and how it came to be there.
+///
+/// **A value in the composition root rather than a domain type**, because it is an answer
+/// about *this machine and this build*. What the domain gets is a path, and what the About
+/// dialog gets is these two facts (decision 5).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SettingsFolder {
+    pub(crate) path: PathBuf,
+    pub(crate) standing: Standing,
+}
+
+/// Why the settings folder is where it is — the second half of the line About reads out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Standing {
+    /// A development build, which keeps its settings where it was started from so a
+    /// developer needs no variable set to get a sane answer.
+    Development,
+    /// This copy was packaged portable, so its settings are beside the program.
+    Portable,
+    /// This copy was packaged for the installer, so its settings are with the rest of this
+    /// account's configuration.
+    Installed,
+    /// [`SETTINGS_DIR`] named a folder, which wins over the packaging either way.
+    Directed,
+    /// Nowhere else to put them: an operating system that reports no configuration
+    /// directory at all, or a portable copy that cannot tell where its own program is.
+    /// Acter writes where it was started from, which is a real answer rather than a
+    /// failure — but it is a different one, and About says so.
+    WhereItStarted,
+}
+
+impl Standing {
+    /// What the About dialog says about it, as a whole sentence: this is read aloud, and
+    /// "portable" on its own is a word with no verb (CLAUDE.md).
+    pub(crate) fn said(self) -> &'static str {
+        match self {
+            Self::Development => {
+                "This is a development build of Acter, so its settings are kept in the \
+                 folder it was started from."
+            }
+            Self::Portable => {
+                "Acter is running portable, so its settings are kept beside the program."
+            }
+            Self::Installed => {
+                "Acter is installed, so its settings are kept with your other application \
+                 data."
+            }
+            Self::Directed => "Acter was told where to keep its settings.",
+            Self::WhereItStarted => {
+                "Acter has nowhere of its own to keep its settings on this system, so it \
+                 uses the folder it was started from."
+            }
+        }
+    }
+}
+
+/// How this copy of Acter was packaged: the whole of the portable question, decided when
+/// the binary was built rather than guessed at when it runs (decision 3).
+///
+/// **The packaging is the fact, so the package is what says it.** An installer put a copy
+/// somewhere and a zip did not, and nothing a running program can see on disk distinguishes
+/// those two reliably — a marker beside the executable can be created by accident, copied
+/// into place, or left behind by an unzip nobody meant to keep.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Packaging {
+    /// Any debug build. **A case of its own** so a developer needs no variable set to get a
+    /// sane answer, which is the whole reason it exists.
+    Development,
+    /// Built for the portable zip: `cargo build --release --features portable`.
+    Portable,
+    /// A release without the feature, which is what the installer ships.
+    Installed,
+}
+
+/// What this build is: the identifier a bug report carries, and the sentence About speaks
+/// (decision 5).
+///
+/// **Two strings rather than one**, because they are for two different people.
+/// `development-521c956` is a value and not a sentence: a listener hears "Development
+/// build, commit 521c956", and the raw identifier stays here so a bug report can still
+/// carry it — the About dialog is copyable text, and nothing tries to spell a commit out
+/// loud.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Version {
+    /// What a bug report carries: `1.0.0`, or `development-521c956`.
+    pub(crate) identifier: String,
+    /// What About reads out, as a whole sentence.
+    pub(crate) said: String,
+}
+
+impl Version {
+    /// A release, named by its tag's version and nothing else.
+    ///
+    /// **The platform is not in it** (decision 3). Tags are `<platform>-vx.y.z`, so
+    /// `windows-v1.0.0` and `macos-v1.0.0` are the same release of the same product for two
+    /// machines; a listener hears "Version 1.0.0" on either, because the platform is a fact
+    /// about which file they downloaded rather than about which Acter they are running.
+    pub(crate) fn released(number: &str) -> Self {
+        Self {
+            identifier: number.to_owned(),
+            said: format!("Version {number}."),
+        }
+    }
+
+    /// Anything with a commit behind it that is not a release.
+    pub(crate) fn development(commit: &str) -> Self {
+        Self {
+            identifier: format!("development-{commit}"),
+            said: format!("Development build, commit {commit}."),
+        }
+    }
+
+    /// A source tree with no git at all, which is what a source tarball is.
+    fn from_cargo(number: &str) -> Self {
+        Self::released(number)
+    }
 }
 
 pub fn run() {
@@ -152,7 +292,14 @@ pub fn run() {
             crate::routers::use_profile,
             crate::routers::answer_connect,
             crate::routers::attempt_ended,
-            crate::routers::connected
+            crate::routers::connected,
+            crate::routers::saved,
+            crate::routers::save_connection,
+            crate::routers::rename_connection,
+            crate::routers::forget_connection,
+            crate::routers::offer_to_save,
+            crate::routers::stop_offering_to_save,
+            crate::routers::requested_at_launch
         ]);
 
     // Embedded WebDriver server for E2E tests (spec T2): debug builds only, so
@@ -192,7 +339,12 @@ pub fn run() {
 /// sentence reaches the user the way every other connection failure does: the window opens
 /// unconnected, and the reason is the first thing it says.
 pub(crate) fn connected_state() -> AppState {
-    let service = Arc::new(state());
+    // **Resolved once, here, and handed to everything that needs it** (spec 26,
+    // decision 10). The folder is one answer about this machine, and a second lookup could
+    // name a folder the files are not in — which is also why the About router is given this
+    // object rather than the environment.
+    let settings = settings();
+    let service = Arc::new(state(&settings));
     if let Some(profile) = launch_profile() {
         // Nothing reads the error here on purpose: `connected()` answers `None`, which is
         // the unconnected window, and the frontend says so. Reporting the reason as well is
@@ -203,9 +355,13 @@ pub(crate) fn connected_state() -> AppState {
         // checkbox authorises and the dialog discloses, and a launch that names a profile from
         // the environment has neither. `Unasked` refuses, so such a session runs and is told
         // nothing — which is what it does for a host key and for an unverified file already.
+        // Started from no saved connection, whatever the environment named: `--connect`
+        // is the switch that names one, and it is answered by the window rather than here
+        // (spec 26, decision 20).
         let _ = service.use_profile(
             &profile,
             SetUp::Yes,
+            None,
             &(Arc::new(Unasked) as Arc<dyn ConnectQuestions>),
         );
     }
@@ -214,18 +370,35 @@ pub(crate) fn connected_state() -> AppState {
         session: Arc::clone(&service) as Arc<dyn SessionApi>,
         connecting: Arc::new(Connecting::new(Arc::clone(&connect))),
         connect,
+        settings,
     }
 }
 
+/// The settings object, resolved from the world once (spec 26, decision 10).
+///
+/// **This is the one place the world is read for it**: the variable, the packaging, where
+/// the program is, where this operating system keeps an account's configuration, and what
+/// the build stamped. Everything above takes the answers as values, which is what lets one
+/// machine assert both platforms and all three packagings.
+pub(crate) fn settings() -> Arc<Settings> {
+    Arc::new(Settings::open(settings_directory(), stamped()))
+}
+
 /// The connect service, wired and empty — the shape every test of the invoke surface wants.
-pub(crate) fn state() -> ConnectService {
+///
+/// **The settings object is passed in rather than built here**, which is the whole of
+/// decision 10: one object owns the folder, and the store the service talks to is that same
+/// object seen through the port it needs.
+pub(crate) fn state(settings: &Arc<Settings>) -> ConnectService {
     ConnectService::new(
-        Arc::new(Shells::new()),
+        Arc::new(Shells::new(settings)),
         machine(),
         signatures(),
         offered(consts::OS).to_vec(),
         scripted_profiles(),
+        Arc::clone(settings) as Arc<dyn ConnectionStore>,
     )
+    .asked_for(requested_connection(env::args_os().skip(1)))
 }
 
 /// The connect service, as a named platform would build it — the shape a test that is about
@@ -238,12 +411,14 @@ pub(crate) fn state() -> ConnectService {
 /// in (spec M1, decision 1).
 #[cfg(test)]
 fn state_on(os: &str) -> ConnectService {
+    let settings = settings();
     ConnectService::new(
-        Arc::new(Shells::new()),
+        Arc::new(Shells::new(&settings)),
         machine(),
         signatures(),
         offered(os).to_vec(),
         scripted_profiles(),
+        settings as Arc<dyn ConnectionStore>,
     )
 }
 
@@ -360,14 +535,22 @@ struct Shells {
     /// the dialog names the shell it detected, and which shell that is is not known until the
     /// far end has answered — which happens inside this factory.
     explained: Arc<dyn Explained>,
+    /// Acter's own record of the servers this person accepted (spec B9, decision 5).
+    ///
+    /// **The settings object behind the port it fills** (spec 26, decision 2 as amended,
+    /// and decision 10). It was a path on disk resolved on every SSH attempt, from a
+    /// function that read the environment; it is a typed list in the one document now, and
+    /// what the transport is handed is the seam rather than a file name.
+    known_hosts: Arc<dyn HostKeyStore>,
 }
 
 impl Shells {
-    fn new() -> Self {
+    fn new(settings: &Arc<Settings>) -> Self {
         Self {
             clock: Arc::new(SystemClock::new()),
             machine: machine(),
-            explained: Arc::new(ExplainedShells::new(explained_shells())),
+            explained: Arc::new(ExplainedShells::new(settings.explained_shells())),
+            known_hosts: Arc::clone(settings) as Arc<dyn HostKeyStore>,
         }
     }
 
@@ -419,7 +602,10 @@ impl Shells {
             port,
             user: user.to_owned(),
         };
-        let hosts = Arc::new(KnownHosts::new(acter_known_hosts(), users_known_hosts()));
+        let hosts = Arc::new(KnownHosts::new(
+            Arc::clone(&self.known_hosts),
+            users_known_hosts(),
+        ));
         // The SSH half of the same asker: the transport must not be handed a question it can
         // never ask, and it is measured against a real server with no window anywhere near it.
         let asker = Arc::clone(questions) as Arc<dyn SshQuestions>;
@@ -885,81 +1071,286 @@ fn far_end_note(shell: Option<&str>, outcome: SetUpOutcome) -> Note {
     }
 }
 
-/// Acter's own record of host keys, under the profile directory or wherever
-/// `ACTER_PROFILES_DIR` points.
+/// The settings folder, resolved from the world (spec 26, decisions 2 and 3).
 ///
-/// **Read here because this is where the environment is allowed in** (spec B8, decision 2),
-/// which is also why `KnownHosts` takes both paths rather than resolving them: the whole of
-/// the host-key behaviour is then testable against a directory made for the test.
-fn acter_known_hosts() -> PathBuf {
-    profiles_directory().join(KNOWN_HOSTS)
+/// **The world is read here and the rule is [`settings_folder`], which is pure** — so both
+/// platforms and all three packagings are asserted from whichever machine the suite happens
+/// to run on, which is what ARCHITECTURE's platform-divergence rule asks for and what M1
+/// exists because of.
+pub(crate) fn settings_directory() -> SettingsFolder {
+    settings_folder(
+        consts::OS,
+        packaging(),
+        // **Asked of the operating system rather than of `%APPDATA%`** (decision 3). On
+        // Windows this is the known-folder API, where reading the variable trusts something
+        // that can be missing or redirected — and it collapses the per-platform branch to
+        // nothing, because both platforms answer their own base and both then join the same
+        // suffix.
+        dirs::config_dir().as_deref(),
+        // Where the running program is, which a portable copy needs and nothing else does.
+        // Nothing is asked of the filesystem: this is a path the operating system already
+        // knows, and whether anything exists at it is nobody's question here.
+        program_directory().as_deref(),
+        env::current_dir().ok().as_deref(),
+        env::var_os(SETTINGS_DIR)
+            .filter(|named| !named.is_empty())
+            .map(PathBuf::from)
+            .as_deref(),
+    )
 }
 
-/// The directory Acter keeps its own records in, until B8 has a profile store to keep them
-/// beside.
-///
-/// **`ACTER_PROFILES_DIR` first, always** — it is what points development, the suites and the
-/// NVDA fixture at a directory made for them, and it must win over whatever the machine would
-/// otherwise choose (spec B8, decision 2).
-///
-/// **Otherwise the place this operating system keeps an application's data.** Until M1 the
-/// only such place was `%APPDATA%`, with the current working directory as the last resort —
-/// which off Windows was not a last resort but the *only* answer, so a macOS Acter would have
-/// written its `known_hosts` and its record of explained shells into whatever directory it
-/// happened to be launched from. Two users, two shells, two different files, and none of them
-/// where anybody would look.
-fn profiles_directory() -> PathBuf {
-    env::var_os(PROFILES_DIR)
-        .map(PathBuf::from)
-        .or_else(|| records_directory(consts::OS, env::var_os("APPDATA"), env::var_os("HOME")))
-        // A platform nobody has chosen a directory for, which is every platform this does not
-        // build for. It keeps the behaviour that shipped rather than inventing one: the
-        // records go beside the binary's working directory, and an operating system joins by
-        // being named above rather than by falling somewhere plausible.
-        .unwrap_or_else(|| PathBuf::from("."))
+/// The directory the running program is in, or `None` on a machine that will not say.
+fn program_directory() -> Option<PathBuf> {
+    env::current_exe()
+        .ok()
+        .and_then(|program| program.parent().map(Path::to_path_buf))
 }
 
-/// Where this operating system keeps an application's own data, given what its environment
-/// said.
+/// How this build was packaged (decision 3).
 ///
-/// **A conditional expression rather than a conditional module**, per ARCHITECTURE's
-/// platform-divergence rule: the answer is one path per platform, so it needs no adapter — but
-/// it does need to be *testable*, and reading the environment inside a `#[cfg]` is what makes
-/// a wrong answer invisible until somebody runs the product on that platform. So the two
-/// variables are read at the edge above and this is pure.
+/// **One `cfg!` expression rather than a gated pair of functions**, which is
+/// ARCHITECTURE's platform-divergence rule taken at its word: prefer no gate at all where
+/// the answer is a value. `cfg!` is a compile-time boolean, so this costs nothing at run
+/// time and **both arms are still compiled** — where a `#[cfg]` on the function would leave
+/// the variants this build is not one of unconstructed, which clippy fails the portable
+/// build over as dead code.
 ///
-/// `None` for an operating system with no answer here, which the caller turns into the
-/// working directory.
-fn records_directory(
-    os: &str,
-    appdata: Option<OsString>,
-    home: Option<OsString>,
-) -> Option<PathBuf> {
-    match os {
-        "windows" => appdata.map(|appdata| PathBuf::from(appdata).join("acter")),
-        // Where macOS puts an application's own data, and where a Mac user would look for it.
-        // `~/Library/Application Support` rather than a dotfile in the home directory: the
-        // dotfile convention is Unix's, and this is the one Finder, Time Machine and every
-        // native application agree on.
-        "macos" => home.map(|home| {
-            PathBuf::from(home)
-                .join("Library")
-                .join("Application Support")
-                .join("acter")
-        }),
-        _ => None,
+/// **The feature wins over the debug default**, so a portable build can be made and driven
+/// on a developer's machine.
+fn packaging() -> Packaging {
+    if cfg!(feature = "portable") {
+        Packaging::Portable
+    } else if cfg!(debug_assertions) {
+        Packaging::Development
+    } else {
+        Packaging::Installed
     }
 }
 
-/// Where the record of explained shells is kept, under the same directory Acter's own
-/// `known_hosts` is (spec B9.5, decision 10).
+/// Where Acter keeps its settings, given how this copy was packaged, what the operating
+/// system said, where the program is, and where it was started from.
 ///
-/// **Read here because this is where the environment is allowed in** (spec B8, decision 2),
-/// which is what makes the whole preference testable against a directory made for the test.
-/// `ACTER_PROFILES_DIR` points it elsewhere for development, tests and the NVDA fixture — the
-/// precedent B9 set for Acter's own record of host keys before B8 existed.
-fn explained_shells() -> PathBuf {
-    profiles_directory().join(EXPLAINED_SHELLS)
+/// **Pure, and the packaging arrives as a value** (decision 4), so an ordinary `cargo test`
+/// covers every branch whichever packaging is being compiled.
+///
+/// The order is: the variable, then the packaging.
+fn settings_folder(
+    os: &str,
+    packaging: Packaging,
+    configuration: Option<&Path>,
+    program: Option<&Path>,
+    working: Option<&Path>,
+    directed: Option<&Path>,
+) -> SettingsFolder {
+    if let Some(directed) = directed {
+        return SettingsFolder {
+            path: directed.to_path_buf(),
+            standing: Standing::Directed,
+        };
+    }
+    match packaging {
+        // A developer needs no variable set to get a sane answer, which is the whole reason
+        // this case exists.
+        Packaging::Development => where_it_started(working, Standing::Development),
+        Packaging::Portable => match program {
+            Some(beside) => SettingsFolder {
+                path: portable_settings(os, beside),
+                standing: Standing::Portable,
+            },
+            None => where_it_started(working, Standing::WhereItStarted),
+        },
+        Packaging::Installed => match configuration {
+            Some(configuration) => SettingsFolder {
+                path: configuration.join(ACTER).join(SETTINGS),
+                standing: Standing::Installed,
+            },
+            None => where_it_started(working, Standing::WhereItStarted),
+        },
+    }
+}
+
+/// The settings folder in the directory Acter was started from, which is both the
+/// development answer and the last resort.
+///
+/// A machine that will not say where that is gets the relative name, which the operating
+/// system resolves against the same directory — the behaviour that shipped before there was
+/// a settings folder at all.
+fn where_it_started(working: Option<&Path>, standing: Standing) -> SettingsFolder {
+    SettingsFolder {
+        path: working.map_or_else(|| PathBuf::from(SETTINGS), |at| at.join(SETTINGS)),
+        standing,
+    }
+}
+
+/// Where a portable copy keeps its settings, given the directory its program runs from.
+///
+/// **Beside the `.app` bundle on macOS rather than inside it** (decision 3). A file written
+/// inside a bundle breaks its signature the moment M4 signs it, so a portable Mac copy
+/// writes next to `Acter.app`, three levels above the executable in
+/// `Acter.app/Contents/MacOS`. A macOS build that is *not* in a bundle writes beside its own
+/// executable like every other platform, because there is no bundle to be outside of.
+fn portable_settings(os: &str, program: &Path) -> PathBuf {
+    match os {
+        "macos" => beside_the_bundle(program).unwrap_or(program).join(SETTINGS),
+        _ => program.join(SETTINGS),
+    }
+}
+
+/// The directory holding the `.app` this executable is inside, or `None` when it is not
+/// inside one.
+fn beside_the_bundle(program: &Path) -> Option<&Path> {
+    if program.file_name() != Some(OsStr::new("MacOS")) {
+        return None;
+    }
+    let contents = program.parent()?;
+    if contents.file_name() != Some(OsStr::new("Contents")) {
+        return None;
+    }
+    let bundle = contents.parent()?;
+    if !bundle
+        .extension()
+        .is_some_and(|extension| extension == "app")
+    {
+        return None;
+    }
+    bundle.parent()
+}
+
+/// What this build is, from what the build script stamped (decision 3).
+///
+/// **`option_env!` rather than `env!`**, because a build in a directory that is not a
+/// repository stamps nothing at all and that is a state this product supports: a source
+/// tarball with no git says what Cargo says.
+fn stamped() -> Version {
+    version(
+        option_env!("VERGEN_GIT_DESCRIBE"),
+        option_env!("VERGEN_GIT_SHA"),
+        env!("CARGO_PKG_VERSION"),
+    )
+}
+
+/// The rule turning what git said into the two things a person meets (decision 3).
+///
+/// - a describe string shaped `<platform>-vx.y.z`, with all three numbers numeric, is a
+///   release, and the version is `x.y.z` — with an optional suffix after the third number,
+///   so `<platform>-vx.y.z-beta` is the release `x.y.z-beta`;
+/// - anything else with a commit behind it is `development-<short commit>`;
+/// - nothing at all is `CARGO_PKG_VERSION`, which is what a source tarball with no git has.
+///
+/// **A tag that does not match the shape is not a release.** It falls to the development
+/// case rather than being read out as a version, because a malformed tag claiming to be
+/// `1.0` is worse than one saying it is a development build. It does not check that the
+/// platform in the tag is the platform being built: which tag builds which artifact is the
+/// release workflow's business (decision 21), not the binary's.
+///
+/// **A function rather than something the build script prints**, because these strings are
+/// read aloud and a build script's output cannot be unit tested.
+fn version(describe: Option<&str>, commit: Option<&str>, cargo: &str) -> Version {
+    if let Some(number) = released(describe) {
+        return Version::released(&number);
+    }
+    match commit.map(str::trim).filter(|commit| !commit.is_empty()) {
+        Some(commit) => Version::development(commit),
+        None => Version::from_cargo(cargo),
+    }
+}
+
+/// The version in a release tag, or `None` for anything that is not one.
+///
+/// **Three numbers, and a suffix after them for a release that is not the final one**
+/// (asked for by the user on 2026-09-12): `windows-v1.0.0-beta` is a release and says so,
+/// because a beta somebody downloaded is a thing they are running and a version they have
+/// to be able to report. What the suffix may hold is semver's own rule — dot-separated
+/// runs of letters, digits and hyphens — so `1.0.0-rc.1` is a release too.
+fn released(describe: Option<&str>) -> Option<String> {
+    // The *first* `-v`, because the platform never contains one and a suffix might.
+    let (platform, number) = describe?.trim().split_once("-v")?;
+    if platform.is_empty() || past_the_tag(number) {
+        return None;
+    }
+    let (triple, suffix) = match number.split_once('-') {
+        Some((triple, suffix)) => (triple, Some(suffix)),
+        None => (number, None),
+    };
+    let parts: Vec<&str> = triple.split('.').collect();
+    let [major, minor, patch] = parts[..] else {
+        return None;
+    };
+    let numeric = [major, minor, patch]
+        .iter()
+        .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()));
+    let named = suffix.is_none_or(|suffix| {
+        !suffix.is_empty()
+            && suffix.split('.').all(|part| {
+                !part.is_empty()
+                    && part
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+            })
+    });
+    (numeric && named).then(|| number.to_owned())
+}
+
+/// Whether `git describe` added its own tail, which means this commit is *past* the tag
+/// rather than on it.
+///
+/// **The tail is `-<commits since>-g<commit>`**, and telling it apart from a suffix
+/// somebody chose is the whole job here: `1.0.0-2-gf49246c` is two commits past
+/// `windows-v1.0.0` and is a development build, while `1.0.0-beta` is a release. Both are
+/// well-formed semver, so the shape of the tail is what answers it — and it has to be
+/// looked for at the end, because `1.0.0-beta-2-gf49246c` is two commits past the beta and
+/// is a development build as well.
+fn past_the_tag(number: &str) -> bool {
+    let Some((before, commit)) = number.rsplit_once('-') else {
+        return false;
+    };
+    let Some(hex) = commit.strip_prefix('g') else {
+        return false;
+    };
+    if hex.is_empty() || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return false;
+    }
+    before
+        .rsplit_once('-')
+        .is_some_and(|(_, since)| !since.is_empty() && since.bytes().all(|b| b.is_ascii_digit()))
+}
+
+/// The saved connection this launch asked for, from `acter --connect <name>` (spec 26,
+/// decision 20).
+///
+/// **Parsed, never printed.** A windowed binary has no console, so there is nowhere to put
+/// a usage message: an argument this does not recognise is ignored, and a name nothing is
+/// saved under is answered in the window rather than on a stream nobody can hear.
+///
+/// `--connect=<name>` is accepted beside `--connect <name>`, because it is the other
+/// spelling a person types and the alternative is a window that opens unconnected and never
+/// says why.
+///
+/// Pure over the arguments it is given, so both spellings and every way of getting it wrong
+/// are tested without a launch.
+fn requested_connection<A: IntoIterator<Item = OsString>>(arguments: A) -> Option<String> {
+    let mut arguments = arguments.into_iter();
+    while let Some(argument) = arguments.next() {
+        let named = if argument == CONNECT {
+            arguments.next()
+        } else {
+            argument
+                .to_str()
+                .and_then(|argument| argument.strip_prefix(CONNECT))
+                .and_then(|rest| rest.strip_prefix('='))
+                .map(OsString::from)
+        };
+        if let Some(named) = named {
+            return named
+                .into_string()
+                .ok()
+                // A trailing space is invisible to the person who typed it, and `cmd.exe`
+                // hands one over of its own accord (spec A9).
+                .map(|name| name.trim().to_owned())
+                .filter(|name| !name.is_empty());
+        }
+    }
+    None
 }
 
 /// The user's own `known_hosts`, which Acter reads and never writes (spec B9, decision 5) —
@@ -967,7 +1358,7 @@ fn explained_shells() -> PathBuf {
 fn users_known_hosts() -> Option<PathBuf> {
     env::var_os("USERPROFILE")
         .or_else(|| env::var_os("HOME"))
-        .map(|home| PathBuf::from(home).join(".ssh").join(KNOWN_HOSTS))
+        .map(|home| PathBuf::from(home).join(".ssh").join("known_hosts"))
 }
 
 /// One reason, ended as a sentence.
@@ -1076,7 +1467,7 @@ mod tests {
     /// list would pass every test above and ship the wrong window.
     #[test]
     fn the_build_offers_what_its_own_operating_system_offers() {
-        let wired: Vec<_> = state()
+        let wired: Vec<_> = state(&settings())
             .connectable()
             .into_iter()
             .map(|row| row.label)
@@ -1090,47 +1481,432 @@ mod tests {
         assert_eq!(wired, named, "{} gets its own list", consts::OS);
     }
 
-    /// **Where Acter keeps its own records, per operating system** — the `known_hosts` it
-    /// writes and the shells it has explained.
+    /// **Where Acter keeps its settings, for every packaging on both platforms**
+    /// (spec 26, decision 4).
     ///
-    /// **It is a test because the answer used to be silently wrong** (M1). Off Windows there
-    /// was no branch at all, so the fallback fired and a macOS Acter wrote its records into
-    /// whatever directory it was launched from: two launches, two directories, and a host key
-    /// verified once and unknown the next time.
+    /// **It is a test because the answer used to be silently wrong** (M1), and because the
+    /// packaging arrives as a *value*: a `#[cfg]` on the rule would compile half of it out
+    /// of every test run, so a Windows machine could never assert the macOS answers and a
+    /// Mac could never assert Windows'. Every case below runs on both.
+    mod where_acter_keeps_its_settings {
+        use super::*;
+
+        /// A machine that answers every question, so each test below can vary the one it
+        /// is about.
+        fn windows() -> PathBuf {
+            PathBuf::from(r"C:\Users\someone\AppData\Roaming")
+        }
+
+        fn mac() -> PathBuf {
+            PathBuf::from("/Users/someone/Library/Application Support")
+        }
+
+        fn program() -> PathBuf {
+            PathBuf::from(r"D:\portable\acter")
+        }
+
+        fn working() -> PathBuf {
+            PathBuf::from(r"C:\projects\acter")
+        }
+
+        fn folder(
+            os: &str,
+            packaging: Packaging,
+            configuration: Option<PathBuf>,
+            program: Option<PathBuf>,
+        ) -> SettingsFolder {
+            settings_folder(
+                os,
+                packaging,
+                configuration.as_deref(),
+                program.as_deref(),
+                Some(&working()),
+                None,
+            )
+        }
+
+        /// **A developer needs no variable set to get a sane answer**, which is the whole
+        /// reason this packaging exists.
+        #[test]
+        fn a_development_build_keeps_them_where_it_was_started() {
+            for os in ["windows", "macos"] {
+                let at = folder(os, Packaging::Development, Some(windows()), Some(program()));
+
+                assert_eq!(at.path, working().join("settings"), "{os}");
+                assert_eq!(at.standing, Standing::Development, "{os}");
+            }
+        }
+
+        #[test]
+        fn a_portable_copy_keeps_them_beside_the_program() {
+            let at = folder(
+                "windows",
+                Packaging::Portable,
+                Some(windows()),
+                Some(program()),
+            );
+
+            assert_eq!(at.path, program().join("settings"));
+            assert_eq!(at.standing, Standing::Portable);
+        }
+
+        /// **Beside the bundle rather than inside it** (decision 3): a file written inside
+        /// an `.app` breaks its signature the moment M4 signs it.
+        #[test]
+        fn a_portable_mac_keeps_them_outside_the_bundle() {
+            let inside = PathBuf::from("/Applications/Acter.app/Contents/MacOS");
+
+            let at = folder("macos", Packaging::Portable, Some(mac()), Some(inside));
+
+            assert_eq!(at.path, PathBuf::from("/Applications/settings"));
+            assert_eq!(at.standing, Standing::Portable);
+        }
+
+        /// And a macOS build that is not in a bundle is beside its own executable like
+        /// every other platform, because there is no bundle to be outside of.
+        #[test]
+        fn a_portable_mac_that_is_not_in_a_bundle_is_beside_its_own_program() {
+            let loose = PathBuf::from("/Users/someone/acter");
+
+            let at = folder(
+                "macos",
+                Packaging::Portable,
+                Some(mac()),
+                Some(loose.clone()),
+            );
+
+            assert_eq!(at.path, loose.join("settings"));
+        }
+
+        /// A directory that merely *looks* like part of a bundle is not one, so nothing is
+        /// written a level up from somewhere it should not be.
+        #[test]
+        fn only_a_real_bundle_puts_the_settings_a_level_up() {
+            for not_a_bundle in [
+                "/Users/someone/MacOS",
+                "/Users/someone/Contents/MacOS",
+                "/Users/someone/Acter.zip/Contents/MacOS",
+            ] {
+                let at = folder(
+                    "macos",
+                    Packaging::Portable,
+                    Some(mac()),
+                    Some(PathBuf::from(not_a_bundle)),
+                );
+
+                assert_eq!(
+                    at.path,
+                    PathBuf::from(not_a_bundle).join("settings"),
+                    "{not_a_bundle}"
+                );
+            }
+        }
+
+        /// **The installed case is one branch on both platforms**, which is what asking
+        /// the operating system for the account's configuration directory buys: each
+        /// answers its own base and both then join the same suffix.
+        #[test]
+        fn an_installed_copy_keeps_them_with_the_accounts_configuration() {
+            let on_windows = folder(
+                "windows",
+                Packaging::Installed,
+                Some(windows()),
+                Some(program()),
+            );
+            assert_eq!(
+                on_windows.path,
+                windows().join("acter").join("settings"),
+                "Windows keeps it under the roaming profile"
+            );
+            assert_eq!(on_windows.standing, Standing::Installed);
+
+            let on_a_mac = folder("macos", Packaging::Installed, Some(mac()), Some(program()));
+            assert_eq!(
+                on_a_mac.path,
+                mac().join("acter").join("settings"),
+                "macOS keeps it where Finder and Time Machine expect it, not in a dotfile"
+            );
+            assert_eq!(on_a_mac.standing, Standing::Installed);
+        }
+
+        /// **The variable wins over the packaging**, whichever packaging it is: it is what
+        /// points the suites and the NVDA fixture at a directory made for them, and the one
+        /// way to keep settings somewhere the packaging did not choose.
+        #[test]
+        fn the_variable_wins_over_every_packaging() {
+            let told = PathBuf::from(r"E:\fixtures\acter");
+
+            for packaging in [
+                Packaging::Development,
+                Packaging::Portable,
+                Packaging::Installed,
+            ] {
+                let at = settings_folder(
+                    "windows",
+                    packaging,
+                    Some(&windows()),
+                    Some(&program()),
+                    Some(&working()),
+                    Some(&told),
+                );
+
+                assert_eq!(at.path, told, "{packaging:?}");
+                assert_eq!(at.standing, Standing::Directed, "{packaging:?}");
+            }
+        }
+
+        /// A machine that reports no configuration directory at all — a service account, a
+        /// stripped environment — gets the folder Acter was started from, and About says
+        /// so rather than dressing it up as an installation.
+        #[test]
+        fn a_machine_that_says_nothing_about_itself_falls_back_and_says_which() {
+            let installed = folder("windows", Packaging::Installed, None, Some(program()));
+            assert_eq!(installed.path, working().join("settings"));
+            assert_eq!(installed.standing, Standing::WhereItStarted);
+
+            let portable = folder("windows", Packaging::Portable, Some(windows()), None);
+            assert_eq!(portable.path, working().join("settings"));
+            assert_eq!(portable.standing, Standing::WhereItStarted);
+        }
+
+        /// And one that will not even say where it was started from still gets a folder:
+        /// the relative name, which the operating system resolves against that same
+        /// directory. This is the behaviour that shipped before there was a settings folder.
+        #[test]
+        fn a_machine_that_will_not_say_where_it_is_still_gets_a_folder() {
+            let at = settings_folder("windows", Packaging::Installed, None, None, None, None);
+
+            assert_eq!(at.path, PathBuf::from("settings"));
+            assert_eq!(at.standing, Standing::WhereItStarted);
+        }
+
+        /// **The build's own packaging matches its feature**, which is the line the tests
+        /// above cannot reach: they all pass a packaging in, and a `packaging()` that
+        /// answered the wrong one would ship a copy writing somewhere nobody expected.
+        #[test]
+        fn the_build_is_packaged_the_way_its_features_say() {
+            if cfg!(feature = "portable") {
+                assert_eq!(
+                    packaging(),
+                    Packaging::Portable,
+                    "the feature wins over the debug default, so a portable build can be \
+                     driven on a developer's machine"
+                );
+            } else if cfg!(debug_assertions) {
+                assert_eq!(packaging(), Packaging::Development);
+            } else {
+                assert_eq!(
+                    packaging(),
+                    Packaging::Installed,
+                    "a release without the feature is what the installer ships"
+                );
+            }
+        }
+    }
+
+    /// **What this build is, as a bug report carries it and as About says it** (spec 26,
+    /// decision 3). The rule is a pure function precisely because these strings are read
+    /// aloud and a build script's output cannot be unit tested.
+    mod what_this_build_is {
+        use super::*;
+
+        const CARGO: &str = "0.1.0";
+
+        /// A tag shaped `<platform>-vx.y.z` is a release, and **the version is the numeric
+        /// triple and nothing else**: a listener hears "Version 1.0.0" on either platform,
+        /// because the platform is a fact about which file they downloaded.
+        #[test]
+        fn a_platform_tag_is_a_release_and_the_platform_is_not_in_the_version() {
+            for tag in ["windows-v1.0.0", "macos-v1.0.0"] {
+                let version = version(Some(tag), Some("521c956"), CARGO);
+
+                assert_eq!(version.identifier, "1.0.0", "{tag}");
+                assert_eq!(version.said, "Version 1.0.0.", "{tag}");
+            }
+        }
+
+        /// **A release that is not the final one is still a release** (asked for by the
+        /// user on 2026-09-12): three numbers, then a suffix saying which pre-release it
+        /// is. Somebody running a beta is running something, and the version they report
+        /// has to say which one.
+        #[test]
+        fn a_tag_with_a_suffix_after_the_three_numbers_is_a_release() {
+            for (tag, number) in [
+                ("windows-v1.0.0-alpha", "1.0.0-alpha"),
+                ("windows-v1.0.0-beta", "1.0.0-beta"),
+                ("macos-v2.3.4-rc.1", "2.3.4-rc.1"),
+                ("windows-v1.0.0-beta-2", "1.0.0-beta-2"),
+            ] {
+                let version = version(Some(tag), Some("521c956"), CARGO);
+
+                assert_eq!(version.identifier, number, "{tag}");
+                assert_eq!(version.said, format!("Version {number}."), "{tag}");
+            }
+        }
+
+        /// **And a commit past a pre-release tag is still a development build.** This is the
+        /// one that makes the suffix hard: `git describe` writes `-2-gf49246c` after
+        /// whatever tag it found, so a suffix has to be told apart from that tail rather
+        /// than merely allowed.
+        #[test]
+        fn a_commit_past_a_pre_release_tag_is_not_that_pre_release() {
+            for tag in [
+                "windows-v1.0.0-2-gf49246c",
+                "windows-v1.0.0-beta-2-gf49246c",
+                "windows-v1.0.0-rc.1-14-g0803341",
+            ] {
+                let version = version(Some(tag), Some("521c956"), CARGO);
+
+                assert_eq!(
+                    version.identifier, "development-521c956",
+                    "{tag} is past the tag"
+                );
+            }
+        }
+
+        /// A suffix is letters, digits, hyphens and the dots between them, and a tag whose
+        /// suffix is anything else falls to the development case with the other malformed
+        /// ones.
+        #[test]
+        fn a_suffix_that_is_not_one_is_not_a_release() {
+            for tag in [
+                "windows-v1.0.0-",
+                "windows-v1.0.0-beta..1",
+                "windows-v1.0.0-beta.",
+                "windows-v1.0.0-be ta",
+            ] {
+                assert_eq!(
+                    version(Some(tag), Some("521c956"), CARGO).identifier,
+                    "development-521c956",
+                    "{tag} is not a release"
+                );
+            }
+        }
+
+        /// Anything else with a commit behind it is a development build, and the commit is
+        /// what a bug report carries.
+        #[test]
+        fn a_commit_with_no_release_tag_is_a_development_build() {
+            let version = version(None, Some("521c956"), CARGO);
+
+            assert_eq!(version.identifier, "development-521c956");
+            assert_eq!(version.said, "Development build, commit 521c956.");
+        }
+
+        /// **A malformed tag falls to the development case rather than being read out**,
+        /// because a tag claiming to be `1.0` said aloud as a version is worse than one
+        /// saying it is a development build.
+        #[test]
+        fn a_tag_that_is_not_shaped_like_a_release_is_not_read_out_as_one() {
+            for tag in [
+                "v1.0.0",
+                "windows-v1.0",
+                "windows-v1.0.0.0",
+                "windows-v1.0.x",
+                "windows-1.0.0",
+                "windows-v",
+                "windows-v1.0.0-2-gf49246c",
+                "windows-v..",
+            ] {
+                let version = version(Some(tag), Some("521c956"), CARGO);
+
+                assert_eq!(
+                    version.identifier, "development-521c956",
+                    "{tag} is not a release"
+                );
+            }
+        }
+
+        /// Nothing at all is what a source tarball with no git has, and it says what Cargo
+        /// says.
+        #[test]
+        fn a_tree_with_no_git_says_what_cargo_says() {
+            let version = version(None, None, CARGO);
+
+            assert_eq!(version.identifier, CARGO);
+            assert_eq!(version.said, "Version 0.1.0.");
+        }
+
+        /// A commit the build stamped as an empty string is no commit, which is what a
+        /// release workflow overriding one variable and not the other would produce.
+        #[test]
+        fn a_commit_that_is_not_there_is_not_a_development_build() {
+            assert_eq!(version(None, Some("   "), CARGO).identifier, CARGO);
+        }
+
+        /// Every sentence a listener hears is a whole one, and none of them tries to spell
+        /// a commit out loud beyond naming it once.
+        #[test]
+        fn every_version_sentence_is_one_a_reader_can_speak() {
+            for version in [
+                version(Some("windows-v1.0.0"), Some("521c956"), CARGO),
+                version(Some("windows-v1.0.0-beta"), Some("521c956"), CARGO),
+                version(None, Some("521c956"), CARGO),
+                version(None, None, CARGO),
+            ] {
+                assert!(version.said.ends_with('.'), "{}", version.said);
+                assert!(!version.said.contains("  "), "{}", version.said);
+                assert!(!version.identifier.trim().is_empty());
+            }
+        }
+    }
+
+    /// **What a launch asked to connect to, in both spellings a person types** (spec 26,
+    /// decision 20). Nothing here starts anything: the switch becomes a request the window
+    /// carries out, so a saved SSH connection can ask its questions where somebody can hear
+    /// them.
     #[test]
-    fn each_operating_system_keeps_acters_records_where_that_system_keeps_them() {
-        let appdata = || Some(OsString::from(r"C:\Users\someone\AppData\Roaming"));
-        let home = || Some(OsString::from("/Users/someone"));
+    fn the_launch_switch_names_the_saved_connection_it_asked_for() {
+        let asked = |arguments: &[&str]| {
+            requested_connection(arguments.iter().map(|argument| OsString::from(*argument)))
+        };
 
         assert_eq!(
-            records_directory("windows", appdata(), home()),
-            Some(PathBuf::from(r"C:\Users\someone\AppData\Roaming").join("acter")),
-            "Windows keeps it under the roaming profile"
+            asked(&["--connect", "work laptop"]).as_deref(),
+            Some("work laptop")
         );
         assert_eq!(
-            records_directory("macos", appdata(), home()),
-            Some(
-                PathBuf::from("/Users/someone")
-                    .join("Library")
-                    .join("Application Support")
-                    .join("acter")
-            ),
-            "macOS keeps it where Finder and Time Machine expect it, not in a dotfile"
+            asked(&["--connect=work laptop"]).as_deref(),
+            Some("work laptop"),
+            "the other spelling of the same switch"
         );
         assert_eq!(
-            records_directory("linux", appdata(), home()),
-            None,
-            "and an operating system nobody has chosen a directory for says so"
+            asked(&["--connect", " work laptop "]).as_deref(),
+            Some("work laptop"),
+            "a name is trimmed, because a trailing space is invisible to the person who typed it"
         );
     }
 
-    /// The machine that has neither variable — a service account, a stripped environment —
-    /// gets no directory rather than a path built from an empty string.
+    /// An ordinary launch, and every way of getting the switch wrong: all of them open the
+    /// window unconnected, because a windowed binary has no console to print a usage
+    /// message to and an argument nobody recognises is not worth refusing to start over.
     #[test]
-    fn a_machine_that_says_nothing_about_itself_is_not_given_a_directory() {
-        for os in ["windows", "macos"] {
-            assert_eq!(records_directory(os, None, None), None, "{os}");
-        }
+    fn a_launch_that_names_nothing_asks_for_nothing() {
+        let asked = |arguments: &[&str]| {
+            requested_connection(arguments.iter().map(|argument| OsString::from(*argument)))
+        };
+
+        assert_eq!(asked(&[]), None, "an ordinary launch");
+        assert_eq!(
+            asked(&["--connect"]),
+            None,
+            "the switch with no name after it"
+        );
+        assert_eq!(
+            asked(&["--connect", "   "]),
+            None,
+            "a name that is only spaces"
+        );
+        assert_eq!(
+            asked(&["--verbose", "work"]),
+            None,
+            "an argument nobody reads"
+        );
+        assert_eq!(
+            asked(&["--connected", "work"]),
+            None,
+            "a switch that is not this one"
+        );
     }
 
     /// **The release gate, asserted rather than assumed.** What a build offers and what it
@@ -1438,6 +2214,8 @@ mod tests {
                 clock: Arc::new(SystemClock::new()),
                 machine: machine(),
                 explained,
+                // Nothing here reaches a server, so nothing here writes one down.
+                known_hosts: Arc::new(acter_core::RememberedHostKeys::default()),
             }
         }
 

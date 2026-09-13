@@ -4,8 +4,10 @@
 mod clock;
 mod connect_questions;
 mod connect_sink;
+mod connection_store;
 mod event_sink;
 mod explained;
+mod host_key_store;
 mod session_factory;
 mod shell_adapter;
 mod signatures;
@@ -19,8 +21,10 @@ pub use connect_questions::{
     ConnectQuestions, IF_YOU_SKIP, ProgramAnswer, ProgramQuestion, SetupAnswer, SetupQuestion,
 };
 pub use connect_sink::ConnectSink;
+pub use connection_store::{ConnectionStore, RememberedConnections, StoredConnections};
 pub use event_sink::EventSink;
 pub use explained::{Explained, NeverExplained};
+pub use host_key_store::{HostKeyStore, RememberedHostKeys};
 pub use session_factory::{Chosen, SessionFactory, Started};
 pub use shell_adapter::{ShellAdapter, ShellFacts, ShellLaunch};
 pub use signatures::{Signatures, Unchecked};

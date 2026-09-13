@@ -34,3 +34,18 @@ e2e/screenshots/
 
 # Scratch: a PR body being drafted, never part of the tree.
 .pr-body.md
+
+# Where a development build keeps its settings (spec 26, decision 3): the folder Acter
+# was started from, which for `cargo run` and `tauri dev` is inside this tree. It holds
+# somebody's own saved connections and accepted host keys, so it is theirs and not the
+# repository's.
+settings/
+
+# The version the release workflow hands to `tauri build`, written from the tag (spec 26,
+# amendment M). It is a build artifact of a release run, not a file anybody edits.
+release-version.json
+
+# What a release run leaves beside the repository: the folder the zip is made from, and the
+# zip itself. Both are built by the workflow and neither is anybody's source.
+portable-package/
+acter-*-portable.zip

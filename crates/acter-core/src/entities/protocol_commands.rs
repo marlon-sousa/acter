@@ -21,7 +21,7 @@
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
-use crate::{CommandId, ConnectionKind, SessionId};
+use crate::{CommandId, ConnectionKind, SessionId, SetUp};
 
 /// The immediate answer to `submit_command`.
 ///
@@ -159,6 +159,20 @@ pub struct Connected {
     /// sentence silently changed what a listener heard afterwards. It is computed by the one
     /// function that composes the note, so the two cannot disagree.
     pub limit_explained: bool,
+    /// The saved connection this session was started from, or `None` for one nobody has
+    /// named yet (spec 26, decision 11).
+    ///
+    /// **It is the frontend's knowledge travelling back**, because the user may have
+    /// edited the panel before pressing Connect and the backend cannot know which row that
+    /// came from. What it is *for* is two things the window decides: whether to offer to
+    /// save, and what to prefill the Save connection dialog with.
+    pub saved_as: Option<String>,
+    /// Who holds the line as this session opens (spec 28, decision 1).
+    ///
+    /// **What the saved connection asked for, and the default otherwise.** The frontend
+    /// applies it where it already decides which owner a new session starts on, so a saved
+    /// choice wins over the default there — which is what closes roadmap 28.8.
+    pub line_owner: LineOwner,
 }
 
 /// One thing that can be started: which far end, and which of it.
@@ -371,6 +385,101 @@ pub enum KeyAck {
     Unsupported,
 }
 
+/// What the command line asked this launch to connect to (spec 26, decision 20).
+///
+/// **Asked for by the backend and carried out by the frontend.** The composition root is
+/// the one place allowed to read the command line, and the window is the one place a
+/// connection can ask its questions — a saved SSH connection needs a host-key dialog and a
+/// password dialog, and there is no window to put either in until the frontend is running.
+/// So the switch becomes a value the frontend collects at startup and acts on through the
+/// same call the Connect dialog makes.
+///
+/// **A name nothing is saved under is a sentence rather than a silence.** A windowed binary
+/// has no console, so there is nowhere to print a usage error: the window opens unconnected
+/// and says what was asked for.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(tag = "request")]
+pub enum LaunchRequest {
+    /// Start this saved connection, exactly as choosing its row in the Connect dialog would.
+    ///
+    /// **The name as the document spells it**, not as the switch did: the frontend looks
+    /// the row up by name, and a lookup that had to allow for case would be a second place
+    /// deciding what two names being the same means.
+    Connect { name: String },
+    /// Nothing is saved under this name, and [`said`](Self::Unknown::said) is what the
+    /// unconnected window announces instead.
+    Unknown { name: String, said: String },
+}
+
+impl LaunchRequest {
+    /// The request for a name nothing is saved under, with the sentence already written.
+    ///
+    /// **The sentence is made here rather than by whoever discovers the name is unknown**,
+    /// so the words a listener hears are one string in one place — the same reason every
+    /// other refusal in this protocol carries its own sentence rather than a code somebody
+    /// downstream turns into words.
+    pub fn unknown(name: &str) -> Self {
+        Self::Unknown {
+            name: name.to_owned(),
+            said: no_such_connection(name),
+        }
+    }
+}
+
+/// What a listener is told about a name nothing is saved under, wherever it is met: on the
+/// command line, or in a rename or a forget aimed at a row that is not there any more.
+pub fn no_such_connection(name: &str) -> String {
+    format!("There is no saved connection named {name}.")
+}
+
+/// The saved connections as the Connect dialog meets them (spec 26, decision 11).
+///
+/// **Not [`StoredConnections`](crate::StoredConnections), and the difference is the
+/// point.** That is what the document holds; this is what that becomes once the machine has
+/// been asked — every row carrying the profile its panel is loaded from, and whether this
+/// machine can start it now.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+pub struct SavedConnections {
+    /// The names, alphabetically and without case (decision 12). **Stable, never
+    /// most-recent-first**: a listener learns positions, and a list that reorders itself
+    /// under them is a list they have to read from the top every time.
+    pub rows: Vec<SavedRow>,
+    /// What went wrong with a document that would not parse, and `None` when nothing did
+    /// (decision 9). The dialog says this where it would otherwise say the list is empty.
+    pub unreadable: Option<String>,
+}
+
+/// One saved connection, as a row in that list.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+pub struct SavedRow {
+    /// What the user called it, as they typed it — which is the whole of what the list
+    /// shows, because a name is what they chose to recognise it by.
+    pub name: String,
+    /// What to load the panel from, and what to hand
+    /// [`ConnectApi::use_profile`](crate::ConnectApi) if nothing in the panel is changed.
+    ///
+    /// **Resolved against discovery rather than taken from the document** (decision 7):
+    /// a saved PowerShell edition is matched to wherever it lives now, so an upgrade does
+    /// not break a connection somebody saved a year ago.
+    pub id: ProfileId,
+    /// The kind and what identifies it, as one line a listener hears on arrowing onto the
+    /// name (decision 13): "SSH, marlon at example.org", "WSL, Ubuntu", "PowerShell 7".
+    pub summary: String,
+    /// Whether Acter may set this session up (spec B9.5, decision 9), so the panel's
+    /// checkbox opens on what was saved.
+    pub set_up: SetUp,
+    /// Who holds the line when it opens (spec 28, decision 1), applied where the frontend
+    /// already decides that — a saved choice wins over the default there.
+    pub line_owner: LineOwner,
+    /// Whether this machine can start it now. A distribution that was uninstalled, an
+    /// edition that is gone and a scripted scenario in a release build are all listed and
+    /// all unavailable, for the reason a missing kind is listed (spec B5.4).
+    pub available: bool,
+    /// What to do about a row that cannot be started, and `None` when it can — a panel of
+    /// instructions under a working row is noise a listener has to arrow past.
+    pub instructions: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -575,6 +684,8 @@ mod tests {
             label: "WSL: Ubuntu".to_owned(),
             note: None,
             limit_explained: false,
+            saved_as: None,
+            line_owner: LineOwner::FarEnd,
         };
 
         assert_eq!(
@@ -583,7 +694,12 @@ mod tests {
                 "session": 2,
                 "label": "WSL: Ubuntu",
                 "note": null,
-                "limit_explained": false
+                "limit_explained": false,
+                // **The two the frontend needs to decide what happens next** (spec 26,
+                // decision 11): whether to offer to save, and which line the session
+                // opens on.
+                "saved_as": null,
+                "line_owner": "FarEnd"
             })
         );
         let back: Connected =

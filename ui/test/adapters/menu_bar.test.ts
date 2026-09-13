@@ -38,7 +38,14 @@ const SKELETON = `
   <input id="command-input" />
 `;
 
-let actions: { connects: number; exited: number; helps: number; abouts: number };
+let actions: {
+  connects: number;
+  newConnections: number;
+  saves: number;
+  exited: number;
+  helps: number;
+  abouts: number;
+};
 let returned: number;
 
 function byId(id: string): HTMLElement {
@@ -78,7 +85,7 @@ function expanded(id: string): string | null {
 
 beforeEach(() => {
   document.body.innerHTML = SKELETON;
-  actions = { connects: 0, exited: 0, helps: 0, abouts: 0 };
+  actions = { connects: 0, newConnections: 0, saves: 0, exited: 0, helps: 0, abouts: 0 };
   returned = 0;
   const editField = byId('command-input');
   installMenuBar(
@@ -86,6 +93,12 @@ beforeEach(() => {
     {
       connect: () => {
         actions.connects += 1;
+      },
+      newConnection: () => {
+        actions.newConnections += 1;
+      },
+      saveConnection: () => {
+        actions.saves += 1;
       },
       exit: () => {
         actions.exited += 1;
@@ -305,7 +318,7 @@ describe('choosing something', () => {
     );
 
     for (const leaf of leaves) {
-      actions = { connects: 0, exited: 0, helps: 0, abouts: 0 };
+      actions = { connects: 0, newConnections: 0, saves: 0, exited: 0, helps: 0, abouts: 0 };
       leaf.dispatchEvent(new MouseEvent('click', { bubbles: true }));
 
       expect(

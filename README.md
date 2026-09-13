@@ -15,6 +15,29 @@ Built in Rust with Tauri 2 (HTML frontend over WebView2), Windows first.
 
 Planning complete, implementation starting. Development is AI-first and spec-driven.
 
+## Installing
+
+Two ways, and which one you choose decides where Acter keeps its settings.
+
+**The installer** — `acter_x.y.z_x64-setup.exe` from the
+[releases page](https://github.com/marlon-sousa/acter/releases). It installs for your
+account only and never asks for administrator rights. Its settings live with the rest of
+your application data, in `%APPDATA%\acter\settings`.
+
+**The portable zip** — `acter-windows-vx.y.z-portable.zip`. Unpack it anywhere, including
+a USB stick, and run `acter.exe`. It keeps its settings in a `settings` folder beside the
+program, so the whole of Acter travels with the folder you put it in.
+
+Either way, Help then About Acter reads out where that folder is on this computer, and how
+Acter came to be using it. Setting `ACTER_SETTINGS_DIR` to a folder of your own overrides
+both.
+
+**Windows will warn you before it runs either of them.** Neither is signed with a code
+signing certificate yet, so SmartScreen says the publisher is unknown; choose "More info"
+and then "Run anyway". This is a known cost, recorded rather than worked around: a
+certificate is a purchase, and until there is one, saying so plainly is more use than
+pretending the warning is not there.
+
 ## Documentation
 
 - [Design](docs/DESIGN.md) — product decisions and open questions.

@@ -9,10 +9,13 @@ import type {
   Connected,
   KeyAck,
   KeyPress,
+  LaunchRequest,
   LineId,
   LineOwner,
   LineRevision,
   ProfileId,
+  SavedConnections,
+  SavedRow,
   SessionEvent,
   SessionId,
   SetUp,
@@ -192,6 +195,10 @@ class FakeAnnouncer implements AnnouncerView {
   documentReturned(): void {
     this.returns += 1;
   }
+  /** Nothing is queued in a fake: it says everything the moment it is told. */
+  drained(): Promise<void> {
+    return Promise.resolve();
+  }
 }
 
 class FakeBeep implements BeepView {
@@ -269,6 +276,8 @@ class FakeConnect implements ConnectApi {
     label: 'Command Prompt',
     note: null,
     limit_explained: false,
+    saved_as: null,
+    line_owner: 'FarEnd',
   };
   /** What the far end has to say about itself, once, at connection (spec B9). */
   note: string | null = null;
@@ -288,14 +297,39 @@ class FakeConnect implements ConnectApi {
   /** The sentence `use` rejects with instead of connecting, when a test wants a failure. */
   refuses: string | null = null;
   used: ProfileId[] = [];
+  /** Which saved connection each attempt started from (spec 26, decision 11). */
+  origins: (string | null)[] = [];
+  /** What a saved connection asked for about the line, when one did. */
+  lineOwner: LineOwner = 'FarEnd';
+  /** Why a session cannot be written down, when one cannot (spec 26, decision 19). */
+  /** What the saved connections are, for the window that lists or launches them. */
+  savedRows: SavedRow[] = [];
+  /** What went wrong with the document, when a test is about decision 9. */
+  unreadable: string | null = null;
+  /** Whether a new connection should be offered for saving (spec 26, decision 19). */
+  offering = true;
+  /** How many times the preference was written, so a test can see it happen once. */
+  stopped = 0;
+  /** What was saved, renamed and forgotten, and what the backend answered. */
+  savedUnder: string[] = [];
+  /** The sentence `saveConnection` rejects with instead of saving. */
+  refusesSaving: string | null = null;
+  /** What the launch asked for, or nothing for an ordinary launch (decision 20). */
+  atLaunch: LaunchRequest | null = null;
   private nextSession = 1;
 
   connectable(): Promise<Connectable[]> {
     return Promise.resolve(this.rows);
   }
-  use(id: ProfileId, setUp: SetUp, listener?: ConnectListener): Promise<Connected> {
+  use(
+    id: ProfileId,
+    setUp: SetUp,
+    origin: string | null,
+    listener?: ConnectListener,
+  ): Promise<Connected> {
     this.used.push(id);
     this.setUps.push(setUp);
+    this.origins.push(origin);
     for (const said of this.progress) {
       listener?.onProgress?.(said);
     }
@@ -308,10 +342,38 @@ class FakeConnect implements ConnectApi {
       label: id.profile === 'Distribution' ? `WSL: ${id.name}` : 'Command Prompt',
       note: this.note,
       limit_explained: this.limitExplained,
+      saved_as: origin,
+      line_owner: this.lineOwner,
     });
   }
   connected(): Promise<Connected | null> {
     return Promise.resolve(this.atStartup);
+  }
+  saved(): Promise<SavedConnections> {
+    return Promise.resolve({ rows: this.savedRows, unreadable: this.unreadable });
+  }
+  saveConnection(name: string): Promise<string> {
+    if (this.refusesSaving !== null) {
+      return Promise.reject(this.refusesSaving);
+    }
+    this.savedUnder.push(name);
+    return Promise.resolve(`Saved as ${name}.`);
+  }
+  renameConnection(from: string, to: string): Promise<string> {
+    return Promise.resolve(`${from} is now called ${to}.`);
+  }
+  forgetConnection(name: string): Promise<string> {
+    return Promise.resolve(`${name} is no longer saved.`);
+  }
+  offerToSave(): Promise<boolean> {
+    return Promise.resolve(this.offering);
+  }
+  stopOfferingToSave(): Promise<void> {
+    this.stopped += 1;
+    return Promise.resolve();
+  }
+  requestedAtLaunch(): Promise<LaunchRequest | null> {
+    return Promise.resolve(this.atLaunch);
   }
 }
 
@@ -589,6 +651,7 @@ describe('event rendering (decision 2)', () => {
         order.push('announce');
       },
       documentReturned: () => {},
+      drained: () => Promise.resolve(),
     };
     const controller = new AppController(
       backend,
@@ -1860,5 +1923,234 @@ describe('the two faces of the window (spec A10)', () => {
     expect(backend.submitted).toEqual([]);
     expect(editField.text).toBe('dir');
     expect(announcer.announcements).toEqual([notConnectedMessage]);
+  });
+});
+
+/**
+ * **The saved connections, as the controller meets them** (spec 26, decisions 11, 19
+ * and 20): who holds the line when a saved one opens, whether the offer is made, and what
+ * a launch switch turns into.
+ */
+describe('the connections somebody saved', () => {
+  /**
+   * **A saved connection's own choice about the line wins over the default** (decision 11),
+   * which is what closes roadmap 28.8. The backend answers `line_owner` with what was
+   * saved and with the far end when nothing was, so this is still one decision applied in
+   * one place.
+   */
+  it('opens on the line the saved connection asked for', async () => {
+    const connect = new FakeConnect();
+    connect.lineOwner = 'Local';
+    const { backend, controller, farEndField } = await makeApp(connect);
+
+    await controller.connectTo({ profile: 'Shell', kind: 'Cmd' }, 'Yes', 'quiet');
+
+    expect(backend.owners.at(-1)).toBe('Local');
+    expect(farEndField.showing).toBe(false);
+    expect(connect.origins.at(-1)).toBe('quiet');
+  });
+
+  /** And a new one opens on the far end's line, which is what a session does by default. */
+  it('opens a new connection on the far end line, with no origin', async () => {
+    const connect = new FakeConnect();
+    const { backend, controller } = await makeApp(connect);
+
+    await controller.connectTo({ profile: 'Shell', kind: 'Cmd' });
+
+    expect(backend.owners.at(-1)).toBe('FarEnd');
+    expect(connect.origins.at(-1)).toBe(null);
+  });
+
+  /**
+   * **The offer waits for the two sentences to have been said** (decision 19's order).
+   * Found with NVDA 2026.1.1 on 2026-09-12: a modal makes the rest of the document inert,
+   * so a dialog that opens while an announcement is still queued sends it into the
+   * dialog's own region instead — and the keys sentence arrived after the offer had named
+   * itself. The connection is the news, the keys are what the next keypress needs, and the
+   * offer is a question about neither.
+   */
+  it('does not open the offer until the announcer has said everything', async () => {
+    const connect = new FakeConnect();
+    const { controller, announcer } = await makeApp(connect);
+    await controller.connectTo({ profile: 'Shell', kind: 'Cmd' });
+    const order: string[] = [];
+    announcer.drained = () => {
+      order.push('drained');
+      return Promise.resolve();
+    };
+
+    await controller.offerToSave(async () => {
+      order.push('offered');
+      return { stopOffering: false };
+    });
+
+    expect(order).toEqual(['drained', 'offered']);
+  });
+
+  /**
+   * **The offer is made once, for a session nobody has named** (decision 19), and only
+   * when the preference allows it.
+   */
+  it('offers to save a new connection', async () => {
+    const connect = new FakeConnect();
+    const { controller } = await makeApp(connect);
+    await controller.connectTo({ profile: 'Shell', kind: 'Cmd' });
+    const offered: string[] = [];
+
+    await controller.offerToSave(async (connection) => {
+      offered.push(connection.label);
+      return { stopOffering: false };
+    });
+
+    expect(offered).toEqual(['Command Prompt']);
+  });
+
+  /** **Never after a saved one**, because it already has a name. */
+  it('does not offer to save a connection that already has a name', async () => {
+    const connect = new FakeConnect();
+    const { controller } = await makeApp(connect);
+    await controller.connectTo({ profile: 'Shell', kind: 'Cmd' }, 'Yes', 'work laptop');
+    let asked = 0;
+
+    await controller.offerToSave(async () => {
+      asked += 1;
+      return { stopOffering: false };
+    });
+
+    expect(asked).toBe(0);
+  });
+
+  /** **And never when the preference is set**, which is what the checkbox writes. */
+  it('does not offer when the preference says not to', async () => {
+    const connect = new FakeConnect();
+    connect.offering = false;
+    const { controller } = await makeApp(connect);
+    await controller.connectTo({ profile: 'Shell', kind: 'Cmd' });
+    let asked = 0;
+
+    await controller.offerToSave(async () => {
+      asked += 1;
+      return { stopOffering: false };
+    });
+
+    expect(asked).toBe(0);
+  });
+
+  /**
+   * **Ticking the box records the preference whichever button was pressed** (decision 19):
+   * it is a decision about the offer rather than about this connection.
+   */
+  it('records the preference when the box was ticked', async () => {
+    const connect = new FakeConnect();
+    const { controller } = await makeApp(connect);
+    await controller.connectTo({ profile: 'Shell', kind: 'Cmd' });
+
+    await controller.offerToSave(async () => ({ stopOffering: true }));
+
+    expect(connect.stopped).toBe(1);
+  });
+
+  /** Saving answers the sentence, and the session stops being one nobody has named. */
+  it('saves under a name and stops offering that session', async () => {
+    const connect = new FakeConnect();
+    const { controller } = await makeApp(connect);
+    await controller.connectTo({ profile: 'Shell', kind: 'Cmd' });
+
+    const said = await controller.saveConnection('work laptop');
+
+    expect(said).toBe('Saved as work laptop.');
+    expect(connect.savedUnder).toEqual(['work laptop']);
+    expect(controller.connectedNow?.saved_as).toBe('work laptop');
+
+    let asked = 0;
+    await controller.offerToSave(async () => {
+      asked += 1;
+      return { stopOffering: false };
+    });
+    expect(asked).toBe(0);
+  });
+
+  /**
+   * **A refusal is announced and answered with nothing**, so the caller keeps the dialog
+   * open (decision 18). The words are the backend's, because only it knows what was wrong.
+   */
+  it('announces a refusal and answers nothing', async () => {
+    const connect = new FakeConnect();
+    connect.refusesSaving =
+      'A connection named work laptop already exists. Choose another name, or forget that one first.';
+    const { controller, announcer } = await makeApp(connect);
+    await controller.connectTo({ profile: 'Shell', kind: 'Cmd' });
+    announcer.announcements = [];
+
+    const said = await controller.saveConnection('work laptop');
+
+    expect(said).toBe(null);
+    expect(announcer.announcements).toEqual([connect.refusesSaving]);
+    expect(controller.connectedNow?.saved_as).toBe(null);
+  });
+
+  /**
+   * **`--connect <name>` is carried out by the window** (decision 20), through the same
+   * call the Connect dialog makes — so a saved SSH connection asks its questions where
+   * somebody can hear them.
+   */
+  it('starts the saved connection a launch asked for', async () => {
+    const connect = new FakeConnect();
+    connect.atStartup = null;
+    connect.atLaunch = { request: 'Connect', name: 'work laptop' };
+    connect.savedRows = [
+      {
+        name: 'work laptop',
+        id: { profile: 'Shell', kind: 'Cmd' },
+        summary: 'Command Prompt',
+        set_up: 'No',
+        line_owner: 'FarEnd',
+        available: true,
+        instructions: null,
+      },
+    ];
+    const { controller } = await makeApp(connect);
+
+    const started = await controller.carryOutTheLaunchSwitch();
+
+    expect(started).toBe(true);
+    expect(connect.used).toEqual([{ profile: 'Shell', kind: 'Cmd' }]);
+    expect(connect.setUps).toEqual(['No']);
+    expect(connect.origins).toEqual(['work laptop']);
+  });
+
+  /**
+   * **A name nothing is saved under opens the window unconnected and says so**, because a
+   * windowed binary has no console to print a usage message to.
+   */
+  it('says a launch name nothing is saved under, and starts nothing', async () => {
+    const connect = new FakeConnect();
+    connect.atStartup = null;
+    connect.atLaunch = {
+      request: 'Unknown',
+      name: 'wrok laptop',
+      said: 'There is no saved connection named wrok laptop.',
+    };
+    const { controller, announcer } = await makeApp(connect);
+    announcer.announcements = [];
+
+    const started = await controller.carryOutTheLaunchSwitch();
+
+    expect(started).toBe(false);
+    expect(connect.used).toEqual([]);
+    expect(announcer.announcements).toEqual([
+      'There is no saved connection named wrok laptop.',
+    ]);
+  });
+
+  /** An ordinary launch asks for nothing and says nothing. */
+  it('does nothing at all for an ordinary launch', async () => {
+    const connect = new FakeConnect();
+    connect.atStartup = null;
+    const { controller, announcer } = await makeApp(connect);
+    announcer.announcements = [];
+
+    expect(await controller.carryOutTheLaunchSwitch()).toBe(false);
+    expect(announcer.announcements).toEqual([]);
   });
 });
