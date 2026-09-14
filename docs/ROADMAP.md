@@ -54,7 +54,6 @@ lane's next step.
 
 **Lane 4: comments**
 
-- 2. **Open** — C2, `acter-core` entities and root files, with the regenerated `ui/src/protocol.ts`. Spec: [c-comments-say-what-the-code-cannot.md](specs/c-comments-say-what-the-code-cannot.md)
 - 3. **Open** — C3, `acter-core` ports and controllers. Spec: [c-comments-say-what-the-code-cannot.md](specs/c-comments-say-what-the-code-cannot.md)
 - 4. **Open** — C4, `acter-core` services `connect.rs` and `conversation.rs`. Spec: [c-comments-say-what-the-code-cannot.md](specs/c-comments-say-what-the-code-cannot.md)
 - 5. **Open** — C5, `acter-core` services `session.rs`. Spec: [c-comments-say-what-the-code-cannot.md](specs/c-comments-say-what-the-code-cannot.md)
@@ -173,7 +172,7 @@ History: [lane-3-macos.md](roadmap/lane-3-macos.md).
 ## Status board — lane 4: comments (**opened 2026-09-14**; may run parallel to every other lane)
 
 - 1. **Done** — C1, `acter-core` policies. Spec: [c-comments-say-what-the-code-cannot.md](specs/c-comments-say-what-the-code-cannot.md)
-- 2. **Open** — C2, `acter-core` entities and root files, with the regenerated `ui/src/protocol.ts`. Spec: [c-comments-say-what-the-code-cannot.md](specs/c-comments-say-what-the-code-cannot.md)
+- 2. **Done** — C2, `acter-core` entities and root files, with the regenerated `ui/src/protocol.ts`. Spec: [c-comments-say-what-the-code-cannot.md](specs/c-comments-say-what-the-code-cannot.md)
 - 3. **Open** — C3, `acter-core` ports and controllers. Spec: [c-comments-say-what-the-code-cannot.md](specs/c-comments-say-what-the-code-cannot.md)
 - 4. **Open** — C4, `acter-core` services `connect.rs` and `conversation.rs`. Spec: [c-comments-say-what-the-code-cannot.md](specs/c-comments-say-what-the-code-cannot.md)
 - 5. **Open** — C5, `acter-core` services `session.rs`. Spec: [c-comments-say-what-the-code-cannot.md](specs/c-comments-say-what-the-code-cannot.md)
