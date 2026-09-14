@@ -1,23 +1,14 @@
 //! Policy: which row the far end just redrew is the answer to the key Acter sent, and
 //! where the caret goes in it.
 //!
-//! The engine already suppresses a repaint that changed nothing: a `gh` prompt redrawing
-//! four rows after an arrow produces exactly two items, for the two rows whose text
-//! differed. This policy only decides which of those already-filtered rows to speak.
-//!
 //! Runs only after a key Acter sent, once the batch settles on the pacing policy's
 //! quiescence clock, over the rows the engine says changed.
 //!
-//! Row count routes nothing: PSReadLine's completion menu changes eleven rows for
-//! ordinary Tab completion.
+//! Row count routes nothing: one arrow inside PSReadLine's completion menu changes eleven
+//! rows.
 
 use crate::LineId;
 
-/// One row the far end changed after a key Acter sent: what stood on it, and what stands
-/// now.
-///
-/// Both texts, because gaining content is what step 2 looks for, not merely differing:
-/// only the pair can tell a row that gained a selection marker from one that lost it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RowChange {
     pub line: LineId,
@@ -27,9 +18,8 @@ pub struct RowChange {
 
 /// The row the far end draws its command line on, and the column that line starts at.
 ///
-/// Why the prompt is not read aloud on every press: `readline` repaints from the column
-/// the line starts at, so the engine reports the row as `marlon@splyt:...$ exit`, prompt
-/// included, when what a listener wants is `exit` (measured 2026-08-31).
+/// `readline` repaints from the column the line starts at, so the engine reports the row
+/// as `marlon@splyt:...$ exit` when a listener wants `exit`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Anchor {
     /// The row the far end's cursor sat on when it finished drawing its prompt.
@@ -40,9 +30,7 @@ pub struct Anchor {
 
 /// Where the far end's cursor was when the key went out, and where it is now.
 ///
-/// `None` for a far end that is not showing one: `gh` hides the cursor for the whole of a
-/// selection and parks it on the blank row below the list, so a caret placed from it would
-/// put a listener somewhere the far end never went.
+/// `None` for a far end that is not showing one, as `gh` does for the whole of a selection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Caret {
     pub column: u16,
@@ -62,20 +50,13 @@ pub struct Keystroke<'a> {
     /// `None` when the far end was hiding it.
     pub was: Option<Caret>,
     pub now: Option<Caret>,
-    /// What the field is holding right now — the text this policy handed over last time.
-    ///
-    /// The only record of trailing spaces: the extractor trims every row, so a row drawn
-    /// as `echo hi ` reaches here as `echo hi`. `held` with its own padding removed is the
-    /// row as the extractor read it.
+    /// The text this policy handed over last time; see `padded` for why it can be wider
+    /// than the row the extractor read.
     pub held: &'a str,
 }
 
-/// What to put in front of the listener.
-///
-/// Text and a caret, not a sentence: the element holding them is an ARIA text box, so NVDA
-/// does the speaking — the row when it changed, the character at the caret when only the
-/// cursor moved, "blank" for a row a key emptied. This type carries no strings Acter
-/// invented.
+/// Text and a caret, never a sentence: an ARIA text box holds them and NVDA does the
+/// speaking, so this type carries no words Acter invented.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FarEndAnswer {
     /// The row changed: this is its text, with the caret at this character.
@@ -86,26 +67,13 @@ pub enum FarEndAnswer {
     Nothing,
 }
 
-/// Which row is the answer, in four steps.
+/// The anchored row if it changed, else the row that gained content, else the caret if it
+/// moved along its row, else nothing.
 ///
-/// 1. If the anchored row changed, that is the answer, from the anchor column onward.
-///    Both kinds of change count: the first up arrow at a fresh prompt appends the
-///    recalled line rather than rewriting the row, so a rule keyed on rewrites alone
-///    would be silent on the commonest press of the commonest key (measured 2026-08-31).
-/// 2. Otherwise, among the rows that changed, the one that gained non-whitespace content.
-///    Content rather than a marker character: naming `>` would hard-code one program's
-///    choice, and PSReadLine's completion menu draws its selection in colour alone, with
-///    no marker at all.
-/// 3. Otherwise, if the cursor is visible and moved along the row it was on, only the
-///    caret moves — unless it moved across whitespace the extractor trimmed away, which
-///    is this step's second half.
-/// 4. Otherwise nothing happened.
+/// The first up arrow at a fresh `readline` prompt appends the recalled line rather than
+/// rewriting the row, so an appended change counts the same as a rewrite.
 ///
-/// Every row this rule hands over is padded out to the caret. A caret beyond the end of
-/// the text is evidence in itself: the far end's cursor is a screen column, the grid under
-/// it holds spaces, and the extractor trims them off the row. Padding puts the space back
-/// where the cursor says it is, so deleting it is a change a reader can announce, and a
-/// caret never sits past the text it is given.
+/// Every row handed over is padded out to the caret; see `padded`.
 pub fn far_end_row(keystroke: &Keystroke<'_>) -> FarEndAnswer {
     if let Some(anchor) = keystroke.anchor
         && let Some(change) = keystroke
@@ -122,9 +90,6 @@ pub fn far_end_row(keystroke: &Keystroke<'_>) -> FarEndAnswer {
     }
 
     if let Some(change) = keystroke.changed.iter().find(gained_content) {
-        // The caret sits at the start rather than being placed from a cursor that is
-        // somewhere else entirely: this row is an answer the far end drew, not a line the
-        // user is editing.
         return FarEndAnswer::Row {
             text: change.after.clone(),
             caret: 0,
@@ -157,11 +122,6 @@ pub fn far_end_row(keystroke: &Keystroke<'_>) -> FarEndAnswer {
     }
 }
 
-/// Whether this row gained non-whitespace content rather than losing it or trading it.
-///
-/// Counted rather than compared: a program marking its selection with `*`, an arrow, or
-/// indentation reads the same way `gh`'s `>` does, and a row merely rewritten with
-/// same-weight text is not mistaken for one that gained content.
 fn gained_content(change: &&RowChange) -> bool {
     weight(&change.after) > weight(&change.before)
 }
@@ -172,22 +132,12 @@ fn weight(text: &str) -> usize {
         .count()
 }
 
-/// The row from the anchor column onward.
-///
-/// Counted in characters rather than bytes, because a column is a screen position and the
-/// text is what the extractor read out of the grid.
 fn from_column(row: &str, column: u16) -> String {
     row.chars().skip(usize::from(column)).collect()
 }
 
-/// Where the caret goes in the text a listener is about to be handed.
-///
-/// Placed at the end of the text when the far end is not showing a cursor: past the last
-/// character NVDA says "blank", the same word it says for a row a key emptied.
-///
-/// Not clamped, because the text is what gets adjusted: a cursor beyond the row's last
-/// character is where a listener's own caret belongs after they type a space, and
-/// clamping it back onto the text was what made that space vanish.
+/// Placed at the end of the text when the far end shows no cursor. Never clamped: the text
+/// is padded out to it instead, see `padded`.
 fn caret_in(text: &str, anchor: u16, now: Option<Caret>) -> usize {
     match now {
         Some(caret) => usize::from(caret.column.saturating_sub(anchor)),
@@ -195,13 +145,8 @@ fn caret_in(text: &str, anchor: u16, now: Option<Caret>) -> usize {
     }
 }
 
-/// The row padded with spaces out to the caret, and left alone when the caret is already
-/// in it.
-///
-/// The spaces are not invented: the cursor sits on a grid cell, and every cell between the
-/// row's last character and that one holds a space that the extractor trims off before the
-/// row reaches here. Trimming stays right for reading a transcript; the field needs the
-/// row as wide as the far end's own cursor.
+/// The extractor trims the grid's trailing spaces, so a caret past the text is the only
+/// evidence they exist; padding restores them and keeps the caret inside the text.
 fn padded(text: String, caret: usize) -> String {
     let length = text.chars().count();
     let mut text = text;
@@ -236,8 +181,6 @@ mod tests {
         holding("", changed, anchor, was, now)
     }
 
-    /// The same batch, with the field already holding a line — which is what the caret
-    /// steps read the row's trailing whitespace out of.
     fn holding<'a>(
         held: &'a str,
         changed: &'a [RowChange],
@@ -261,8 +204,6 @@ mod tests {
         })
     }
 
-    /// `readline`'s history recall, captured 2026-08-31. Reading the whole row would speak
-    /// "marlon at splyt, slash mnt slash c..." before every press.
     #[test]
     fn history_recall_speaks_the_line_and_not_the_prompt() {
         let prompt = "marlon@splyt:/mnt/c/Users/marlo$ ";
@@ -463,9 +404,6 @@ mod tests {
         );
     }
 
-    /// Tab completing a unique match in `readline` appends a trailing space that the grid
-    /// holds and the extractor trims off; the cursor is the only evidence it was ever
-    /// there.
     #[test]
     fn a_caret_past_the_text_pads_the_row_out_to_it() {
         let prompt = "marlon@splyt:~$ ";
@@ -487,8 +425,8 @@ mod tests {
         );
     }
 
-    /// Measured at a real `bash` 2026-09-02: typing a space after `echo hi` produced no
-    /// line item, only the cursor moving one column right.
+    /// Against `bash`, typing a space after `echo hi` produces no line item, only a cursor
+    /// move.
     #[test]
     fn a_space_typed_at_the_end_reaches_the_field_as_a_space() {
         let answer = far_end_row(&holding(
@@ -508,8 +446,6 @@ mod tests {
         );
     }
 
-    /// Backspace over a trailing space produces no line item either, so the row alone
-    /// cannot distinguish a space typed from one deleted.
     #[test]
     fn deleting_a_trailing_space_shortens_the_line_the_listener_holds() {
         let answer = far_end_row(&holding(

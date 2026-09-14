@@ -193,7 +193,7 @@ pub(crate) fn on_wake(
 }
 
 /// The command ended: flush whatever remains unspoken under the size policy alone.
-/// The babble guard does not apply here — it throttles repetitive chunks *within* a
+/// The babble guard does not apply here — it throttles repetitive chunks within a
 /// running command, not the final reading of what it produced. No wake follows.
 pub(crate) fn on_command_end(
     state: PacingState,

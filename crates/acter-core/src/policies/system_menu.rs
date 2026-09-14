@@ -1,15 +1,15 @@
 //! Policy: what the operating system's own menu bar holds, if that operating system has
 //! one Acter puts anything in.
 //!
-//! A native menu freezes NVDA on Windows for tens of seconds, so an empty answer here is
-//! what keeps the composition root from attaching one.
+//! A native menu freezes NVDA 2026.1.1 on Windows for tens of seconds, so an empty answer here
+//! is what keeps the composition root from attaching one.
 //!
 //! Acter's own items carry Acter's words; the platform's items keep the platform's own
 //! localized words, since macOS translates Cut, Paste, Minimise and Quit into the
 //! account's language.
 //!
-//! Measured 2026-09-02: an unbundled build's process name is `acter-app`, so platform items
-//! currently read "Quit acter-app" rather than "Quit Acter".
+//! On macOS an unbundled build's process name is `acter-app`, so platform items read
+//! "Quit acter-app" rather than "Quit Acter".
 
 use crate::MenuAction;
 
@@ -29,8 +29,8 @@ pub enum MenuItem {
     Acter {
         action: MenuAction,
         label: &'static str,
-        /// `None` when there is no shortcut. Never a lone function key: measured
-        /// 2026-09-02, a Mac with factory settings needs `fn` to reach those.
+        /// `None` when there is no shortcut. Never a lone function key: a Mac with
+        /// factory settings needs `fn` to reach those.
         accelerator: Option<&'static str>,
     },
     /// An item the platform owns, including its words and its conventional shortcut.
@@ -46,7 +46,7 @@ pub enum Standard {
     Hide,
     HideOthers,
     ShowAll,
-    /// Measured 2026-09-02: taking this quits the running shell along with the app.
+    /// On macOS, taking this quits the running shell along with the app.
     Quit,
     Undo,
     Redo,
@@ -54,7 +54,7 @@ pub enum Standard {
     Copy,
     Paste,
     SelectAll,
-    /// Ends the application for Acter (measured 2026-09-02).
+    /// Ends the application for Acter.
     CloseWindow,
     Minimize,
     /// macOS's Zoom.
@@ -147,9 +147,8 @@ fn macos() -> Vec<SystemMenu> {
                 MenuItem::Standard(Standard::CloseWindow),
             ],
         },
-        // Cmd+Slash, not the usual Cmd+? for Help: measured 2026-09-02, macOS reserves
-        // Shift+Cmd+/ for the menu's own search field and intercepts it before the app
-        // sees it.
+        // Cmd+Slash, not the usual Cmd+? for Help: macOS reserves Shift+Cmd+/ for the
+        // menu's own search field and intercepts it before the app sees it.
         SystemMenu {
             title: "Help",
             items: vec![MenuItem::Acter {

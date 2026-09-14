@@ -20,7 +20,7 @@ skill is the procedure; the spec is the judgement.
 1. Read it top to bottom. Every comment paragraph gets exactly one bucket from the
    rubric: N1 to N7 delete, K1 to K6 keep.
 2. Delete N paragraphs whole. Compress K paragraphs to one plain sentence that states
-   the fact, with a date only on a measured fact. A kept fact appears once in the
+   the fact, naming the program and version on a measured fact, never a date. A kept fact appears once in the
    repository; a second place says "see" with a path.
 3. A comment that contradicts the code is deleted if it is N and corrected if it is K.
    Never change the code to match a comment. Put the contradiction in the PR body under

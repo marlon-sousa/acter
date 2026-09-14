@@ -42,7 +42,7 @@ is the source of truth, and specs are written before code.
 - Visibility ladder (private → `pub(crate)` → re-exported `pub`), facade `lib.rs`,
   `module.rs` + `module/` folders (never `mod.rs`), no junk-drawer modules.
 - **Comments say what the code cannot.** A comment is the module role line, a measured
-  fact with its date, an invariant or hazard the code does not enforce, or what an absent
+  fact and what it was measured against, an invariant or hazard the code does not enforce, or what an absent
   value or an error carries. One sentence, at the point of use, once. Rationale, history,
   alternatives and spec or decision citations go in the spec and the PR body, never in
   code. No doc paragraph on a field, method or test whose name already says it. Every PR

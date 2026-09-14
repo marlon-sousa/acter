@@ -1,8 +1,9 @@
 //! Policy: making a reason that came from the world into something a screen reader can
 //! read as a finished thought.
 
-/// Trims trailing whitespace before checking for a final `.`, `!` or `?`: cmd.exe can
-/// leave a trailing space, as in `set ACTER_SHELL=x && acter`.
+/// The reason with a full stop appended unless it already ends in `.`, `!` or `?`.
+/// Trailing whitespace is trimmed first: cmd.exe can leave a trailing space, as in
+/// `set ACTER_SHELL=x && acter`.
 pub fn ended(reason: impl Into<String>) -> String {
     let reason = reason.into();
     let trimmed = reason.trim_end();

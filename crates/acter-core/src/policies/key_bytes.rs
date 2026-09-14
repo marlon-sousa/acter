@@ -1,8 +1,8 @@
 //! Policy: what a keystroke is on the wire — the measured table from a [`KeyPress`] plus
 //! the modes the far end turned on to the bytes a terminal sends for it.
 //!
-//! Every row below was measured 2026-09-02 against `bash` under WSL, `pwsh` 7.6.5 and
-//! `cmd.exe`, using the rig in `crates/acter-transports/examples/capture.rs`. Function keys
+//! Every row below was measured against `bash` under WSL, `pwsh` 7.6.5 and `cmd.exe`,
+//! using the rig in `crates/acter-transports/examples/capture.rs`. Function keys
 //! are absent because they were not measured.
 
 use crate::{Key, KeyPress, TerminalModes};
@@ -11,15 +11,15 @@ const ESC: u8 = 0x1b;
 
 /// # The table
 ///
-/// - **Backspace is `0x7f`; `0x08` is `Ctrl+Backspace`.** Measured 2026-09-02: `0x08`
-///   deletes the previous word in PSReadLine and `cmd.exe` (`BAhello worldECD` →
-///   `BAhello CD`), while `0x7f` deletes one character on all three measured far ends.
-/// - **Home is `ESC[H`; End is `ESC[F`.** `ESC[1~` and `ESC[4~` are also accepted by both
-///   measured far ends but are not sent.
-/// - **Delete is `ESC[3~`** on all three, unaffected by the cursor-key mode.
-/// - **Arrows are `ESC[A/B/C/D`**, switching to `ESC O A/B/C/D` (shared with Home and End)
+/// - Backspace is `0x7f`; `0x08` is `Ctrl+Backspace`: `0x08` deletes the previous word in
+///   PSReadLine and `cmd.exe` (`BAhello worldECD` → `BAhello CD`), while `0x7f` deletes
+///   one character on all three far ends.
+/// - Home is `ESC[H`; End is `ESC[F`. `ESC[1~` and `ESC[4~` are also accepted by all three
+///   far ends but are not sent.
+/// - Delete is `ESC[3~` on all three, unaffected by the cursor-key mode.
+/// - Arrows are `ESC[A/B/C/D`, switching to `ESC O A/B/C/D` (shared with Home and End)
 ///   once application cursor keys are on.
-/// - **`Ctrl` plus a letter is that letter's control byte** (`Ctrl+C` is `0x03`, `Ctrl+D`
+/// - `Ctrl` plus a letter is that letter's control byte (`Ctrl+C` is `0x03`, `Ctrl+D`
 ///   is `0x04`, `Ctrl+U` is `0x15`). What `Ctrl+U` does is the far end's business:
 ///   `readline` and PSReadLine clear the line, `cmd.exe` inserts a literal `^U`.
 pub fn key_bytes(press: &KeyPress, modes: TerminalModes) -> Vec<u8> {

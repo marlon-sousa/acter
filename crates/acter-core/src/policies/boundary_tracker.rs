@@ -144,7 +144,7 @@ impl BoundaryTracker {
     /// being echoed, anything that is not a further append to that row ends the region —
     /// the `C` a shell like this never sends is synthesized right there.
     ///
-    /// Real output arriving while the region is open lands on a *new* row, ends the
+    /// Real output arriving while the region is open lands on a new row, ends the
     /// region and is labelled `Output`; what stays behind is the echo itself and anything
     /// the far end appended to the same row, which is the one thing a caller is entitled
     /// to drop.
