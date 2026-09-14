@@ -1,11 +1,10 @@
 //! Policy: the auto-read/pacing policy. Pure functions over [`PacingState`] and
-//! [`PacingConfig`] — elapsed time in (as a `Duration` offset from command start,
-//! never a clock read), a decision plus the next wake deadline out. Owns the one place
-//! output is measured ([`measure`]) and the one place the size threshold is applied
-//! ([`verdict`]); [`on_output`], [`on_wake`], and [`on_command_end`] cover the three
-//! moments DESIGN's Output pacing section defines: a chunk arriving, a scheduled
-//! deadline firing, and the command ending. The accumulated text buffer stays outside
-//! the policy (decision 5): callers pass its measured [`TextSize`], never the bytes.
+//! [`PacingConfig`]: elapsed time in as a `Duration` offset from command start, never a
+//! clock read; a decision plus the next wake deadline out.
+//!
+//! [`on_output`], [`on_wake`] and [`on_command_end`] are the three entry points: a chunk
+//! arriving, a scheduled deadline firing, and the command ending. Callers pass the
+//! accumulated text's measured [`TextSize`], never the bytes.
 
 use std::time::Duration;
 
@@ -43,7 +42,7 @@ pub(crate) struct PacingOutcome {
 }
 
 /// Measures extracted grid text: line count and char count with each line's trailing
-/// whitespace trimmed (DESIGN, Auto-read threshold). The one place measurement happens.
+/// whitespace trimmed. The one place measurement happens.
 pub fn measure(text: &str) -> TextSize {
     let lines: Vec<&str> = text.lines().map(str::trim_end).collect();
     let separators = lines.len().saturating_sub(1);
@@ -65,11 +64,10 @@ pub(crate) fn verdict(size: TextSize, config: &PacingConfig) -> ReadMode {
 }
 
 /// A chunk of output arrived. In follow mode every non-empty chunk flushes `Auto`
-/// immediately, bypassing thresholds and the babble guard entirely (decision: follow
-/// mode is an explicit override). Otherwise this call only records that output
-/// arrived and asks to be woken at the sooner of the quiescence window and the
-/// still-pending patience deadline (see [`next_wake`]) — flushing itself happens in
-/// [`on_wake`], once a real gap is observed.
+/// immediately, bypassing thresholds and the babble guard. Otherwise this call only
+/// records that output arrived and asks to be woken at the sooner of the quiescence
+/// window and the still-pending patience deadline (see [`next_wake`]); flushing happens
+/// in [`on_wake`], once a real gap is observed.
 pub(crate) fn on_output(
     state: PacingState,
     config: &PacingConfig,
@@ -77,12 +75,10 @@ pub(crate) fn on_output(
     at: Duration,
     follow_mode: bool,
 ) -> (PacingState, PacingOutcome) {
-    // An empty chunk is not output: an escape sequence, a cursor move, a repaint that
-    // painted no text. It leaves the state alone, so it cannot push the quiescence
-    // deadline out — otherwise a spinner redrawing twice a second would postpone the
-    // reading of an already accumulated "Password:" prompt for as long as it spun.
-    // The pending deadline is restated rather than dropped, so a caller that re-arms
-    // its timer on every outcome keeps the flush it was already waiting for.
+    // An empty chunk (an escape sequence, a cursor move, a repaint with no text) leaves
+    // the state alone: otherwise a spinner redrawing twice a second would keep postponing
+    // an already-accumulated prompt's read. The deadline is restated, not dropped, so a
+    // caller re-arming its timer on every outcome keeps the flush it is waiting for.
     if size.lines == 0 && size.chars == 0 {
         let wake_after = if follow_mode {
             None
@@ -98,11 +94,9 @@ pub(crate) fn on_output(
         );
     }
 
-    // This chunk starts a fresh run of unread output when a quiescent gap preceded it:
-    // whatever came before has been flushed, or was never there. Under follow mode
-    // every chunk is read on arrival, so each one restarts the run — nothing
-    // accumulates while follow mode is on, and patience is measured from the moment it
-    // is switched off.
+    // A quiescent gap before this chunk starts a fresh run of unread output. Follow mode
+    // restarts the run on every chunk, so patience is measured from the moment follow
+    // mode is switched off.
     let continuous_since =
         if follow_mode || at.saturating_sub(state.last_output_at) >= config.quiescence {
             at
@@ -199,7 +193,7 @@ pub(crate) fn on_wake(
 }
 
 /// The command ended: flush whatever remains unspoken under the size policy alone.
-/// The babble guard does not apply here — it throttles repetitive chunks *within* a
+/// The babble guard does not apply here — it throttles repetitive chunks within a
 /// running command, not the final reading of what it produced. No wake follows.
 pub(crate) fn on_command_end(
     state: PacingState,
@@ -221,17 +215,13 @@ pub(crate) fn on_command_end(
 }
 
 /// Applies the size verdict and the babble guard to one mid-command chunk. Once the
-/// guard has tripped the command is silent for the rest of its life — including its
-/// "too big" announcements, which are exactly as repetitive when the flood arrives in
-/// large chunks. Silent means unspoken, not withheld: chunks keep flushing under
-/// [`ReadMode::Quiet`], so the text still reaches the results buffer and stays
-/// reviewable while the command runs. This is the one place `Quiet` is produced —
-/// [`verdict`] never returns it, because it is a decision about babble, not size.
-/// Before the trip, a `TooBig` verdict flushes and breaks the auto-read
-/// streak (it is not an auto-read), and an `Auto` verdict flushes and extends the
-/// streak — until `babble_limit` consecutive auto-reads have already been spoken, at
-/// which point the *next* one trips the guard and emits `OutputContinues` once
-/// (DESIGN: "after three consecutive auto-read chunks ... announce and go quiet").
+/// guard has tripped, the command is silent for the rest of its life, including its
+/// "too big" announcements. Silent means unspoken, not withheld: chunks keep flushing
+/// under [`ReadMode::Quiet`], so the text still reaches the results buffer. This is the
+/// one place `Quiet` is produced — [`verdict`] never returns it. Before the trip,
+/// `TooBig` flushes and breaks the auto-read streak, and `Auto` flushes and extends it
+/// until `babble_limit` consecutive auto-reads have been spoken, at which point the next
+/// one trips the guard and emits `OutputContinues` once.
 fn flush_with_babble_guard(
     state: PacingState,
     config: &PacingConfig,
@@ -388,14 +378,10 @@ mod tests {
         );
         let (state, _) = on_output(state, &config, small(), Duration::from_millis(300), false);
 
-        // The original deadline (500ms from the first chunk) has passed, but the
-        // second chunk pushed last_output_at to 300ms, so the gap is only 200ms:
-        // deferred, not flushed.
         let (state, out) = on_wake(state, &config, small(), config.quiescence);
         assert_eq!(out.action, PacingAction::None);
         assert_eq!(out.wake_after, Some(Duration::from_millis(300)));
 
-        // The extended deadline (800ms) does flush.
         let (_, out) = on_wake(state, &config, small(), Duration::from_millis(800));
         assert_eq!(out.action, PacingAction::Flush(ReadMode::Auto));
     }
@@ -412,14 +398,11 @@ mod tests {
             false,
         );
 
-        // A spinner repainting at 400ms: no text, so the 500ms deadline stands and
-        // the restated wake is what is left of it, not a fresh window.
         let (state, out) = on_output(state, &config, empty, Duration::from_millis(400), false);
         assert_eq!(out.action, PacingAction::None);
         assert_eq!(out.wake_after, Some(Duration::from_millis(100)));
         assert_eq!(state.last_output_at, Duration::ZERO);
 
-        // The prompt that arrived at 0ms is still read on time.
         let (_, out) = on_wake(state, &config, small(), config.quiescence);
         assert_eq!(out.action, PacingAction::Flush(ReadMode::Auto));
     }
@@ -437,7 +420,6 @@ mod tests {
         assert_eq!(out.action, PacingAction::StillRunning);
         assert!(state.patience_fired);
 
-        // A later wake with the same fresh output does not re-fire.
         let (_, out) = on_wake(
             state,
             &config,
@@ -459,7 +441,6 @@ mod tests {
         assert_eq!(out.action, PacingAction::Flush(ReadMode::Auto));
         assert!(!state.patience_fired);
 
-        // The command ends long before the 10s patience window: it never fires.
         let (state, _) = on_command_end(state, &config, TextSize { lines: 0, chars: 0 });
         assert!(!state.patience_fired);
     }
@@ -493,9 +474,6 @@ mod tests {
     #[test]
     fn a_long_silence_before_the_first_output_is_not_continuous_output() {
         let config = PacingConfig::default();
-        // The command says nothing for 15s, then speaks. Patience is about output
-        // flowing with no readable gap, so this must not announce "still running" the
-        // instant the first chunk lands; it must simply be read after quiescence.
         let (state, out) = on_output(
             PacingState::default(),
             &config,
@@ -522,12 +500,10 @@ mod tests {
         let start = Duration::from_secs(15);
         let (state, _) = on_output(PacingState::default(), &config, small(), start, false);
 
-        // Nine seconds into that run, still short of the window.
         let (state, out) = on_wake(state, &config, small(), start + Duration::from_secs(9));
         assert_ne!(out.action, PacingAction::StillRunning);
         assert!(!state.patience_fired);
 
-        // Ten seconds in, with output still fresh, it fires.
         let fresh = PacingState {
             last_output_at: start + Duration::from_millis(9900),
             ..state
@@ -542,7 +518,6 @@ mod tests {
         let config = PacingConfig::default();
         let mut state = PacingState::default();
 
-        // Twenty seconds of flooding, every chunk read aloud on arrival.
         let mut at = Duration::ZERO;
         for _ in 0..200 {
             let (next, _) = on_output(state, &config, small(), at, true);
@@ -551,8 +526,6 @@ mod tests {
         }
         assert_eq!(state.continuous_since, at - Duration::from_millis(100));
 
-        // Follow mode off: nothing has accumulated yet, so the patience window starts
-        // now rather than firing a stale "still running" on the next chunk.
         let (state, out) = on_output(state, &config, small(), at, false);
         assert_eq!(out.action, PacingAction::None);
         let (state, out) = on_wake(state, &config, small(), at + Duration::from_millis(400));
@@ -568,7 +541,6 @@ mod tests {
         let at = config.quiescence;
         let mut state = PacingState::default();
 
-        // DESIGN says "after three consecutive auto-read chunks": all three are read.
         for _ in 0..config.babble_limit {
             let (s, out) = on_wake(state, &config, small(), at);
             assert_eq!(out.action, PacingAction::Flush(ReadMode::Auto));
@@ -577,15 +549,12 @@ mod tests {
         assert!(!state.babble_tripped);
         assert_eq!(state.consecutive_auto_reads, config.babble_limit);
 
-        // The fourth trips the guard, announcing once.
         let (s, out) = on_wake(state, &config, small(), at);
         assert_eq!(out.action, PacingAction::OutputContinues);
         assert!(s.babble_tripped);
         assert_eq!(s.consecutive_auto_reads, config.babble_limit);
         state = s;
 
-        // The fifth and everything after it is unspoken — but still flushed, so the
-        // results buffer keeps up with the command instead of freezing mid-run.
         let (s, out) = on_wake(state, &config, small(), at);
         assert_eq!(out.action, PacingAction::Flush(ReadMode::Quiet));
         assert_eq!(s.consecutive_auto_reads, config.babble_limit);
@@ -600,13 +569,10 @@ mod tests {
             ..PacingState::default()
         };
 
-        // Quiet is reachable only through the guard: `verdict` is about size and never
-        // returns it. The frontend appends Quiet output to the buffer and says nothing.
         let (state, out) = on_wake(tripped, &config, small(), config.quiescence);
         assert_eq!(out.action, PacingAction::Flush(ReadMode::Quiet));
         assert_eq!(state, tripped);
 
-        // Nothing unspoken is still nothing to render.
         let (_, out) = on_wake(
             tripped,
             &config,
@@ -628,8 +594,6 @@ mod tests {
             state = s;
         }
 
-        // Not an auto-read: it is announced and the streak restarts, so the next
-        // auto-read chunk is read rather than tripping the guard.
         let (state, out) = on_wake(state, &config, big, at);
         assert_eq!(out.action, PacingAction::Flush(ReadMode::TooBig));
         assert_eq!(state.consecutive_auto_reads, 0);
@@ -649,9 +613,6 @@ mod tests {
         };
         let big = measure(&"a\n".repeat(30));
 
-        // "Go quiet for the remainder of the command" is literal: a flood arriving in
-        // chunks over the size cap would otherwise babble "too big" just as endlessly.
-        // The text is still rendered, it just carries no announcement.
         let (state, out) = on_wake(tripped, &config, big, config.quiescence);
         assert_eq!(out.action, PacingAction::Flush(ReadMode::Quiet));
         assert_eq!(state, tripped);
@@ -672,7 +633,6 @@ mod tests {
             PacingAction::Flush(ReadMode::Quiet)
         );
 
-        // A fresh PacingState (new command) is not tripped.
         let fresh = PacingState::default();
         assert_eq!(
             on_wake(fresh, &config, small(), config.quiescence).1.action,
@@ -710,8 +670,6 @@ mod tests {
     #[test]
     fn command_end_inside_a_quiescence_window_still_flushes() {
         let config = PacingConfig::default();
-        // Output just arrived; the quiescence window has not elapsed. The command
-        // ends right away regardless.
         let (state, _) = on_output(
             PacingState::default(),
             &config,

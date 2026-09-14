@@ -1,30 +1,24 @@
-//! Policy: the command-block boundary tracker — DESIGN's linchpin for non-interactive
-//! mode. Takes the ordered stream of identified lines, OSC 133 markers and screen
-//! transitions the terminal engine emits, and says where each command block begins and
-//! ends and which region every line fell in.
+//! Policy: the command-block boundary tracker. Takes the ordered stream of identified
+//! lines, OSC 133 markers and screen transitions the terminal engine emits, and says
+//! where each command block begins and ends and which region every line fell in.
 //!
-//! It cuts; it never extracts and never filters (spec B2, decision 2). Items pass
-//! through unchanged except for the region label: same id, same text, same revision, in
-//! the same order. Nothing is dropped, nothing is rewritten, and no opinion is formed
-//! about what a region is *for*: DESIGN's echo exclusion — block content is C..D only —
-//! is then a caller's filter over labelled regions rather than a rule buried in a state
-//! machine.
+//! It cuts; it never extracts and never filters. Items pass through unchanged except for
+//! the region label: same id, same text, same revision, in the same order. Block content
+//! is `Output` only; excluding the prompt and command-line echo is a caller's filter over
+//! labelled regions, not a rule in this state machine.
 //!
 //! Pure: no clock, no ports, no identity of its own. Line identity is minted by the
 //! engine and only carried here; command ids and the integration grace period belong to
-//! the service above it (decision 5), because both need state this layer deliberately
-//! does not have.
+//! the service above it, because both need state this layer does not have.
 
 use crate::{ExitCode, LineId, LineRevision, Osc133Marker, Screen, ShellMarkers, TerminalItem};
 
 /// Where a piece of text fell relative to the markers around it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Region {
-    /// No block context at all: before the first marker, in a session whose integration
-    /// never appeared (DESIGN's reliability case 2), or between a command's end and the
-    /// next prompt. Not an error path — such text is still rendered, it is only never
-    /// treated as a command's output. A terminal that silently drops text is worse than
-    /// one that admits it does not know where the text belongs.
+    /// No block context: before the first marker, in a session whose integration never
+    /// appeared, or between a command's end and the next prompt. Not an error path — the
+    /// text is still rendered, just never treated as a command's output.
     #[default]
     Unstructured,
     /// A..B — the prompt the shell drew.
@@ -45,9 +39,7 @@ pub enum BoundaryEvent {
     MarkersObserved,
     /// A command's output region opened.
     BlockStarted,
-    /// One line item, labelled with the region it fell in. Everything else about it —
-    /// which line, what text, what the text did to that line — is carried through
-    /// untouched.
+    /// One line item, labelled with the region it fell in.
     Line {
         region: Region,
         id: LineId,
@@ -57,11 +49,8 @@ pub enum BoundaryEvent {
     /// The open block closed. `exit` is `None` when the end was not a well-formed `D`
     /// carrying a code — either a bare `D`, or a prompt reappearing mid-block.
     BlockEnded { exit: Option<ExitCode> },
-    /// The emulator switched screens, passed through at its place in the stream.
-    ///
-    /// It travels here rather than on a side channel so ordering stays decided in one
-    /// place: the alternate screen is entered in the middle of a batch, and which lines
-    /// arrived before the switch is exactly what a caller must not have to reconstruct.
+    /// The emulator switched screens, passed through at its place in the stream so
+    /// ordering stays decided in one place rather than reconstructed by a caller.
     ScreenChanged(Screen),
 }
 
@@ -70,28 +59,22 @@ pub enum BoundaryEvent {
 /// Its state is the current region, a latch, whether a block is open, and — for a shell
 /// that marks only `A` and `B` — the row the command line is being echoed onto.
 ///
-/// **Openness used to be exactly `region == Output`, and B4.5 is what separated them.** In
-/// a shell that emits no `D` the block closes on `B`, so the returning prompt falls inside
-/// the block of the command it ended (decision 3) — which means the region is `Prompt`
-/// while a block is still open, and the two facts stop being the same fact. For a
-/// [`ShellMarkers::Full`] shell they remain equivalent, and every path below behaves as it
-/// did.
+/// `block_open` and `region == Output` are not the same fact: in a shell that marks no
+/// `D`, the block closes on `B` instead, so the region can be `Prompt` while a block is
+/// still open. For a [`ShellMarkers::Full`] shell they remain equivalent.
 ///
-/// The latch fires once and that is sufficient, including for DESIGN decision 8's
-/// recovery case: `SessionState` only ever moves *into* `Integrated`, and
-/// `grace_period_expired` only resolves `Pending`, so if the grace period expired first
-/// the latch has not fired yet and the first marker to arrive still recovers the session.
+/// The latch fires once. `SessionState` only ever moves into `Integrated`, and
+/// `grace_period_expired` only resolves `Pending`, so if the grace period expires first the
+/// latch has not fired yet and the first marker to arrive still recovers the session.
 #[derive(Debug, Default)]
 pub struct BoundaryTracker {
     region: Region,
     markers_seen: bool,
-    /// What the far end's prompt is able to say. A [`ShellMarkers::Full`] shell drives
-    /// every path in this type exactly as it did before B4.5; the two extra rules below
-    /// are reachable only for a shell that declares it emits no `C` (spec B4.5).
+    /// What the far end's prompt is able to say. The two extra rules below are reachable
+    /// only for a shell that declares it emits no `C`.
     markers: ShellMarkers,
-    /// The row the prompt was last drawn on. It is the row the echo of the submitted line
-    /// is written onto — measured against a real `cmd.exe` — so it is what a synthesized
-    /// `C` is positioned against.
+    /// The row the prompt was last drawn on: measured against real `cmd.exe`, this is the
+    /// row the echo is written onto, so it is what a synthesized `C` is positioned against.
     prompt_row: Option<LineId>,
     /// The row the command line is being echoed onto, while one is. `None` outside
     /// `B..C`, and `None` inside it until the first row of the region is known.
@@ -103,10 +86,8 @@ pub struct BoundaryTracker {
 impl BoundaryTracker {
     /// A tracker for a far end whose prompt says this much.
     ///
-    /// The shell is named at construction rather than discovered, because it is a
-    /// declaration: what a shell *can* emit is knowledge the adapter that spawned it has,
-    /// and inferring it from what has arrived so far would make every early command behave
-    /// differently from every later one.
+    /// The shell is named at construction: inferring it from what has arrived so far
+    /// would make every early command behave differently from every later one.
     pub fn new(markers: ShellMarkers) -> Self {
         Self {
             markers,
@@ -116,27 +97,20 @@ impl BoundaryTracker {
 
     /// Where the far end is writing right now.
     ///
-    /// Exposed for one caller and one question: whether the shell has drawn its prompt and
-    /// is reading a line, which is `Prompt` or `CommandLine` and nothing else. The service
-    /// needs it to decide whether a byte meant for a line editor may safely be sent (spec
-    /// B4.5, decision 7), and it is a fact this type already holds rather than one anybody
-    /// should reconstruct from the event stream.
+    /// The service uses it to decide whether a byte meant for a line editor may safely be
+    /// sent: `Prompt` or `CommandLine` mean the shell is reading a line, nothing else does.
     pub fn region(&self) -> Region {
         self.region
     }
 
-    /// Observes a batch of items and returns what it concluded.
-    ///
-    /// Batch in, batch out, because that is the shape the caller has: one batch of items
-    /// per read from the transport (decision 9). State carries across calls — a marker in
-    /// one batch governs the lines in the next.
+    /// Observes a batch of items and returns what it concluded. State carries across
+    /// calls: a marker in one batch governs the lines in the next.
     pub fn observe(&mut self, items: impl IntoIterator<Item = TerminalItem>) -> Vec<BoundaryEvent> {
         let mut events = Vec::new();
         for item in items {
             match item {
-                // Empty text passes through rather than being swallowed: B1.1 made an
-                // empty chunk meaningful — it must not move the quiescence deadline — so
-                // dropping one here would hide the case the pacing policy was built for.
+                // Empty text passes through rather than being swallowed: the pacing
+                // policy depends on receiving it too.
                 TerminalItem::Line { id, text, revision } => {
                     self.observe_row(id, &mut events);
                     events.push(BoundaryEvent::Line {
@@ -146,16 +120,15 @@ impl BoundaryTracker {
                         revision,
                     });
                 }
-                // A marker is one of the things that can end a command-line region in a
-                // shell that marks no `C`: the next prompt's `A` is what arrives when a
-                // command produced no output at all.
+                // A marker can end a command-line region in a shell that marks no `C`:
+                // the next prompt's `A` is what arrives when a command produced no output
+                // at all.
                 TerminalItem::Marker(marker) => {
                     self.end_command_line(&mut events);
                     self.observe_marker(marker, &mut events);
                 }
-                // A screen change says nothing about command blocks: a program redrawing
-                // on the alternate screen has neither started nor finished a command, so
-                // the region is left exactly as it was and the item is only relayed.
+                // A screen change says nothing about command blocks: the region is left
+                // as it was and the item is only relayed.
                 TerminalItem::ScreenChanged(screen) => {
                     events.push(BoundaryEvent::ScreenChanged(screen))
                 }
@@ -166,16 +139,15 @@ impl BoundaryTracker {
 
     /// Which row this line item is on, and whether that ends the command line.
     ///
-    /// Only two things are recorded and only one decision is taken, both of them dead
-    /// weight for a [`ShellMarkers::Full`] shell. The prompt's row is remembered because
-    /// it is the row the echo will be written onto; and once the command line is being
-    /// echoed, **anything that is not a further append to that row ends the region**,
-    /// which is where a `C` nobody sent is synthesized (spec B4.5, decision 2).
+    /// Dead weight for a [`ShellMarkers::Full`] shell. The prompt's row is remembered
+    /// because it is the row the echo will be written onto; once the command line is
+    /// being echoed, anything that is not a further append to that row ends the region —
+    /// the `C` a shell like this never sends is synthesized right there.
     ///
-    /// That single rule is what makes the region safe to exclude from a block's content.
-    /// Real output arriving while the region is open lands on a *new* row, ends the region
-    /// and is labelled `Output`; what stays behind is the echo itself and anything the far
-    /// end appended to the same row, which is the one thing a caller is entitled to drop.
+    /// Real output arriving while the region is open lands on a new row, ends the
+    /// region and is labelled `Output`; what stays behind is the echo itself and anything
+    /// the far end appended to the same row, which is the one thing a caller is entitled
+    /// to drop.
     fn observe_row(&mut self, id: LineId, events: &mut Vec<BoundaryEvent>) {
         if self.region == Region::Prompt {
             self.prompt_row = Some(id);
@@ -215,17 +187,13 @@ impl BoundaryTracker {
 
         match marker {
             // A and B both mean the shell is back at its prompt, and a prompt cannot
-            // reappear before D — which is exactly what makes D deterministic. Arriving
-            // mid-block, either one means the integration lied or a program forged a
-            // marker; closing keeps the session speakable, where ignoring would strand it
-            // in "running" until it is torn down (decision 6).
+            // reappear before D. Arriving mid-block, either one means the integration
+            // lied or a program forged a marker; closing keeps the session speakable
+            // rather than stranding it in "running".
             //
-            // **Except in a shell that emits no `D`**, where the block closes on `B`
-            // instead (spec B4.5, decision 3). There the returning prompt is the only
-            // ending a listener gets — no exit code exists to announce — so it has to fall
-            // inside the block of the command that just ended rather than after it. `A`,
-            // the prompt text and `B` are one write in `cmd.exe`, so the close is a few
-            // bytes later either way.
+            // Except in a shell that emits no `D`, where the block closes on `B` instead:
+            // the returning prompt is the only ending such a listener gets, so it has to
+            // fall inside the block of the command that just ended rather than after it.
             Osc133Marker::PromptStart => {
                 if self.markers.marks_output_start() {
                     self.end_open_block(None, events);
@@ -233,11 +201,11 @@ impl BoundaryTracker {
                 self.region = Region::Prompt;
                 // Forgotten rather than carried: a `B` with no prompt text behind it must
                 // leave the first row of the command line to claim the region, not adopt
-                // whichever row the *previous* prompt happened to use.
+                // the previous prompt's row.
                 self.prompt_row = None;
             }
             // Accepted with or without a preceding A: it means the command line begins
-            // here, and refusing it would only lose text (decision 7).
+            // here, and refusing it would only lose text.
             Osc133Marker::CommandStart => {
                 self.end_open_block(None, events);
                 self.region = Region::CommandLine;
@@ -256,8 +224,7 @@ impl BoundaryTracker {
                     events.push(BoundaryEvent::BlockStarted);
                 }
             }
-            // D with no open block is ignored outright, region untouched (DESIGN names
-            // this case).
+            // D with no open block is ignored outright; region untouched.
             Osc133Marker::CommandEnd(exit) => {
                 if self.block_open {
                     self.block_open = false;
@@ -618,15 +585,6 @@ mod tests {
     }
 
     proptest! {
-        /// The property that matters most for this product: for a screen-reader terminal,
-        /// silently dropping output is the cardinal defect. Every line item comes out, in
-        /// order, carrying the same id, the same text and the same revision it went in
-        /// with — the tracker adds a label and nothing else. Screen changes are relayed
-        /// on the same terms.
-        ///
-        /// This is B2's "text is never lost" restated for identified lines. Identity made
-        /// the old concatenation equality ill-typed, and the replacement is strictly
-        /// stronger: it no longer has to reason about what the text means.
         #[test]
         fn items_pass_through_unchanged_except_for_the_region_label(items in any_stream()) {
             let mut tracker = BoundaryTracker::new(ShellMarkers::Full);
@@ -694,9 +652,9 @@ mod tests {
         }
     }
 
-    /// A shell whose prompt marks only `A` and `B` — `cmd.exe` (spec B4.5). Every test
-    /// below drives the sequence a real one puts on the wire: `A`, the prompt text, `B`
-    /// all in one write, then the echo appended to the prompt's own row.
+    /// A shell whose prompt marks only `A` and `B` — `cmd.exe`. Every test below drives
+    /// the sequence a real one puts on the wire: `A`, the prompt text and `B` in one
+    /// write, then the echo appended to the prompt's own row.
     mod a_shell_that_marks_no_output_start {
         use super::*;
 
@@ -704,8 +662,6 @@ mod tests {
             BoundaryTracker::new(ShellMarkers::PromptAndCommandLine)
         }
 
-        /// The rule itself: the echoed line is `B..C`, and the block opens where that row
-        /// stops being appended to.
         #[test]
         fn the_block_opens_where_the_echoed_line_ends() {
             let mut tracker = cmd();
@@ -724,8 +680,7 @@ mod tests {
             assert!(events.contains(&BoundaryEvent::BlockStarted));
         }
 
-        /// A command line wide enough to wrap: `cmd.exe` swallows the continuation into
-        /// the same row, so the region must not end on it.
+        /// `cmd.exe` swallows a wrapped line's continuation into the same row.
         #[test]
         fn a_wrapped_command_line_does_not_open_the_block_early() {
             let mut tracker = cmd();
@@ -744,9 +699,6 @@ mod tests {
             assert!(!events.contains(&BoundaryEvent::BlockStarted));
         }
 
-        /// A command that printed nothing at all. The next prompt's `A` is what arrives,
-        /// and it has to end the region — otherwise the block never opens and the
-        /// submission reports running forever.
         #[test]
         fn a_command_with_no_output_still_opens_and_closes_a_block() {
             let mut tracker = cmd();
@@ -778,9 +730,6 @@ mod tests {
             );
         }
 
-        /// Decision 3: the block closes on `B`, not on `A`, so the returning prompt is
-        /// inside the block of the command that just ended. It is the only ending a
-        /// listener gets in a shell with no exit code.
         #[test]
         fn the_returning_prompt_is_the_last_thing_in_the_block_it_ends() {
             let mut tracker = cmd();
@@ -805,9 +754,6 @@ mod tests {
                 vec![
                     (Region::CommandLine, "dir"),
                     (Region::Output, "one.txt"),
-                    // Labelled `Prompt` and still inside the open block, which is the
-                    // whole of decisions 3 and 4: the tracker says where the text was, and
-                    // `Pump::wants` is what makes a prompt content in a shell with no `D`.
                     (Region::Prompt, r"C:\>"),
                 ]
             );
@@ -827,9 +773,6 @@ mod tests {
             );
         }
 
-        /// The safety constraint, which is the reason the rule keys on the row: text that
-        /// cannot be an echo must be forwarded, not dropped. A new row while the command
-        /// line is open ends the region and is labelled `Output`.
         #[test]
         fn text_on_a_new_row_is_output_and_never_stays_in_the_command_line() {
             let mut tracker = cmd();
@@ -843,8 +786,6 @@ mod tests {
             assert_eq!(regions(&events), vec![Region::Prompt, Region::Output]);
         }
 
-        /// A `B` with no prompt text behind it leaves the first row of the region to claim
-        /// it, rather than adopting whichever row the previous prompt used.
         #[test]
         fn a_command_line_with_no_prompt_behind_it_claims_its_own_row() {
             let mut tracker = cmd();
@@ -862,8 +803,6 @@ mod tests {
             );
         }
 
-        /// Nothing about a `Full` shell changes, which is what keeps every session that
-        /// came before B4.5 exactly where it was.
         #[test]
         fn the_full_cycle_is_untouched_by_the_declaration() {
             let mut full = BoundaryTracker::new(ShellMarkers::Full);
@@ -875,7 +814,6 @@ mod tests {
                 line(2, "one.txt", LineRevision::Appended),
             ]);
 
-            // No `C`, so no block, and the second row is still the command line.
             assert!(!events.contains(&BoundaryEvent::BlockStarted));
             assert_eq!(
                 regions(&events),

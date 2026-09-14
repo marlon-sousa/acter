@@ -35,8 +35,10 @@ The rule is in CLAUDE.md under hard rules and is repeated here so this file stan
 A comment is one of four things:
 
 1. The module role line required by the module role rule.
-2. A measured fact: what was measured, on what, and when. Example: "NVDA 2026.1.1 drops
-   a message queued less than 100 ms after the previous one; measured 2026-08-20."
+2. A measured fact: what was measured, against which program and version, and the
+   value. Example: "NVDA 2026.1.1 drops a message queued less than 100 ms after the
+   previous one." No date: a rewrite resets what git blame reports, and a version is
+   what a re-measurement needs.
 3. An invariant or hazard the code does not enforce. Example: "Drop the writer before the
    reader or ConPTY never closes the pipe." Example: "SAFETY: the handle is owned by this
    struct and closed exactly once in Drop."
@@ -81,8 +83,9 @@ Keep, compressed to one sentence each:
 
 - K1 role line. Keep the first line of the `//!` doc or the `// Role:` line. Delete the
   paragraphs after it unless they are K2, K3 or K4.
-- K2 measured fact. Keep what was measured, on what, the value, and the date. Drop the
-  story of how it was found.
+- K2 measured fact. Keep what was measured, against which program and version, and the
+  value. No date: a rewrite resets what git blame reports, and a version is what a
+  re-measurement needs. Drop the story of how it was found.
 - K3 invariant or hazard. Keep. These are usually already one line inside a body: SAFETY
   notes, drop order, cancel-safety, a field kept alive for its Drop, a call that must
   happen on the main thread.
@@ -95,8 +98,7 @@ code and work this out in a few minutes? If yes, delete. If genuinely unsure, ke
 one sentence that states the fact and delete the rest.
 
 Compression means rewriting a kept paragraph as one plain sentence. The kept sentence
-states the fact and nothing about who decided it or when it changed, except the date on a
-measured fact.
+states the fact and nothing about who decided it or when it changed.
 
 ## Stale comments
 
@@ -225,7 +227,7 @@ Files: every file under `crates/acter-shells/src/`.
 
 Audit figures: 2,226 comment lines, about 1,750 to delete. This crate has the most
 measured platform facts in the repository (PSReadLine under screen readers, busybox PS1,
-WSL distribution listing, Windows signature trust). Keep each once, one sentence, dated.
+WSL distribution listing, Windows signature trust). Keep each once, one sentence, naming the program and version.
 
 Gate: `cargo test -p acter-shells`.
 
@@ -269,7 +271,7 @@ Audit figures: 2,743 comment lines, about 2,200 to delete (sampled, not read in 
 `controllers/app.ts` has 501 comment lines; the pinned announcement strings at its top
 keep one line each saying they are spoken and therefore a domain requirement, and nothing
 about which spec or entry chose the words. `adapters/announcer.ts` keeps its measured NVDA
-constants with their dates.
+constants with the NVDA version they were measured against.
 
 Gate: `npm run typecheck` and `npm test` in `ui/`.
 
