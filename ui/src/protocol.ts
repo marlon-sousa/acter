@@ -24,11 +24,9 @@ export type Announcement =
 /**
  *  Which attempt to connect a step or an answer belongs to.
  * 
- *  **Minted per attempt, for the reason [`SessionId`](crate::SessionId) is minted per
- *  connection** (spec B7, decision 4): a user who gives up on one dialog and starts again
- *  has two conversations in flight for a moment, and an answer typed into the first must
- *  never resolve the second. A password is the worst possible value to deliver to the wrong
- *  question.
+ *  Minted per attempt: a user who gives up on one dialog and starts again has two
+ *  conversations in flight for a moment, and an answer typed into the first must never
+ *  resolve the second.
  */
 export type AttemptId = number;
 
@@ -42,9 +40,9 @@ export type CommandId = number;
 /**
  *  What the person decided.
  * 
- *  **Deserialize only.** An answer arrives from a dialog and never travels the other way,
- *  and deriving `Serialize` here would not compile: [`Secret`](crate::Secret) has none. The
- *  guarantee is the type system's rather than a reviewer's.
+ *  Deserialize only: an answer arrives from a dialog and never travels the other way, and
+ *  deriving `Serialize` here would not compile, since [`Secret`](crate::Secret) has none.
+ *  The guarantee is the type system's rather than a reviewer's.
  */
 export type ConnectAnswer = 
 /**  Trust this server, and remember it so the same host does not ask again. */
@@ -59,27 +57,25 @@ export type ConnectAnswer =
 /**
  *  Start this file even though it did not verify.
  * 
- *  **The one way to reach [`ProgramAnswer::Start`](crate::ProgramAnswer)**, so nothing
- *  but a person deliberately saying so can start an unverified program — the shape
- *  [`Self::Trust`] has for a host key, and for the same reason (spec B5.7, decision 6).
- *  What was agreed to is then said out loud at connection, so nobody is left unsure.
+ *  The one way to reach [`ProgramAnswer::Start`](crate::ProgramAnswer), so nothing but
+ *  a person deliberately saying so can start an unverified program. What was agreed
+ *  to is then said out loud at connection, so nobody is left unsure.
  */
 { answer: "StartAnyway" } | 
 /**
  *  Set this session up, and — if `remember` — do not ask about this shell again.
  * 
- *  **The one way to reach [`SetupAnswer::SetUp`](crate::SetupAnswer)**, so nothing but a
- *  person pressing the button that says so runs anything in their session. `remember` is
- *  the dialog's own "do not show this dialog again", and it is kept per shell and for no
- *  host and no profile (spec B9.5, decision 10).
+ *  The one way to reach [`SetupAnswer::SetUp`](crate::SetupAnswer). `remember` is the
+ *  dialog's own "do not show this dialog again", and it is kept per shell and for no
+ *  host and no profile.
  */
 { answer: "SetUpSession"; remember: boolean } | 
 /**
  *  Stop: the key was refused, the dialog was cancelled, or the user changed their mind.
  * 
- *  **One variant for all three**, because the connection does the same thing for each
- *  and the sentence a listener hears is about what did *not* happen rather than about
- *  which control they used to say so.
+ *  One variant for all three: the connection does the same thing for each, and the
+ *  sentence a listener hears is about what did *not* happen rather than about which
+ *  control they used to say so.
  */
 { answer: "GiveUp" };
 
@@ -88,9 +84,9 @@ export type ConnectQuestion =
 /**
  *  This server's identity is not one Acter has a record of.
  * 
- *  **An unknown key and a changed one are the same variant carrying different facts,
- *  deliberately**: they are one decision — trust this server or do not — and the
- *  dialog's words differ rather than its shape. What makes them different sentences is
+ *  An unknown key and a changed one are the same variant carrying different facts:
+ *  one decision, trust this server or do not, so the dialog's words differ rather
+ *  than its shape. What makes them different sentences is
  *  [`recorded`](Self::HostKey::recorded) being present.
  */
 { question: "HostKey"; host: string; port: number; 
@@ -113,12 +109,9 @@ aside: string | null } |
 /**
  *  The file this machine is about to start did not verify.
  * 
- *  **Never a gate, and it arrives here rather than removing a row from the list** (spec
- *  B5.7, decision 6). A self-built pwsh, a corporate re-signed build, a damaged catalog
- *  database and an offline revocation check are all legitimate and all common; hiding
- *  any of them would teach a user that Acter cannot see the shell they are looking
- *  straight at. So everything discovered is listed, and starting an unverified one asks
- *  first — the shape B9 established for an unknown host key.
+ *  Never a gate: it arrives here rather than removing a row from the list. Everything
+ *  discovered is listed, and starting an unverified one asks first, the shape used
+ *  for an unknown host key.
  */
 { question: "Unverified"; 
 /**  What the user chose, as they heard it in the list. */
@@ -144,17 +137,13 @@ signer: string | null } |
  *  The connection succeeded, the far end runs this shell, and this is what Acter would
  *  run inside the session so a listener hears more about what they run.
  * 
- *  **The one question here that is not a warning** (spec B9.5, decision 9). The checkbox
- *  on the Connect dialog is what authorises the setup; this is what discloses it, and
- *  both are needed — "on by default" is what makes an ordinary user hear headings and
- *  failures without knowing the words this project uses, and the dialog is what stops
- *  that from being a surprise.
+ *  The one question here that is not a warning. The checkbox on the Connect dialog is
+ *  what authorises the setup; this is what discloses it, and both are needed.
  * 
- *  **The sentences arrive composed rather than as facts to assemble**, which is
- *  [`Self::Unverified`]'s rule: the words a listener hears are decided in the domain, in
- *  one place, and the dialog renders them. What the dialog owns is the shape — four
- *  paragraphs that can be arrowed, and the command in a field that can be walked
- *  character by character.
+ *  The sentences arrive composed rather than as facts to assemble: the words a
+ *  listener hears are decided in the domain, in one place, and the dialog renders
+ *  them. What the dialog owns is the shape — four paragraphs that can be arrowed, and
+ *  the command in a field that can be walked character by character.
  */
 { question: "SetUpSession"; 
 /**
@@ -182,10 +171,9 @@ refusal: string } |
 /**  The server will take a password, and there is not one yet. */
 { question: "Password"; host: string; user: string; 
 /**
- *  Whether one was already tried and refused.
- * 
- *  **Said rather than left to be inferred from the dialog opening twice**, which is
- *  indistinguishable from the first one not having been submitted.
+ *  Whether one was already tried and refused. Said rather than left to be inferred
+ *  from the dialog opening twice, which is indistinguishable from the first one
+ *  not having been submitted.
  */
 again: boolean };
 
@@ -199,9 +187,9 @@ export type ConnectStep =
 /**
  *  Something is happening and it is worth saying out loud.
  * 
- *  **A listener with no feedback cannot tell a slow network from a dead one** (spec B9,
- *  decision 6), and an SSH connection can take seconds before anything at all is
- *  certain. The sentence is complete and is read exactly as it arrives.
+ *  A listener with no feedback cannot tell a slow network from a dead one, and an SSH
+ *  connection can take seconds before anything at all is certain. The sentence is
+ *  complete and is read exactly as it arrives.
  */
 { step: "Progress"; said: string } | 
 /**  The connection cannot go on until somebody answers this. */
@@ -213,19 +201,13 @@ export type ConnectStep =
 
 /**
  *  One thing a user can connect to, as [`ConnectApi::connectable`](crate::ConnectApi)
- *  answers and the connect list renders it.
+ *  answers and the connect list renders it. Not the same value as
+ *  [`Connection`](crate::Connection), which decides what belongs on this platform: this
+ *  is what that becomes once a real machine has answered.
  * 
- *  **Not the same value as [`Connection`](crate::Connection), and the difference is the
- *  point.** B5.4's catalogue is a pure function over connection *kinds*: it decides what
- *  belongs on this platform, in what order, and how a missing one reads. This is what that
- *  catalogue becomes once a real machine has answered — WSL carrying the distributions it
- *  actually found, the scripted sessions appended in a debug build, and every row carrying
- *  the id that starts it.
- * 
- *  **One row per kind, not one per thing that can be started** (spec A8, decision 1). The
- *  dialog is a list of kinds with a panel below it holding whatever that kind needs, and a
- *  listener arrows five rows rather than four plus however many distributions this machine
- *  happens to have. What goes in the panel is [`variants`](Connectable::variants).
+ *  One row per kind, not one per thing that can be started, so a listener arrows five
+ *  rows rather than four plus however many distributions this machine happens to have.
+ *  What goes in the panel is [`variants`](Connectable::variants).
  */
 export type Connectable = {
 	/**
@@ -237,33 +219,19 @@ export type Connectable = {
 	/**
 	 *  What the user hears: "Command Prompt", "PowerShell 7", "WSL", with
 	 *  `(not available)` on the end when this machine cannot start it.
-	 * 
-	 *  **The label belongs to the profile, not to the adapter** (spec B5.1, decision 3),
-	 *  which is how two rows can share one adapter — the two PowerShell editions do, and
-	 *  so does every WSL distribution.
 	 */
 	label: string,
 	/**
-	 *  Whether choosing this row can start a session.
-	 * 
-	 *  A row that cannot is still listed, still focusable and still says so in its name,
-	 *  because a list that silently omits WSL teaches a listener that Acter does not
-	 *  support it (spec B5.4).
+	 *  Whether choosing this row can start a session. A row that cannot is still listed,
+	 *  still focusable and still says so in its name.
 	 */
 	available: boolean,
-	/**
-	 *  What to say about a row that cannot be connected to, and `None` when it can — a
-	 *  panel of instructions under a working row is noise a listener has to arrow past.
-	 */
+	/**  What to say about a row that cannot be connected to, and `None` when it can. */
 	instructions: string | null,
 	/**
 	 *  The things *within* this kind that a user chooses between: WSL's installed
-	 *  distributions today, the user's saved connections of this kind with B8.
-	 * 
-	 *  Empty for a kind that is one thing — cmd is cmd — and empty for a kind this machine
-	 *  cannot start, because there is nothing to enumerate inside something that is not
-	 *  there. A row with variants starts the one the user chose; with none, it starts
-	 *  itself.
+	 *  distributions today, the user's saved connections of this kind with B8. A row with
+	 *  variants starts the one the user chose; with none, it starts itself.
 	 */
 	variants: Variant[],
 };
@@ -278,83 +246,52 @@ export type Connected = {
 	/**
 	 *  The new session's id, which every later invoke about it carries.
 	 * 
-	 *  **Minted per connection rather than fixed at 1**, so a line submitted to the
-	 *  session the user just replaced is refused rather than run in the new one — the id
-	 *  finally identifies something (spec B7, decision 4).
+	 *  Minted per connection rather than fixed at 1, so a line submitted to the session
+	 *  the user just replaced is refused rather than run in the new one.
 	 */
 	session: SessionId,
 	/**
 	 *  What to call it: the same words the connect list used, so what a user chose and
-	 *  what the window then calls itself are not two different names for one thing
-	 *  (spec A9).
+	 *  what the window then calls itself are not two different names for one thing.
 	 */
 	label: string,
 	/**
-	 *  What else there is to say about this far end, **once, at connection** — and `None`
-	 *  when there is nothing.
-	 * 
-	 *  **It exists so that a listener hears one sentence rather than two** (spec B9,
-	 *  decision 7). An SSH session is unintegrated and has to say so, and it can now also
-	 *  say *what it is*: "bash, with no shell integration set up on this host" names the far
-	 *  end and points at the fix, where a bare "unavailable" arriving two seconds later
-	 *  names nothing and interrupts whatever was being said. The frontend appends this to
-	 *  the connection announcement and then suppresses the session's own one.
-	 * 
-	 *  Only the far end knows it — which shell answered the probe, and whether anything
-	 *  was learned at all — so it travels with the connection rather than being composed
-	 *  from the label.
+	 *  What else there is to say about this far end, once, at connection — and `None`
+	 *  when there is nothing. Lets a listener hear one sentence rather than two: an SSH
+	 *  session that is unintegrated says so and also says *what it is*, and the frontend
+	 *  appends this to the connection announcement and suppresses the session's own one.
 	 */
 	note: string | null,
 	/**
-	 *  Whether that note already told the listener that this session cannot say how a command
-	 *  went, so the session's own `IntegrationUnavailable` is not said a second time.
-	 * 
-	 *  **A fact rather than a phrase to look for** (spec B9.5, decision 13). The frontend
-	 *  used to decide this by searching the note for the words "shell integration" — which is
-	 *  exactly the vocabulary A13 removed and this entry rewrote, so a rewording of the
-	 *  sentence silently changed what a listener heard afterwards. It is computed by the one
-	 *  function that composes the note, so the two cannot disagree.
+	 *  Whether that note already told the listener that this session cannot say how a
+	 *  command went, so the session's own `IntegrationUnavailable` is not said a second
+	 *  time. Computed by the one function that composes the note, so the two cannot
+	 *  disagree.
 	 */
 	limit_explained: boolean,
 	/**
 	 *  The saved connection this session was started from, or `None` for one nobody has
-	 *  named yet (spec 26, decision 11).
-	 * 
-	 *  **It is the frontend's knowledge travelling back**, because the user may have
-	 *  edited the panel before pressing Connect and the backend cannot know which row that
-	 *  came from. What it is *for* is two things the window decides: whether to offer to
-	 *  save, and what to prefill the Save connection dialog with.
+	 *  named yet. The frontend's own knowledge travelling back, since the user may have
+	 *  edited the panel before pressing Connect.
 	 */
 	saved_as: string | null,
 	/**
-	 *  Who holds the line as this session opens (spec 28, decision 1).
-	 * 
-	 *  **What the saved connection asked for, and the default otherwise.** The frontend
-	 *  applies it where it already decides which owner a new session starts on, so a saved
-	 *  choice wins over the default there — which is what closes roadmap 28.8.
+	 *  Who holds the line as this session opens: what the saved connection asked for, and
+	 *  the default otherwise.
 	 */
 	line_owner: LineOwner,
 };
 
-/**
- *  One thing a user can choose to connect to.
- * 
- *  Deliberately not carrying the adapter that starts it: this is what the connect list is
- *  made of, and the list exists on machines where the thing cannot be started at all.
- */
 export type ConnectionKind = 
 /**  `cmd.exe`, which is on every Windows machine and cannot be removed. */
 "Cmd" | 
 /**
- *  PowerShell, whichever edition. **One row in the connect list, with the editions as
- *  its variants** — the shape WSL already had, applied to the other kind that comes in
- *  more than one (spec A11). A listener arrowing the kinds meets "PowerShell" once and
- *  chooses an edition in the panel, rather than meeting two rows whose names differ by
- *  one word.
+ *  PowerShell, whichever edition. One row in the connect list; the editions are its
+ *  variants.
  */
 "PowerShell" | 
 /**
- *  Windows PowerShell 5.1, which ships with Windows. A *variant* of [`Self::PowerShell`]
+ *  Windows PowerShell 5.1, which ships with Windows. A variant of [`Self::PowerShell`]
  *  rather than a row of its own, and never listed at the top level.
  */
 "WindowsPowerShell" | 
@@ -365,23 +302,15 @@ export type ConnectionKind =
 /**
  *  A shell on this Mac, with the shells `/etc/shells` names as its variants.
  * 
- *  **Called Terminal because that is what a Mac calls it** (DESIGN, decided
- *  2026-08-31). "Shell" is what the thing is; "Terminal" is what somebody who has used
- *  this computer has already opened, and the row is offering to be that.
- * 
- *  **Not a program on this machine either, for a different reason from
- *  [`Self::Ssh`]'s.** SSH names nothing because Acter speaks the protocol itself; this
- *  names nothing because *which* program it is is the account's own business, read from
- *  the passwd entry at the moment the list is built (spec M2, decision 2). One row,
- *  however many shells this Mac has.
+ *  What macOS itself calls it. Names no program: which shell an account logs into is
+ *  read from the passwd entry when the list is built.
  */
 "Terminal" | 
 /**
  *  A far end that is not on this machine, reached over SSH.
  * 
- *  **The one kind that is not a program on this computer**, and the only one whose row
- *  needs a form rather than a choice: a host, a port and an account are four fields, not
- *  a variant to pick (spec A8, decision 1).
+ *  The only row that needs a form rather than a choice: host, port and account are
+ *  fields, not variants to pick.
  */
 "Ssh";
 
@@ -394,12 +323,8 @@ export type ConnectionState =
  *  The session has been started and is not usable yet: a process was spawned, or a
  *  network connection is being made, and the far end has not said anything.
  * 
- *  **Added by A9 because it is the state a user meets first**, and the one they were
- *  never told about: a window opening onto PowerShell sat silent for seconds while the
- *  shell started, which a listener cannot tell from a session that is broken (roadmap
- *  23.7). It is deliberately not "the process exists" — a shell that has not drawn a
- *  prompt is not one anybody can use, and reporting it as connected is a lie a listener
- *  would act on.
+ *  Deliberately not "the process exists": a shell that has not drawn a prompt is not
+ *  one anybody can use, and reporting it as connected is a lie a listener would act on.
  */
 "Connecting" | "Connected" | "Reconnecting" | "Disconnected";
 
@@ -409,10 +334,8 @@ export type ExitCode = number;
 /**
  *  Which key, as the frontend read it off the keyboard event.
  * 
- *  **The named variants arrived with the entry that needed them** (spec 28, decision 4).
- *  B6 shipped `Char` alone and said the rest would come with a consumer rather than as a
- *  dozen variants nobody reads; far-end-line mode is that consumer, because a key aimed at
- *  the far end has to be spelled as bytes and an arrow is not a character.
+ *  `Char` alone would do for local editing, but a key aimed at the far end has to be
+ *  spelled as bytes, and an arrow is not a character.
  * 
  *  The list is what [`key_bytes`](crate::key_bytes) has a measured spelling for and stops
  *  there. The function keys are still absent, and so is every key nobody has measured a far
@@ -428,7 +351,7 @@ export type Key =
  * 
  *  A key nothing is bound to and a bound key that found nothing running are different
  *  things to say to a listener, so they are different answers here. Which words each
- *  one becomes is the frontend's (A3.2); this only reports what happened.
+ *  one becomes is the frontend's; this only reports what happened.
  */
 export type KeyAck = 
 /**  No binding for this keystroke. Nothing was attempted. */
@@ -438,19 +361,14 @@ export type KeyAck =
 /**
  *  Bound, but there was no running command to act on — and, for a key aimed at the far
  *  end rather than at a command, nothing left listening at all.
- * 
- *  The honest answer to A3.1 decision 6's "nothing to stop", which the typed `stop`
- *  had no way to give.
  */
 "NothingToActOn" | 
 /**
  *  Bound, and this far end has no measured answer for it.
  * 
- *  **Different from [`Self::NothingToActOn`], which is why it exists** (spec 28,
- *  decision 9). "This shell has no key for end of input" and "there is nothing left to
- *  send it to" are two different things to tell a listener, and until this variant they
- *  were the same answer: a `Ctrl+D` at a shell nobody has measured an end-of-input
- *  answer for reported that nothing was listening, in a session that was working fine.
+ *  Different from [`Self::NothingToActOn`]: "this shell has no key for end of input"
+ *  and "there is nothing left to send it to" are two different things to tell a
+ *  listener.
  */
 "Unsupported";
 
@@ -468,25 +386,21 @@ export type KeyPress = {
 };
 
 /**
- *  What the command line asked this launch to connect to (spec 26, decision 20).
+ *  What the command line asked this launch to connect to.
  * 
- *  **Asked for by the backend and carried out by the frontend.** The composition root is
- *  the one place allowed to read the command line, and the window is the one place a
- *  connection can ask its questions — a saved SSH connection needs a host-key dialog and a
- *  password dialog, and there is no window to put either in until the frontend is running.
- *  So the switch becomes a value the frontend collects at startup and acts on through the
- *  same call the Connect dialog makes.
+ *  Asked for by the backend and carried out by the frontend: the window is the one place
+ *  a connection can ask its questions, such as a host-key dialog, and there is none until
+ *  the frontend is running.
  * 
- *  **A name nothing is saved under is a sentence rather than a silence.** A windowed binary
- *  has no console, so there is nowhere to print a usage error: the window opens unconnected
- *  and says what was asked for.
+ *  A name nothing is saved under is a sentence rather than a silence: a windowed binary
+ *  has no console, so the window opens unconnected and says what was asked for.
  */
 export type LaunchRequest = 
 /**
  *  Start this saved connection, exactly as choosing its row in the Connect dialog would.
  * 
- *  **The name as the document spells it**, not as the switch did: the frontend looks
- *  the row up by name, and a lookup that had to allow for case would be a second place
+ *  The name as the document spells it, not as the switch did: the frontend looks the
+ *  row up by name, and a lookup that had to allow for case would be a second place
  *  deciding what two names being the same means.
  */
 { request: "Connect"; name: string } | 
@@ -497,47 +411,32 @@ export type LaunchRequest =
 { request: "Unknown"; name: string; said: string };
 
 /**
- *  Identifies one line of output for as long as anything may still revise it.
- * 
  *  Opaque and monotonic: the engine mints one when a line is first emitted and never
- *  reuses it. Deliberately **not** a grid coordinate — a row index survives scrolling
- *  but breaks on resize, on scrollback eviction, and on alt-screen entry, which swaps in
- *  a separate grid with its own coordinate space. Ids are session-global and outlive the
+ *  reuses it. Deliberately not a grid coordinate — a row index survives scrolling but
+ *  breaks on resize, on scrollback eviction, and on alt-screen entry, which swaps in a
+ *  separate grid with its own coordinate space. Ids are session-global and outlive the
  *  command block that produced them, so a frontend can find a line whichever block it
- *  came from (spec B3, decision 7).
+ *  came from.
  * 
  *  `u64`, unlike [`CommandId`](crate::CommandId)'s `u32`, because lines are minted per
  *  line of output rather than per submitted command.
  * 
- *  **A protocol type since 28** (decision 8), which B3 said would happen when the wire
- *  format learned about lines. It has to be, because a terminal's output is not
- *  append-only and the buffer had been pretending it was: without an id to apply a
- *  revision to, arrowing a history list appends a line per press, and a `gh` prompt
- *  answered with Cancel leaves its three option rows behind where the far end itself
- *  blanked them. The far end writes its own record; Acter keeps that and nothing else.
+ *  Without an id to apply a revision to, arrowing a history list would append a line per
+ *  press, and a cancelled prompt would leave its option rows behind after the far end
+ *  itself blanked them.
  * 
- *  **Exported to TypeScript as a plain number by naming a narrower integer to specta.**
+ *  Exported to TypeScript as a plain number by naming a narrower integer to specta:
  *  `specta-typescript` refuses `u64` outright, to stop a caller silently losing precision
- *  in a JSON number — and JSON is exactly what this crosses on, so serde already writes a
- *  number and the TypeScript describing it is `number` whichever integer is named. The
- *  annotation is a statement about the exported *shape*, not about the id: the two
- *  alternatives were narrowing a Decided domain type to suit a generator, and giving the
- *  domain crate a dependency on the frontend's TypeScript exporter.
+ *  in a JSON number. The annotation is a statement about the exported shape, not about
+ *  the id.
  */
 export type LineId = number;
 
 /**
- *  Who owns the line being edited: Acter, or the far end (DESIGN, "Edit field ownership").
- * 
- *  **A state rather than a setting, and never inferred** (spec 28, decision 1). The choice
- *  cannot be made key by key — a Tab that completes against Acter's history while the far
- *  end holds its own line buffer corrupts a command line rather than roughening an edge — so
- *  ownership moves whole or not at all, and the user is the only thing that moves it.
- * 
- *  It lives in the domain because the domain is what needs it: which bytes a key becomes,
- *  whether Enter opens a block, and which row goes in front of the listener all depend on
- *  it. Holding it in the frontend would put a second binding table there, which is the seam
- *  B6 decision 4 exists to prevent.
+ *  Who owns the line being edited: Acter, or the far end. A state rather than a setting,
+ *  and never inferred: a Tab that completes against Acter's history while the far end
+ *  holds its own line buffer corrupts a command line, so ownership moves whole or not at
+ *  all, and the user is the only thing that moves it.
  */
 export type LineOwner = 
 /**
@@ -552,25 +451,14 @@ export type LineOwner =
 "FarEnd";
 
 /**
- *  What one [`TerminalItem::Line`] did to the line it names.
- * 
- *  Two kinds would be information-sufficient — whole text plus a final flag lets a
- *  consumer diff for itself — but the engine already did that diff to detect the
- *  rewrite, so re-deriving it downstream would make every consumer keep a copy of every
- *  line. Three kinds also keep the common case cheap: [`Appended`](Self::Appended)
- *  carries only the delta, so a session containing no rewrites produces exactly the
+ *  [`Appended`](Self::Appended) carries only the delta, since the engine already diffed
+ *  the line to detect the rewrite; a session containing no rewrites produces exactly the
  *  append-only stream that existed before this type did.
  * 
- *  Which path consumes which follows DESIGN's separate-paths decision exactly. The
- *  **buffer** applies all three, assigning or appending by id, so it always shows current
- *  state. **Speech** takes `Appended` as it always has, ignores `Rewritten` as
- *  buffer-only churn, and takes `Settled` as the line's final word — so a spinner is
+ *  The buffer applies all three, assigning or appending by id, so it always shows
+ *  current state. Speech takes `Appended` as it always has, ignores `Rewritten` as
+ *  buffer-only churn, and takes `Settled` as the line's final word, so a spinner is
  *  never read mid-spin and its result still is.
- * 
- *  **A protocol type since 28** (decision 8), for the reason [`LineId`] is: the buffer
- *  cannot apply a revision it is not told about. Which path takes which is unchanged —
- *  this is DESIGN's separate-paths decision reaching the frontend rather than stopping at
- *  the service.
  */
 export type LineRevision = 
 /**
@@ -587,35 +475,19 @@ export type LineRevision =
  *  settles when change has become impossible: it scrolled out of the active screen
  *  area, its command block closed, the screen changed, or the terminal was resized.
  *  Not at a newline — until a row leaves the screen area it stays reachable by
- *  cursor addressing, which is exactly how an in-place progress display works
- *  (spec B3, decisions 5 and 6).
+ *  cursor addressing, which is exactly how an in-place progress display works.
  */
 "Settled";
 
-/**  What a menu item Acter answers itself asks for. */
 export type MenuAction = 
-/**
- *  Open the Connect dialog — the list of saved connection names, and the same action
- *  the button and the Windows menu run.
- */
+/**  Opens the list of saved connection names. */
 "Connect" | 
-/**
- *  Open the New connection dialog: the list of kinds, which is what Connect used to
- *  open (spec 26, decisions 17 and 22).
- */
+/**  Opens the list of connection kinds. */
 "NewConnection" | 
-/**
- *  Name the session that is running, and save it (spec 26, decision 18).
- * 
- *  **Unconnected it opens no dialog** and says there is nothing to save, which is the
- *  frontend's decision to make because only it knows whether there is a session behind
- *  the window.
- */
+/**  Unconnected, opens no dialog and reports there is nothing to save. */
 "SaveConnection" | 
-/**  Open the help topic, at its first section, exactly as F1 does. */
-"Help" | 
-/**  Open the About dialog. */
-"About";
+/**  Opens the help topic at its first section, as F1 does. */
+"Help" | "About";
 
 /**
  *  Rendering mode over the one live session. Phase 1 only ever emits
@@ -630,7 +502,7 @@ export type Mode =
 /**
  *  One thing that can be started: which far end, and which of it.
  * 
- *  **A typed value rather than an opaque string**, so the factory that turns one into a
+ *  A typed value rather than an opaque string, so the factory that turns one into a
  *  running session matches exhaustively and a variant cannot be added without somebody
  *  deciding how to start it. It crosses the wire because the connect list is rendered by
  *  the frontend and handed back unchanged.
@@ -647,12 +519,9 @@ export type ProfileId =
 { profile: "Shell"; kind: ConnectionKind } | 
 /**
  *  One *particular* install of a kind: which edition it is, and the file that is it.
- * 
- *  **What the connect list offers for a kind this machine actually has, since B5.7.**
- *  [`Self::Shell`] names a kind and leaves the file to whatever `PATH` resolves at spawn
- *  time, which is the second resolution decision 1 exists to remove — and it cannot tell
- *  two PowerShell 7 installs apart at all. This carries the file the list already
- *  resolved, so what is verified and what is started are the same bytes.
+ *  [`Self::Shell`] leaves the file to whatever `PATH` resolves at spawn time; this
+ *  carries the file the list already resolved, so what is verified and what is
+ *  started are the same bytes.
  */
 { profile: "Install"; 
 /**  Which edition this is, so a session started from it says what it says today. */
@@ -661,58 +530,52 @@ kind: ConnectionKind;
 program: string; 
 /**
  *  What tells this install from another of the same edition, when anything does:
- *  `preview`, `Microsoft Store`, or the directory it lives in (decision 9).
+ *  `preview`, `Microsoft Store`, or the directory it lives in.
  * 
- *  `None` on the ordinary machine with one install, which is why A11's row count
- *  survives this entry.
+ *  `None` on the ordinary machine with one install.
  */
 provenance: string | null } | 
 /**  Bash inside one named WSL distribution, spelled as `wsl.exe -l -q` spelled it. */
 { profile: "Distribution"; name: string } | 
 /**
  *  A program named directly rather than chosen from a list: what `ACTER_SHELL` carries
- *  today, and what B8's saved profiles will carry.
+ *  today.
  * 
  *  Started with whatever adapter recognises the name, and with none at all if nothing
  *  does — which is a session Acter supports and says nothing about.
  */
 { profile: "Program"; program: string } | 
 /**
- *  A machine that is not this one, reached over SSH.
- * 
- *  **Three fields rather than a string to parse.** `user@host:port` is a spelling, and
- *  a spelling has to be parsed and can be got wrong; these are the facts, and the form
- *  that collects them is the connect dialog's (spec A8, decision 3). Nothing is stored
- *  here — a password is asked for every time and never written down (spec B9,
- *  decision 5).
+ *  A machine that is not this one, reached over SSH. Three fields rather than a
+ *  string to parse: `user@host:port` is a spelling, and a spelling can be got wrong.
+ *  Nothing is stored here: a password is asked for every time and never written down.
  */
 { profile: "Ssh"; host: string; port: number; user: string } | 
 /**
  *  One of the scripted far ends: a built-in name, or a path to a transcript.
  * 
- *  **Debug builds only.** A release build does not hide these — it never lists them
- *  and never constructs them (spec B7, decision 7).
+ *  Debug builds only. A release build does not hide these: it never lists them and
+ *  never constructs them.
  */
 { profile: "Scripted"; name: string };
 
 /**
- *  The saved connections as the Connect dialog meets them (spec 26, decision 11).
+ *  The saved connections as the Connect dialog meets them.
  * 
- *  **Not [`StoredConnections`](crate::StoredConnections), and the difference is the
- *  point.** That is what the document holds; this is what that becomes once the machine has
- *  been asked — every row carrying the profile its panel is loaded from, and whether this
- *  machine can start it now.
+ *  Not [`StoredConnections`](crate::StoredConnections): that is what the document holds;
+ *  this is what that becomes once the machine has been asked — every row carrying the
+ *  profile its panel is loaded from, and whether this machine can start it now.
  */
 export type SavedConnections = {
 	/**
-	 *  The names, alphabetically and without case (decision 12). **Stable, never
-	 *  most-recent-first**: a listener learns positions, and a list that reorders itself
-	 *  under them is a list they have to read from the top every time.
+	 *  The names, alphabetically and without case. Stable, never most-recent-first: a
+	 *  listener learns positions, and a list that reorders itself under them is a list
+	 *  they have to read from the top every time.
 	 */
 	rows: SavedRow[],
 	/**
-	 *  What went wrong with a document that would not parse, and `None` when nothing did
-	 *  (decision 9). The dialog says this where it would otherwise say the list is empty.
+	 *  What went wrong with a document that would not parse, and `None` when nothing
+	 *  did. The dialog says this where it would otherwise say the list is empty.
 	 */
 	unreadable: string | null,
 };
@@ -728,30 +591,30 @@ export type SavedRow = {
 	 *  What to load the panel from, and what to hand
 	 *  [`ConnectApi::use_profile`](crate::ConnectApi) if nothing in the panel is changed.
 	 * 
-	 *  **Resolved against discovery rather than taken from the document** (decision 7):
-	 *  a saved PowerShell edition is matched to wherever it lives now, so an upgrade does
-	 *  not break a connection somebody saved a year ago.
+	 *  Resolved against discovery rather than taken from the document: a saved
+	 *  PowerShell edition is matched to wherever it lives now, so an upgrade does not
+	 *  break a connection somebody saved a year ago.
 	 */
 	id: ProfileId,
 	/**
 	 *  The kind and what identifies it, as one line a listener hears on arrowing onto the
-	 *  name (decision 13): "SSH, marlon at example.org", "WSL, Ubuntu", "PowerShell 7".
+	 *  name: "SSH, marlon at example.org", "WSL, Ubuntu", "PowerShell 7".
 	 */
 	summary: string,
 	/**
-	 *  Whether Acter may set this session up (spec B9.5, decision 9), so the panel's
-	 *  checkbox opens on what was saved.
+	 *  Whether Acter may set this session up, so the panel's checkbox opens on what was
+	 *  saved.
 	 */
 	set_up: SetUp,
 	/**
-	 *  Who holds the line when it opens (spec 28, decision 1), applied where the frontend
-	 *  already decides that — a saved choice wins over the default there.
+	 *  Who holds the line when it opens, applied where the frontend already decides that
+	 *  — a saved choice wins over the default there.
 	 */
 	line_owner: LineOwner,
 	/**
 	 *  Whether this machine can start it now. A distribution that was uninstalled, an
 	 *  edition that is gone and a scripted scenario in a release build are all listed and
-	 *  all unavailable, for the reason a missing kind is listed (spec B5.4).
+	 *  all unavailable, for the reason a missing kind is listed.
 	 */
 	available: boolean,
 	/**
@@ -794,7 +657,7 @@ export type SessionEvent =
  *  `command_line` is what the shell echoed for this block (the B..C region), which
  *  is the shell itself saying which line it read. The frontend prefers it over the
  *  optimistic heading it put on the block when the submission was acked, so an id
- *  that drifted can no longer put the wrong words on a block (spec B6.1, decision 1).
+ *  that drifted can no longer put the wrong words on a block.
  * 
  *  `None` is a real state and not a missing value: an unintegrated session has no
  *  B..C region at all, a shell may emit `C` with nothing echoed before it, and an
@@ -806,17 +669,14 @@ export type SessionEvent =
 /**
  *  One line of output, and what this event does to it. Rendering only: it says what to
  *  put in the buffer and never what to say about it. Whether any of it is spoken is a
- *  separate [`Announce`](SessionEvent::Announce) (A6).
+ *  separate [`Announce`](SessionEvent::Announce).
  * 
- *  **It names a line since 28** (decision 8), and that is what makes the transcript
- *  honest. A terminal's output is not append-only: `readline` repaints the row it is
- *  editing, and `gh` blanks its option rows when the prompt is answered — so a buffer
- *  that could only append grew a junk line per arrow press and kept three option rows
- *  the far end had already erased. With the id and the revision the buffer assigns or
- *  appends by line, blanks included, and the far end writes its own record.
+ *  Names a line because a terminal's output is not append-only: `readline` repaints
+ *  the row it is editing, and `gh` blanks its option rows when the prompt is
+ *  answered. With the id and the revision the buffer assigns or appends by line,
+ *  blanks included, and the far end writes its own record.
  * 
- *  This is DESIGN's separate-paths decision unchanged rather than widened: the buffer
- *  applies all three revisions, and what is *spoken* is still an
+ *  The buffer applies all three revisions, and what is spoken is still an
  *  [`Announce`](SessionEvent::Announce) about text that is already there — a rewrite
  *  reaches the buffer and never the speech path.
  */
@@ -827,31 +687,25 @@ export type SessionEvent =
  *  Carries no exit code. A nonzero one arrives as `Announce { Failed }`, after the
  *  remainder of the output, which is the order a listener needs: the error text
  *  first, the verdict about it second. A successful command's code is therefore not
- *  on the wire at all — nothing read it, and the frontend must not speak it (A6
- *  decision 2). A later feature wanting the code adds a shape for it deliberately.
+ *  on the wire at all, and the frontend must not speak it. A later feature wanting the
+ *  code adds a shape for it deliberately.
  */
 { type: "CommandFinished"; command_id: CommandId } | 
 /**
  *  The shell drew a prompt, and this is what it says.
  * 
- *  **Restores what shell integration took away** (spec B5.6). The prompt is where a
- *  terminal user reads their working directory, their git branch, their virtualenv —
- *  and in a session marking all four boundaries it lives in the `A..B` region, which
- *  block content excludes, so a listener heard it nowhere at all. `D` replaced the
- *  prompt as an *ending signal* and replaced nothing about what it *says*.
+ *  In a session marking all four boundaries the prompt lives in the `A..B` region,
+ *  which block content excludes, so without this event a listener would hear it
+ *  nowhere at all.
  * 
- *  **Its own event rather than block content.** A prompt admitted as output would
- *  arrive inside a block, before that block's verdict, reading as though the shell had
- *  printed it. It is not output: it is the state the next command will run in.
+ *  Its own event rather than block content: a prompt admitted as output would arrive
+ *  inside a block, before that block's verdict, reading as though the shell had
+ *  printed it. It is not output; it is the state the next command will run in.
  * 
- *  Only a session whose shell reports an exit code emits it. A shell with no `D` already
- *  speaks the prompt as content, because the returning prompt is the only ending it has
- *  (spec B4.5, decision 4) — emitting this as well would say everything twice.
- * 
- *  **The condition is the verdict rather than the full marker cycle** (roadmap 23.15).
- *  It read `ShellMarkers::Full` while that was the only shell in the product with a `D`;
- *  a POSIX `sh` that reports exit codes has one and marks no `C`, and its prompt is news
- *  for the same reason bash's is.
+ *  Only a session whose shell reports an exit code (`ShellMarkers::reports_exit_code`,
+ *  not only the full four-marker cycle) emits it. A shell with no `D` already speaks
+ *  the prompt as content, because the returning prompt is the only ending it has —
+ *  emitting this as well would say everything twice.
  */
 { type: "PromptDrawn"; text: string } | 
 /**
@@ -865,19 +719,16 @@ export type SessionEvent =
 /**
  *  The startup grace period elapsed with no shell-integration markers: this session
  *  has no command boundaries and every command in it degrades to patience-only
- *  behavior (DESIGN's reliability case 2).
+ *  behavior.
  * 
- *  Session-scoped and carrying no `command_id`, the shape `AltScreenEntered` and
- *  `AltScreenLeft` already have, because it fires at session start before any
- *  command exists — which is why it is not an
- *  [`Announce`](SessionEvent::Announce), whose payload is about a command. Reusing
- *  `ConnectionChanged` was rejected: that describes the transport, and "the pipe is
- *  down" and "the shell did not announce itself" must not sound alike to a listener
- *  (spec B6, decision 11).
+ *  Session-scoped and carrying no `command_id`, since it fires at session start
+ *  before any command exists, which is why it is not an
+ *  [`Announce`](SessionEvent::Announce). Distinct from `ConnectionChanged`, which
+ *  describes the transport: "the pipe is down" and "the shell did not announce
+ *  itself" must not sound alike to a listener.
  * 
- *  Recovery is silent: a marker arriving later upgrades the session (DESIGN
- *  decision 8) and nothing is said, because there is nothing the user must do
- *  differently.
+ *  Recovery is silent: a marker arriving later upgrades the session and nothing is
+ *  said, because there is nothing the user must do differently.
  */
 { type: "IntegrationUnavailable" } | 
 /**  A program entered the alternate screen (ncurses/full-screen); interactive mode needed. */
@@ -889,14 +740,13 @@ export type SessionEvent =
 /**
  *  What the far end's command line says now, and where its cursor is in it.
  * 
- *  **Only in far-end-line mode, and it carries no words of Acter's** (spec 28,
- *  decisions 2 and 3). The frontend writes both into an ARIA text box — a
- *  `contenteditable` span with `role="textbox"` — and the reader does the speaking out
- *  of its own text-box behaviour: the row when the row changed, the character at the
- *  caret when only the cursor moved, and "blank" for a row a key emptied or a caret
- *  past the end. That is why there is no live region on this path and no string here:
- *  what a listener hears is identical in kind to what they hear in every other text box
- *  on Windows.
+ *  Only in far-end-line mode, and it carries no words of Acter's. The frontend writes
+ *  both into an ARIA text box — a `contenteditable` span with `role="textbox"` — and
+ *  the reader does the speaking out of its own text-box behaviour: the row when the
+ *  row changed, the character at the caret when only the cursor moved, and "blank" for
+ *  a row a key emptied or a caret past the end. There is no live region on this path
+ *  and no string here: what a listener hears is identical in kind to what they hear in
+ *  every other text box on Windows.
  * 
  *  `text` is `None` when nothing was redrawn and only the caret moved, which is the
  *  whole of what left, right, Home and End do — they rewrite nothing, so there is no
@@ -931,38 +781,24 @@ export type SessionEvent =
 export type SessionId = number;
 
 /**
- *  Whether this connection may set its session up at all.
- * 
- *  **The checkbox authorises and the dialog discloses, and neither is optional** (spec B9.5,
- *  decision 9). This is the checkbox: it is ticked by default, because that is what makes an
- *  ordinary user hear headings and failures without knowing the words this project uses, and
- *  unticking it has to be reachable without the dialog ever appearing.
- * 
- *  **It travels with the attempt rather than being stored**, until B8 has a profile to keep
- *  it in (decision 10). Which shells this person has said not to be asked about again is a
- *  different thing entirely and is kept behind [`Explained`](crate::Explained).
- * 
- *  A two-variant enum rather than a `bool`, for [`ProgramAnswer`](crate::ProgramAnswer)'s
- *  reason: `true` at a call site three files away does not say which way it went.
+ *  Whether this connection may set its session up at all. Ticked by default. Travels
+ *  with the attempt; not persisted. Distinct from whether this person has said not to be
+ *  asked about a given shell again, which is kept behind [`Explained`](crate::Explained).
  */
 export type SetUp = 
-/**  Set it up: ask about it unless this person has said not to, then send the line. */
+/**  Ask about it unless this person has said not to, then send the line. */
 "Yes" | 
-/**
- *  Do not. No dialog, no setup line, and the connection says what the session will and
- *  will not be able to tell them.
- */
+/**  No dialog, no setup line. */
 "No";
 
 /**
  *  The immediate answer to `submit_command`.
  * 
- *  **Two answers rather than one since B7**, because there are now two things that can
- *  become of a submitted line. A window that is not connected to anything is a state a
+ *  Two answers rather than one: a window that is not connected to anything is a state a
  *  user can be in from the moment Acter opens, and a line typed into it has to be
- *  *answered* rather than swallowed: silence is indistinguishable from a shell that is
+ *  *answered* rather than swallowed — silence is indistinguishable from a shell that is
  *  thinking, and the text the user typed has to survive so they can connect and press
- *  Enter again (spec B7, decision 3).
+ *  Enter again.
  */
 export type SubmitAck = 
 /**
@@ -980,12 +816,8 @@ export type SubmitAck =
 { status: "NotConnected" };
 
 /**
- *  One thing inside a kind, as the connect dialog's panel lists it.
- * 
- *  **Named without repeating its kind.** The row above already said WSL, and a panel that
- *  reads "WSL: Ubuntu, WSL: Debian" says the same word to a listener as many times as they
- *  have distributions. What [`Connected::label`] says is the full name, because a window
- *  title has no row above it to lean on.
+ *  One thing inside a kind, as the connect dialog's panel lists it. Named without
+ *  repeating its kind: the row above already said WSL.
  */
 export type Variant = {
 	/**  What to hand [`ConnectApi::use_profile`](crate::ConnectApi) to start this one. */
@@ -996,17 +828,12 @@ export type Variant = {
 	 */
 	label: string,
 	/**
-	 *  Whether choosing this one can start a session.
+	 *  Whether choosing this one can start a session. A variant can be missing while its
+	 *  kind is not: a machine with Windows PowerShell and no PowerShell 7 has the kind
+	 *  and one of its two editions, and the missing one stays listed.
 	 * 
-	 *  **A variant can be missing while its kind is not**, which is what PowerShell needs:
-	 *  a machine with Windows PowerShell and no PowerShell 7 has the kind and one of its two
-	 *  editions. Listing only what is installed would teach that listener that Acter does
-	 *  not support PowerShell 7, which is B5.4's whole argument, so a missing edition stays
-	 *  in the panel and says what to do about it.
-	 * 
-	 *  Always true for a WSL distribution, and that is not an oversight: distributions are
-	 *  *discovered* by asking `wsl.exe`, so one that is not installed cannot be enumerated
-	 *  and has no name to list.
+	 *  Always true for a WSL distribution: distributions are *discovered*, so one that
+	 *  is not installed cannot be enumerated and has no name to list.
 	 */
 	available: boolean,
 	/**  What to say about a variant that cannot be started, and `None` when it can. */

@@ -1,7 +1,6 @@
 //! Entity/value: session-scoped state — rendering mode, shell-integration status, and
 //! which screen (normal or alternate) is on display. Transitions return a new state;
-//! per-command block lifecycle belongs to the boundary tracker (B2), not here — the two
-//! touch but do not overlap (decision 9).
+//! per-command block lifecycle belongs to the boundary tracker, not here.
 
 use crate::Mode;
 
@@ -13,20 +12,17 @@ pub enum Integration {
     /// Markers observed: command boundaries are trustworthy.
     Integrated,
     /// No markers within the grace period: every command degrades to patience-only
-    /// behavior until markers are observed (decision 8 allows recovery).
+    /// behavior until markers are observed.
     Unintegrated,
 }
 
 impl Integration {
-    /// OSC 133 markers observed. Resolves `Pending`, and recovers `Unintegrated`
-    /// (DESIGN decision 8); an already-`Integrated` session is unaffected.
+    /// OSC 133 markers observed. Resolves `Pending`, and recovers `Unintegrated`; an
+    /// already-`Integrated` session is unaffected.
     ///
     /// The transitions live on the value rather than only on [`SessionState`] because
-    /// two components apply them: the actor, which owns the session state and the
-    /// behavior that changes with it, and the service's pump, which must know at
-    /// submission time whether to open a command itself (spec B6, decision 10). Both
-    /// are driven by the same two facts, so sharing the transition is what keeps them
-    /// from ever disagreeing about what those facts meant.
+    /// both the actor and the service's pump apply them, and sharing keeps the two from
+    /// disagreeing about what the same facts meant.
     pub fn markers_observed(self) -> Self {
         match self {
             Self::Pending | Self::Unintegrated => Self::Integrated,
@@ -52,10 +48,10 @@ pub enum Screen {
 }
 
 /// Session-scoped facts: what kind of session this is and what is on screen.
-/// Invariants: [`Integration::Pending`] resolves to `Integrated` or `Unintegrated`
-/// exactly once; markers observed after `Unintegrated` recover to `Integrated`
-/// (decision 8); alt-screen transitions are idempotent — entering twice is one entry,
-/// because a program redrawing does not mean it re-entered (decision 9).
+/// [`Integration::Pending`] resolves to `Integrated` or `Unintegrated` exactly once;
+/// markers observed after `Unintegrated` recover to `Integrated`; alt-screen transitions
+/// are idempotent — entering twice is one entry, because a program redrawing does not
+/// mean it re-entered.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SessionState {
     pub mode: Mode,
@@ -74,8 +70,8 @@ impl SessionState {
         }
     }
 
-    /// OSC 133 markers observed. Resolves `Pending`, and recovers `Unintegrated`
-    /// (decision 8); an already-`Integrated` session is unaffected.
+    /// OSC 133 markers observed. Resolves `Pending`, and recovers `Unintegrated`; an
+    /// already-`Integrated` session is unaffected.
     pub fn markers_observed(self) -> Self {
         Self {
             integration: self.integration.markers_observed(),
@@ -167,8 +163,6 @@ mod tests {
         assert_eq!(state.integration, Integration::Unintegrated);
     }
 
-    /// The transitions the service's pump applies to the bare value, which must agree
-    /// with the ones the actor applies to the whole state.
     #[test]
     fn the_bare_integration_transitions_match_the_session_state_ones() {
         let states = [

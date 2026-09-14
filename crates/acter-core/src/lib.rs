@@ -21,10 +21,8 @@ pub use entities::{
     ShellMarkers, Signer, StoredSettings, SubmitAck, TerminalItem, Variant, Verdict,
     no_such_connection, refused, same_name,
 };
-// The pacing verdict is domain-internal since A6: `ReadMode` no longer crosses the wire,
-// so the items whose signatures mention it — `PacingAction`, `PacingOutcome`, `verdict`
-// and the three transition functions — are `pub(crate)` in `policies` and reached
-// through that module rather than re-exported here. Nothing outside this crate used them.
+// `PacingAction`, `PacingOutcome`, `verdict` and the three transition functions are
+// `pub(crate)` in `policies`, not re-exported here.
 pub use policies::{
     Anchor, Binding, BoundaryEvent, BoundaryTracker, Caret, Connection, FarEndAnswer, Keystroke,
     MenuItem, Region, RowChange, Standard, SystemMenu, TextSize, binding_for, catalogue, ended,

@@ -1,23 +1,19 @@
 //! Entity/value: what verifying a file's signature found, and the sentence a listener hears
 //! about it.
 //!
-//! **It stopped saying "Windows" with M2.** Every sentence here opened with the name of one
-//! operating system, and macOS reads them too — so what a listener is told is now "this
-//! computer", which is true wherever there is a computer to trust something (spec M2,
-//! decision 6).
+//! Every sentence names "this computer" rather than an operating system, since macOS
+//! reads them too.
 //!
-//! **Three outcomes rather than two, and the third is the one that matters** (spec B5.7,
-//! decision 4). Trusted and untrusted are the obvious pair; unverifiable is what an
-//! execution alias that cannot be opened produces, what a revocation answer that never comes
-//! produces, and what an unfamiliar Windows status produces. Reporting either of the other
-//! two in its place would be a lie to somebody who cannot see the file — quietly trusted, or
-//! quietly condemned.
+//! Three outcomes rather than two: trusted and untrusted are the obvious pair;
+//! unverifiable is what an execution alias that cannot be opened produces, what a
+//! revocation answer that never comes produces, and what an unfamiliar Windows status
+//! produces. Reporting either of the other two in its place would be a lie to somebody
+//! who cannot see the file — quietly trusted, or quietly condemned.
 //!
-//! **Never a gate** (decision 6). A verdict is a sentence and a question, not a filter: a
-//! self-built pwsh, a corporate re-signed build, a damaged catalog database and an offline
-//! revocation check are all legitimate and all common, and hiding a user's shell for any of
-//! them teaches the lesson B5.4 refused to teach — that Acter cannot see the shell they are
-//! looking straight at.
+//! Never a gate: a verdict is a sentence and a question, not a filter. A self-built pwsh,
+//! a corporate re-signed build, a damaged catalog database and an offline revocation
+//! check are all legitimate and all common, and hiding a user's shell for any of them
+//! teaches them that Acter cannot see the shell they are looking straight at.
 //!
 //! What the check buys is real and narrower than it sounds: it defeats `PATH`-order
 //! hijacking, which is cheap and common, and it tells the user *before* the program runs
@@ -29,10 +25,9 @@
 pub enum Verdict {
     /// This computer verified the signature and trusts the chain behind it.
     Trusted {
-        /// Who signed it — **a second question and a different call** (decision 5), because
-        /// "trusted and signed by Microsoft" and "trusted and signed by somebody else" are
-        /// different sentences and a verdict that could not tell them apart would be no use
-        /// on a machine with a corporate root.
+        /// A second question and a different call from whether it is trusted:
+        /// "trusted and signed by Microsoft" and "trusted and signed by somebody else"
+        /// are different sentences, which matters on a machine with a corporate root.
         signer: Signer,
     },
     /// This computer verified the signature and will not trust it.
@@ -57,13 +52,8 @@ pub enum Signer {
     /// its own embedded signature.
     Microsoft,
     /// Apple — every shell macOS ships, whose leaf certificate is Apple's own "Software
-    /// Signing" and whose chain reaches the Apple Root CA (spec M2, decision 6, measured
-    /// 2026-09-01 against all seven entries in this Mac's `/etc/shells`).
-    ///
-    /// **The vendor of the operating system is a variant rather than a name**, for
-    /// [`Self::Microsoft`]'s reason: "trusted, and the company that made this computer signed
-    /// it" is a different sentence from "trusted, and somebody else did", and a verdict that
-    /// could not tell them apart would announce something on every ordinary connection.
+    /// Signing" and whose chain reaches the Apple Root CA. Measured against all seven
+    /// entries in a real Mac's `/etc/shells`.
     Apple,
     /// Somebody else this machine's trust store accepts: a corporate re-signed build, a
     /// vendor, a root an administrator installed.
@@ -74,11 +64,9 @@ pub enum Signer {
 }
 
 impl Signer {
-    /// What this signer is called in a sentence, for the two that are an operating system's
-    /// own vendor.
-    ///
-    /// [`Self::Other`] answers with its own name, which is the certificate subject as the
-    /// platform renders it.
+    /// What this signer is called in a sentence, for the two that are an operating
+    /// system's own vendor. [`Self::Other`] answers with its own name, which is the
+    /// certificate subject as the platform renders it.
     pub fn vendor(&self) -> &str {
         match self {
             Self::Microsoft => "Microsoft",
@@ -97,12 +85,10 @@ pub enum Fault {
     /// The file signed itself: there is a signature, it records the file's own hashes, and
     /// there is no certificate and therefore nobody behind it.
     ///
-    /// **A fourth way of being untrusted, added by M2, because macOS makes it ordinary.**
     /// Apple silicon requires every executable to carry at least an ad-hoc signature, so
-    /// this is what a locally built or Homebrew-installed shell has — common, legitimate, and
-    /// not the same news as "nothing signed this". Telling a listener nothing had signed it
-    /// would be false about the half that is true: the file has not been altered since it was
-    /// built. What is missing is who built it.
+    /// this is what a locally built or Homebrew-installed shell has — common, legitimate,
+    /// and not the same news as "nothing signed this": the file has not been altered
+    /// since it was built, and what is missing is who built it.
     AdHoc,
     /// The file does not hash to what the signature says it should, so it is not the file
     /// whoever signed it produced.
@@ -125,20 +111,16 @@ pub enum Fault {
 }
 
 impl Verdict {
-    /// Whether this is a verdict nobody needs to act on.
-    ///
-    /// **The one question the connection asks of a verdict** (decision 6): a trusted file is
-    /// started without a word, and everything else is put to the person in front of the
-    /// window before anything runs.
+    /// Whether this is a verdict nobody needs to act on: a trusted file is started
+    /// without a word, and everything else is put to the person in front of the window
+    /// before anything runs.
     pub fn settled(&self) -> bool {
         matches!(self, Self::Trusted { .. })
     }
 
-    /// Who signed it, when anything could be read about that.
-    ///
-    /// Said on its own, rather than only inside the sentence, so a dialog can put it
-    /// somewhere a listener can read character by character (spec B5.7, accessibility
-    /// checklist).
+    /// Who signed it, when anything could be read about that. Said on its own, rather
+    /// than only inside the sentence, so a dialog can put it somewhere a listener can
+    /// read character by character.
     pub fn signer(&self) -> Option<String> {
         match self {
             Self::Trusted {
@@ -160,10 +142,9 @@ impl Verdict {
         }
     }
 
-    /// What a listener is told, as whole sentences ending in what to do next.
-    ///
-    /// **Every verdict has one, including the ones nobody hears** (spec B5.7, definition of
-    /// done). A verdict with no sentence is a verdict somebody later renders as a code.
+    /// What a listener is told, as whole sentences ending in what to do next. Every
+    /// verdict has one, including the ones nobody hears: a verdict with no sentence is a
+    /// verdict somebody later renders as a code.
     pub fn said(&self) -> String {
         match self {
             Self::Trusted {
@@ -173,9 +154,6 @@ impl Verdict {
                  nothing to decide before starting it.",
                 signer.vendor()
             ),
-            // **No "rather than" clause, since M2.** It used to read "rather than by
-            // Microsoft", which is a contrast a Mac cannot draw and which said nothing the
-            // first half had not: what the listener needs is who did sign it.
             Self::Trusted {
                 signer: Signer::Other { name },
             } => format!(
@@ -230,13 +208,9 @@ impl Verdict {
         }
     }
 
-    /// The clause said once, at connection, about a file that was started anyway.
-    ///
-    /// **`None` for a file the operating system's own vendor signed, because a verdict
-    /// nobody needs to act on is not an announcement** (spec B5.7, accessibility checklist).
-    /// Connecting to a normally installed shell says exactly what it says today — and that
-    /// is what M2 had to be true of on a Mac, where every shell in `/etc/shells` is signed by
-    /// Apple and a note on each would be a sentence at every connection.
+    /// The clause said once, at connection, about a file that was started anyway. `None`
+    /// for a file the operating system's own vendor signed: a verdict nobody needs to act
+    /// on is not an announcement.
     pub fn note(&self) -> Option<String> {
         match self {
             Self::Trusted {
@@ -288,8 +262,8 @@ fn certificate(signer: Option<&str>) -> String {
 mod tests {
     use super::*;
 
-    /// Every verdict this product can reach, so a variant cannot be added without deciding
-    /// what it says.
+    /// Every verdict this product can reach, so a variant cannot be added without
+    /// deciding what it says.
     fn every_verdict() -> Vec<Verdict> {
         vec![
             Verdict::Trusted {
@@ -329,8 +303,6 @@ mod tests {
         ]
     }
 
-    /// The rule CLAUDE.md makes a domain requirement: these are read aloud, so each is a
-    /// whole sentence rather than a label or a status code.
     #[test]
     fn every_verdict_speaks_whole_sentences() {
         for verdict in every_verdict() {
@@ -355,9 +327,6 @@ mod tests {
         }
     }
 
-    /// **The half a status code cannot carry** (spec B5.7, definition of done): every
-    /// sentence ends by naming what to do next, because a listener who has just been told
-    /// something is wrong with a file is being asked to decide.
     #[test]
     fn every_verdict_names_what_to_do_next() {
         for verdict in every_verdict() {
@@ -372,9 +341,6 @@ mod tests {
         }
     }
 
-    /// Told apart by what a listener hears rather than by a discriminant. The pair this is
-    /// really about is trusted-and-Microsoft against trusted-and-somebody-else (decision 5),
-    /// which are the same trust and very different news.
     #[test]
     fn no_two_verdicts_are_said_the_same_way() {
         let said: Vec<String> = every_verdict().iter().map(Verdict::said).collect();
@@ -386,7 +352,6 @@ mod tests {
         }
     }
 
-    /// The one question the connection asks: is this a verdict anybody has to act on.
     #[test]
     fn only_a_trusted_file_is_started_without_a_word() {
         for verdict in every_verdict() {
@@ -398,8 +363,6 @@ mod tests {
         }
     }
 
-    /// **A verdict nobody needs to act on is not an announcement** (accessibility
-    /// checklist): connecting to a normally installed shell says exactly what it says today.
     #[test]
     fn a_file_microsoft_signed_adds_nothing_to_what_connecting_says() {
         assert_eq!(
@@ -411,13 +374,9 @@ mod tests {
         );
     }
 
-    /// And everything else does say something, because starting it was a decision the user
-    /// made and they should hear what they agreed to (accessibility checklist).
     #[test]
     fn everything_a_user_had_to_agree_to_is_said_when_it_starts() {
         for verdict in every_verdict() {
-            // The two vendors of an operating system this product runs on: a shell they
-            // signed is the ordinary case, and the test above is what pins its silence.
             if verdict.settled()
                 && matches!(
                     verdict.signer().as_deref(),
@@ -437,8 +396,6 @@ mod tests {
         }
     }
 
-    /// The signer travels on its own as well as inside the sentence, so a dialog can put it
-    /// somewhere it can be read character by character.
     #[test]
     fn who_signed_it_can_be_read_on_its_own() {
         assert_eq!(

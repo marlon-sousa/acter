@@ -1,8 +1,5 @@
 //! Entity/value: shared IPC protocol value types — identity, correlation, and the
 //! state enums carried across the frontend wire. Pure data, no behavior.
-//!
-//! The autoread verdict used to live here too. A6 took it off the wire, so it moved to
-//! [`crate::entities::read_mode`], which is not a protocol module.
 
 use serde::{Deserialize, Serialize};
 use specta::Type;
@@ -41,12 +38,8 @@ pub enum ConnectionState {
     /// The session has been started and is not usable yet: a process was spawned, or a
     /// network connection is being made, and the far end has not said anything.
     ///
-    /// **Added by A9 because it is the state a user meets first**, and the one they were
-    /// never told about: a window opening onto PowerShell sat silent for seconds while the
-    /// shell started, which a listener cannot tell from a session that is broken (roadmap
-    /// 23.7). It is deliberately not "the process exists" — a shell that has not drawn a
-    /// prompt is not one anybody can use, and reporting it as connected is a lie a listener
-    /// would act on.
+    /// Deliberately not "the process exists": a shell that has not drawn a prompt is not
+    /// one anybody can use, and reporting it as connected is a lie a listener would act on.
     Connecting,
     Connected,
     Reconnecting,
