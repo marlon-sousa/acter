@@ -30,6 +30,9 @@ crates/acter-app/gen/
 # E2E failure screenshots, written on demand by the wdio runner
 e2e/screenshots/
 .claude/
+!.claude/
+.claude/*
+!.claude/skills/
 .vscode/
 
 # Scratch: a PR body being drafted, never part of the tree.
