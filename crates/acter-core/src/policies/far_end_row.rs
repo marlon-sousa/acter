@@ -1,33 +1,23 @@
 //! Policy: which row the far end just redrew is the answer to the key Acter sent, and
 //! where the caret goes in it.
 //!
-//! **A policy over events that already exist, and not a differ** (DESIGN, "A row that
-//! changed is an answer"). The engine has emitted identified lines with `Appended` and
-//! `Rewritten` revisions since B3 and already suppresses a repaint that changed nothing —
-//! a `gh` prompt redrawing four rows after an arrow produces exactly two items, for the two
-//! rows whose *text* differed. So the comparison was built three entries ago for another
-//! reason; what was missing was permission to speak the result.
+//! The engine already suppresses a repaint that changed nothing: a `gh` prompt redrawing
+//! four rows after an arrow produces exactly two items, for the two rows whose text
+//! differed. This policy only decides which of those already-filtered rows to speak.
 //!
-//! Three bounds keep it small and all three already exist: only after a key Acter sent,
-//! only once the batch settles on the quiescence clock the pacing policy computes, and only
-//! over the rows the engine says changed.
+//! Runs only after a key Acter sent, once the batch settles on the pacing policy's
+//! quiescence clock, over the rows the engine says changed.
 //!
-//! **Row count routes nothing** (spec 28, decision 6). PSReadLine's first arrow at a
-//! completion menu changed eleven rows — the command line rewritten and ten menu rows
-//! blanked — and it is ordinary Tab completion. A rule that sent "most of the screen
-//! changed" somewhere else would mis-route the commonest thing anybody does in PowerShell.
-//! The alternate screen is the only boundary that means anything, and it is phase 2's.
+//! Row count routes nothing: PSReadLine's completion menu changes eleven rows for
+//! ordinary Tab completion.
 
 use crate::LineId;
 
 /// One row the far end changed after a key Acter sent: what stood on it, and what stands
 /// now.
 ///
-/// Both texts, because step 2 is about *gaining* content rather than about having some. The
-/// row losing a `gh` selection went from `> marlon-sousa/acter` to `  marlon-sousa/acter`
-/// and the row gaining it went from `  Skip pushing the branch` to
-/// `> Skip pushing the branch`; only the second is what a listener arrowing a list wants,
-/// and only the pair of texts can tell them apart.
+/// Both texts, because gaining content is what step 2 looks for, not merely differing:
+/// only the pair can tell a row that gained a selection marker from one that lost it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RowChange {
     pub line: LineId,
@@ -37,11 +27,9 @@ pub struct RowChange {
 
 /// The row the far end draws its command line on, and the column that line starts at.
 ///
-/// **The anchor is why the prompt is not read aloud on every press.** What comes back on
-/// the wire when a recalled line changes is a cursor address and the few characters that
-/// differ — `readline` repaints from the column the line starts at — so the row the engine
-/// then reports is `marlon@splyt:/mnt/c/Users/marlo$ exit`, prompt included, and what a
-/// listener wants is `exit` (measured 2026-08-31).
+/// Why the prompt is not read aloud on every press: `readline` repaints from the column
+/// the line starts at, so the engine reports the row as `marlon@splyt:...$ exit`, prompt
+/// included, when what a listener wants is `exit` (measured 2026-08-31).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Anchor {
     /// The row the far end's cursor sat on when it finished drawing its prompt.
@@ -76,23 +64,18 @@ pub struct Keystroke<'a> {
     pub now: Option<Caret>,
     /// What the field is holding right now — the text this policy handed over last time.
     ///
-    /// **It is the only record of the trailing spaces the grid has and the row text has
-    /// not** (roadmap 28.9). The extractor trims every row, correctly and for a documented
-    /// reason, so a row the far end drew as `echo hi ` reaches here as `echo hi`; the
-    /// padding this policy adds is therefore the whole difference between the two, and
-    /// `held` with its trailing spaces taken back off is the row as the extractor read it.
-    /// That inference is the same one `follow_cursor` already makes when it measures a
-    /// prompt off the front of a row.
+    /// The only record of trailing spaces: the extractor trims every row, so a row drawn
+    /// as `echo hi ` reaches here as `echo hi`. `held` with its own padding removed is the
+    /// row as the extractor read it.
     pub held: &'a str,
 }
 
 /// What to put in front of the listener.
 ///
-/// Text and a caret rather than a sentence, because the element holding them is an ARIA
-/// text box and the reader does the speaking (spec 28, decision 3): NVDA answers the row
-/// when the row changed, the character at the caret when only the cursor moved, and "blank"
-/// for a row a key emptied — its own word, in a vocabulary its users already have. That is
-/// why this type carries no strings Acter invented and never will.
+/// Text and a caret, not a sentence: the element holding them is an ARIA text box, so NVDA
+/// does the speaking — the row when it changed, the character at the caret when only the
+/// cursor moved, "blank" for a row a key emptied. This type carries no strings Acter
+/// invented.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FarEndAnswer {
     /// The row changed: this is its text, with the caret at this character.
@@ -103,35 +86,26 @@ pub enum FarEndAnswer {
     Nothing,
 }
 
-/// Which row is the answer, in the two steps decision 6 measured, and the two ways of
-/// having no answer at all.
+/// Which row is the answer, in four steps.
 ///
-/// 1. **If the anchored row changed, that is the answer**, from the anchor column onward.
-///    `readline`'s history recall and Tab completion, PSReadLine's completion menu — where
-///    the anchored row wins over ten blanked ones — and every far end that has a command
-///    line. Both kinds of change count: the first up arrow at a fresh prompt *appends* the
-///    recalled line rather than rewriting the row, because there was nothing there to
-///    overwrite, so a rule keyed on rewrites alone would be silent on the commonest press
-///    of the commonest key (measured 2026-08-31).
-/// 2. **Otherwise, among the rows that changed, the one that gained non-whitespace
-///    content.** `gh`'s selection prompt, where the cursor is hidden and parked below the
-///    list and the anchored row never changes at all. Content rather than a marker
-///    character: naming `>` would hard-code one program's choice, and PSReadLine's menu —
-///    the second prompt-driven sample — draws its selection in colour alone, with no marker
-///    anywhere.
-/// 3. **Otherwise, if the cursor is visible and moved along the row it was on**, only the
-///    caret moves. Left, right, Home and End rewrite nothing and are invisible to steps 1
-///    and 2 by construction — *unless* the cursor has moved across whitespace the extractor
-///    trimmed away, which is step 3's second half and roadmap 28.9.
-/// 4. **Otherwise nothing happened.**
+/// 1. If the anchored row changed, that is the answer, from the anchor column onward.
+///    Both kinds of change count: the first up arrow at a fresh prompt appends the
+///    recalled line rather than rewriting the row, so a rule keyed on rewrites alone
+///    would be silent on the commonest press of the commonest key (measured 2026-08-31).
+/// 2. Otherwise, among the rows that changed, the one that gained non-whitespace content.
+///    Content rather than a marker character: naming `>` would hard-code one program's
+///    choice, and PSReadLine's completion menu draws its selection in colour alone, with
+///    no marker at all.
+/// 3. Otherwise, if the cursor is visible and moved along the row it was on, only the
+///    caret moves — unless it moved across whitespace the extractor trimmed away, which
+///    is this step's second half.
+/// 4. Otherwise nothing happened.
 ///
-/// **Every row this rule hands over is padded out to the caret** (roadmap 28.9). A caret
-/// beyond the end of the text is evidence in itself: the far end's cursor is a screen
-/// column, the grid under it holds spaces, and the row lost them on the way here because
-/// the extractor trims — so `echo hi ` and `echo hi` arrive as one string and deleting the
-/// space changes nothing a reader can announce. Padding puts the space back where the
-/// cursor says it is, which makes deleting it a change, and leaves the invariant the caret
-/// always wanted: a caret can never sit past the text it is given.
+/// Every row this rule hands over is padded out to the caret. A caret beyond the end of
+/// the text is evidence in itself: the far end's cursor is a screen column, the grid under
+/// it holds spaces, and the extractor trims them off the row. Padding puts the space back
+/// where the cursor says it is, so deleting it is a change a reader can announce, and a
+/// caret never sits past the text it is given.
 pub fn far_end_row(keystroke: &Keystroke<'_>) -> FarEndAnswer {
     if let Some(anchor) = keystroke.anchor
         && let Some(change) = keystroke
@@ -162,12 +136,11 @@ pub fn far_end_row(keystroke: &Keystroke<'_>) -> FarEndAnswer {
             let anchor = keystroke.anchor.map_or(0, |anchor| anchor.column);
             let caret = usize::from(now.column.saturating_sub(anchor));
             // Nothing was redrawn, so the row is what the listener already has with this
-            // policy's own padding taken back off — and where the cursor came to rest is
-            // the only evidence about how much of it is still there (roadmap 28.9). A
-            // cursor at or past the row's end re-measures the padding, which is what tells
-            // a space typed at the end from a space deleted from it; a cursor that landed
-            // *inside* the row says nothing about the whitespace after it, and the line the
-            // listener holds is left exactly as it was.
+            // policy's own padding removed, and where the cursor rests is the only
+            // evidence of how much is still there. A cursor at or past the row's end
+            // re-measures the padding — telling a space typed at the end from one deleted
+            // from it; a cursor that landed inside the row says nothing about the
+            // whitespace after it, so the line is left exactly as it was.
             let row = keystroke.held.trim_end();
             let text = if caret >= row.chars().count() {
                 padded(row.to_owned(), caret)
@@ -186,9 +159,9 @@ pub fn far_end_row(keystroke: &Keystroke<'_>) -> FarEndAnswer {
 
 /// Whether this row gained non-whitespace content rather than losing it or trading it.
 ///
-/// Counted rather than compared, so a program that marks its selection with `*`, with an
-/// arrow, or by indenting the row is read the same way `gh`'s `>` is — and so a row that
-/// merely had its text replaced with something of the same weight is not mistaken for one.
+/// Counted rather than compared: a program marking its selection with `*`, an arrow, or
+/// indentation reads the same way `gh`'s `>` does, and a row merely rewritten with
+/// same-weight text is not mistaken for one that gained content.
 fn gained_content(change: &&RowChange) -> bool {
     weight(&change.after) > weight(&change.before)
 }
@@ -210,12 +183,11 @@ fn from_column(row: &str, column: u16) -> String {
 /// Where the caret goes in the text a listener is about to be handed.
 ///
 /// Placed at the end of the text when the far end is not showing a cursor: past the last
-/// character NVDA says "blank", which is the same word it says for a row a key emptied and
-/// is exactly right for both.
+/// character NVDA says "blank", the same word it says for a row a key emptied.
 ///
-/// **Not clamped, because the text is what gets adjusted** (roadmap 28.9). A cursor beyond
-/// the row's last character is where a listener's own caret belongs after they type a
-/// space, and clamping it back onto the text was what made that space vanish.
+/// Not clamped, because the text is what gets adjusted: a cursor beyond the row's last
+/// character is where a listener's own caret belongs after they type a space, and
+/// clamping it back onto the text was what made that space vanish.
 fn caret_in(text: &str, anchor: u16, now: Option<Caret>) -> usize {
     match now {
         Some(caret) => usize::from(caret.column.saturating_sub(anchor)),
@@ -226,11 +198,10 @@ fn caret_in(text: &str, anchor: u16, now: Option<Caret>) -> usize {
 /// The row padded with spaces out to the caret, and left alone when the caret is already
 /// in it.
 ///
-/// The spaces are not invented: the cursor sits on a grid cell, every cell between the
-/// row's last character and that one holds a space, and the row arrived here without them
-/// only because the extractor trims (`extractor.rs`, decision 9 — an untrimmed walk speaks
-/// eighty spaces after every line). Trimming stays right for reading a transcript; what the
-/// field needs is the row as wide as the far end's own cursor.
+/// The spaces are not invented: the cursor sits on a grid cell, and every cell between the
+/// row's last character and that one holds a space that the extractor trims off before the
+/// row reaches here. Trimming stays right for reading a transcript; the field needs the
+/// row as wide as the far end's own cursor.
 fn padded(text: String, caret: usize) -> String {
     let length = text.chars().count();
     let mut text = text;
@@ -290,10 +261,8 @@ mod tests {
         })
     }
 
-    /// **`readline`'s history recall, from the transcript captured 2026-08-31.** The row is
-    /// the prompt and the recalled line together; what a listener wants is the line, and the
-    /// anchor is what separates them. Reading the row whole would say
-    /// "marlon at splyt, slash mnt slash c..." before every single press.
+    /// `readline`'s history recall, captured 2026-08-31. Reading the whole row would speak
+    /// "marlon at splyt, slash mnt slash c..." before every press.
     #[test]
     fn history_recall_speaks_the_line_and_not_the_prompt() {
         let prompt = "marlon@splyt:/mnt/c/Users/marlo$ ";
@@ -318,11 +287,6 @@ mod tests {
         );
     }
 
-    /// **The first up arrow at a fresh prompt appends rather than rewriting**, because
-    /// there is nothing on the row to overwrite (measured 2026-08-31). A rule keyed on
-    /// revisions would be silent here, on the commonest press of the commonest key — which
-    /// is why this policy compares the row's content and never asks which revision brought
-    /// it.
     #[test]
     fn the_first_recall_is_an_append_and_is_still_the_answer() {
         let prompt = "marlon@splyt:/mnt/c/Users/marlo$ ";
@@ -348,9 +312,7 @@ mod tests {
         );
     }
 
-    /// Tab completion is the same shape, and it is the clearest argument for the anchor
-    /// there is: Tab's whole contribution to the wire was the two bytes `o `, which is worth
-    /// nothing spoken on its own.
+    /// Tab's whole contribution to the wire is two bytes, `o `, worth nothing spoken alone.
     #[test]
     fn tab_completion_speaks_the_completed_line_rather_than_what_tab_added() {
         let prompt = "marlon@splyt:~$ ";
@@ -370,10 +332,6 @@ mod tests {
         );
     }
 
-    /// **PSReadLine's completion menu, captured 2026-09-02: the anchored row wins over ten
-    /// blanked ones.** One arrow produced eleven line items — the command line rewritten and
-    /// ten menu rows emptied — and what a listener wants is the one item the arrow selected,
-    /// which PowerShell has already written onto the command line for them.
     #[test]
     fn a_menu_repaint_answers_with_the_command_line_and_not_the_menu() {
         let prompt = "PS C:\\Users\\marlo> ";
@@ -396,10 +354,6 @@ mod tests {
         );
     }
 
-    /// **`gh`'s selection prompt, captured 2026-09-02: two rows change and the one that
-    /// gained content wins.** The anchored row never changes — the user is answering a
-    /// question rather than editing a line — and the cursor is hidden on the blank row below
-    /// the list, so nothing but the content can choose between them.
     #[test]
     fn a_selection_prompt_answers_with_the_row_that_gained_content() {
         let changed = [
@@ -417,8 +371,6 @@ mod tests {
         );
     }
 
-    /// And it is the content rather than the marker, so a program that draws its highlight
-    /// with a `*`, with an indent, or with a word is read the same way.
     #[test]
     fn the_rule_is_content_and_never_a_marker_character() {
         let changed = [
@@ -434,34 +386,24 @@ mod tests {
         );
     }
 
-    /// **Left and right rewrite nothing at all, and the answer to them is a caret.** That is
-    /// the whole reason the engine grew a cursor: these keys are invisible to every rule
-    /// that watches rows change, and without a column there would be nothing to say about
-    /// them.
     #[test]
     fn a_cursor_that_moved_along_its_row_moves_the_caret_and_nothing_else() {
         let answer = far_end_row(&holding("exit", &[], anchored(7, 32), at(36, 3), at(35, 3)));
         assert_eq!(answer, FarEndAnswer::Caret { caret: 3 });
     }
 
-    /// The caret is counted from the anchor, because that is where the text the listener
-    /// has begins.
     #[test]
     fn the_caret_is_counted_from_the_anchor_column() {
         let answer = far_end_row(&holding("exit", &[], anchored(7, 32), at(32, 3), at(33, 3)));
         assert_eq!(answer, FarEndAnswer::Caret { caret: 1 });
     }
 
-    /// A cursor that changed rows is not a caret moving along a line — it is the far end
-    /// having gone somewhere else — and nothing is said about it.
     #[test]
     fn a_cursor_that_changed_rows_is_not_a_caret_move() {
         let answer = far_end_row(&keystroke(&[], anchored(7, 0), at(4, 3), at(4, 4)));
         assert_eq!(answer, FarEndAnswer::Nothing);
     }
 
-    /// A cursor the far end is not showing places nothing, which is `gh` for the whole of a
-    /// selection.
     #[test]
     fn a_hidden_cursor_moves_no_caret() {
         assert_eq!(
@@ -474,17 +416,12 @@ mod tests {
         );
     }
 
-    /// Nothing changed and nothing moved: the far end had no answer, and Acter invents none.
     #[test]
     fn nothing_changing_says_nothing() {
         let answer = far_end_row(&keystroke(&[], anchored(7, 0), at(4, 3), at(4, 3)));
         assert_eq!(answer, FarEndAnswer::Nothing);
     }
 
-    /// **A row a key emptied is an empty row, and Acter says nothing about it.** `Ctrl+U`
-    /// clears the line in `readline` and in PSReadLine and inserts a literal `^U` in
-    /// `cmd.exe`, so what happened is the far end's business; what the listener gets is the
-    /// row as it stands, which their reader calls "blank" in its own words.
     #[test]
     fn a_row_a_key_emptied_is_reported_empty_and_not_described() {
         let prompt = "$ ";
@@ -500,8 +437,6 @@ mod tests {
         );
     }
 
-    /// A row that only *lost* content is not an answer: it is the option a listener just
-    /// left, and reading it beside the one they arrived at doubles every press.
     #[test]
     fn a_row_that_only_lost_content_is_not_the_answer() {
         let changed = [change(11, "> marlon-sousa/acter", "  marlon-sousa/acter")];
@@ -511,8 +446,6 @@ mod tests {
         );
     }
 
-    /// The anchored row wins even when another row gained more, because step 1 is asked
-    /// first: a far end with a command line has already put the answer on it.
     #[test]
     fn the_anchored_row_is_asked_before_the_content_rule() {
         let changed = [
@@ -530,14 +463,9 @@ mod tests {
         );
     }
 
-    /// **A caret past the end of the row means whitespace is there, and the row is padded
-    /// out to it** (roadmap 28.9). Tab completing a unique match in `readline` appends a
-    /// space, the grid holds it, the extractor trims it off, and the cursor is the only
-    /// thing left saying it was ever there.
-    ///
-    /// The caret still cannot end up past the text — it lands at its end, as it did when
-    /// this was a clamp — but the text is now as wide as the far end's own cursor, so what
-    /// the listener holds is the line the far end drew.
+    /// Tab completing a unique match in `readline` appends a trailing space that the grid
+    /// holds and the extractor trims off; the cursor is the only evidence it was ever
+    /// there.
     #[test]
     fn a_caret_past_the_text_pads_the_row_out_to_it() {
         let prompt = "marlon@splyt:~$ ";
@@ -559,10 +487,8 @@ mod tests {
         );
     }
 
-    /// **A space typed at the end of the line is a change the field can show.** Measured at
-    /// a real `bash` on 2026-09-02: typing the space after `echo hi` produced no line item
-    /// at all — the grid gained a space, the extractor trimmed it off again, and the only
-    /// evidence left is the cursor, which moved one column right.
+    /// Measured at a real `bash` 2026-09-02: typing a space after `echo hi` produced no
+    /// line item, only the cursor moving one column right.
     #[test]
     fn a_space_typed_at_the_end_reaches_the_field_as_a_space() {
         let answer = far_end_row(&holding(
@@ -582,10 +508,8 @@ mod tests {
         );
     }
 
-    /// **And deleting it is a change too, which is the defect this rule was written for**
-    /// (roadmap 28.9). Backspace over a space produced no line item either, so with the row
-    /// alone nothing whatever distinguished the two states and the reader had nothing to
-    /// announce. The field losing its last character is a difference a reader speaks.
+    /// Backspace over a trailing space produces no line item either, so the row alone
+    /// cannot distinguish a space typed from one deleted.
     #[test]
     fn deleting_a_trailing_space_shortens_the_line_the_listener_holds() {
         let answer = far_end_row(&holding(
@@ -605,9 +529,6 @@ mod tests {
         );
     }
 
-    /// Moving the caret about inside the line is still only a caret move: padding is for a
-    /// cursor that has gone past the text, and a cursor inside it changes nothing the
-    /// listener is holding.
     #[test]
     fn a_caret_moving_inside_a_padded_line_still_rewrites_nothing() {
         let answer = far_end_row(&holding(
@@ -621,7 +542,6 @@ mod tests {
         assert_eq!(answer, FarEndAnswer::Caret { caret: 4 });
     }
 
-    /// Pure: the same batch always answers the same thing.
     #[test]
     fn the_same_batch_always_answers_the_same_thing() {
         let changed = [change(7, "$ ", "$ ls")];
