@@ -31,6 +31,8 @@ lane's next step.
 - 14. **Open** — A4, completion path. Entry: [14-a4-completion-path.md](roadmap/14-a4-completion-path.md). Spec: none yet.
 - 15. **Open** — A5.3 and onward: iteration entries appear here as NVDA findings arrive. Spec: none yet.
 - 41. **Open** — The end-to-end test for F10 checks focus before the menu has taken it. Entry: [41-f10-menu-e2e-test-races-focus.md](roadmap/41-f10-menu-e2e-test-races-focus.md). Spec: none yet.
+- 49. **Open** — A new menu action compiles and does nothing. Entry: [49-a-new-menu-action-compiles-and-does-nothing.md](roadmap/49-a-new-menu-action-compiles-and-does-nothing.md). Spec: none yet.
+- 50. **Open** — The far-end toggle depends on the keyboard layout. Entry: [50-the-far-end-toggle-depends-on-the-keyboard-layout.md](roadmap/50-the-far-end-toggle-depends-on-the-keyboard-layout.md). Spec: none yet.
 
 **Lane 2: domain**
 
@@ -55,6 +57,7 @@ lane's next step.
 - 46. **Open** — A marker inside a synchronized update may be placed before the output ahead of it. Entry: [46-a-marker-inside-a-synchronized-update-may-be-misplaced.md](roadmap/46-a-marker-inside-a-synchronized-update-may-be-misplaced.md). Spec: none yet.
 - 47. **Open** — A password is asked for before the server says it takes one. Entry: [47-a-password-is-asked-before-the-server-says-it-takes-one.md](roadmap/47-a-password-is-asked-before-the-server-says-it-takes-one.md). Spec: none yet.
 - 48. **Open** — A question nobody will answer parks a thread for good. Entry: [48-an-abandoned-question-parks-a-thread-for-good.md](roadmap/48-an-abandoned-question-parks-a-thread-for-good.md). Spec: none yet.
+- 51. **Open** — Four tests and fakes claim more than they check. Entry: [51-four-tests-and-fakes-claim-more-than-they-check.md](roadmap/51-four-tests-and-fakes-claim-more-than-they-check.md). Spec: none yet.
 
 **Lane 3: macOS**
 
@@ -98,6 +101,8 @@ lane's next step.
 - 14. **Open** — A4, completion path. Entry: [14-a4-completion-path.md](roadmap/14-a4-completion-path.md). Spec: none yet.
 - 15. **Open** — A5.3 and onward: iteration entries appear here as NVDA findings arrive. Spec: none yet.
 - 41. **Open** — The end-to-end test for F10 checks focus before the menu has taken it. Entry: [41-f10-menu-e2e-test-races-focus.md](roadmap/41-f10-menu-e2e-test-races-focus.md). Spec: none yet.
+- 49. **Open** — A new menu action compiles and does nothing. Entry: [49-a-new-menu-action-compiles-and-does-nothing.md](roadmap/49-a-new-menu-action-compiles-and-does-nothing.md). Spec: none yet.
+- 50. **Open** — The far-end toggle depends on the keyboard layout. Entry: [50-the-far-end-toggle-depends-on-the-keyboard-layout.md](roadmap/50-the-far-end-toggle-depends-on-the-keyboard-layout.md). Spec: none yet.
 
 ## Status board — lane 2: domain (pure Rust; may start anytime, parallel to lane 1)
 
@@ -162,6 +167,7 @@ lane's next step.
 - 46. **Open** — A marker inside a synchronized update may be placed before the output ahead of it. Entry: [46-a-marker-inside-a-synchronized-update-may-be-misplaced.md](roadmap/46-a-marker-inside-a-synchronized-update-may-be-misplaced.md). Spec: none yet.
 - 47. **Open** — A password is asked for before the server says it takes one. Entry: [47-a-password-is-asked-before-the-server-says-it-takes-one.md](roadmap/47-a-password-is-asked-before-the-server-says-it-takes-one.md). Spec: none yet.
 - 48. **Open** — A question nobody will answer parks a thread for good. Entry: [48-an-abandoned-question-parks-a-thread-for-good.md](roadmap/48-an-abandoned-question-parks-a-thread-for-good.md). Spec: none yet.
+- 51. **Open** — Four tests and fakes claim more than they check. Entry: [51-four-tests-and-fakes-claim-more-than-they-check.md](roadmap/51-four-tests-and-fakes-claim-more-than-they-check.md). Spec: none yet.
 
 ## Status board — lane 3: macOS (**opened 2026-08-31**; may run parallel to lanes 1 and 2)
 

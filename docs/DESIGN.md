@@ -985,9 +985,8 @@ every F6, every Escape and every dialog, which is noise rather than orientation.
 what the remote process's line editing gives, and what Acter's gives up — is in the help
 dialog, where it can be re-read at the listener's own pace rather than heard once.
 
-**Still open, and deliberately: this is not remembered per connection.** A saved connection
-that always wants Acter's line has to be asked every time. Recorded as its own entry rather
-than guessed at here.
+**Remembered per saved connection, amended 2026-09-12.** Saving a connection records who
+holds the line, and a saved choice wins over the default (spec 26, decision 11).
 
 **Amended 2026-09-02: the far-end line is an element of its own, and the reader speaks it —
 Decided.** The open question below asked whether a permanently empty field needs
@@ -1157,6 +1156,11 @@ Consequences:
   which is what makes the seam between a marked shell and the container it launched
   disappear.
 
+**Where the host console already defines a behaviour, Acter matches it — Decided
+2026-08-22.** An interrupt that releases typed-ahead lines runs them, as a real `cmd.exe`
+window does (measured 2026-08-22). This covers behaviour Acter passes through, not bytes
+Acter itself writes.
+
 ## Output pacing: quiescence, patience, follow mode — **Decided**
 
 Silence is a signal: a program that stops printing is either done or waiting for
@@ -1245,6 +1249,9 @@ Also decided earlier and unchanged:
 - The status announcement (Ctrl+Shift+S) reports when a command is still running.
 - The frontend caps rendered lines per block (last N lines) for never-ending output;
   full scrollback is retained backend-side in the terminal grid.
+
+**Typing at a far end that is not reading input is silent, and that silence is accepted
+rather than a defect — ruled by the user 2026-08-22.**
 
 ## A row that changed is an answer — **Decided**
 
@@ -1633,3 +1640,6 @@ keeps that caveat.
   local edit field would display and speak it. Remote no-echo state is unreliable to
   detect through ConPTY; likely a "secure input" toggle masking the field, possibly
   with heuristic detection of password-prompt text as a hint.
+- Should quiescence flush a trailing partial line? B4 counted no gap of 500 ms or more
+  inside an unfinished line on a local pseudoconsole (2026-08-22), so it is not urgent
+  locally; revisit over SSH, where a network can split a write.

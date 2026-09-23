@@ -593,6 +593,16 @@ reaches the transcript and it is read aloud, in the very batch the user describe
 dropping it. What stood in front of it was the prompt announcement, arriving first, over a
 listener editing a line — and that is what amendment A removes.
 
+
+### M. The toggle's words are the ones DESIGN records, not decision 1's
+
+Decision 1's "off" sentence ("Acter gets your keys again. History and completion are back.")
+and the checklist item "Toggling back restores Acter's history and completion" predate
+roadmap 28.7, which found that Acter has neither a history nor a completion. What shipped
+is `farEndLineOnMessage`, "Remote process keys.", and `farEndLineOffMessage`, "Acter process
+keys.", in `ui/src/controllers/app.ts`; DESIGN records the decision under "Edit field
+ownership". Noted 2026-09-23 while retiring the lane histories (C12).
+
 ## Definition of done
 
 - Every named key becomes the measured bytes, with a unit test per row of the table and one
