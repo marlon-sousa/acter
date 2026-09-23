@@ -1,52 +1,30 @@
 //! Entity/value: shared IPC protocol value types — identity, correlation, and the
-//! state enums carried across the frontend wire. Pure data, no behavior.
-//!
-//! The autoread verdict used to live here too. A6 took it off the wire, so it moved to
-//! [`crate::entities::read_mode`], which is not a protocol module.
+//! state enums carried across the frontend wire.
 
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
-/// Identifies a session (one per tab). A distinct named type so it can never be
-/// confused with a [`CommandId`]; serializes as a bare integer. `u32` (not `u64`)
-/// because it maps to a JS `number` without precision loss and a session/tab counter
-/// never approaches four billion.
+/// `u32` so it fits a JavaScript number exactly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Type)]
 pub struct SessionId(pub u32);
 
-/// Correlation id tying a submitted command to every event about it. `submit_command`
-/// returns one; every later event about that command carries it. `u32` for the same
-/// reason as [`SessionId`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Type)]
 pub struct CommandId(pub u32);
 
-/// Process exit status. Nonzero is a failure, announced distinctly from success.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Type)]
 pub struct ExitCode(pub i32);
 
-/// Rendering mode over the one live session. Phase 1 only ever emits
-/// [`Mode::NonInteractive`]; the interactive variant is defined so Phase 2 is additive.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
 pub enum Mode {
-    /// Conversational, screen-reader-native mode: local edit field + results buffer.
+    /// Local edit field and results buffer.
     NonInteractive,
-    /// Full terminal pass-through for ncurses/full-screen programs.
+    /// Full terminal pass-through.
     Interactive,
 }
 
-/// Transport connection state. The local transport is always [`ConnectionState::Connected`]
-/// in Phase 1; the other states are exercised once SSH lands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
 pub enum ConnectionState {
-    /// The session has been started and is not usable yet: a process was spawned, or a
-    /// network connection is being made, and the far end has not said anything.
-    ///
-    /// **Added by A9 because it is the state a user meets first**, and the one they were
-    /// never told about: a window opening onto PowerShell sat silent for seconds while the
-    /// shell started, which a listener cannot tell from a session that is broken (roadmap
-    /// 23.7). It is deliberately not "the process exists" — a shell that has not drawn a
-    /// prompt is not one anybody can use, and reporting it as connected is a lie a listener
-    /// would act on.
+    /// Started, and nothing has arrived from the far end yet.
     Connecting,
     Connected,
     Reconnecting,

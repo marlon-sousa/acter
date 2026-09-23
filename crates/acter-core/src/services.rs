@@ -1,9 +1,5 @@
-//! Facade for this crate's services, one file per service.
-//!
-//! A service coordinates ports, entities and policies for one named use case, and owns
-//! the wiring and the lifetime of what it coordinates (ARCHITECTURE's service-sprawl
-//! guard). It names no adapter: everything below it is a trait, and which implementation
-//! fills each slot is the composition root's to decide.
+//! Service: a domain's actionable surface. Facade over the crate's services,
+//! one file per service; declares modules and re-exports their public API.
 
 mod connect;
 mod conversation;

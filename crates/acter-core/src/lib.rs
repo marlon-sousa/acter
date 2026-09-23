@@ -1,7 +1,5 @@
-//! Acter domain crate: entities, policies, ports (driven and driving), services,
-//! and the IPC protocol types. No I/O and no framework dependencies live here.
-//!
-//! Facade: this file only declares modules and re-exports the public API.
+//! Acter domain crate: entities, policies, ports, services and the IPC protocol
+//! types. Facade: this file only declares modules and re-exports the public API.
 #![warn(unreachable_pub)]
 
 mod controllers;
@@ -21,10 +19,6 @@ pub use entities::{
     ShellMarkers, Signer, StoredSettings, SubmitAck, TerminalItem, Variant, Verdict,
     no_such_connection, refused, same_name,
 };
-// The pacing verdict is domain-internal since A6: `ReadMode` no longer crosses the wire,
-// so the items whose signatures mention it — `PacingAction`, `PacingOutcome`, `verdict`
-// and the three transition functions — are `pub(crate)` in `policies` and reached
-// through that module rather than re-exported here. Nothing outside this crate used them.
 pub use policies::{
     Anchor, Binding, BoundaryEvent, BoundaryTracker, Caret, Connection, FarEndAnswer, Keystroke,
     MenuItem, Region, RowChange, Standard, SystemMenu, TextSize, binding_for, catalogue, ended,

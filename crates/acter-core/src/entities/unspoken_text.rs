@@ -1,49 +1,23 @@
-//! Entity/value: the text a running command has produced but not yet announced, with
-//! the one invariant that keeps a session actor's memory bounded.
+//! Entity/value: the text a running command has produced but not yet announced.
 //!
-//! Speech is the only reason to keep this text: it has already been rendered and is
-//! reviewable in the buffer (DESIGN, buffer and speech are separate paths). So once the
-//! accumulated span passes the auto-read threshold its verdict is settled as
-//! [`ReadMode::TooBig`] forever — no later chunk can bring it back under — and a too-big
-//! announcement needs only the line count. From that point the bytes are dropped and
-//! only counts are kept.
-//!
-//! That is what bounds the gapless-flood case (`yes`, a busy `tail -f`) that no pacing
-//! rule reaches: under a flood no quiescent gap ever occurs, so without this nothing
-//! would ever be flushed and nothing ever freed.
-//!
-//! **One line survives the drop, and it is the last one.** Reported by the user on
-//! 2026-08-30: a session with no shell integration that floods says "too big to read" and
-//! nothing else, and the prompt goes with the flood — because in such a session the prompt
-//! *is* output, the last row of it, and no `PromptDrawn` is coming to say it separately. So
-//! the final unterminated row is kept beside the counts, which costs one row of memory
-//! whatever the flood does, and whoever announces the verdict can read it.
-//!
-//! **Unterminated is the whole of the test.** A shell that has drawn its prompt leaves the
-//! cursor on that row with no line ending after it, so a span ending at a newline has
-//! nothing outstanding and this answers `None`. That is why it is the *last line* rather
-//! than the last *complete* line: the complete ones were part of what was too big.
+//! Past the auto-read threshold the verdict cannot change back, since the size only grows,
+//! so the text is dropped and only counts are kept; that bounds memory under a gapless flood
+//! such as `yes`.
 
 use crate::PacingConfig;
 use crate::entities::ReadMode;
 use crate::policies::{TextSize, measure, verdict};
 
-/// Unannounced text for one command. Line counts stay exact whether or not the text is
-/// still held; the character count is exact only while it is, and afterwards is an
-/// over-estimate that stays above `max_chars` — which is all the threshold needs, since
-/// the verdict is already settled.
+/// Once the text is dropped the character count is an over-estimate; line counts stay exact.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct UnspokenText {
-    /// `None` once the verdict is settled as too big and the bytes were dropped — which
-    /// is why this cannot derive `Default`: an empty accumulator holds an empty string,
-    /// not nothing.
+    /// `None` once dropped; empty is `Some("")`, hence the manual `Default`.
     text: Option<String>,
     newlines: usize,
     chars: usize,
     ends_with_newline: bool,
     any: bool,
-    /// Whatever has arrived since the last line ending. Kept whether or not the bytes are,
-    /// because it is one row rather than a span.
+    /// Kept after the text is dropped; in an unintegrated session this row is the prompt.
     last_line: String,
 }
 
@@ -61,7 +35,6 @@ impl Default for UnspokenText {
 }
 
 impl UnspokenText {
-    /// Adds a chunk. Empty chunks change nothing — they are not output (B1.1).
     pub(crate) fn push(&mut self, chunk: &str, config: &PacingConfig) {
         if chunk.is_empty() {
             return;
@@ -69,8 +42,6 @@ impl UnspokenText {
         self.newlines += chunk.matches('\n').count();
         self.ends_with_newline = chunk.ends_with('\n');
         self.any = true;
-        // Everything after this chunk's last line ending, or more of the row already being
-        // built when it carried none.
         match chunk.rfind('\n') {
             Some(at) => {
                 self.last_line.clear();
@@ -84,19 +55,13 @@ impl UnspokenText {
                 text.push_str(chunk);
                 self.chars = measure(text).chars;
                 if verdict(self.size(), config) == ReadMode::TooBig {
-                    // The verdict can never come back under the threshold, and a
-                    // too-big announcement carries only the line count.
                     self.text = None;
                 }
             }
-            // Already over: keep counting, and let `chars` over-estimate. Raw chars are
-            // never fewer than the trimmed measure, so it stays above `max_chars`.
             None => self.chars = self.chars.saturating_add(chunk.chars().count()),
         }
     }
 
-    /// The measured size, matching what [`measure`] would report for the whole span —
-    /// exactly for lines, and for chars until the bytes are dropped.
     pub(crate) fn size(&self) -> TextSize {
         let trailing = usize::from(self.any && !self.ends_with_newline);
         TextSize {
@@ -105,17 +70,13 @@ impl UnspokenText {
         }
     }
 
-    /// The row the far end is still sitting on: everything since the last line ending.
-    ///
-    /// `None` when the span ends at one, and when what is outstanding is only whitespace —
-    /// the rule a drawn prompt is held to for the same reason: some shells draw across two
-    /// rows and the first of them is blank.
+    /// `None` when the span ends at a line ending or the row is only whitespace, as the
+    /// blank first row of a two-row prompt is.
     pub(crate) fn last_line(&self) -> Option<&str> {
         (!self.last_line.trim().is_empty()).then_some(self.last_line.as_str())
     }
 
-    /// Takes the span, leaving the accumulator empty. The text is `None` when it was
-    /// dropped — a caller announcing a too-big verdict needs only [`TextSize::lines`].
+    /// The text is `None` when it was dropped.
     pub(crate) fn take(&mut self) -> (Option<String>, TextSize) {
         let size = self.size();
         let text = self.text.take();
@@ -196,8 +157,6 @@ mod tests {
     fn a_flood_does_not_grow_without_bound() {
         let config = PacingConfig::default();
         let mut unspoken = UnspokenText::default();
-        // No quiescent gap ever comes, so nothing is ever flushed: the accumulator has
-        // to survive this on its own.
         for _ in 0..10_000 {
             unspoken.push(&"y\n".repeat(100), &config);
         }
@@ -205,9 +164,6 @@ mod tests {
         assert_eq!(unspoken.size().lines, 1_000_000);
     }
 
-    /// **The row the far end is sitting on outlives the bytes.** It is what a listener
-    /// needs when the span itself is too big to read, and in an unintegrated session it is
-    /// the prompt.
     #[test]
     fn the_last_unterminated_row_survives_the_bytes_being_dropped() {
         let config = PacingConfig::default();
@@ -222,7 +178,6 @@ mod tests {
         assert_eq!(text, None, "the span itself is still not worth holding");
     }
 
-    /// It is built up as the far end draws it, chunk by chunk, exactly as a prompt arrives.
     #[test]
     fn a_row_arriving_in_pieces_is_one_row() {
         let config = PacingConfig::default();
@@ -234,9 +189,6 @@ mod tests {
         assert_eq!(unspoken.last_line(), Some("marlon@ubuntu:~$ "));
     }
 
-    /// **A span that ends at a line ending has nothing outstanding**, which is the test
-    /// for "the far end is sitting at a prompt" and the reason this is the last row rather
-    /// than the last complete line.
     #[test]
     fn a_span_that_ends_at_a_line_ending_has_no_last_row() {
         let config = PacingConfig::default();
@@ -246,8 +198,6 @@ mod tests {
         assert_eq!(unspoken.last_line(), None);
     }
 
-    /// Whitespace is not a row worth reading: some shells draw a prompt across two of them
-    /// and the first is blank.
     #[test]
     fn a_blank_row_is_not_a_row() {
         let config = PacingConfig::default();
@@ -257,8 +207,6 @@ mod tests {
         assert_eq!(unspoken.last_line(), None);
     }
 
-    /// And it belongs to the span it arrived in: taking one leaves nothing behind for the
-    /// next.
     #[test]
     fn taking_the_span_takes_the_row_with_it() {
         let config = PacingConfig::default();
