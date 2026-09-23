@@ -1,56 +1,106 @@
-/* Readable defaults only — no visual design in A1 (see docs/specs/a1-static-shell.md). */
-
-main {
-  max-width: 60rem;
-  margin: 0 auto;
-  padding: 1rem;
-  font-family: system-ui, sans-serif;
+:root {
+  color-scheme: dark;
+  --session-bg: #0c0c0c;
+  --session-fg: #cccccc;
+  --session-strong: #f2f2f2;
+  --chrome-bg: #1f1f1f;
+  --chrome-fg: #cccccc;
+  --chrome-muted: #9d9d9d;
+  --chrome-rule: #2f2f2f;
+  --dialog-bg: #2b2b2b;
+  --dialog-fg: #ffffff;
+  --control-bg: #373737;
+  --control-hover: #414141;
+  --control-border: #8a8a8a;
+  --field-bg: #1f1f1f;
+  --accent: #4cc2ff;
+  --accent-fg: #000000;
+  --mono: 'Cascadia Mono', Consolas, monospace;
+  --ui: 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif;
 }
 
-#results {
-  min-height: 4rem;
+html,
+body {
+  margin: 0;
+  background: var(--session-bg);
+  color: var(--session-fg);
+  font-family: var(--ui);
+}
+
+main {
+  padding: 0 0.75rem 2.5rem;
+  font-family: var(--mono);
+  font-size: 1rem;
+  line-height: 1.3;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* The ellipsis is visual only; NVDA reads the heading's whole text. */
+#window-title {
+  margin: 0 -0.75rem 0.5rem;
+  padding: 0.35rem 0.75rem;
+  background: var(--chrome-bg);
+  border-bottom: 1px solid var(--chrome-rule);
+  color: var(--chrome-muted);
+  font-family: var(--ui);
+  font-size: 0.8125rem;
+  font-weight: 400;
+  line-height: 1.4;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+#results h2,
+#results .prompt {
+  margin: 0;
+  font: inherit;
+}
+
+#results h2 {
+  color: var(--session-strong);
 }
 
 #results .response {
   white-space: pre-wrap;
-  font-family: monospace;
 }
 
-#command-form {
-  display: flex;
-  gap: 0.5rem;
-  align-items: center;
-}
-
-#command-input {
-  flex: 1;
-  font-family: monospace;
-  font-size: 1rem;
-  padding: 0.25rem;
-}
-
-/* The far end's command line. A span rather than an input for accessibility reasons that
-   are measured and recorded in adapters/far_end_field.ts, so it needs the borders and the
-   baseline an input gets for free — a sighted developer looking at this window should see
-   a command line where a command line is. */
+#command-form,
 #far-end-line {
   display: flex;
-  gap: 0.5rem;
   align-items: center;
+}
+
+#command-input,
+#far-end-input {
+  flex: 1;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--session-strong);
+  caret-color: var(--session-strong);
+  font: inherit;
+}
+
+#command-input:focus-visible,
+#far-end-input:focus-visible {
+  outline: none;
 }
 
 #far-end-input {
-  flex: 1;
-  font-family: monospace;
-  font-size: 1rem;
-  padding: 0.25rem;
-  border: 1px solid;
-  min-height: 1.5rem;
+  min-height: 1.3em;
   white-space: pre;
   overflow-x: auto;
 }
 
-.visually-hidden {
+.visually-hidden,
+#command-form > label,
+#far-end-label {
   position: absolute;
   width: 1px;
   height: 1px;
@@ -62,21 +112,21 @@ main {
   border: 0;
 }
 
-/* The in-document menu bar (spec A7). Kept deliberately plain: what matters about it is
-   its roles and its keyboard, and a sighted reviewer should still be able to see where
-   it is. `[hidden]` is asserted first, because a `display` rule on the menu would
-   otherwise override the attribute the adapter uses to open and close submenus. */
+/* Asserted first, because a `display` rule on the menu would otherwise override the attribute the adapter uses to open and close submenus. */
 [hidden] {
   display: none !important;
 }
 
 #menu-bar {
   display: flex;
-  gap: 0.25rem;
+  gap: 0.125rem;
   margin: 0;
-  padding: 0.25rem;
+  padding: 0.2rem 0.4rem;
   list-style: none;
-  border-bottom: 1px solid currentColor;
+  background: var(--chrome-bg);
+  color: var(--chrome-fg);
+  font-family: var(--ui);
+  font-size: 0.875rem;
 }
 
 #menu-bar > li {
@@ -85,100 +135,192 @@ main {
 
 #menu-bar [role='menuitem'] {
   display: block;
-  padding: 0.2rem 0.6rem;
+  padding: 0.25rem 0.65rem;
+  border-radius: 4px;
   cursor: default;
 }
 
+#menu-bar [role='menuitem']:hover,
 #menu-bar [role='menuitem']:focus {
-  outline: 2px solid currentColor;
+  background: var(--control-bg);
+  color: var(--dialog-fg);
+}
+
+#menu-bar [role='menuitem']:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 
 #menu-bar [role='menu'] {
   position: absolute;
   z-index: 1;
-  margin: 0;
-  padding: 0.25rem 0;
+  margin: 0.2rem 0 0;
+  padding: 0.25rem;
   min-width: 12rem;
   list-style: none;
-  border: 1px solid currentColor;
-  background: Canvas;
+  background: var(--dialog-bg);
+  border: 1px solid var(--chrome-rule);
+  border-radius: 6px;
+  box-shadow: 0 8px 16px rgb(0 0 0 / 0.5);
 }
 
-/* The status bar sits at the bottom of the window, and that position is functional rather
-   than decorative. NVDA's report-status-line command does not look for an ARIA role: it
-   takes the bottom-left PIXEL of the foreground window, asks the accessibility tree what
-   object is there, and walks up from it looking for one whose role is STATUSBAR
-   (`api.getStatusBar`, read from NVDA's own source). An element that is merely last in the
-   document is not under that pixel, so the command finds nothing.
-
-   Pinning it is the half we control. **The other half does not work, and was measured:**
-   with the bar pinned here, NVDA's report-status-line command still answers nothing
-   (2026-08-25). So either Chromium does not expose `role="status"` as ROLE_SYSTEM_STATUSBAR,
-   or the window's bottom edge belongs to the frame rather than to the webview — and either
-   way no markup on this side will make that command answer. The route that does work is a
-   keystroke Acter owns, which DESIGN already reserves as Ctrl+Shift+S.
-
-   The bar stays pinned regardless: a status bar belongs at the bottom of a window, it is
-   reachable as a labelled `contentinfo` landmark, and it announces itself when it changes. */
+/* Pinned to the bottom edge because NVDA's report-status-line command looks at the window's
+   bottom-left pixel rather than for a role. Measured 2026-08-25: pinned, that command still
+   answers nothing, so the edge belongs to the frame or Chromium does not expose the role. */
 footer[aria-label='Connection status'] {
   position: fixed;
   left: 0;
   bottom: 0;
+  box-sizing: border-box;
   width: 100%;
   margin: 0;
-  padding: 0.15rem 0.5rem;
-  border-top: 1px solid currentColor;
-  background: Canvas;
+  padding: 0.25rem 0.75rem;
+  background: var(--chrome-bg);
+  border-top: 1px solid var(--chrome-rule);
+  color: var(--chrome-fg);
+  font-family: var(--ui);
+  font-size: 0.8125rem;
 }
 
-/* So the last line of output is never hidden behind it. */
-main {
-  padding-bottom: 2.5rem;
-}
-
-/* The Connect dialog. Readable defaults only, like the rest of this file — but the
-   selected kind has to be visible as well as announced, because a list whose selection can
-   only be heard is one a sighted person helping cannot follow (spec A8). */
-#connect-kinds {
-  list-style: none;
-  margin: 0.5rem 0;
-  padding: 0;
-  border: 1px solid;
-  max-height: 12rem;
-  overflow-y: auto;
-}
-
-#connect-kinds [role='option'] {
-  padding: 0.25rem 0.5rem;
-  cursor: default;
-}
-
-#connect-kinds [role='option'][aria-selected='true'] {
-  /* System colours, so this follows the user's contrast theme rather than fighting it. */
-  background: Highlight;
-  color: HighlightText;
-}
-
-#connect-panel h2 {
-  font-size: 1rem;
-  margin: 0.5rem 0 0.25rem;
-}
-
-#connect-panel p {
+footer[aria-label='Connection status'] p {
   margin: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+#not-connected-window,
+#terminal-ended {
+  margin: 0.5rem 0;
+}
+
+#not-connected-window p,
+#terminal-ended p {
+  margin: 0 0 0.75rem;
+}
+
+#connect-button,
+#reconnect-button {
+  padding: 0.3rem 1.25rem;
+  background: transparent;
+  border: 1px solid var(--session-fg);
+  border-radius: 4px;
+  color: var(--session-strong);
+  font-family: var(--mono);
+  font-size: 1rem;
+}
+
+#connect-button:hover,
+#reconnect-button:hover {
+  background: var(--control-bg);
+}
+
+dialog {
+  box-sizing: border-box;
+  max-width: min(40rem, calc(100vw - 2rem));
+  max-height: calc(100vh - 2rem);
+  padding: 1.25rem 1.5rem;
+  background: var(--dialog-bg);
+  color: var(--dialog-fg);
+  border: 1px solid var(--chrome-rule);
+  border-radius: 8px;
+  box-shadow: 0 16px 32px rgb(0 0 0 / 0.6);
+  font-family: var(--ui);
+  font-size: 0.9375rem;
+  line-height: 1.45;
+}
+
+dialog::backdrop {
+  background: rgb(0 0 0 / 0.55);
+}
+
+dialog h1 {
+  margin: 0 0 0.75rem;
+  font-size: 1.25rem;
+  font-weight: 600;
+}
+
+dialog h2 {
+  margin: 1rem 0 0.35rem;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+dialog p {
+  margin: 0 0 0.6rem;
   max-width: 40rem;
 }
 
-/* The window with no session: the state, then the button that answers it (spec A10). */
-#not-connected {
-  margin: 1rem 0;
+button {
+  margin: 0.25rem 0.35rem 0 0;
+  padding: 0.35rem 1rem;
+  background: var(--control-bg);
+  color: var(--dialog-fg);
+  border: 1px solid var(--control-border);
+  border-radius: 4px;
+  font: inherit;
+  cursor: default;
 }
 
-#not-connected p {
-  margin: 0 0 0.5rem;
+button:hover {
+  background: var(--control-hover);
 }
 
-#connect-button {
-  font-size: 1rem;
-  padding: 0.25rem 1rem;
+button:focus-visible {
+  outline-offset: 2px;
+}
+
+dialog input[type='text'],
+dialog input[type='password'],
+dialog input:not([type]) {
+  padding: 0.3rem 0.5rem;
+  background: var(--field-bg);
+  color: var(--dialog-fg);
+  border: 1px solid var(--control-border);
+  border-radius: 4px;
+  font: inherit;
+}
+
+input[type='checkbox'] {
+  accent-color: var(--accent);
+}
+
+[role='listbox'] {
+  margin: 0.5rem 0;
+  padding: 0.25rem;
+  max-height: 12rem;
+  overflow-y: auto;
+  list-style: none;
+  background: var(--field-bg);
+  border: 1px solid var(--control-border);
+  border-radius: 4px;
+}
+
+[role='option'] {
+  padding: 0.3rem 0.6rem;
+  border-radius: 3px;
+  cursor: default;
+}
+
+[role='option'][aria-selected='true'] {
+  background: var(--accent);
+  color: var(--accent-fg);
+}
+
+@media (forced-colors: active) {
+  #command-input,
+  #far-end-input {
+    border: 1px solid CanvasText;
+  }
+
+  #command-input:focus-visible,
+  #far-end-input:focus-visible {
+    outline: 2px solid Highlight;
+  }
+
+  [role='option'][aria-selected='true'] {
+    background: Highlight;
+    color: HighlightText;
+    forced-color-adjust: none;
+  }
 }

@@ -641,6 +641,34 @@ mod tests {
         prop::collection::vec(any::<u8>(), 0..256)
     }
 
+    fn assert_matches_the_grid(transcript: &[u8]) {
+        let reference = without_blanks(reference_lines(transcript, 12, 4));
+        for chunk in [1, 3, 7, 29, transcript.len()] {
+            assert_eq!(
+                without_blanks(replay(&drive(transcript, chunk))),
+                reference,
+                "chunk {chunk}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_line_split_by_erasing_its_wrap_keeps_its_place_above_the_next() {
+        assert_matches_the_grid(b"aaa aaa  aaaa\x1b[A\r\n\r\nb\x1b[A\x1b[A\x1b[K");
+    }
+
+    #[test]
+    fn a_line_written_above_an_earlier_one_keeps_its_place() {
+        assert_matches_the_grid(
+            b"\r\n\x1b[Ba\t\x1b[3X\x1b[A\x1b[31m\x1b[K\x1b[Aaaa b  \x1b[A\x1b[2K",
+        );
+    }
+
+    #[test]
+    fn a_wrapped_line_rewritten_above_a_later_one_keeps_its_place() {
+        assert_matches_the_grid(b"\r\n\x1b[B a \x1b[Aa\x1b[Aaaaaa a  \x1b[A\x1b[K");
+    }
+
     proptest! {
         #[test]
         fn never_panics_on_arbitrary_bytes(chunks in prop::collection::vec(any_bytes(), 0..4)) {

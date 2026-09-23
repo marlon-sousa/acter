@@ -68,14 +68,8 @@ export class WindowChrome implements WindowView {
 
   // Focus moves only if it was in what just went away or nowhere, so a reader keeps their place.
   showTerminal(live: boolean): void {
-    const { notConnectedWindow, terminalWindow, form, ended, document } = this.elements;
-    const active = document.activeElement;
-    const stranded =
-      active === null ||
-      active === document.body ||
-      notConnectedWindow.contains(active) ||
-      form.contains(active) ||
-      ended.contains(active);
+    const { notConnectedWindow, terminalWindow, form, ended } = this.elements;
+    const stranded = this.stranded();
 
     this.hasConnected = this.hasConnected || live;
 
@@ -93,7 +87,23 @@ export class WindowChrome implements WindowView {
       return;
     }
     this.opened = true;
-    setTimeout(() => this.focus(), this.startupHold);
+    setTimeout(() => {
+      if (this.stranded()) {
+        this.focus();
+      }
+    }, this.startupHold);
+  }
+
+  private stranded(): boolean {
+    const { notConnectedWindow, form, ended, document } = this.elements;
+    const active = document.activeElement;
+    return (
+      active === null ||
+      active === document.body ||
+      notConnectedWindow.contains(active) ||
+      form.contains(active) ||
+      ended.contains(active)
+    );
   }
 
   showLocalLine(showing: boolean): void {

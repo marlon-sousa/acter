@@ -30,7 +30,6 @@ lane's next step.
 - 13.5. **Open** — The first Enter after a window opens does not always press the focused control. Entry: [13.5-first-enter-after-window-opens-misses-the-focus.md](roadmap/13.5-first-enter-after-window-opens-misses-the-focus.md). Spec: none yet.
 - 14. **Open** — A4, completion path. Entry: [14-a4-completion-path.md](roadmap/14-a4-completion-path.md). Spec: none yet.
 - 15. **Open** — A5.3 and onward: iteration entries appear here as NVDA findings arrive. Spec: none yet.
-- 41. **Open** — The end-to-end test for F10 checks focus before the menu has taken it. Entry: [41-f10-menu-e2e-test-races-focus.md](roadmap/41-f10-menu-e2e-test-races-focus.md). Spec: none yet.
 - 49. **Open** — A new menu action compiles and does nothing. Entry: [49-a-new-menu-action-compiles-and-does-nothing.md](roadmap/49-a-new-menu-action-compiles-and-does-nothing.md). Spec: none yet.
 - 50. **Open** — The far-end toggle depends on the keyboard layout. Entry: [50-the-far-end-toggle-depends-on-the-keyboard-layout.md](roadmap/50-the-far-end-toggle-depends-on-the-keyboard-layout.md). Spec: none yet.
 - 52.1. **Open** — A prompt lands in a different place in the buffer from one run to the next. Entry: [52.1-a-prompt-lands-in-a-different-place-each-run.md](roadmap/52.1-a-prompt-lands-in-a-different-place-each-run.md). Spec: none yet.
@@ -50,7 +49,6 @@ lane's next step.
 - 27.3. **Open** — Reopening the Connect dialog re-reads the last thing the previous attempt said. Entry: [27.3-reopening-connect-dialog-re-reads-last.md](roadmap/27.3-reopening-connect-dialog-re-reads-last.md). Spec: none yet.
 - 27.6. **Open** — Windows PowerShell's screen-reader warning is spoken after the prompt the buffer puts it before. Entry: [27.6-powershell-warning-spoken-after-prompt.md](roadmap/27.6-powershell-warning-spoken-after-prompt.md). Spec: none yet.
 - 27.7. **Open** — At a bash far end, nothing is read aloud when the session connects. Entry: [27.7-bash-far-end-nothing-read-aloud.md](roadmap/27.7-bash-far-end-nothing-read-aloud.md). Spec: none yet.
-- 40. **Open** — The terminal engine can emit two rows in the wrong order after the cursor moves up. Entry: [40-terminal-engine-row-order-under-cursor-up.md](roadmap/40-terminal-engine-row-order-under-cursor-up.md). Spec: none yet.
 - 42. **Open** — A file started anyway goes unmentioned when the far end also has a note. Entry: [42-started-anyway-note-dropped-behind-far-end-note.md](roadmap/42-started-anyway-note-dropped-behind-far-end-note.md). Spec: none yet.
 - 43. **Open** — A leftover answer can resolve the next question in the same attempt. Entry: [43-a-stale-answer-resolves-the-next-question.md](roadmap/43-a-stale-answer-resolves-the-next-question.md). Spec: none yet.
 - 44. **Open** — A trusted signature whose subject merely contains "Microsoft" is announced as Microsoft's. Entry: [44-any-subject-naming-microsoft-is-called-microsoft.md](roadmap/44-any-subject-naming-microsoft-is-called-microsoft.md). Spec: none yet.
@@ -72,7 +70,6 @@ lane's next step.
 
 **Lane 5: the look**
 
-- 52. **Open** — V1, to a sighted person, it looks like a terminal. Entry: [52-it-looks-like-a-terminal.md](roadmap/52-it-looks-like-a-terminal.md). Spec: none yet.
 - 53. **Open** — V2, the prompt, the command and the edit field share one visual line. Entry: [53-the-prompt-and-the-command-share-a-line.md](roadmap/53-the-prompt-and-the-command-share-a-line.md). Spec: none yet.
 - 54. **Open** — V3, the output carries the far end's colours. Entry: [54-the-output-carries-the-far-ends-colours.md](roadmap/54-the-output-carries-the-far-ends-colours.md). Spec: none yet.
 
@@ -107,7 +104,7 @@ lane's next step.
 - 13.9. **Done** — ten findings from the user's own pass over the shipped window, fixed in one general PR. Spec: amendments to [a8-connect-dialog.md](specs/a8-connect-dialog.md) (G, H, I), [a10-the-window-has-two-faces.md](specs/a10-the-window-has-two-faces.md), [a13-what-a-session-can-tell-you-and-where-that-is-explained.md](specs/a13-what-a-session-can-tell-you-and-where-that-is-explained.md) and [b9.5-the-session-is-set-up-after-it-is-established.md](specs/b9.5-the-session-is-set-up-after-it-is-established.md) (7 to 11)
 - 14. **Open** — A4, completion path. Entry: [14-a4-completion-path.md](roadmap/14-a4-completion-path.md). Spec: none yet.
 - 15. **Open** — A5.3 and onward: iteration entries appear here as NVDA findings arrive. Spec: none yet.
-- 41. **Open** — The end-to-end test for F10 checks focus before the menu has taken it. Entry: [41-f10-menu-e2e-test-races-focus.md](roadmap/41-f10-menu-e2e-test-races-focus.md). Spec: none yet.
+- 41. **Done** — The end-to-end test for F10 checks focus before the menu has taken it. Spec: [41-the-startup-focus-leaves-a-moved-focus-alone.md](specs/41-the-startup-focus-leaves-a-moved-focus-alone.md)
 - 49. **Open** — A new menu action compiles and does nothing. Entry: [49-a-new-menu-action-compiles-and-does-nothing.md](roadmap/49-a-new-menu-action-compiles-and-does-nothing.md). Spec: none yet.
 - 50. **Open** — The far-end toggle depends on the keyboard layout. Entry: [50-the-far-end-toggle-depends-on-the-keyboard-layout.md](roadmap/50-the-far-end-toggle-depends-on-the-keyboard-layout.md). Spec: none yet.
 - 52.1. **Open** — A prompt lands in a different place in the buffer from one run to the next. Entry: [52.1-a-prompt-lands-in-a-different-place-each-run.md](roadmap/52.1-a-prompt-lands-in-a-different-place-each-run.md). Spec: none yet.
@@ -167,7 +164,7 @@ lane's next step.
 - 27.5. **Done** — the status region says the whole sentence, and the announcement is that same string, from one function. Spec: [a9-the-window-says-where-you-are.md](specs/a9-the-window-says-where-you-are.md)
 - 27.6. **Open** — Windows PowerShell's screen-reader warning is spoken after the prompt the buffer puts it before. Entry: [27.6-powershell-warning-spoken-after-prompt.md](roadmap/27.6-powershell-warning-spoken-after-prompt.md). Spec: none yet.
 - 27.1. **Done** — B9.5, the session is set up after it is established. Spec: [b9.5-the-session-is-set-up-after-it-is-established.md](specs/b9.5-the-session-is-set-up-after-it-is-established.md)
-- 40. **Open** — The terminal engine can emit two rows in the wrong order after the cursor moves up. Entry: [40-terminal-engine-row-order-under-cursor-up.md](roadmap/40-terminal-engine-row-order-under-cursor-up.md). Spec: none yet.
+- 40. **Done** — The terminal engine can emit two rows in the wrong order after the cursor moves up. Spec: [40-a-line-above-keeps-its-place.md](specs/40-a-line-above-keeps-its-place.md)
 - 42. **Open** — A file started anyway goes unmentioned when the far end also has a note. Entry: [42-started-anyway-note-dropped-behind-far-end-note.md](roadmap/42-started-anyway-note-dropped-behind-far-end-note.md). Spec: none yet.
 - 43. **Open** — A leftover answer can resolve the next question in the same attempt. Entry: [43-a-stale-answer-resolves-the-next-question.md](roadmap/43-a-stale-answer-resolves-the-next-question.md). Spec: none yet.
 - 44. **Open** — A trusted signature whose subject merely contains "Microsoft" is announced as Microsoft's. Entry: [44-any-subject-naming-microsoft-is-called-microsoft.md](roadmap/44-any-subject-naming-microsoft-is-called-microsoft.md). Spec: none yet.
@@ -209,7 +206,7 @@ lane's next step.
 
 ## Status board — lane 5: the look (**opened 2026-09-23**; may run parallel to every other lane; strict order)
 
-- 52. **Open** — V1, to a sighted person, it looks like a terminal. Entry: [52-it-looks-like-a-terminal.md](roadmap/52-it-looks-like-a-terminal.md). Spec: none yet.
+- 52. **Done** — V1, to a sighted person, it looks like a terminal. Spec: [v1-it-looks-like-a-terminal.md](specs/v1-it-looks-like-a-terminal.md)
 - 53. **Open** — V2, the prompt, the command and the edit field share one visual line. Entry: [53-the-prompt-and-the-command-share-a-line.md](roadmap/53-the-prompt-and-the-command-share-a-line.md). Spec: none yet.
 - 54. **Open** — V3, the output carries the far end's colours. Entry: [54-the-output-carries-the-far-ends-colours.md](roadmap/54-the-output-carries-the-far-ends-colours.md). Spec: none yet.
 

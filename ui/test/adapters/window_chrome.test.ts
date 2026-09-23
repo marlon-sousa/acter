@@ -298,6 +298,17 @@ describe('the startup hold', () => {
     expect(document.activeElement).toBe(connectButton);
   });
 
+  it('leaves focus alone when the user moved it somewhere else during the hold', async () => {
+    const chrome = held();
+    chrome.showTerminal(true);
+    heading.tabIndex = -1;
+    heading.focus();
+
+    await new Promise((resolve) => setTimeout(resolve, 40));
+
+    expect(document.activeElement).toBe(heading);
+  });
+
   it('places every later one immediately', async () => {
     const chrome = held();
     chrome.showTerminal(false);
