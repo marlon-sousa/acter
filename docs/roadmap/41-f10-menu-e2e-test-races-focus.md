@@ -11,6 +11,11 @@ opens on F10 with focus on the first item", failed at line 86 with
 `Expected: "menu-acter"`, `Received: "command-input"`. The rerun of the same commit passed,
 and main had been green in every run before.
 
+Again on 2026-09-23, in the `e2e (Windows)` job of PR #71 (V1), on commit `9f9d832`, which
+only removed two comments from `ui/src/styles.css`: the same test, the same
+`Expected: "menu-acter"`, `Received: "command-input"`. The same job had passed on the
+branch's previous commit, whose CSS rules are identical.
+
 The test presses F10 and reads the focused element once, immediately. Nothing in the test
 waits for focus to move. The `before` hook in the same file uses `waitUntil` with a
 30-second timeout for F10 to reach the menu bar, but the test itself does not.
