@@ -29,6 +29,14 @@ been green in every run before. The bug is in the code on main and was not hit u
   ` a `, `ESC[A`, `a`, `ESC[A`, `aaaaa a  `, `ESC[A`, `ESC[K`. The log did not show this
   test's own seed.
 
-Both inputs move the cursor up past rows already written, then write or erase there.
+- Again on 2026-09-23, in the `fmt, clippy, test (Windows)` job of PR #67 (C4, comments
+  only): `no_line_is_ever_lost` with seed
+  `cc 95462c408b57ea8b7c66954fec5ed923db1ec8210789bb8bf13302d6580fa302`, replay gives
+  `["a", "c"]` where the reference gives `["c", "a"]`. The minimal input begins `ESC[2K`,
+  `ESC[31m`, `ESC[31m`, `ESC[5G`, `aaa aa ac`, `ESC[K`, `ESC[B`, `CR`, `ESC[31m`, `ESC[K`,
+  `a`, `ESC[A`, `ESC[A`; the log was cut off after that. The rerun passed. That is two of
+  the four CI runs of the day.
+
+All of these inputs move the cursor up past rows already written, then write or erase there.
 The seed is not in `crates/acter-term/proptest-regressions/alacritty_engine.txt`, so CI
 only hits this again by chance.

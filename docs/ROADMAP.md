@@ -43,6 +43,8 @@ lane's next step.
 - 27.3. **Open** — Reopening the Connect dialog re-reads the last thing the previous attempt said. Entry: [27.3-reopening-connect-dialog-re-reads-last.md](roadmap/27.3-reopening-connect-dialog-re-reads-last.md). Spec: none yet.
 - 27.7. **Open** — At a bash far end, nothing is read aloud when the session connects. Entry: [27.7-bash-far-end-nothing-read-aloud.md](roadmap/27.7-bash-far-end-nothing-read-aloud.md). Spec: none yet.
 - 40. **Open** — The terminal engine can emit two rows in the wrong order after the cursor moves up. Entry: [40-terminal-engine-row-order-under-cursor-up.md](roadmap/40-terminal-engine-row-order-under-cursor-up.md). Spec: none yet.
+- 42. **Open** — A file started anyway goes unmentioned when the far end also has a note. Entry: [42-started-anyway-note-dropped-behind-far-end-note.md](roadmap/42-started-anyway-note-dropped-behind-far-end-note.md). Spec: none yet.
+- 43. **Open** — A leftover answer can resolve the next question in the same attempt. Entry: [43-a-stale-answer-resolves-the-next-question.md](roadmap/43-a-stale-answer-resolves-the-next-question.md). Spec: none yet.
 
 **Lane 3: macOS**
 
@@ -153,6 +155,8 @@ History: [lane-2-domain.md](roadmap/lane-2-domain.md).
 - 27.5. **Done** — the status region says the whole sentence, and the announcement is that same string, from one function.
 - 27.1. **Done** — B9.5, the session is set up after it is established. Spec: [b9.5-the-session-is-set-up-after-it-is-established.md](specs/b9.5-the-session-is-set-up-after-it-is-established.md)
 - 40. **Open** — The terminal engine can emit two rows in the wrong order after the cursor moves up. Entry: [40-terminal-engine-row-order-under-cursor-up.md](roadmap/40-terminal-engine-row-order-under-cursor-up.md). Spec: none yet.
+- 42. **Open** — A file started anyway goes unmentioned when the far end also has a note. Entry: [42-started-anyway-note-dropped-behind-far-end-note.md](roadmap/42-started-anyway-note-dropped-behind-far-end-note.md). Spec: none yet.
+- 43. **Open** — A leftover answer can resolve the next question in the same attempt. Entry: [43-a-stale-answer-resolves-the-next-question.md](roadmap/43-a-stale-answer-resolves-the-next-question.md). Spec: none yet.
 
 ## Status board — lane 3: macOS (**opened 2026-08-31**; may run parallel to lanes 1 and 2)
 
