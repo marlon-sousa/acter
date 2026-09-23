@@ -1,7 +1,4 @@
-//! Adapter: `ChannelSink` implements the `EventSink` driven port over a Tauri IPC
-//! Channel — the only place in the app a Channel is held (ARCHITECTURE, IPC rules).
-//! The frontend creates a JS `Channel<SessionEvent>` and passes it in the
-//! `attach_session` invoke; the session's event stream flows down it.
+//! Adapter: `ChannelSink` implements the `EventSink` driven port over a Tauri IPC Channel.
 
 use acter_core::{EventSink, SessionEvent};
 use tauri::ipc::Channel;
@@ -18,8 +15,8 @@ impl ChannelSink {
 
 impl EventSink for ChannelSink {
     fn send(&self, event: SessionEvent) {
-        // A closed channel (the webview reloaded or went away) is not a domain error;
-        // the next attach re-establishes delivery. Drop the send silently.
+        // A closed channel means the webview reloaded or went away; the next attach restores
+        // delivery.
         let _ = self.channel.send(event);
     }
 }

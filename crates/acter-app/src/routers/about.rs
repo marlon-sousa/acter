@@ -1,14 +1,4 @@
-//! Adapter: the About Tauri router — the facts the About dialog reads, as one
-//! `#[tauri::command]`.
-//!
-//! **Since 26 it says where Acter keeps its settings and what this build is** (spec 26,
-//! decision 5). The folder is the cheapest answer to "where did that go" for somebody who
-//! cannot go looking with a file manager, and the version stopped being Cargo's the moment
-//! the build started stamping the real one.
-//!
-//! **Everything here comes out of the settings object through managed state**, and the
-//! dialog asks the environment nothing: a second lookup could name a folder the files are
-//! not in.
+//! Adapter: the About Tauri router, the facts the About dialog reads.
 
 use serde::Serialize;
 use tauri::State;
@@ -16,24 +6,14 @@ use tauri::State;
 use crate::adapters::Settings;
 use crate::container::AppState;
 
-/// What About says, in the order it says it.
 #[derive(Serialize)]
 pub(crate) struct About {
     name: &'static str,
-    /// What a bug report carries: `1.0.0`, or `development-521c956`.
-    ///
-    /// **Kept beside the sentence rather than replaced by it.** The dialog is copyable
-    /// text, so the identifier has to be there to be copied; what is *read out* is
-    /// [`Self::version_said`], because `development-521c956` is a value and not a sentence.
     version: String,
-    /// The version as a listener hears it: "Version 1.0.0." or "Development build, commit
-    /// 521c956."
     version_said: String,
     copyright: &'static str,
     licence: &'static str,
-    /// The settings folder, as a path a user can read out and type into a file manager.
     settings_folder: String,
-    /// How Acter came to be using it, as a whole sentence.
     settings_standing: &'static str,
 }
 
@@ -42,11 +22,6 @@ pub(crate) fn about(state: State<'_, AppState>) -> About {
     facts(&state.settings)
 }
 
-/// The facts themselves, given the settings object the composition root built.
-///
-/// Separate from the command so the whole answer is assertable without a Tauri runtime;
-/// what the runtime adds is the state extraction, and the mock-runtime test in `routers.rs`
-/// covers that.
 fn facts(settings: &Settings) -> About {
     About {
         name: "Acter",
@@ -67,9 +42,6 @@ mod tests {
 
     use super::*;
 
-    /// A settings object over a folder nothing was written to, which is all these need:
-    /// the runtime values are set in the constructor and no test here touches the
-    /// document.
     fn about_a(standing: Standing, version: Version) -> About {
         facts(&Settings::open(
             SettingsFolder {
@@ -94,9 +66,6 @@ mod tests {
         }
     }
 
-    /// **The folder is the one the composition root resolved, not one this router looked
-    /// up.** A dialog that read the environment a second time could say a different folder
-    /// than the one the files are actually in.
     #[test]
     fn it_says_the_settings_folder_it_was_given() {
         let about = about_a(Standing::Portable, Version::released("1.0.0"));
@@ -104,8 +73,6 @@ mod tests {
         assert_eq!(about.settings_folder, r"D:\acter\settings");
     }
 
-    /// **The version is the build's, and it is said in words** (decision 5). The raw
-    /// identifier is what a bug report carries; nothing tries to spell a commit out loud.
     #[test]
     fn a_release_says_its_number_and_a_development_build_says_it_is_one() {
         let released = about_a(Standing::Installed, Version::released("1.0.0"));
@@ -120,14 +87,6 @@ mod tests {
         );
     }
 
-    /// Every standing has a sentence of its own, and each is a whole one: this line is read
-    /// aloud, and a listener who hears only a path has been told where without being told
-    /// why.
-    ///
-    /// **The run of spaces is asserted because one got in** during an earlier attempt at
-    /// this entry, from a line continuation a formatting pass unwrapped: the sentence still
-    /// read correctly and carried eighteen spaces in the middle of it, which nothing in
-    /// that version of this test could see.
     #[test]
     fn every_standing_is_a_finished_sentence_a_reader_can_speak() {
         let mut said = Vec::new();

@@ -1,29 +1,5 @@
 //! Adapter: [`SshTransport`] — a session on a machine that is not this one, behind
 //! acter-core's [`Transport`] port.
-//!
-//! **The third implementer of a seam that has not moved since B3.5.** Everything above it
-//! — the engine, the boundary tracker, the correlation, the pacing policy — has run over a
-//! scripted far end and over a local pseudoconsole, and does not change because these bytes
-//! crossed a network. Two things the port already modelled turn out to be right here, which
-//! is the evidence the seam was cut in the right place: `interrupt` and `resize` are
-//! methods rather than bytes a caller computes, because over a connection both are things
-//! done to a channel rather than text written into one.
-//!
-//! **Connecting is async and starting is not, and that is deliberate.** [`Transport::start`]
-//! is sync because a `LocalPty` starts by spawning a process; an SSH session is *already
-//! established* by the time anything above it exists, because establishing it is where the
-//! questions live. So [`SshTransport::connect`] is an `async fn` that returns a transport
-//! whose channel is open, and `start` only spawns the pump that carries bytes both ways.
-//! Nothing here ever blocks a thread waiting for a person: the questions are asked through
-//! a port on a blocking task of their own, so a dialog on screen never has a runtime worker
-//! parked behind it (spec B9).
-//!
-//! **The session is unintegrated and this file does nothing to change that** (spec B9,
-//! decision 2). No environment is injected, because there is no carrier: measured against
-//! the rig, `PROMPT_COMMAND` sent with `SendEnv` arrives empty, since OpenSSH's stock
-//! `AcceptEnv` is `LANG` and `LC_*` and a server belonging to somebody else has not been
-//! configured for us. What the far end runs is the account's own login shell, exactly as
-//! `ssh` would start it.
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -40,30 +16,10 @@ use tokio::sync::mpsc::{Sender, UnboundedReceiver, UnboundedSender, unbounded_ch
 use crate::ssh::KnownHosts;
 use crate::ssh::probe::{self, FarEnd};
 
-/// What the far end is told this terminal is.
-///
-/// **`xterm-256color`, which is what the emulator above this actually is.** The engine is
-/// `alacritty_terminal`, and a remote program choosing its escape sequences from `TERM`
-/// has to be choosing the ones that engine parses. Announcing something smaller would make
-/// a far end degrade its output for a terminal Acter is not.
 const TERM: &str = "xterm-256color";
 
-/// End of text — what a pseudoconsole turns into an interrupt for the process attached to
-/// it, and what a remote pty's line discipline does with it too.
-///
-/// **Measured against the rig rather than assumed** (see `tests/ssh_rig.rs`). Spec B9 was
-/// drafted saying an interrupt over SSH is a channel request, which is what the protocol
-/// offers; what OpenSSH's `sshd` actually does with a `signal` request on an interactive
-/// session is another matter, and the honest answer is the one the far end responds to.
-/// Both are sent, cheapest first: the byte is what the remote line discipline turns into
-/// `SIGINT`, and the request is what a server that implements it would act on.
 const INTERRUPT: u8 = 0x03;
 
-/// Which far end to reach, as one value.
-///
-/// **Three fields that only mean anything together**, and the shape B8's saved connections
-/// will hold: a host with somebody else's port, or somebody else's account, is a different
-/// machine as far as both `known_hosts` and the user are concerned.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SshTarget {
     pub host: String,
@@ -71,35 +27,21 @@ pub struct SshTarget {
     pub user: String,
 }
 
-/// One session over one SSH connection.
 pub struct SshTransport {
-    /// What the pump is told to do. Dropping it is what ends the session: the pump's
-    /// receive returns `None`, the pump breaks out of its loop, and the connection handle
-    /// it owns is dropped with it — which is what closes the connection.
+    /// Dropping it ends the session: the pump exits and drops the connection it holds.
     outgoing: UnboundedSender<Outgoing>,
-    /// Taken by [`Transport::start`], which is what makes starting twice a no-op rather
-    /// than two pumps racing over one channel.
     ready: Option<Ready>,
-    /// What the far end said it was, asked before this session's channel was opened.
     far_end: FarEnd,
 }
 
-/// Everything the pump needs, held between connecting and starting.
 struct Ready {
     read: ChannelReadHalf,
     write: ChannelWriteHalf<Msg>,
     inbox: UnboundedReceiver<Outgoing>,
-    /// Kept only so it lives as long as the session: dropping the handle drops the
-    /// connection, and a channel whose connection has gone answers nothing.
     connection: client::Handle<Verifier>,
 }
 
-/// What a sync caller above asks of the async connection below.
-///
-/// **A message rather than a method call**, because [`Transport`] is sync by design and
-/// everything russh offers is async. One queue keeps them ordered: a resize that overtook
-/// the write before it would tell the far end about a screen the output was not written
-/// for.
+/// One queue, so a resize never overtakes the write before it.
 enum Outgoing {
     Data(Vec<u8>),
     Interrupt,
@@ -107,10 +49,7 @@ enum Outgoing {
 }
 
 impl SshTransport {
-    /// Opens a connection, answers whatever it asks, and starts a shell on it.
-    ///
-    /// The error is a whole spoken sentence, because it reaches somebody who has just
-    /// filled in a form and is waiting to hear what happened (CLAUDE.md).
+    /// Err is a whole spoken sentence.
     pub async fn connect(
         target: &SshTarget,
         hosts: Arc<KnownHosts>,
@@ -133,11 +72,6 @@ impl SshTransport {
         };
 
         let mut config = client::Config::default();
-        // **What the user already trusts is offered first.** A server usually has several
-        // kinds of host key; if the negotiation picks one this machine has no record of,
-        // a host the user knows perfectly well arrives as an unknown one and they are asked
-        // about a server they have used for years. This is what `ssh` does with its own
-        // `known_hosts`, and the reason it does not prompt every second connection.
         let recorded = hosts.recorded_algorithms(host, port);
         if !recorded.is_empty() {
             let mut preferred = Preferred::DEFAULT.key.to_vec();
@@ -148,9 +82,6 @@ impl SshTransport {
         let mut connection = client::connect(Arc::new(config), (host, port), verifier)
             .await
             .map_err(|why| {
-                // A key the user refused is not a network failure, and saying "the
-                // connection failed" for it would hide the one thing they need to know:
-                // that Acter did what they told it to.
                 refusal
                     .lock()
                     .expect("refusal lock poisoned")
@@ -167,11 +98,6 @@ impl SshTransport {
 
         authenticate(&mut connection, host, user, &questions).await?;
 
-        // **Before the session channel, which is the whole of decision 7.** Signing in
-        // finishes at the protocol level and no shell exists yet, so this is the one moment
-        // the far end can be asked what it is without a command nobody typed appearing in
-        // the terminal buffer — and the answer is in hand before `ShellFacts` are needed and
-        // before there is anything to announce.
         let far_end = probe::ask(&mut connection, patience).await;
 
         questions.tell("Opening a shell.");
@@ -217,17 +143,10 @@ impl SshTransport {
         })
     }
 
-    /// What the far end said it was, for whoever turns a name into facts.
-    ///
-    /// **This transport does not decide what a name means**, deliberately: which shells have
-    /// been measured, and what ends one's input, is shell knowledge and lives in
-    /// `acter-shells`. What crosses this seam is what the far end actually said.
     pub fn far_end(&self) -> &FarEnd {
         &self.far_end
     }
 
-    /// Queues one thing for the pump, saying the session has ended if it is no longer
-    /// there to do it.
     fn ask(&self, outgoing: Outgoing) -> Result<(), TransportError> {
         if self.ready.is_some() {
             return Err(TransportError::NotStarted);
@@ -239,13 +158,6 @@ impl SshTransport {
 }
 
 impl Transport for SshTransport {
-    /// Starts the pump: one task carrying the far end's bytes up and everything above's
-    /// requests down.
-    ///
-    /// **One send is one read**, as the port requires. What arrives as one `Data` message
-    /// is delivered as one `Vec<u8>` and never merged with the next, because a marker split
-    /// across two reads is exactly the case the domain above has to survive — and over a
-    /// network that split is not hypothetical.
     fn start(&mut self, bytes: Sender<Vec<u8>>) {
         let Some(Ready {
             mut read,
@@ -258,25 +170,18 @@ impl Transport for SshTransport {
         };
 
         tokio::spawn(async move {
-            // Named so it is obvious that the connection is held for the pump's lifetime:
-            // dropping it closes the connection, and that is how a session ends.
+            // Held for the pump's lifetime: dropping it closes the connection.
             let _connection = connection;
             loop {
                 tokio::select! {
                     message = read.wait() => match message {
-                        // Both kinds of output reach the buffer. `ExtendedData` is the far
-                        // end's standard error, and a session that rendered a command's
-                        // output and silently dropped its error messages would be a session
-                        // that lies to somebody who cannot see the screen.
+                        // `ExtendedData` is the far end's standard error.
                         Some(ChannelMsg::Data { data })
                         | Some(ChannelMsg::ExtendedData { data, .. }) => {
                             if bytes.send(data.to_vec()).await.is_err() {
                                 break;
                             }
                         }
-                        // The far end closed: the shell exited, or the connection went.
-                        // Ending the loop drops the sender, which is how the domain above
-                        // learns a session is over (the port's own rule).
                         Some(ChannelMsg::Eof) | Some(ChannelMsg::Close) | None => break,
                         Some(_) => {}
                     },
@@ -287,11 +192,8 @@ impl Transport for SshTransport {
                             }
                         }
                         Some(Outgoing::Interrupt) => {
-                            // The byte first, because it is what a remote pty's line
-                            // discipline turns into `SIGINT`; the request as well, for a
-                            // server that acts on one. Neither is asserted to have worked:
-                            // whether a command actually ended is observed the ordinary
-                            // way, in the bytes that follow (the port's own rule).
+                            // A remote pty's line discipline turns the byte into
+                            // `SIGINT`; the signal request is for a server that acts on one.
                             let _ = write.data_bytes(vec![INTERRUPT]).await;
                             let _ = write.signal(Sig::INT).await;
                         }
@@ -300,7 +202,6 @@ impl Transport for SshTransport {
                                 .window_change(u32::from(columns), u32::from(screen_lines), 0, 0)
                                 .await;
                         }
-                        // Everything above has let go of this transport.
                         None => break,
                     },
                 }
@@ -324,12 +225,6 @@ impl Transport for SshTransport {
     }
 }
 
-/// Signing in, with the password asked for only when the server will take one.
-///
-/// **The question is asked because the server offered the method, not because Acter
-/// assumed it.** A server that takes only public keys is told so by the user's client, and
-/// asking for a password there would be asking for a secret that could not be used —
-/// exactly the reason the password is not a field on the connect form (spec B9, decision 4).
 async fn authenticate(
     connection: &mut client::Handle<Verifier>,
     host: &str,
@@ -358,8 +253,6 @@ async fn authenticate(
         if result.success() {
             return Ok(());
         }
-        // The server may stop offering passwords after enough refusals, and a dialog that
-        // reappeared forever would be a dialog nobody can get out of except by guessing.
         if !offers_password(&result) {
             return Err(format!(
                 "The server at {host} would not accept that password for {user}, and will \
@@ -371,19 +264,8 @@ async fn authenticate(
     }
 }
 
-/// What to say when the connection went away while the user was still answering.
-///
-/// **Found by driving the real thing with a screen reader, 2026-08-26.** An unauthenticated
-/// SSH connection has a deadline — OpenSSH's `LoginGraceTime`, two minutes by default — and
-/// it is running while Acter is asking the *user* questions. Reading a forty-character
-/// fingerprint character by character, meeting a wrong password, and typing another one is
-/// slower than that, and the person most likely to exceed it is the person this product is
-/// for. What they heard was russh's own words: "Channel send error."
-///
-/// So the send failure that means "the far end hung up" is given the sentence it deserves,
-/// and it names the deadline, because that is the one thing that makes the next attempt
-/// succeed. Everything else keeps the library's reason, which is still the best available
-/// account of a genuine network fault.
+/// OpenSSH's `LoginGraceTime`, two minutes by default, runs while the user is answering,
+/// and russh reports the server hanging up then as `SendError`.
 fn lost_while_asking(host: &str, why: &russh::Error) -> String {
     if matches!(why, russh::Error::SendError) {
         return format!(
@@ -395,7 +277,6 @@ fn lost_while_asking(host: &str, why: &russh::Error) -> String {
     ended(format!("Acter could not sign in to {host}. {why}"))
 }
 
-/// Whether the server is still willing to be given a password.
 fn offers_password(result: &russh::client::AuthResult) -> bool {
     match result {
         russh::client::AuthResult::Success => false,
@@ -405,14 +286,7 @@ fn offers_password(result: &russh::client::AuthResult) -> bool {
     }
 }
 
-/// Asks a question on a thread of its own.
-///
-/// **Nothing that waits for a person may hold a runtime worker.** The port is sync because
-/// ARCHITECTURE says port traits are, and answering means a dialog somebody has to read; a
-/// blocking call straight from this task would park one of the runtime's threads for as
-/// long as that takes. `spawn_blocking` is the thread pool that exists for exactly this,
-/// and the port travels into it as an `Arc` rather than a borrow because the task outlives
-/// this stack frame as far as the compiler is concerned.
+/// Nothing that waits for a person may hold a runtime worker.
 async fn ask<T, F>(questions: &Arc<dyn SshQuestions>, question: F) -> T
 where
     T: Send + 'static,
@@ -424,31 +298,21 @@ where
         .expect("asking a question does not panic")
 }
 
-/// The client handler: the one thing russh calls back into, and the place the security
-/// decision is made.
-///
-/// `Clone` because the decision itself is made on a blocking task — everything in it is
-/// shared or copied, so a clone decides exactly what the original would have.
 #[derive(Clone)]
 struct Verifier {
     hosts: Arc<KnownHosts>,
     questions: Arc<dyn SshQuestions>,
     host: String,
     port: u16,
-    /// Why the connection was refused, when it was refused by a person rather than by the
-    /// network. Read after `connect` fails, so the sentence a listener hears is about their
-    /// own decision rather than about a socket.
+    /// `Some` when a person refused, read after `connect` fails.
     refusal: Arc<Mutex<Option<String>>>,
 }
 
 impl Verifier {
-    /// Records the sentence to report instead of whatever the library says next.
     fn refuse(&self, why: String) {
         *self.refusal.lock().expect("refusal lock poisoned") = Some(why);
     }
 
-    /// The whole of decision 3, in one place: a key that is already recorded connects
-    /// silently, and anything else is a question whose default is refusal.
     fn decide(&self, key: &PublicKey) -> bool {
         let Some(question) = self.hosts.check(&self.host, self.port, key) else {
             return true;
@@ -472,8 +336,6 @@ impl Verifier {
         }
 
         if let Err(why) = self.hosts.remember(&self.host, self.port, key) {
-            // Not a failure to connect: the user accepted the key and the session should
-            // happen. What they are owed is knowing they will be asked again.
             self.questions.tell(&why);
         }
         true
@@ -483,20 +345,12 @@ impl Verifier {
 impl client::Handler for Verifier {
     type Error = russh::Error;
 
-    /// **Acter never silently trusts** (spec B9, decision 3). There is no accept-everything
-    /// mode and no `StrictHostKeyChecking no` to find: this is the only path, and its
-    /// default is to ask.
     async fn check_server_key(
         &mut self,
         offered: &russh::keys::PublicKeyOrCertificate,
     ) -> Result<bool, Self::Error> {
         let key = match offered {
             russh::keys::PublicKeyOrCertificate::PublicKey { key, .. } => key.clone(),
-            // A host certificate is a real thing and Acter cannot yet judge one: doing it
-            // properly means knowing which certificate authorities the user trusts, which
-            // is `@cert-authority` in a file this entry does not parse. Refusing loudly is
-            // the honest answer; asking a person to accept something Acter could not check
-            // would be asking them to guess.
             russh::keys::PublicKeyOrCertificate::Certificate(_) => {
                 self.refuse(format!(
                     "The server at {} identified itself with a certificate, which Acter \
@@ -518,14 +372,6 @@ impl client::Handler for Verifier {
 mod tests {
     use super::*;
 
-    /// **Found by driving the real thing with NVDA on 2026-08-26**, and pinned here so it
-    /// cannot quietly go back to what it was.
-    ///
-    /// An unauthenticated SSH connection has a deadline — OpenSSH's `LoginGraceTime`, two
-    /// minutes by default — and it runs while Acter is asking the *user* questions. Reading
-    /// a forty-character fingerprint character by character, meeting a wrong password and
-    /// typing another one exceeds it easily, and the person most likely to exceed it is the
-    /// person this product exists for. What they heard was "Channel send error."
     #[test]
     fn a_connection_that_went_away_while_asking_says_what_to_do_about_it() {
         let said = lost_while_asking("acter-ssh", &russh::Error::SendError);
@@ -546,9 +392,6 @@ mod tests {
         );
     }
 
-    /// Every other failure keeps the library's reason, which is still the best available
-    /// account of a genuine network fault — ended as a sentence, because the world does not
-    /// punctuate.
     #[test]
     fn any_other_failure_keeps_the_reason_the_world_gave() {
         let said = lost_while_asking("acter-ssh", &russh::Error::Disconnect);

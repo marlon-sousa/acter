@@ -2,21 +2,12 @@
 //! with a scripted key sequence, and write down both what it sent and what Acter's own
 //! terminal engine made of it.
 //!
-//! It exists to answer the questions roadmap entries 28, 29 and 30 keep asking and
-//! nobody can answer from a document: does this program take the alternate screen, what
-//! does it send when an arrow key arrives, and how many rows does the engine report as
-//! having changed.
-//!
-//! It runs the real [`AlacrittyEngine`] in the loop, and writes its `take_replies` back
-//! to the pseudoconsole — without that a program that asks for a cursor position report
-//! (`ESC[6n`) waits forever, which is exactly what the first run of this rig measured.
-//!
 //! Usage:
 //!   cargo run -p acter-transports --example capture -- <out.bin> <script> <program> [args...]
 //!
 //! Script steps, comma separated and applied in order:
 //!   w<ms>      wait that many milliseconds, reading and answering all the while
-//!   k:<name>   send a named key (up down left right tab enter esc ctrl_c ctrl_d ctrl_u)
+//!   k:<name>   send a key named in `key_bytes`
 //!   t:<text>   type literal text
 
 use std::io::Write;
@@ -85,8 +76,7 @@ async fn main() {
     }
 }
 
-/// Reads for `ms`, feeding every byte to the engine, printing what it reported, and
-/// writing the engine's replies back — a device query nobody answers hangs the program.
+/// Writes the engine's replies back: a device query nobody answers hangs the program.
 async fn drain(
     receiver: &mut Receiver<Vec<u8>>,
     engine: &mut AlacrittyEngine,
@@ -136,8 +126,6 @@ fn contains(haystack: &[u8], needle: &[u8]) -> bool {
         .any(|window| window == needle)
 }
 
-/// The normal (non-application) encodings, which the measurement of 2026-08-31 found
-/// both shells accept.
 fn key_bytes(name: &str) -> Option<&'static [u8]> {
     Some(match name {
         "up" => b"\x1b[A",
@@ -151,8 +139,6 @@ fn key_bytes(name: &str) -> Option<&'static [u8]> {
         "ctrl_d" => b"\x04",
         "ctrl_u" => b"\x15",
         "ctrl_x" => b"\x18",
-        // The two spellings of Backspace, and of Home and End, which entry 28 must
-        // choose between and which no document can answer.
         "bs" => b"\x08",
         "del" => b"\x7f",
         "delete" => b"\x1b[3~",

@@ -1,16 +1,8 @@
 //! Experiment rig (not product code): how long a real far end takes to answer one
 //! keystroke, measured from the byte leaving Acter to the engine reporting the row.
 //!
-//! It exists for roadmap 28.1. NVDA answers an arrow key by sending it on, polling the
-//! caret for up to `caretMoveTimeoutMs` (default 100 ms, source/editableText.py), and
-//! speaking whatever is at the caret when that poll ends. So the only number that
-//! decides whether the far-end line can be spoken on the press is this one: the time
-//! from the key going out to the redrawn row being in hand. Acter's 500 ms quiescence
-//! clock is five times NVDA's window, which is why the listener hears the previous press.
-//!
-//! For each measured key it prints the time to the first engine item and to the last one
-//! in the window -- first change is when a caret could move, last change is when the row
-//! has settled and stopped being rewritten.
+//! NVDA polls the caret for up to `caretMoveTimeoutMs` after an arrow key (100 ms by default,
+//! source/editableText.py) and speaks whatever is at the caret when the poll ends.
 //!
 //! Usage:
 //!   cargo run -p acter-transports --example latency -- <window_ms> <script> <program> [args...]
@@ -87,7 +79,6 @@ async fn main() {
     }
 }
 
-/// Reads for the whole window, timestamping every item the engine reports.
 async fn measure(
     receiver: &mut Receiver<Vec<u8>>,
     engine: &mut AlacrittyEngine,
@@ -125,8 +116,6 @@ async fn measure(
                         );
                     }
                 }
-                // A bare cursor move -- left, right, Home -- rewrites no line, so the
-                // cursor is the whole of the evidence that the key arrived.
                 let now = engine.cursor();
                 if (now.column, now.row) != (was.column, was.row) {
                     println!(

@@ -1,18 +1,5 @@
 //! Adapter: [`TranscriptShell`] — a [`FakeShell`] that answers from a
 //! [`SessionTranscript`].
-//!
-//! **A request/response loop, not a linear tape** (spec B3.5, decision 4). It draws the
-//! transcript's prompt, echoes what was submitted the way a terminal echoes what was
-//! typed, plays the matching rule, and the pipe asks it for the prompt again. That is
-//! what B2's regions actually require — `Prompt` is A..B, `CommandLine` is the B..C
-//! echo, `Output` is C..D — and an event-level fake can produce neither a prompt nor an
-//! echo, which is why DESIGN's echo exclusion had never been exercised against something
-//! that echoes.
-//!
-//! **Everything here was in `ScriptedTransport` before B3.6 and behaves identically.**
-//! What moved is the prompt sequence, the echo, the line discipline, rule matching and
-//! the interrupt predicate; what stayed behind is the clock, the task and the channels.
-//! Nothing in this file waits, and nothing in it knows where a read ends.
 
 use std::mem::take;
 
@@ -20,30 +7,14 @@ use crate::scripted::transcript::{SessionTranscript, Step};
 
 use super::shell::{Delivery, FakeShell, Script, Submission};
 
-/// The line ending the echo appends, which is what a terminal shows when Enter is
-/// pressed: the carriage return moves to column one, the line feed moves down.
 const CRLF: &[u8] = b"\r\n";
 
-/// What a console line editor treats as "discard whatever is pending on this line".
-///
-/// Line discipline, and therefore this shell's rather than the pipe's — the same side of
-/// the seam as the echo and the prompt. It is modelled because B4.5 writes this byte at a
-/// real `cmd.exe` and needs a fake that answers the way the real one was measured to: the
-/// pending line is thrown away, and **nothing is echoed for it**. Echoing it instead is
-/// what a raw byte pipe does, and it made a submitted `dir` come back as `ir` — the
-/// emulator taking the escape and the letter after it for one sequence.
-///
-/// **Only a bare one**, and that distinction is measured rather than chosen. A console
-/// turns input bytes into key events: an escape on its own is the escape *key* and clears
-/// the line, while an escape followed by `[` is the start of a sequence and is echoed as
-/// the literal characters it is made of — which is exactly why an unread cursor-position
-/// answer sits in the buffer as `^[[3;1R` rather than quietly cancelling anything.
+/// Only a bare escape discards the pending line; `cmd.exe` echoes an escape followed by `[`
+/// as literal characters (see docs/specs/b4.5-cmd-markers-and-unclaimed-replies.md).
 const CANCEL: u8 = 0x1b;
 
-/// What follows an escape that makes it a sequence rather than the escape key.
 const SEQUENCE: u8 = b'[';
 
-/// A far end that says whatever its transcript says.
 pub struct TranscriptShell {
     transcript: SessionTranscript,
 }
@@ -53,21 +24,12 @@ impl TranscriptShell {
         Self { transcript }
     }
 
-    /// The built-in transcript: the ten scenarios A3 scripted as events, expressed as
-    /// bytes.
     pub fn builtin() -> Self {
         Self::new(SessionTranscript::builtin())
     }
 
-    /// The deliveries a run of steps becomes, each payload expanded to the exact bytes
-    /// it puts on the wire.
-    ///
-    /// A payload that cannot be expanded ends the script there. Validation resolved
-    /// every payload when the transcript was loaded, so reaching this means a capture
-    /// file was removed underneath a running session; saying less is the only answer a
-    /// synchronous shell has, because ending the session is the pipe's to do and this
-    /// trait deliberately cannot reach it (decision 2, and the amendment recorded in the
-    /// B3.6 spec).
+    /// A payload that cannot be expanded, such as a capture file removed under a running
+    /// session, ends the script there.
     fn deliveries(&self, steps: &[Step]) -> Vec<Delivery> {
         let mut deliveries = Vec::with_capacity(steps.len());
         for step in steps {
@@ -85,19 +47,11 @@ impl FakeShell for TranscriptShell {
         Script::new(self.deliveries(self.transcript.prompt()))
     }
 
-    /// Bytes accumulate until a line is complete, and each complete line is one
-    /// submission.
-    ///
-    /// Two exceptions. Bytes that exactly match a rule marked `interrupts` are submitted
-    /// without waiting for a line ending, because a control byte never carries one — B3.5
-    /// decision 7's whole point. And an escape discards everything pending on the line
-    /// ahead of it, which is what a console line editor does with one and what B4.5 relies
-    /// on. Everything else — a device-query answer, a partial line — simply accumulates.
     fn accept(&mut self, pending: &mut Vec<u8>) -> Vec<Submission> {
         let mut submissions = Vec::new();
         loop {
-            // Ahead of the line-ending scan, so a cancel arriving in the same read as the
-            // line it precedes clears what was there rather than the line itself.
+            // Ahead of the line-ending scan, so a cancel in the same read as a line clears
+            // only what preceded it.
             if let Some(index) = pending
                 .iter()
                 .position(|byte| *byte == CANCEL)
@@ -111,7 +65,6 @@ impl FakeShell for TranscriptShell {
                 .position(|byte| *byte == b'\r' || *byte == b'\n')
             {
                 let line = pending[..index].to_vec();
-                // A carriage return and line feed together end one line, not two.
                 let pair =
                     usize::from(pending[index] == b'\r' && pending.get(index + 1) == Some(&b'\n'));
                 pending.drain(..index + 1 + pair);
@@ -155,8 +108,6 @@ mod tests {
 
     use super::*;
 
-    /// A prompt, one rule, one interrupting rule and a default, so a test can say only
-    /// the thing it is about.
     fn shell() -> TranscriptShell {
         TranscriptShell::new(
             SessionTranscript::parse(
@@ -190,8 +141,6 @@ mod tests {
         )
     }
 
-    /// What a script would put on the wire, one string per delivery. Read boundaries are
-    /// the pipe's, so this is deliberately not "the reads".
     fn said(script: &Script) -> Vec<String> {
         script
             .deliveries()
@@ -222,8 +171,6 @@ mod tests {
         );
     }
 
-    /// A submission with no line ending is a control byte, and it is echoed as itself:
-    /// appending a newline would move the cursor down a row the shell never left.
     #[test]
     fn an_unterminated_submission_is_echoed_without_a_line_ending() {
         let mut shell = shell();
@@ -240,8 +187,6 @@ mod tests {
         );
     }
 
-    /// The timing is the far end's: a command that dribbles output for a tenth of a
-    /// second is the program being slow, and the script carries that unchanged.
     #[test]
     fn a_delivery_carries_the_transcripts_own_delay() {
         let script = shell().answer(&line("go"));
@@ -289,8 +234,6 @@ mod tests {
         assert!(pending.is_empty());
     }
 
-    /// A control byte carries no line ending, so waiting for one would mean an interrupt
-    /// that never lands.
     #[test]
     fn a_control_byte_is_accepted_with_no_line_ending() {
         let mut shell = shell();
@@ -307,8 +250,6 @@ mod tests {
         );
     }
 
-    /// A device-query answer is written back mid-line and carries no line ending, so it
-    /// must not be mistaken for a submitted command.
     #[test]
     fn a_device_query_answer_is_not_a_submission() {
         let mut shell = shell();
@@ -321,8 +262,6 @@ mod tests {
         );
     }
 
-    /// The byte B4.5 writes ahead of a submitted line, and what a console line editor does
-    /// with it: the pending line is thrown away and nothing is echoed for it.
     #[test]
     fn a_bare_escape_discards_the_pending_line() {
         let mut shell = shell();
