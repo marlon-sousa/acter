@@ -37,6 +37,14 @@ been green in every run before. The bug is in the code on main and was not hit u
   `a`, `ESC[A`, `ESC[A`; the log was cut off after that. The rerun passed. That is two of
   the four CI runs of the day.
 
+- Again on 2026-09-23, in the `fmt, clippy, test (Windows)` job of PR #71 (V1, CSS and the
+  window theme only): `reconstruction_is_independent_of_chunking` with seed
+  `cc 67b21f56d1ea70dd752c7a5793451e845233c2b165012986195495f579b19305`. Chunked replay
+  gives `["a", "b", "a"]` and the whole-transcript replay gives `["a", "a", "b"]`. The
+  minimal failing input: `[97, 97, 97, 32, 97, 97, 97, 32, 32, 97, 97, 97, 97, 27, 91, 65,
+  13, 10, 13, 10, 98, 27, 91, 65, 27, 91, 65, 27, 91, 75]`, which is `aaa aaa  aaaa`,
+  `ESC[A`, `CR LF`, `CR LF`, `b`, `ESC[A`, `ESC[A`, `ESC[K`.
+
 All of these inputs move the cursor up past rows already written, then write or erase there.
 The seed is not in `crates/acter-term/proptest-regressions/alacritty_engine.txt`, so CI
 only hits this again by chance.
