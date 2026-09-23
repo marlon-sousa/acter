@@ -1,5 +1,3 @@
-/* Windows Terminal's defaults, Campbell scheme; every colour yields to forced-colors below. */
-
 :root {
   color-scheme: dark;
   --session-bg: #0c0c0c;
@@ -41,7 +39,7 @@ main {
   outline-offset: 1px;
 }
 
-/* The window title, drawn as a Windows Terminal tab; the ellipsis is visual and the heading keeps its whole text. */
+/* The ellipsis is visual only; NVDA reads the heading's whole text. */
 #window-title {
   margin: 0 -0.75rem 0.5rem;
   padding: 0.35rem 0.75rem;
