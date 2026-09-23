@@ -1,11 +1,5 @@
 // @vitest-environment jsdom
 // Role: test — the modal that says one thing and waits to be dismissed.
-//
-// It exists because a connection error used to arrive as a live-region announcement and a
-// user expected something to press OK on (reported 2026-08-26). What is pinned here is the
-// two properties that make it different from an announcement: the sentence is the dialog's
-// own description, so a reader says it on opening, and the promise does not settle until
-// somebody has dismissed it.
 
 import { beforeEach, describe, expect, it } from 'vitest';
 
@@ -52,7 +46,6 @@ describe('MessageDialog', () => {
     expect(document.getElementById('failed-why')?.textContent).toBe(
       'Acter could not reach acter-ssh on port 2222.',
     );
-    // Described by that element, so it is announced with the dialog rather than found.
     expect(dialog.getAttribute('aria-describedby')).toBe('failed-why');
 
     dialog.close('ok');
@@ -70,7 +63,6 @@ describe('MessageDialog', () => {
     await shown;
   });
 
-  // **The difference from an announcement**: it is still there until acknowledged.
   it('does not settle until it has been dismissed', async () => {
     const { dialog, message } = build();
     let dismissed = false;
@@ -88,14 +80,6 @@ describe('MessageDialog', () => {
   });
 });
 
-/**
- * **Tab in a dialog with one control does nothing at all.**
- *
- * Reported by the user on 2026-08-26. `keepTabInside` exists because Chromium drops focus
- * out of a modal on the last control (A7 measured it, A8 measured it again) — but cycling
- * a single-control dialog lands on the control it started from, and a reader announces it
- * again. Tab then appears to act, and what it does is repeat itself.
- */
 describe('Tab with nowhere to go', () => {
   it('is swallowed rather than re-announcing the only control', () => {
     const { dialog, message } = build();
@@ -114,9 +98,7 @@ describe('Tab with nowhere to go', () => {
     });
     dialog.dispatchEvent(tab);
 
-    // Swallowed, so the platform does not send focus to the dialog's own document...
     expect(tab.defaultPrevented).toBe(true);
-    // ...and not re-focused, so nothing is announced a second time.
     expect(focused).toBe(0);
     expect(document.activeElement?.id).toBe('failed-ok');
 
@@ -124,15 +106,6 @@ describe('Tab with nowhere to go', () => {
   });
 });
 
-/**
- * **A disabled control is not a place Tab can land.**
- *
- * Measured with NVDA on 2026-08-26, in the connect dialog: with Connect disabled by an
- * incomplete form, Tab out of the last field did nothing at all, because the cycle stepped
- * onto a button that cannot take focus and stayed there. Two correct changes — a button
- * that follows the form, and a Tab that stays inside the dialog — met each other exactly
- * where a user would.
- */
 describe('Tab past a disabled control', () => {
   it('skips it rather than stalling on it', () => {
     document.body.innerHTML = `

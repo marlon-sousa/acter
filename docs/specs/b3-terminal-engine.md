@@ -8,7 +8,11 @@ out as one ordered stream, behind a new `TerminalEngine` driven port. This is B2
 caller, and it amends B2 — see decisions 6 and 7.
 
 The unhandled-OSC fork this depends on already landed (PR #17, ahead of this spec, because
-it was a dependency change rather than a component).
+it was a dependency change rather than a component). Measured against source on 2026-08-17:
+`alacritty_terminal` 0.26.0 depends on and re-exports `vte` 0.15, whose `osc_dispatch`
+logs an unrecognized OSC at `debug!` and discards it with no embedder hook, which is the
+gap the fork (marlon-sousa/vte, branch `unhandled-osc`) closes with a no-op-by-default
+`ansi::Handler::unhandled_osc`.
 
 ## Why now / relation to the roadmap
 

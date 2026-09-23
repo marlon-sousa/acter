@@ -291,10 +291,33 @@ WebDriver is installed, so say in the PR body whether it ran.
 
 ### C12 — retire the lane histories
 
-Docs only, one lane file per PR, under the rubric above: keep the measured fact in the
-spec or DESIGN.md, drop the story. The entry file
-[c12-retire-the-lane-histories.md](../roadmap/c12-retire-the-lane-histories.md) carries
-the procedure.
+Files: `docs/roadmap/lane-1-ui.md`, `lane-2-domain.md`, `lane-3-macos.md` and
+`keyboard-routing.md`, the specs their Done entries link to, and `docs/ROADMAP.md`. Docs
+only. It rides in one PR with C10 and C11.
+
+On 2026-09-14 the roadmap was split: the board became one line per entry, open entries
+became one file each under `docs/roadmap/`, and the bodies of every entry already Done were
+moved verbatim into those four files, 4,458 lines in all. Under the roadmap process an entry
+that has a spec and is Done keeps no body: what shipped is the spec plus the merged PR. Most
+of the four files is what shipped and why, which the specs and PRs already say; some of it
+is dated measurements and user observations that spawned later entries, and a few of those
+may exist nowhere else.
+
+The procedure, with this rubric's judgement:
+
+1. For each Done entry, list every dated measurement and every quoted user observation in
+   its body.
+2. For each, check whether the spec the board line links to, or DESIGN.md, already states
+   it. If it does not, add one sentence to the spec's "what was measured" section, or to
+   DESIGN.md when it is a product fact.
+3. Delete the entry's body from the lane file.
+4. An entry marked Closed or Answered with no spec keeps its body: move it to its own entry
+   file named by number and slug, and point the board line at it with `Entry:`.
+5. When a lane file is empty, delete it and remove the `History:` line from that lane's
+   section on the board.
+
+Gate: none, this is docs only. The PR body lists every measurement that was moved and where
+it went.
 
 ## Definition of done for the lane
 

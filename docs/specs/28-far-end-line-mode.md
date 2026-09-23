@@ -101,6 +101,8 @@ candidate spelling, type a marker character, and read where the marker landed.
   inserts a literal `^U` into it. So "the row a key emptied" is something Acter reports and
   never promises.
 
+- **Arrows are not a trap at a bash prompt.** Measured 2026-08-31: `bash` under WSL never set DECCKM, and readline answered `ESC[A` and `ESC O A` identically because it binds both.
+
 ## Decisions
 
 ### 1. The user toggles it, the frontend owns the key, the domain holds the state
@@ -264,6 +266,8 @@ say:
 The frontend words the answer to the key it sent. It still does not decide what the key
 means, and the binding table stays behind the port.
 
+Measured 2026-08-25 in B5.2's NVDA pass (NVDA 2026.1.1, screen-readers bridge, silent capture, `user` persona): Ctrl+D in the edit field of a real PowerShell session produced no speech at all, and a command submitted afterwards ran normally.
+
 ### 10. A paste is bracketed when the far end asked for it, and never otherwise
 
 Pasting into far-end-line mode wraps the text in `ESC[200~` and `ESC[201~` when
@@ -345,6 +349,8 @@ every settling where no key is outstanding, and at the first settling after Ente
 never re-taken while a key is in flight, which is what stops typing from dragging it along
 the row.
 
+Measured 2026-09-02 at a real `gh repo create` on NVDA 2026.1.1 (roadmap 28.2): while "no anchor after Enter" and "no anchor because the cursor is hidden" shared one `None`, arrowing the selection left the field empty; with an explicit `awaiting_prompt` flag the field held one option per press.
+
 ### C. `Cursor` carries the row as well as the column, and the row is read
 
 Decision 5 names "column, row, and whether it is visible" and gives a reason only for the
@@ -365,6 +371,8 @@ it leaves insert mode in `vi`, closes a completion menu in `readline`, cancels a
 so the frontend stops claiming it. The local `<input>` is also taken out of the document
 rather than merely losing focus, because two edit fields where only one does anything is the
 noise A10 took the field away to avoid.
+
+F6 follows the same rule (roadmap 28.3): measured 2026-09-02 on NVDA 2026.1.1, F6 in this mode focused the hidden local `<input>` and nothing moved, so F6 now toggles between whichever line is in front of the user and the buffer.
 
 ### E. `LineId` is exported to TypeScript by naming a narrower integer to specta
 
@@ -491,6 +499,8 @@ arrow answering "hífen". The listing Tab spoke
 **`alpha-one.txt alpha-three.txt alpha-two.txt`**, put that row in the transcript, and left
 the field holding `ls /tmp/acterprobe/al` — the line being edited.
 
+A textbox with `aria-controls` naming an offscreen listbox whose selection moves also announced the completion, because NVDA's `event_selection` reports a selection inside what the focused object controls, but always with its position ("echo 1 de 1"), which `aria-setsize="-1"` did not remove (roadmap 28.4, probe variants I and K).
+
 ### J. What the far end prints at its own prompt is content, and the cursor says which row is not
 
 Decision 6 answers with the row that gained content when the anchored row did not change, and
@@ -514,6 +524,8 @@ because decision 10 draws that line.
 **Nothing published this way is ever taken back**: measured, `bash` sends a candidate list as
 fresh `Appended` rows and never rewrites them, so three candidates leave three rows in the
 transcript and a hundred and fifty leave a hundred and fifty.
+
+Observed 2026-09-02 on NVDA 2026.1.1 and left standing because it predates this amendment: the bare prompt row `bash` redraws with the candidates is published and spoken first, as `marlon@splyt:/mnt/c/Users/marlo$`.
 
 ### G. Checklist item 7 asks for a prompt that creates nothing
 

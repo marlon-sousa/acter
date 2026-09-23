@@ -1,10 +1,5 @@
 // @vitest-environment jsdom
 // Role: test — the listbox both of the Connect dialog's lists are.
-//
-// The rules here are small and each one of them was a defect somewhere first: selection
-// travels as `aria-activedescendant` so focus never leaves the list (A8, decision 2), the
-// ends do not wrap, and a list can have **nothing** selected — which is the state the user
-// asked for on 2026-08-30 when they asked for the variants combo box to become a list.
 
 import { beforeEach, describe, expect, it } from 'vitest';
 
@@ -51,9 +46,6 @@ describe('filling it', () => {
     expect(active()).toBe('kind-0');
   });
 
-  /** **The state a combo box cannot hold.** Nothing marked, and nothing for a reader to
-   * announce as active — an `aria-activedescendant` pointing at nothing would promise an
-   * option that is not there. */
   it('can hold nothing selected', () => {
     list.fill({ labels: ['Ubuntu', 'Debian'], selected: null });
 
@@ -78,7 +70,6 @@ describe('arrowing it', () => {
     list.fill({ labels: ['Ubuntu', 'Debian', 'Alpine'], selected: null });
   });
 
-  /** From nothing, Down is the first choice rather than a correction. */
   it('takes the first row on Down when nothing is chosen', () => {
     press('ArrowDown');
 
@@ -87,7 +78,6 @@ describe('arrowing it', () => {
     expect(chosen).toBe(1);
   });
 
-  /** And Up takes the last, which is what a listbox with no selection does everywhere. */
   it('takes the last row on Up when nothing is chosen', () => {
     press('ArrowUp');
 
@@ -109,8 +99,6 @@ describe('arrowing it', () => {
     expect(selected()).toBe('Ubuntu');
   });
 
-  /** Pressing into the end you are already on is not a change, so nothing is announced
-   * again — the rule `dialog_tab` keeps for Tab, kept here for the arrows. */
   it('says nothing changed when nothing changed', () => {
     press('Home');
     const before = chosen;
@@ -121,7 +109,6 @@ describe('arrowing it', () => {
     expect(chosen).toBe(before);
   });
 
-  /** Every other key belongs to whoever is listening above: Enter connects, Tab leaves. */
   it('leaves other keys alone', () => {
     const enter = new KeyboardEvent('keydown', {
       key: 'Enter',

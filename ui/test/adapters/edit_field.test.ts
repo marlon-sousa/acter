@@ -1,7 +1,5 @@
 // @vitest-environment jsdom
-// Role: test — EditFieldDom over a real input, and above all its selection question:
-// an input's own selection is invisible to window.getSelection(), which is why each area
-// is asked rather than the document (spec A3.2, decision 3).
+// Role: test — EditFieldDom over a real input, and above all its selection question.
 
 import { beforeEach, describe, expect, it } from 'vitest';
 
@@ -48,9 +46,6 @@ describe('EditFieldDom.hasSelection', () => {
     expect(field.hasSelection()).toBe(true);
   });
 
-  // The reason this lives on the view rather than at the document level: the Selection
-  // API reports nothing for a range inside a text field, so a single document-level check
-  // would answer "no selection" here and steal every copy the user asked for.
   it('sees a range the document Selection API cannot', () => {
     input.value = 'git status';
     input.focus();

@@ -15,7 +15,6 @@ import type {
   SubmitAck,
 } from '../../src/protocol';
 
-/** The session every call in this file names; which one it is does not matter here. */
 const SESSION: SessionId = 1;
 
 class FakeBackend implements BackendApi {
@@ -61,8 +60,6 @@ beforeEach(() => {
 });
 
 describe('installDebugRecorder in a release build', () => {
-  // The flag comes from a `#[cfg(debug_assertions)]` plugin, so its absence *is* the
-  // release build. Nothing may be installed and nothing may be wrapped.
   it('hands the backend back untouched and installs nothing', () => {
     const backend = new FakeBackend();
 
@@ -104,9 +101,6 @@ describe('installDebugRecorder in a debug build', () => {
     expect(events).toEqual(['Output', 'Announce', 'CommandFinished']);
   });
 
-  // The record is the arrival order, not the handling order: an entry is written before
-  // the controller's handler runs, so a handler that reorders its own work cannot make
-  // the tape agree with it.
   it('records an event before passing it on', async () => {
     const backend = new FakeBackend();
     const wrapped = installDebugRecorder(backend);

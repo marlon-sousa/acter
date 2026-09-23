@@ -56,6 +56,6 @@ fact, move it into DESIGN.md and delete the file instead.
 
 ## Lane histories
 
-The files named `lane-*.md` and `keyboard-routing.md` under `docs/roadmap/` are the
-archive of entries that were Done before entries had files. They are being retired by
-lane 4 entry C12 and are not where new writing goes.
+There are none. A Done entry keeps no body: what shipped is the spec plus the merged PR.
+Lane 4 entry C12 retired the four history files on 2026-09-23, moving each measurement
+they alone held into the entry's spec.

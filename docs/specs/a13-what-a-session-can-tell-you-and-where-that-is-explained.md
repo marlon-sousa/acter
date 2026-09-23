@@ -20,6 +20,8 @@ The comment above the string says "nothing is read aloud" and is wrong the same 
 
 **B6.2 did not break this. It made the lie audible**, because the prompt is now read too: a
 listener hears "output will not be read automatically" and then immediately hears output.
+The user's first finding, raised during B6.2's accessibility pass: *"'shell integration
+unavailable, output will not be read' — is this still true? Because prompts are now read."*
 
 The user's second finding is the one that decides this entry's shape. Offered three corrected
 sentences, all of them accurate, the reply was: *"Are these sentences what will be presented to

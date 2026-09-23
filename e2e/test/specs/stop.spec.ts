@@ -1,30 +1,11 @@
 // Role: e2e spec — stopping a running command with the key the user actually presses.
-//
-// This file used to submit a typed `stop` line and assert the *silence* B6 left behind:
-// Acter had not asked for that interrupt, the far end simply ended the block, and
-// claiming "command stopped" would have been a claim about something Acter did not do.
-// A3.2 is the entry that comment named. The key now exists, so the whole path runs —
-// keyboard adapter, `send_key`, the keybinding policy, `Transport::interrupt`, the far
-// end's own interrupt rule, a `D` with no exit code.
-//
-// **What is heard is nothing, since B4.1.** Acter claimed `command stopped` at the moment
-// it wrote the byte, which is before anything is known: the signal is asynchronous, and
-// the program stops in its own time or not at all. So the claim went, and what a user
-// hears in a real session is the shell's own prompt coming back, read as ordinary output
-// — evidence from the far end rather than a claim Acter makes. This scripted far end has
-// no prompt to send back, so what these cases can observe is the other half: the output
-// genuinely stops, and Acter says nothing over the top of it.
-//
-// The typed `stop` rule is gone from the shipped transcript with this entry, which is
-// also why the second case here no longer has to tiptoe around correlation drift.
 
 import { browser, expect } from '@wdio/globals';
 
 import { pressCtrlC, submitCommand } from '../helpers';
 
-// Everything the live region has said, accumulated. The region empties itself on an idle
-// timer (A3's browse-mode rule), so sampling `textContent` at the end can miss an
-// announcement that has already been cleared; an observer records them as they land.
+// The region empties itself on an idle timer, so a sample taken at the end can miss an
+// announcement; an observer records them as they land.
 async function recordAnnouncements(): Promise<void> {
   await browser.execute(() => {
     const target = window as unknown as { __spoken?: string[] };
@@ -33,12 +14,8 @@ async function recordAnnouncements(): Promise<void> {
     if (announcer === null) {
       return;
     }
-    // Records what was ADDED, not what the region currently holds. Each announcement is
-    // its own child node (the announcer is a drained queue), so the added nodes are the
-    // utterances — and reading `textContent` instead would report everything still in the
-    // region, including announcements from an earlier test that had not cleared yet. That
-    // distinction was invisible until B5.6 gave a marked session a prompt to announce,
-    // which added mutations and made the stale text reachable.
+    // Added nodes only: the region's `textContent` can still hold an earlier test's
+    // announcements that have not cleared yet.
     new MutationObserver((records) => {
       for (const record of records) {
         for (const added of Array.from(record.addedNodes)) {
@@ -58,11 +35,8 @@ function spoken(): Promise<string[]> {
   );
 }
 
-// The text accumulated under a command's h2, or null while no such block exists.
-//
-// The *most recent* block with that heading: these cases share one app instance, so a
-// name submitted more than once has several blocks and only the newest is the live one.
-// Reading the oldest would have this report a long-finished command as "not growing".
+// The text under the newest h2 for that command, or null while no such block exists; the
+// cases share one app instance, so a name submitted twice has several blocks.
 function blockTextOf(command: string): Promise<string | null> {
   return browser.execute((name: string) => {
     const headings = Array.from(document.querySelectorAll('#results h2'));
@@ -85,16 +59,10 @@ describe('Ctrl+C: stopping a running command', () => {
   it('halts an endless command, and says nothing of its own about it', async () => {
     await recordAnnouncements();
     await submitCommand('forever');
-    // The E2E transcript paces every delivery at 20ms, so the block grows continuously.
-    // Wait until it is genuinely running before stopping it.
     await waitUntilRunning('forever');
 
     await pressCtrlC();
 
-    // The output actually stopped. Sample, wait well past several 20ms intervals, and
-    // sample again — a still-running script would have grown. This is also what the stop
-    // is now waited on *by*: there is no announcement left to synchronise against, which
-    // is the point.
     await browser.waitUntil(
       async () => {
         const settled = await blockTextOf('forever');
@@ -104,13 +72,10 @@ describe('Ctrl+C: stopping a running command', () => {
       { timeout: 10_000, timeoutMsg: 'forever kept producing output after the stop' },
     );
 
-    // And Acter claimed nothing about it (B4.1).
     const said = await spoken();
     expect(said.filter((line) => line.includes('command stopped'))).toEqual([]);
   });
 
-  // The other answer only the frontend can voice, and the one A3.1 decision 6 said the
-  // typed `stop` had no honest way to give.
   it('says there is nothing to stop when nothing is running', async () => {
     await recordAnnouncements();
 
@@ -123,11 +88,6 @@ describe('Ctrl+C: stopping a running command', () => {
     );
   });
 
-  // DESIGN layer 2, the half A3.2's NVDA pass forced into words: the interrupt belongs
-  // to the edit field and nowhere else. In the results buffer Ctrl+C is the screen
-  // reader's own copy command — NVDA answers it in browse mode and it never reaches the
-  // page — so a listener binding here would be one that cannot be pressed. The app must
-  // not act on it even when it is delivered, which is what this dispatches.
   it('does not stop anything when the key arrives outside the edit field', async () => {
     await recordAnnouncements();
     await submitCommand('forever');
@@ -144,11 +104,6 @@ describe('Ctrl+C: stopping a running command', () => {
       );
     });
 
-    // Nothing said, and — the decisive half — the command is still producing.
-    //
-    // "Nothing said" is checked against the answers a keystroke can still earn: a key the
-    // app never saw gets neither the idle answer nor the unbound one. The stop itself has
-    // been silent since B4.1, so its absence would prove nothing here.
     const before = await blockTextOf('forever');
     await browser.pause(1000);
     expect(await blockTextOf('forever')).not.toBe(before);
@@ -156,9 +111,6 @@ describe('Ctrl+C: stopping a running command', () => {
     expect(said.filter((line) => line.includes('nothing running to stop'))).toEqual([]);
     expect(said.filter((line) => line.includes('that key does nothing here'))).toEqual([]);
 
-    // And the edit field still can, so this is a rule about where the key lands rather
-    // than a session that had already stopped listening. What shows it is the output
-    // settling, since there is no announcement to wait for.
     await pressCtrlC();
     await browser.waitUntil(
       async () => {
@@ -184,8 +136,6 @@ describe('Ctrl+C: stopping a running command', () => {
         timeoutMsg: 'the session did not run a command after a stop',
       },
     );
-    // Under its own heading, not the previous command's: nothing minted an id for a
-    // keystroke, so there is no queued id for this block to claim by mistake.
     expect(await blockTextOf('small')).toContain('hello from acter');
   });
 });

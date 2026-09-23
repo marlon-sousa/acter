@@ -1,5 +1,4 @@
-// Role: test — controller behavior against fake backend, views, and beep. Covers
-// every rendering rule in spec decision 2.
+// Role: test — controller behavior against fake backend, views, and beep.
 
 import { describe, expect, it } from 'vitest';
 
@@ -58,7 +57,6 @@ class FakeBackend implements BackendApi {
   private nextId = 1;
   private onEvent: ((event: SessionEvent) => void) | undefined;
 
-  /** Every session this backend was attached to, in order. */
   attachedTo: SessionId[] = [];
   attachSession(
     session: SessionId,
@@ -68,13 +66,9 @@ class FakeBackend implements BackendApi {
     this.onEvent = onEvent;
     return Promise.resolve();
   }
-  /** Hold acks back, so an event can be delivered while a submission is still in
-   * flight — the race that decides which heading a block ends up with. */
   deferAcks = false;
   private held: Array<() => void> = [];
-  /** The answer to the next submission, so a test can be the session that went away. */
   refuseSubmissions = false;
-  /** Which session each submitted line named. */
   submittedTo: SessionId[] = [];
   submitCommand(session: SessionId, line: string): Promise<SubmitAck> {
     this.submitted.push(line);
@@ -96,15 +90,12 @@ class FakeBackend implements BackendApi {
     }
     this.held = [];
   }
-  /** What the next sendKey answers; the backend owns the binding table, so a test
-   * chooses the answer rather than the meaning. */
   keyAck: KeyAck = 'Applied';
   keysSent: KeyPress[] = [];
   sendKey(_session: SessionId, key: KeyPress): Promise<KeyAck> {
     this.keysSent.push(key);
     return Promise.resolve(this.keyAck);
   }
-  /** Every hand-over of the line, in order (spec 28, decision 1). */
   owners: LineOwner[] = [];
   setLineOwner(_session: SessionId, owner: LineOwner): Promise<void> {
     this.owners.push(owner);
@@ -115,7 +106,6 @@ class FakeBackend implements BackendApi {
     this.pasted.push(text);
     return Promise.resolve();
   }
-  /** Push an event as the backend would over the Channel. */
   emit(event: SessionEvent): void {
     this.onEvent?.(event);
   }
@@ -152,7 +142,6 @@ class FakeBuffer implements BufferView {
     revision: LineRevision;
     text: string;
   }> = [];
-  /** Prompts the shell drew, in the order the buffer was asked to keep them (B5.6). */
   prompts: string[] = [];
   focused = false;
   openBlock(commandId: CommandId, commandLine: string): void {
@@ -169,7 +158,6 @@ class FakeBuffer implements BufferView {
   appendPrompt(text: string): void {
     this.prompts.push(text);
   }
-  /** How many times the buffer was emptied, and what it forgot when it was. */
   cleared = 0;
   clear(): void {
     this.cleared += 1;
@@ -187,7 +175,6 @@ class FakeBuffer implements BufferView {
 
 class FakeAnnouncer implements AnnouncerView {
   announcements: string[] = [];
-  /** How many times a caller said a dialog had closed (spec 13.3). */
   returns = 0;
   announce(text: string): void {
     this.announcements.push(text);
@@ -195,7 +182,6 @@ class FakeAnnouncer implements AnnouncerView {
   documentReturned(): void {
     this.returns += 1;
   }
-  /** Nothing is queued in a fake: it says everything the moment it is told. */
   drained(): Promise<void> {
     return Promise.resolve();
   }
@@ -208,11 +194,9 @@ class FakeBeep implements BeepView {
   }
 }
 
-/** What the window was told to call itself and to say, in order (spec A9). */
 class FakeWindow implements WindowView {
   titles: Array<string | null> = [];
   statuses: string[] = [];
-  /** Whether the terminal window was shown or taken away, in order (spec A10). */
   terminals: boolean[] = [];
   connectedTo(name: string | null): void {
     this.titles.push(name);
@@ -223,20 +207,12 @@ class FakeWindow implements WindowView {
   showTerminal(live: boolean): void {
     this.terminals.push(live);
   }
-  /** Whether the local command line was shown or taken away, in order (spec 28). */
   localLines: boolean[] = [];
   showLocalLine(showing: boolean): void {
     this.localLines.push(showing);
   }
 }
 
-/**
- * The far end's command line, as the controller drives it (spec 28, decision 2).
- *
- * It records rather than renders: what an ARIA text box does with a row and a caret is the
- * adapter's own test, and what this one asks is whether the controller hands it the right
- * ones and moves focus with the mode.
- */
 class FakeFarEndField implements FarEndFieldView {
   rendered: Array<{ text: string | null; caret: number; completed: boolean }> = [];
   showing = false;
@@ -255,12 +231,6 @@ class FakeFarEndField implements FarEndFieldView {
   }
 }
 
-/**
- * Connecting, as three answers a test chooses (spec B7).
- *
- * `atStartup` is the difference between the two windows B7 created: one that a launch
- * brought a session to, and one connected to nothing at all.
- */
 class FakeConnect implements ConnectApi {
   rows: Connectable[] = [
     {
@@ -279,42 +249,20 @@ class FakeConnect implements ConnectApi {
     saved_as: null,
     line_owner: 'FarEnd',
   };
-  /** What the far end has to say about itself, once, at connection (spec B9). */
   note: string | null = null;
-  /**
-   * Whether that note already told the listener this session cannot say how a command went
-   * (spec B9.5, decision 13).
-   *
-   * **A fact rather than a phrase to look for.** The controller used to search the note for
-   * the words "shell integration" — the vocabulary A13 removed and B9.5 rewrote — so the
-   * sentence and the suppression could not be changed independently.
-   */
   limitExplained = false;
-  /** What the Connect dialog's checkbox said on each attempt (spec B9.5, decision 9). */
   setUps: SetUp[] = [];
-  /** What it says while it is connecting (spec B9, decision 6). */
   progress: string[] = [];
-  /** The sentence `use` rejects with instead of connecting, when a test wants a failure. */
   refuses: string | null = null;
   used: ProfileId[] = [];
-  /** Which saved connection each attempt started from (spec 26, decision 11). */
   origins: (string | null)[] = [];
-  /** What a saved connection asked for about the line, when one did. */
   lineOwner: LineOwner = 'FarEnd';
-  /** Why a session cannot be written down, when one cannot (spec 26, decision 19). */
-  /** What the saved connections are, for the window that lists or launches them. */
   savedRows: SavedRow[] = [];
-  /** What went wrong with the document, when a test is about decision 9. */
   unreadable: string | null = null;
-  /** Whether a new connection should be offered for saving (spec 26, decision 19). */
   offering = true;
-  /** How many times the preference was written, so a test can see it happen once. */
   stopped = 0;
-  /** What was saved, renamed and forgotten, and what the backend answered. */
   savedUnder: string[] = [];
-  /** The sentence `saveConnection` rejects with instead of saving. */
   refusesSaving: string | null = null;
-  /** What the launch asked for, or nothing for an ordinary launch (decision 20). */
   atLaunch: LaunchRequest | null = null;
   private nextSession = 1;
 
@@ -377,13 +325,6 @@ class FakeConnect implements ConnectApi {
   }
 }
 
-/**
- * A window that has already opened onto whatever `connect.atStartup` says.
- *
- * Started here rather than in each test because since B7 a controller with no session
- * refuses everything: "connected" is the precondition of nearly every rule in this file,
- * and the unconnected window has a describe block of its own.
- */
 async function makeApp(connect: FakeConnect = new FakeConnect()) {
   const backend = new FakeBackend();
   const editField = new FakeEditField();
@@ -403,8 +344,6 @@ async function makeApp(connect: FakeConnect = new FakeConnect()) {
     window,
   );
   await controller.start();
-  // The startup announcement and title are not what any of the older tests are about, so
-  // they start from where a user starts: a window that has said what it is.
   announcer.announcements = [];
   window.titles = [];
   window.statuses = [];
@@ -435,11 +374,6 @@ describe('submit', () => {
     expect(editField.clearedCount).toBe(1);
   });
 
-  // Inverted in B4.9, not deleted: this used to assert that an empty or whitespace-only
-  // field was dropped where it stood, which is why a bare Enter did nothing at all — no
-  // bytes, so the shell never redrew its prompt and the user heard silence. It goes to
-  // the far end now, and opens no block, because an empty submission matches no echo: a
-  // bare Enter is a re-orient gesture rather than a command.
   it('submits empty and whitespace-only input, and opens no block for it', async () => {
     const { backend, buffer, editField, controller } = await makeApp();
     editField.text = '   ';
@@ -453,8 +387,6 @@ describe('submit', () => {
 });
 
 describe('what the window says about its connection (spec A9)', () => {
-  /** The state a user meets first, and the one that had no words: a window opening onto a
-   * shell that takes seconds to start used to say nothing at all (roadmap 23.7). */
   it('says it is connecting', async () => {
     const { backend, window, controller } = await makeApp();
 
@@ -463,13 +395,6 @@ describe('what the window says about its connection (spec A9)', () => {
     expect(window.statuses).toContain('connecting');
   });
 
-  /**
-   * **The region says the whole thing, and the announcement is that same string** — A9
-   * decision 2 reversed on use, 2026-08-27: "no two truth places". The region used to say
-   * "connected" while the connection was announced with the far end's name and what was
-   * learned about it, so the two descriptions of one fact could not be kept in step and
-   * only one of them survived being spoken once.
-   */
   it('says what it is connected to, in the region and in the announcement alike', async () => {
     const ubuntu: ProfileId = { profile: 'Distribution', name: 'Ubuntu' };
     const { connect, window, announcer, controller } = await makeApp();
@@ -483,7 +408,6 @@ describe('what the window says about its connection (spec A9)', () => {
     expect(announcer.announcements).toContain(said);
   });
 
-  /** And the session's own `Connected` restates it rather than shortening it. */
   it('restates the same sentence when the far end reports it is connected', async () => {
     const ubuntu: ProfileId = { profile: 'Distribution', name: 'Ubuntu' };
     const { backend, window, controller } = await makeApp();
@@ -495,8 +419,6 @@ describe('what the window says about its connection (spec A9)', () => {
     expect(window.statuses).toContain('connected to WSL: Ubuntu');
   });
 
-  /** A far end that goes away leaves the window saying so, and stops claiming to be
-   * connected to something that is gone (spec A9, decision 4). */
   it('says it is not connected when the far end goes away, and drops the name', async () => {
     const { backend, window, controller } = await makeApp();
 
@@ -506,8 +428,6 @@ describe('what the window says about its connection (spec A9)', () => {
     expect(window.titles).toContain(null);
   });
 
-  /** Reconnecting has no producer until SSH, but a listener meeting it should hear
-   * something true rather than nothing. */
   it('treats reconnecting as connecting rather than falling silent', async () => {
     const { backend, window, controller } = await makeApp();
 
@@ -518,9 +438,6 @@ describe('what the window says about its connection (spec A9)', () => {
 });
 
 describe('the prompt a marked shell drew (spec B5.6)', () => {
-  /** A shell that marks all four boundaries puts its prompt in the `A..B` region, which
-   * block content excludes — so before this entry the working directory and the git branch
-   * a listener steers by were audible nowhere at all. */
   it('speaks the prompt and keeps it in the buffer', async () => {
     const { backend, buffer, announcer, controller } = await makeApp();
 
@@ -530,8 +447,6 @@ describe('the prompt a marked shell drew (spec B5.6)', () => {
     expect(announcer.announcements).toContain('C:\projects\acter (main)>');
   });
 
-  /** Every time, not only when it changes: the same command run twice in two directories
-   * has to say where each one ran (spec B5.6, decision 3). */
   it('speaks an unchanged prompt again rather than falling silent', async () => {
     const { backend, announcer, controller } = await makeApp();
 
@@ -541,8 +456,6 @@ describe('the prompt a marked shell drew (spec B5.6)', () => {
     expect(announcer.announcements.filter((said) => said === 'acter>')).toHaveLength(2);
   });
 
-  /** It opens nothing: a prompt is not a command, and a block opened for one would put an
-   * empty heading into the sequence a listener walks with `h`. */
   it('opens no block', async () => {
     const { backend, buffer, controller } = await makeApp();
 
@@ -563,8 +476,6 @@ describe('the block heading (spec B6.1)', () => {
     });
 
     expect(buffer.opened).toEqual([
-      // Opened lazily with no heading, then headed by what the shell said it is
-      // running. An id that drifted can no longer put the wrong words on a block.
       { commandId: 1, commandLine: '' },
       { commandId: 1, commandLine: 'git status' },
     ]);
@@ -597,9 +508,6 @@ describe('the block heading (spec B6.1)', () => {
     expect(buffer.opened).toEqual([
       { commandId: 1, commandLine: '' },
       { commandId: 1, commandLine: 'what the shell read' },
-      // The ack still opens its block — that is what makes one appear the instant Enter
-      // is pressed — but with no heading of its own to impose: an empty line leaves an
-      // existing block's heading exactly as it is.
       { commandId: 1, commandLine: '' },
     ]);
   });
@@ -632,8 +540,6 @@ describe('event rendering (decision 2)', () => {
   it('renders an auto-read chunk into the buffer before announcing it (A5.2)', async () => {
     const backend = new FakeBackend();
     const order: string[] = [];
-    // Two fakes sharing one call log: the invariant under test is cross-view ordering,
-    // which the per-view recordings cannot show.
     const buffer: BufferView = {
       openBlock: () => {},
       applyLine: () => {
@@ -666,9 +572,6 @@ describe('event rendering (decision 2)', () => {
     await controller.start();
 
     backend.emit({ type: 'CommandStarted', command_id: 1, command_line: null });
-    // Two events now, in the order the backend sends them: A6 moved this invariant from
-    // "append before announcing inside one handler" to "the render event before the
-    // announce about it". The channel delivers in order, so obeying that order is enough.
     backend.emit({
       type: 'Output',
       command_id: 1,
@@ -748,11 +651,6 @@ describe('event rendering (decision 2)', () => {
     expect(beep.beeps).toBe(0);
   });
 
-  // The event shape the backend actually produces: the text is rendered quietly, the
-  // speech about it rides an `Announce`, and the failure verdict is a second `Announce`
-  // sent after the terminal event. Written this way because B6's manual NVDA pass heard
-  // the failure spoken TWICE and heard it FIRST — before the error line it was about —
-  // which is what a second producer in `CommandFinished` did.
   it('announces the output and then the failure, once each, in that order', async () => {
     const { backend, announcer, beep, controller } = await makeApp();
 
@@ -776,13 +674,10 @@ describe('event rendering (decision 2)', () => {
       announcement: { kind: 'Failed', exit_code: 2 },
     });
 
-    // The error text first, the verdict about it second, and each said exactly once.
     expect(announcer.announcements).toEqual(['error: boom', failureMessage(2)]);
     expect(beep.beeps).toBe(0);
   });
 
-  // A finish carries no speech of its own: `CommandFinished` is a lifecycle event, and
-  // everything spoken about a command comes from an `Announce`.
   it('a failing command that finishes says nothing until the Failed announcement', async () => {
     const { backend, announcer, controller } = await makeApp();
 
@@ -792,9 +687,6 @@ describe('event rendering (decision 2)', () => {
     expect(announcer.announcements).toEqual([]);
   });
 
-  // B4.1: the stop is not Acter's to announce. What the user hears is the shell's own
-  // prompt coming back, read as ordinary output — so this event does its bookkeeping and
-  // says nothing at all.
   it('CommandInterrupted announces nothing and closes the block', async () => {
     const { backend, buffer, announcer, controller } = await makeApp();
 
@@ -814,7 +706,6 @@ describe('event rendering (decision 2)', () => {
     backend.emit({ type: 'CommandInterrupted', command_id: 1 });
 
     expect(announcer.announcements).toEqual(['phase one']);
-    // The block was closed, so a later event for the same id opens a fresh one.
     backend.emit({
       type: 'Output',
       command_id: 1,
@@ -846,9 +737,6 @@ describe('event rendering (decision 2)', () => {
     });
     backend.emit({ type: 'CommandInterrupted', command_id: 1 });
 
-    // The beep answers "your too-big output finished", and a command that was stopped
-    // never finished. Nothing is spoken either (B4.1): the too-big warning stands as the
-    // last thing said, and the next thing the user hears is the shell.
     expect(beep.beeps).toBe(0);
     expect(announcer.announcements.at(-1)).toBe(tooBigMessage(2));
   });
@@ -907,9 +795,6 @@ describe('event rendering (decision 2)', () => {
     expect(beep.beeps).toBe(1);
   });
 
-  // The remainder flushed at the end of a command can itself be too big. That verdict
-  // used to ride `CommandFinished.read_mode`; since A6 it is an `Announce` the backend
-  // sends before closing the block, and it must still arm the beep.
   it('beeps when the verdict on the final remainder is too-big', async () => {
     const { backend, beep, controller } = await makeApp();
 
@@ -927,7 +812,6 @@ describe('event rendering (decision 2)', () => {
   it('does not carry the too-big beep flag across commands', async () => {
     const { backend, beep, controller } = await makeApp();
 
-    // Command 1 is too-big and beeps.
     backend.emit({
       type: 'Output',
       command_id: 1,
@@ -941,7 +825,6 @@ describe('event rendering (decision 2)', () => {
       announcement: { kind: 'TooBig', lines: 2 },
     });
     backend.emit({ type: 'CommandFinished', command_id: 1 });
-    // Command 2 is plain; it must not beep.
     backend.emit({
       type: 'Output',
       command_id: 2,
@@ -981,19 +864,12 @@ describe('event rendering (decision 2)', () => {
     backend.emit({ type: 'IntegrationUnavailable' });
 
     expect(announcer.announcements).toEqual([integrationUnavailableMessage]);
-    // **Spelled out rather than compared to the constant alone**, because the constant
-    // was wrong for five entries and every test that only compared it to itself passed
-    // the whole time (spec A13). What is pinned here is the sentence a person hears.
     expect(announcer.announcements[0]).toBe(
       'You will hear what commands print here, but not whether they worked. Press F1 for help.',
     );
     expect(buffer.opened).toEqual([]);
   });
 
-  /** **The claim the old sentence made and the product had stopped honouring.** It said
-   * output would not be read automatically; B4.4 reversed that ("only the silence goes")
-   * and nothing updated the words. This asserts the behaviour the new sentence promises,
-   * so the two can never drift apart again without a test saying so. */
   it('output in an unintegrated session is still read aloud', async () => {
     const { backend, announcer, controller } = await makeApp();
 
@@ -1021,7 +897,6 @@ describe('event rendering (decision 2)', () => {
   it('lazily opens a block when an event arrives for an unsubmitted command', async () => {
     const { backend, buffer, controller } = await makeApp();
 
-    // No submit happened; an Output races in first.
     backend.emit({
       type: 'Output',
       command_id: 7,
@@ -1035,15 +910,12 @@ describe('event rendering (decision 2)', () => {
   });
 
   it('sets the command line on the ack even when an event opened the block first', async () => {
-    // The scripting race: CommandStarted/Output for command 1 arrives over the Channel
-    // before the submit ack resolves, lazily opening the block with an empty heading.
     const { backend, buffer, editField, controller } = await makeApp();
     backend.emit({ type: 'CommandStarted', command_id: 1, command_line: null });
 
     editField.text = 'small';
     await controller.submit();
 
-    // The block was opened empty by the event, then the ack authoritatively set 'small'.
     expect(buffer.opened).toEqual([
       { commandId: 1, commandLine: '' },
       { commandId: 1, commandLine: 'small' },
@@ -1068,17 +940,7 @@ describe('event rendering (decision 2)', () => {
   });
 });
 
-// **Far-end-line mode: the keyboard goes to the far end** (spec 28).
-//
-// What is asserted here is the controller's half: that the state reaches the backend, that
-// focus and the two fields move with it, that the sentence says what is gained and lost, and
-// that the far end's row is handed to the field rather than announced. What NVDA then says
-// about that field is the measurement recorded in adapters/far_end_field.ts.
 describe('handing the line to the far end (28)', () => {
-  // **A session starts with the program holding the keys** (roadmap 28.7). Nearly every far
-  // end has its own line editor, and its history, completion and bindings are what a
-  // terminal user reaches for — so starting on Acter's line began every session by taking
-  // those away. Acter's line is the retreat now, not the starting point.
   it('hands the keys to the program as soon as there is a session', async () => {
     const { backend, farEndField } = await makeApp();
 
@@ -1118,10 +980,6 @@ describe('handing the line to the far end (28)', () => {
     expect(announcer.announcements).toEqual([farEndLineOnMessage]);
   });
 
-  // **Neither sentence promises Acter a history or a completion**, because Acter has
-  // neither. They used to end "History and completion are back", which was a feature that
-  // does not exist being handed back to a listener — reported by the user 2026-09-02 and
-  // confirmed by searching for it. What is left is the name of the state and nothing else.
   it('names the state without promising anything Acter does not have', () => {
     for (const said of [farEndLineOnMessage, farEndLineOffMessage]) {
       expect(said.toLowerCase()).not.toContain('mode');
@@ -1135,11 +993,6 @@ describe('handing the line to the far end (28)', () => {
     expect(farEndLineOnMessage).not.toBe(farEndLineOffMessage);
   });
 
-  // **The vocabulary an end user needs, and no more** (roadmap 28.7). What is said after
-  // connecting names the two parties already in every other sentence — Acter, and the
-  // program — and the key that swaps them. It teaches no mode name, and "far end" is the
-  // domain's word for whatever is on the other end of the transport: right in the code,
-  // meaningless to somebody who just wants to run a command.
   it('names the two parties and the key, and teaches no jargon', () => {
     for (const said of [keysGoToTheProgramMessage, keysGoToActerMessage]) {
       expect(said).toContain('Ctrl+Shift+K');
@@ -1151,8 +1004,6 @@ describe('handing the line to the far end (28)', () => {
     expect(keysGoToTheProgramMessage).not.toBe(keysGoToActerMessage);
   });
 
-  // Nothing to hand the keyboard to. The window answers in the words it has used since it
-  // opened, rather than pretending the gesture worked.
   it('refuses in a window with no session, in the words that window already uses', async () => {
     const connect = new FakeConnect();
     connect.atStartup = null;
@@ -1164,8 +1015,6 @@ describe('handing the line to the far end (28)', () => {
     expect(announcer.announcements).toEqual([notConnectedMessage]);
   });
 
-  // A mode carried across a connection would change what a key does in a shell the user
-  // never chose it for, which is why the state is per session.
   it('comes back to Acter when the far end goes away, silently', async () => {
     const { farEndField, announcer, backend, controller } = await makeApp();
     await controller.toggleLineOwner();
@@ -1174,15 +1023,9 @@ describe('handing the line to the far end (28)', () => {
     backend.emit({ type: 'ConnectionChanged', state: 'Disconnected' });
 
     expect(farEndField.showing).toBe(false);
-    // The listener is told the session ended, and not also told about a mode change they
-    // did not make.
     expect(announcer.announcements).toEqual([notConnectedMessage]);
   });
 
-  // **Nothing is announced about the far end's row** (spec 28, decision 3), because the
-  // element holding it is a text box and the reader speaks it. Announcing as well would say
-  // it twice: measured on the bridge, a live region answering alongside produced two
-  // utterances in the same millisecond, the reader's first.
   it('hands the row and the caret to the field and announces neither', async () => {
     const { backend, farEndField, announcer, controller } = await makeApp();
     await controller.toggleLineOwner();
@@ -1198,11 +1041,6 @@ describe('handing the line to the far end (28)', () => {
     expect(announcer.announcements).toEqual([]);
   });
 
-  // **Roadmap 28.4.** `Tab` is the one key the reader will not answer for itself, so its
-  // answer is marked and the field makes what the completion added audible by selecting it.
-  // The mark is set on every reported key rather than only on `Tab`, because a repeat that
-  // changes nothing produces no answer at all — `bash` sends one bell byte — and a mark left
-  // standing would attach to whatever key came next.
   it('marks the answer to a completion, and only that one', async () => {
     const { backend, farEndField, controller } = await makeApp();
     await controller.toggleLineOwner();
@@ -1236,17 +1074,12 @@ describe('handing the line to the far end (28)', () => {
     await controller.pasteToFarEnd('cargo test --all');
     expect(backend.pasted).toEqual(['cargo test --all']);
 
-    // Taken back by Acter, a paste is the platform's and never reaches the far end.
     await controller.toggleLineOwner();
     await controller.pasteToFarEnd('ignored');
 
     expect(backend.pasted).toEqual(['cargo test --all']);
   });
 
-  // **Roadmap 28.3**, found on NVDA 2026.1.1 in 28's own pass: F6 in far-end-line mode did
-  // nothing at all, because the toggle asked the `<input>` — hidden and unfocused there — and
-  // then focused it, which is a no-op. Review by heading is the whole of how this product is
-  // read back, so it has to reach the buffer from whichever line is in front.
   it('F6 reaches the buffer from the far end line, and comes back to it', async () => {
     const { buffer, farEndField, editField, controller } = await makeApp();
     expect(farEndField.focused).toBe(true);
@@ -1256,7 +1089,6 @@ describe('handing the line to the far end (28)', () => {
     controller.toggleFocusArea();
     expect(buffer.focused).toBe(true);
 
-    // And back to the far end's line rather than to the hidden local one.
     farEndField.focused = false;
     controller.toggleFocusArea();
     expect(farEndField.focused).toBe(true);
@@ -1276,9 +1108,6 @@ describe('handing the line to the far end (28)', () => {
   });
 });
 
-// **The three answers to Ctrl+D** (spec 28, decision 9; roadmap 23.5). The frontend words
-// the answer to the key it sent and still does not decide what the key means: which of the
-// three applies is the backend's `KeyAck`.
 describe('what Ctrl+D is answered with (23.5)', () => {
   const ctrlD: KeyPress = {
     key: { Char: 'd' },
@@ -1287,8 +1116,6 @@ describe('what Ctrl+D is answered with (23.5)', () => {
     alt: false,
   };
 
-  // The far end took it and the session is ending. The connection sentence already says so,
-  // and a second announcement would talk over the answer the user actually wanted.
   it('says nothing when the far end took it', async () => {
     const { backend, announcer, controller } = await makeApp();
     backend.keyAck = 'Applied';
@@ -1298,8 +1125,6 @@ describe('what Ctrl+D is answered with (23.5)', () => {
     expect(announcer.announcements).toEqual([]);
   });
 
-  // "Bound, and this shell has no measured answer" — which is a working session, so the
-  // sentence has to say what to do instead rather than only that the key did nothing.
   it('names the way out when the shell has no key for end of input', async () => {
     const { backend, announcer, controller } = await makeApp();
     backend.keyAck = 'Unsupported';
@@ -1319,8 +1144,6 @@ describe('what Ctrl+D is answered with (23.5)', () => {
     expect(announcer.announcements).toEqual([sessionAlreadyEndedMessage]);
   });
 
-  // And the three are three, which is the whole reason `Unsupported` was added: before it,
-  // "no measured answer" and "nothing is listening" were the same reply.
   it('does not give Ctrl+C the sentences that belong to Ctrl+D', async () => {
     const ctrlC: KeyPress = {
       key: { Char: 'c' },
@@ -1338,8 +1161,6 @@ describe('what Ctrl+D is answered with (23.5)', () => {
 });
 
 describe('focus flow', () => {
-  // Acter's own line, which a session reaches by taking the keys back from the program
-  // (roadmap 28.7 flipped the default, so these say so rather than assuming it).
   it('F6 toggles from edit field to buffer and back', async () => {
     const { editField, buffer, controller } = await makeApp();
     await controller.toggleLineOwner();
@@ -1394,8 +1215,6 @@ describe('Announce (B1.5): speech is its own event', () => {
     const { backend, buffer, announcer, controller } = await makeApp();
 
     backend.emit({ type: 'CommandStarted', command_id: 1, command_line: null });
-    // Past the threshold the backend does not hold the text, so the count cannot be
-    // re-derived here even in principle — it is carried.
     backend.emit({
       type: 'Output',
       command_id: 1,
@@ -1495,9 +1314,6 @@ describe('Announce (B1.5): speech is its own event', () => {
   });
 });
 
-// The keystroke the frontend does not consume, and the two answers only it can voice.
-// What a key *means* is the backend's table, so these choose the ack rather than the
-// meaning — which is the whole point of reporting a key instead of an intent.
 describe('reportKey (A3.2)', () => {
   const ctrlC: KeyPress = {
     key: { Char: 'c' },
@@ -1532,8 +1348,6 @@ describe('reportKey (A3.2)', () => {
     expect(announcer.announcements).toEqual([nothingToStopMessage]);
   });
 
-  // Unreachable while Ctrl+C is both the only key reported and the only key bound. It is
-  // tested anyway: the failure it guards against is a second reported key going silent.
   it('says an unbound key did nothing rather than going silent', async () => {
     const { backend, announcer, controller } = await makeApp();
     backend.keyAck = 'Unbound';
@@ -1544,9 +1358,6 @@ describe('reportKey (A3.2)', () => {
   });
 });
 
-// DESIGN's layer 2, the half the frontend enforces: the session hears a keystroke only
-// while the edit field has focus and holds no selection. Focus is enforced by the
-// keyboard adapter listening on the field itself, so what is left here is the selection.
 describe('editFieldHasSelection (A3.2)', () => {
   it('is true when the edit field holds a selection', async () => {
     const { editField, controller } = await makeApp();
@@ -1563,11 +1374,7 @@ describe('editFieldHasSelection (A3.2)', () => {
   });
 });
 
-// **The window B7 created**, and the one every launch now opens with unless something
-// named a shell. An empty window is a state with obligations: it says it is empty, it
-// answers a line typed into it, and it has nothing navigable in the buffer.
 describe('a window connected to nothing (spec B7, decision 3)', () => {
-  /** Startup with no session: nothing is attached, and the window says so three ways. */
   async function emptyWindow() {
     const connect = new FakeConnect();
     connect.atStartup = null;
@@ -1595,15 +1402,11 @@ describe('a window connected to nothing (spec B7, decision 3)', () => {
     const { announcer, window } = await emptyWindow();
 
     expect(announcer.announcements).toEqual([notConnectedMessage]);
-    // It names the control the listener is already on rather than a keystroke to hunt for:
-    // A10 put a Connect button under focus, so the route to describe is that button.
     expect(announcer.announcements[0]).toContain('Connect');
     expect(window.statuses).toEqual(['not connected']);
     expect(window.titles).toEqual([null]);
   });
 
-  /** **The window has no terminal in it** (spec A10): no results buffer to arrow onto and
-   * hear nothing from, and no edit field that could submit nothing. */
   it('shows no terminal window at all', async () => {
     const { window } = await emptyWindow();
 
@@ -1616,9 +1419,6 @@ describe('a window connected to nothing (spec B7, decision 3)', () => {
     expect(backend.attachedTo).toEqual([]);
   });
 
-  /** **The rule with teeth.** A line typed into an empty window is answered, nothing is
-   * sent anywhere, no block is opened for it, and the text survives — because it is what
-   * the user will press Enter on again once they have connected. */
   it('answers a submitted line, sends nothing, and keeps what was typed', async () => {
     const { backend, editField, announcer, buffer, controller } = await emptyWindow();
     editField.text = 'dir';
@@ -1633,8 +1433,6 @@ describe('a window connected to nothing (spec B7, decision 3)', () => {
     expect(announcer.announcements).toEqual([notConnectedMessage]);
   });
 
-  /** Nothing navigable in the buffer: no heading, and no empty block for a listener to
-   * land on. A heading has to correspond to something that ran. */
   it('has nothing in the buffer at all', async () => {
     const { buffer } = await emptyWindow();
 
@@ -1643,8 +1441,6 @@ describe('a window connected to nothing (spec B7, decision 3)', () => {
     expect(buffer.prompts).toEqual([]);
   });
 
-  /** Ctrl+C into an empty window is answered rather than silent, with the words that are
-   * already true of it: there is nothing running to stop. */
   it('answers a keystroke without a round trip', async () => {
     const { backend, announcer, controller } = await emptyWindow();
     announcer.announcements = [];
@@ -1661,7 +1457,6 @@ describe('a window connected to nothing (spec B7, decision 3)', () => {
   });
 });
 
-// Connecting, from the frontend's side: what it does with the two answers `use` can give.
 describe('connecting to a profile (spec B7)', () => {
   const ubuntu: ProfileId = { profile: 'Distribution', name: 'Ubuntu' };
 
@@ -1696,14 +1491,6 @@ describe('connecting to a profile (spec B7)', () => {
     ]);
   });
 
-  /**
-   * **Connecting does not say where you are; `announceConnection` does** (spec 13.3).
-   *
-   * Said while the connect dialogs were still up, the sentence went into a live region that
-   * was about to be taken away — or into the document's in the same millisecond it came back
-   * — and either way it was never spoken. So the words stay here and the moment belongs to
-   * whoever closed the dialog.
-   */
   it('says nothing at the moment it connects, and says it when asked', async () => {
     const { announcer, controller } = await makeApp();
 
@@ -1711,14 +1498,12 @@ describe('connecting to a profile (spec B7)', () => {
     expect(announcer.announcements).toEqual([]);
 
     expect(controller.announceConnection()).toBe(true);
-    // Two sentences now: what connected, then who has the keys (roadmap 28.7).
     expect(announcer.announcements).toEqual([
       connectedMessage('WSL: Ubuntu'),
       keysGoToTheProgramMessage,
     ]);
   });
 
-  /** And there is nothing to say about a window connected to nothing. */
   it('says nothing when there is no connection to name', async () => {
     const connect = new FakeConnect();
     connect.atStartup = null;
@@ -1728,15 +1513,6 @@ describe('connecting to a profile (spec B7)', () => {
     expect(announcer.announcements).toEqual([]);
   });
 
-  /**
-   * **One sentence rather than two** (spec B9, decision 7).
-   *
-   * An SSH far end is asked what it is *before* the session channel is opened, so the
-   * answer is in hand before there is anything to announce. What a listener hears is the
-   * connection, the far end, and the state of it, in one utterance — where a bare "shell
-   * integration unavailable" arriving two seconds later names nothing and speaks over
-   * whatever was being said.
-   */
   it('says what the far end is in the same sentence as the connection', async () => {
     const { connect, announcer, controller } = await makeApp();
     connect.note = 'zsh, which Acter cannot set up yet.';
@@ -1750,14 +1526,6 @@ describe('connecting to a profile (spec B7)', () => {
     ]);
   });
 
-  /**
-   * And having said it, the session does not say it again.
-   *
-   * `IntegrationUnavailable` fires when the startup grace period expires with no markers,
-   * which for an unintegrated far end is certain rather than diagnostic. Hearing the same
-   * fact twice, the second time without the far end's name, teaches a listener that Acter
-   * repeats itself.
-   */
   it('does not repeat the integration warning the connection already gave', async () => {
     const { backend, connect, announcer, controller } = await makeApp();
     connect.note = 'zsh, which Acter cannot set up yet.';
@@ -1770,7 +1538,6 @@ describe('connecting to a profile (spec B7)', () => {
     expect(announcer.announcements).toEqual([]);
   });
 
-  /** A connection that said nothing about integration leaves the session free to say it. */
   it('still warns when the connection said nothing about integration', async () => {
     const { backend, announcer, controller } = await makeApp();
     await controller.connectTo(ubuntu);
@@ -1781,11 +1548,6 @@ describe('connecting to a profile (spec B7)', () => {
     expect(announcer.announcements).toEqual([integrationUnavailableMessage]);
   });
 
-  /**
-   * **Progress is said while it happens** (spec B9, decision 6), because a listener with no
-   * feedback cannot tell a slow network from a dead one — and an SSH connection can take
-   * seconds before anything is certain.
-   */
   it('says what a connection is doing while it does it', async () => {
     const { connect, announcer, controller } = await makeApp();
     connect.progress = ['Connecting to acter-ssh.', 'Signing in.'];
@@ -1798,8 +1560,6 @@ describe('connecting to a profile (spec B7)', () => {
     ]);
   });
 
-  /** The id is what every later invoke names, so a line submitted after connecting goes to
-   * the session that was just started rather than the one it replaced. */
   it('submits into the session it just connected to', async () => {
     const { backend, editField, controller } = await makeApp();
     await controller.connectTo(ubuntu);
@@ -1810,8 +1570,6 @@ describe('connecting to a profile (spec B7)', () => {
     expect(backend.submittedTo).toEqual([2]);
   });
 
-  /** **A failure costs the user nothing.** The sentence is the backend's own, the window
-   * still says what it was on, and the session that was running still takes a line. */
   it('says why a connection failed and leaves the running session alone', async () => {
     const connect = new FakeConnect();
     const { backend, window, announcer, editField, controller } = await makeApp(connect);
@@ -1829,9 +1587,6 @@ describe('connecting to a profile (spec B7)', () => {
     expect(backend.submittedTo).toEqual([1]);
   });
 
-  /** The session went away between the keypress and the invoke — replaced, or ended. The
-   * answer is the unconnected window's, for the same reason: nothing ran anywhere, so the
-   * text stays where the user can send it again. */
   it('answers a refused submission and keeps the text', async () => {
     const { backend, editField, announcer, controller } = await makeApp();
     backend.refuseSubmissions = true;
@@ -1851,10 +1606,6 @@ describe('connecting to a profile (spec B7)', () => {
   });
 });
 
-// **The window has two faces** (spec A10), and which one it shows follows the session
-// rather than anything the user did. The terminal window — a results buffer and an edit
-// field — belongs to a session; with none there is a Connect button and nothing to type
-// into.
 describe('the two faces of the window (spec A10)', () => {
   it('brings the terminal window up when a profile is used', async () => {
     const connect = new FakeConnect();
@@ -1877,9 +1628,6 @@ describe('the two faces of the window (spec A10)', () => {
     expect(backend.attachedTo).toEqual([2]);
   });
 
-  /** **The disconnect rule.** The buffer is the record of a session that ended, and a user
-   * who typed `exit` by accident must not lose it; the edit field has nothing left to
-   * submit to, so it goes. */
   it('takes the edit field away when the far end goes, and keeps the buffer', async () => {
     const { backend, buffer, window, controller } = await makeApp();
     backend.emit({
@@ -1910,8 +1658,6 @@ describe('the two faces of the window (spec A10)', () => {
     expect(announcer.announcements).toEqual([notConnectedMessage]);
   });
 
-  /** And a line typed into what is left is refused rather than run: the session is gone, so
-   * the controller no longer names one. */
   it('refuses a line after the far end has gone', async () => {
     const { backend, editField, announcer, controller } = await makeApp();
     backend.emit({ type: 'ConnectionChanged', state: 'Disconnected' });
@@ -1926,18 +1672,7 @@ describe('the two faces of the window (spec A10)', () => {
   });
 });
 
-/**
- * **The saved connections, as the controller meets them** (spec 26, decisions 11, 19
- * and 20): who holds the line when a saved one opens, whether the offer is made, and what
- * a launch switch turns into.
- */
 describe('the connections somebody saved', () => {
-  /**
-   * **A saved connection's own choice about the line wins over the default** (decision 11),
-   * which is what closes roadmap 28.8. The backend answers `line_owner` with what was
-   * saved and with the far end when nothing was, so this is still one decision applied in
-   * one place.
-   */
   it('opens on the line the saved connection asked for', async () => {
     const connect = new FakeConnect();
     connect.lineOwner = 'Local';
@@ -1950,7 +1685,6 @@ describe('the connections somebody saved', () => {
     expect(connect.origins.at(-1)).toBe('quiet');
   });
 
-  /** And a new one opens on the far end's line, which is what a session does by default. */
   it('opens a new connection on the far end line, with no origin', async () => {
     const connect = new FakeConnect();
     const { backend, controller } = await makeApp(connect);
@@ -1961,14 +1695,6 @@ describe('the connections somebody saved', () => {
     expect(connect.origins.at(-1)).toBe(null);
   });
 
-  /**
-   * **The offer waits for the two sentences to have been said** (decision 19's order).
-   * Found with NVDA 2026.1.1 on 2026-09-12: a modal makes the rest of the document inert,
-   * so a dialog that opens while an announcement is still queued sends it into the
-   * dialog's own region instead — and the keys sentence arrived after the offer had named
-   * itself. The connection is the news, the keys are what the next keypress needs, and the
-   * offer is a question about neither.
-   */
   it('does not open the offer until the announcer has said everything', async () => {
     const connect = new FakeConnect();
     const { controller, announcer } = await makeApp(connect);
@@ -1987,10 +1713,6 @@ describe('the connections somebody saved', () => {
     expect(order).toEqual(['drained', 'offered']);
   });
 
-  /**
-   * **The offer is made once, for a session nobody has named** (decision 19), and only
-   * when the preference allows it.
-   */
   it('offers to save a new connection', async () => {
     const connect = new FakeConnect();
     const { controller } = await makeApp(connect);
@@ -2005,7 +1727,6 @@ describe('the connections somebody saved', () => {
     expect(offered).toEqual(['Command Prompt']);
   });
 
-  /** **Never after a saved one**, because it already has a name. */
   it('does not offer to save a connection that already has a name', async () => {
     const connect = new FakeConnect();
     const { controller } = await makeApp(connect);
@@ -2020,7 +1741,6 @@ describe('the connections somebody saved', () => {
     expect(asked).toBe(0);
   });
 
-  /** **And never when the preference is set**, which is what the checkbox writes. */
   it('does not offer when the preference says not to', async () => {
     const connect = new FakeConnect();
     connect.offering = false;
@@ -2036,10 +1756,6 @@ describe('the connections somebody saved', () => {
     expect(asked).toBe(0);
   });
 
-  /**
-   * **Ticking the box records the preference whichever button was pressed** (decision 19):
-   * it is a decision about the offer rather than about this connection.
-   */
   it('records the preference when the box was ticked', async () => {
     const connect = new FakeConnect();
     const { controller } = await makeApp(connect);
@@ -2050,7 +1766,6 @@ describe('the connections somebody saved', () => {
     expect(connect.stopped).toBe(1);
   });
 
-  /** Saving answers the sentence, and the session stops being one nobody has named. */
   it('saves under a name and stops offering that session', async () => {
     const connect = new FakeConnect();
     const { controller } = await makeApp(connect);
@@ -2070,10 +1785,6 @@ describe('the connections somebody saved', () => {
     expect(asked).toBe(0);
   });
 
-  /**
-   * **A refusal is announced and answered with nothing**, so the caller keeps the dialog
-   * open (decision 18). The words are the backend's, because only it knows what was wrong.
-   */
   it('announces a refusal and answers nothing', async () => {
     const connect = new FakeConnect();
     connect.refusesSaving =
@@ -2089,11 +1800,6 @@ describe('the connections somebody saved', () => {
     expect(controller.connectedNow?.saved_as).toBe(null);
   });
 
-  /**
-   * **`--connect <name>` is carried out by the window** (decision 20), through the same
-   * call the Connect dialog makes — so a saved SSH connection asks its questions where
-   * somebody can hear them.
-   */
   it('starts the saved connection a launch asked for', async () => {
     const connect = new FakeConnect();
     connect.atStartup = null;
@@ -2119,10 +1825,6 @@ describe('the connections somebody saved', () => {
     expect(connect.origins).toEqual(['work laptop']);
   });
 
-  /**
-   * **A name nothing is saved under opens the window unconnected and says so**, because a
-   * windowed binary has no console to print a usage message to.
-   */
   it('says a launch name nothing is saved under, and starts nothing', async () => {
     const connect = new FakeConnect();
     connect.atStartup = null;
@@ -2143,7 +1845,6 @@ describe('the connections somebody saved', () => {
     ]);
   });
 
-  /** An ordinary launch asks for nothing and says nothing. */
   it('does nothing at all for an ordinary launch', async () => {
     const connect = new FakeConnect();
     connect.atStartup = null;

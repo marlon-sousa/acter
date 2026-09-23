@@ -1,6 +1,4 @@
 // Role: adapter — the Tauri IPC router; the only module importing @tauri-apps/api.
-// Outbound: typed invoke wrappers implementing BackendApi and ConnectApi. Inbound: the JS
-// Channel<SessionEvent> created for attachSession carries the session's event stream.
 
 import { Channel, invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
@@ -56,14 +54,6 @@ export class TauriBackend implements BackendApi {
   }
 }
 
-// B7's three named actions, with `use` rebuilt on B9's conversation.
-//
-// **`use` still answers with a session or rejects with a sentence, and that is deliberate.**
-// Connecting is now a stream of steps — progress, questions, and finally an outcome — but
-// only SSH ever asks anything, and hiding the stream behind the promise the rest of this
-// frontend already understood is what let B9 land without rewriting the controller, the
-// dialog, or their tests. The `onQuestion` hook is where the dialogs attach; a caller that
-// passes none is saying it cannot answer, and a far end that asks is told so.
 export class TauriConnect implements ConnectApi {
   connectable(): Promise<Connectable[]> {
     return invoke<Connectable[]>('connectable');
@@ -77,9 +67,6 @@ export class TauriConnect implements ConnectApi {
   ): Promise<Connected> {
     return new Promise<Connected>((resolve, reject) => {
       const steps = new Channel<ConnectStep>();
-      // Held so the terminal step can tell the backend to forget this attempt, and so a
-      // question can be answered against the attempt that asked it rather than whichever
-      // is in flight.
       let attempt: AttemptId | null = null;
 
       const answer = (given: ConnectAnswer): void => {
@@ -96,8 +83,6 @@ export class TauriConnect implements ConnectApi {
           case 'Asked':
             attempt = step.attempt;
             if (listener.onQuestion === undefined) {
-              // Nothing here can ask a person, so the honest answer is that nobody
-              // answered — which the backend reads as a refusal (spec B9, decision 3).
               answer({ answer: 'GiveUp' });
               break;
             }
@@ -109,9 +94,6 @@ export class TauriConnect implements ConnectApi {
             break;
           case 'Failed':
             done();
-            // Rejecting with the sentence the backend wrote keeps this the same shape a
-            // caller has handled since B7: it says it, and the session that was running is
-            // untouched.
             reject(step.why);
             break;
         }
@@ -129,9 +111,7 @@ export class TauriConnect implements ConnectApi {
         origin,
         steps,
       }).then((started) => {
-        // The id is needed before any answer can be sent, and a question can in principle
-        // arrive before this resolves — so the step handler sets it too, and whichever
-        // arrives first wins. They are the same value.
+        // A question can arrive before this resolves, so the step handler sets it too.
         attempt ??= started;
       });
     });
@@ -141,9 +121,6 @@ export class TauriConnect implements ConnectApi {
     return invoke<Connected | null>('connected');
   }
 
-  // 26's saved connections: named actions and typed answers, and no key-and-value surface
-  // anywhere (spec 26, decision 11). Each of the three that change something rejects with
-  // the sentence the backend wrote, which is the shape `use` already has.
   saved(): Promise<SavedConnections> {
     return invoke<SavedConnections>('saved');
   }
@@ -186,21 +163,14 @@ export class TauriShell implements AppShell {
     return invoke<string>('platform');
   }
 
-  // Closing the window rather than exiting the process: Tauri drops the app's managed
-  // state as the last window goes, which is what takes the session — and the shell it
-  // spawned — with it.
+  // Tauri drops the app's managed state, and with it the session and its shell, when the
+  // last window closes.
   async exit(): Promise<void> {
     await getCurrentWindow().close();
   }
 }
 
-// The operating system's menu bar, for the platform whose menu is not in the document
-// (spec M3). One event carries every item Acter owns, and the payload says which — so this
-// is one subscription rather than one per item, and adding an item changes nothing here.
-//
-// **The event name is the backend's** (`adapters/system_menu.rs`), and it is the only string
-// in this file that has to match something on the other side: the payload is the generated
-// `MenuAction`, so everything after this line is checked by the compiler.
+// The event name must match `MENU_EVENT` in crates/acter-app/src/adapters/system_menu.rs.
 export class TauriSystemMenu implements SystemMenuEvents {
   onChosen(chosen: (action: MenuAction) => void): void {
     void listen<MenuAction>('acter://menu', (event) => chosen(event.payload));

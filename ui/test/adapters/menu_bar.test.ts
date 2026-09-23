@@ -1,18 +1,10 @@
 // @vitest-environment jsdom
-// Role: test — the menu bar's keyboard contract, which is the whole of what it is.
-//
-// The subject is navigation and what it leaves behind: where focus is, which submenu is
-// open, what `aria-expanded` claims, and which of the two leaf actions ran. This menu bar
-// exists because a *native* one freezes NVDA for tens of seconds every time it opens
-// (spec A7), so what has to be pinned here is that the document version behaves the way a
-// menu bar behaves — arrows, Enter, Escape — since nothing else in the product asserts it.
+// Role: test — the menu bar's keyboard contract.
 
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { installMenuBar } from '../../src/adapters/menu_bar';
 
-/** The static skeleton from views/main_window.html, restated so this suite tests the
- * structure the product ships rather than one invented for the test. */
 const SKELETON = `
   <ul id="menu-bar" role="menubar" aria-label="Acter">
     <li role="none">
@@ -127,8 +119,6 @@ describe('getting in and out', () => {
     expect(focused()).toBe('menu-acter');
   });
 
-  /** The key that made a native menu bar worth wanting, and the reason it is answered on
-   * keyup: at keydown time Alt+F4 and Alt+Tab are indistinguishable from Alt alone. */
   it('alt pressed and released alone opens the bar', () => {
     press('Alt', { alt: true });
     release('Alt');
@@ -136,8 +126,6 @@ describe('getting in and out', () => {
     expect(focused()).toBe('menu-acter');
   });
 
-  /** The half that keeps Alt+Tab and every other Alt combination working: anything at all
-   * between the press and the release disarms it. */
   it('alt with another key in between does not open anything', () => {
     press('Alt', { alt: true });
     press('Tab', { alt: true });
@@ -154,9 +142,6 @@ describe('getting in and out', () => {
     expect(returned).toBe(1);
   });
 
-  /** From the bar itself there is nowhere further back, so Escape leaves. What opened it
-   * was a key rather than a control, which is why the destination is stated rather than
-   * remembered. */
   it('escape on the bar returns focus to the edit field', () => {
     press('F10');
     press('Escape');
@@ -190,8 +175,6 @@ describe('walking it', () => {
     expect(expanded('menu-acter')).toBe('true');
   });
 
-  /** What every menu bar on this platform does: once one menu is open, walking the bar
-   * keeps the next one open too. */
   it('walking the bar with a menu open keeps the next one open', () => {
     press('F10');
     press('ArrowDown');
@@ -201,7 +184,6 @@ describe('walking it', () => {
     expect(expanded('menu-help')).toBe('true');
   });
 
-  /** One step back rather than out, which is what a menu user expects. */
   it('escape inside a menu closes it and leaves you on the item that opened it', () => {
     press('F10');
     press('ArrowDown');
@@ -233,8 +215,6 @@ describe('choosing something', () => {
     expect(expanded('menu-acter')).toBe('false');
   });
 
-  /** Connect is the item this menu is mostly opened for since B7, and Exit is below it —
-   * so the one that ends the application is not what an accidental Enter lands on. */
   it('exit is the second item, below connect', () => {
     press('F10');
     press('ArrowDown');
@@ -245,10 +225,6 @@ describe('choosing something', () => {
     expect(actions.connects).toBe(0);
   });
 
-  /** Focus must not be left on a hidden menu item, so it falls back to the edit field —
-   * but only after the action has had its chance to take focus somewhere of its own.
-   * Moving it eagerly put focus in the edit field for one frame on the way into the About
-   * dialog, and NVDA announced that frame as an unnamed object. */
   it('focus falls back to the edit field when the action did not take it', async () => {
     press('F10');
     press('ArrowDown');
@@ -267,7 +243,6 @@ describe('choosing something', () => {
     press('F10');
     press('ArrowRight');
     press('ArrowDown');
-    // The About dialog does exactly this: it opens and takes focus.
     elsewhere.focus();
     press('Enter');
 
@@ -286,9 +261,8 @@ describe('choosing something', () => {
     expect(actions.connects + actions.exited + actions.abouts).toBe(0);
   });
 
-  // One activation per test, deliberately: activating leaves focus on the item until the
-  // adapter's own tick moves it, so a second `F10` in the same test means *leave the bar*
-  // rather than enter it — which is the bar behaving correctly and a test walking into it.
+  // One activation per test: until the adapter's tick moves focus off the item, a second
+  // `F10` leaves the bar rather than entering it.
   it('the third menu runs about', () => {
     press('F10');
     press('ArrowRight');
@@ -300,8 +274,6 @@ describe('choosing something', () => {
     expect(actions.connects + actions.exited + actions.helps).toBe(0);
   });
 
-  /** Space activates what Enter activates: both are the platform's own, and a menu that
-   * answered only one of them would surprise somebody halfway through using it. */
   it('space activates a leaf the way enter does', () => {
     press('F10');
     press('ArrowDown');
@@ -310,8 +282,6 @@ describe('choosing something', () => {
     expect(actions.connects).toBe(1);
   });
 
-  /** The assertion that catches a real bug: every item that can be chosen runs something.
-   * An item nobody wired reads as a working menu and does nothing at all. */
   it('every leaf in the bar runs an action', () => {
     const leaves = Array.from(
       document.querySelectorAll<HTMLElement>('[role="menu"] [role="menuitem"]'),

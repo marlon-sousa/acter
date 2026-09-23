@@ -1,20 +1,4 @@
-// Role: e2e spec — the two connect dialogs, driven end to end in the real WebView2
-// window: the menu opens them, their lists come from the real `connectable()` and `saved()`
-// commands over IPC, and choosing from either really replaces the session behind the
-// window (specs A8 and 26).
-//
-// **There are two since spec 26** (decision 17). File → Connect opens the list of saved
-// connection names; File → New connection opens the list of kinds, which is the dialog this
-// spec drove before. The suite's worker writes a settings fixture holding one saved
-// connection (`wdio.conf.ts`), so the saved-connection flow has something to list.
-//
-// **This is the half of B7's shape that only an E2E can prove.** The actions are unit
-// tested with a fake factory and the dialog is unit tested with a fake action; what neither
-// can reach is the whole path — a menu item in the real document, an invoke across the real
-// bridge, a session actually replaced, and the window renaming itself for it.
-//
-// It runs against the scripted far end this suite always runs against, so the profile it
-// connects to is one of the built-in scripted sessions a debug build offers.
+// Role: e2e spec — the two connect dialogs, driven end to end in the real WebView2 window.
 
 import { $, browser, expect } from '@wdio/globals';
 
@@ -29,8 +13,6 @@ function focusedId(): Promise<string> {
   return browser.execute(() => document.activeElement?.id ?? '');
 }
 
-/** The embedded WebDriver synthesizes untrusted key events; the app's own listeners take
- * them, which is everything this spec is about. */
 function press(key: string, on = 'new-kinds') {
   return browser.execute(
     (k: string, id: string) => {
@@ -52,7 +34,6 @@ function dialogIsOpen(which = 'new-connection-dialog'): Promise<boolean> {
   );
 }
 
-/** Whether the "could not connect" modal is up. */
 function failureIsOpen(): Promise<boolean> {
   return browser.execute(
     () =>
@@ -61,15 +42,12 @@ function failureIsOpen(): Promise<boolean> {
   );
 }
 
-/** The kinds as the dialog rendered them — which is the real command's answer, rendered. */
 function rows(): Promise<Row[]> {
   return browser.execute(() =>
     Array.from(
       document.querySelectorAll<HTMLElement>('#new-kinds [role="option"]'),
     ).map((option) => ({
       label: option.textContent ?? '',
-      // A row the machine cannot start says so in its name, which is B5.4's decision and
-      // what this asserts rather than a visual state.
       available: !(option.textContent ?? '').includes('(not available)'),
     })),
   );
@@ -81,7 +59,6 @@ function panelTitle(): Promise<string> {
   );
 }
 
-/** The saved connection names, as the Connect dialog rendered them (spec 26). */
 function savedNames(): Promise<string[]> {
   return browser.execute(() =>
     Array.from(
@@ -96,9 +73,7 @@ function windowTitle(): Promise<string> {
   );
 }
 
-/** Walk the menu bar to one of the two items and activate it, then wait for its dialog.
- * The list comes back over IPC, so the waiting is the part that has to be right on a slow
- * machine. */
+/** The list comes back over IPC, so this waits for the dialog. */
 async function openFromTheMenu(item: string, dialog: string): Promise<void> {
   await browser.execute(() => document.getElementById('command-input')?.focus());
   await press('F10', 'command-input');
@@ -110,15 +85,8 @@ async function openFromTheMenu(item: string, dialog: string): Promise<void> {
   });
 }
 
-/**
- * **The offer to save, which a new connection now makes** (spec 26, decision 19).
- *
- * It opens after `connectTo` resolves, so every test that connects from New connection
- * meets it — and it holds focus until somebody answers. "Not now" is the answer that leaves
- * nothing saved, which is what a test about connecting wants.
- *
- * Answers whether it was there, so a test can assert the offer as well as get past it.
- */
+/** Every connection from New connection is followed by the offer to save, which holds focus
+ * until answered; resolves to whether the offer appeared. */
 async function notNow(): Promise<boolean> {
   const offered = await browser
     .waitUntil(async () => await dialogIsOpen('save-connection-dialog'), {
@@ -139,17 +107,14 @@ async function notNow(): Promise<boolean> {
   return offered;
 }
 
-/** File → New connection: the list of kinds. */
 function openNewConnection(): Promise<void> {
   return openFromTheMenu('menu-new-connection', 'new-connection-dialog');
 }
 
-/** File → Connect: the list of saved names (spec 26, decision 12). */
 function openConnect(): Promise<void> {
   return openFromTheMenu('menu-connect', 'connect-dialog');
 }
 
-/** Move the selection to the row whose label matches, and answer whether it was there. */
 async function chooseKind(label: string): Promise<boolean> {
   const listed = await rows();
   const at = listed.findIndex((row) => row.label === label);
@@ -178,17 +143,12 @@ describe('the New connection dialog', () => {
     await browser.execute(() => document.getElementById('command-input')?.focus());
   });
 
-  /** The whole path: the real menu bar, the real command, and a list built from what this
-   * machine actually has. */
   it('opens from the menu with a list the backend answered', async () => {
     await openNewConnection();
 
     const listed = await rows();
     expect(listed.length).toBeGreaterThan(0);
-    // A debug build offers the scripted far ends, which is what this suite runs on and the
-    // one entry that is the same on every machine (spec B7, decision 7).
     expect(listed.some((row) => row.label === 'Scripted: builtin')).toBe(true);
-    // And a real shell, so the list is not only the developer's tools.
     expect(listed.some((row) => row.label === 'Command Prompt')).toBe(true);
   });
 
@@ -198,8 +158,6 @@ describe('the New connection dialog', () => {
     await expect(await focusedId()).toBe('new-kinds');
   });
 
-  /** Decision 2, end to end: the panel changes with the kind and focus stays on the list.
-   * A list you cannot arrow through without leaving it is not a list. */
   it('arrows the kinds, changing the panel without moving focus', async () => {
     await openNewConnection();
     const before = await panelTitle();
@@ -213,14 +171,10 @@ describe('the New connection dialog', () => {
         '',
     );
     expect(selected).toBe((await rows()).at(-1)?.label);
-    // The last row is either an unavailable kind or a scripted one, and either way its
-    // panel says something different from the first row's.
     expect(await panelTitle()).not.toBe('');
     expect(typeof before).toBe('string');
   });
 
-  /** **What only this suite can assert**: choosing a kind really replaces the session, and
-   * the window renames itself with the label the connect list used. */
   it('connects to a scripted session and renames the window for it', async () => {
     await openNewConnection();
     expect(await chooseKind('Scripted: builtin')).toBe(true);
@@ -238,25 +192,13 @@ describe('the New connection dialog', () => {
         timeoutMsg: `the window never renamed itself; it says ${await windowTitle()}`,
       },
     );
-    // **And Acter offers to save it, once** (spec 26, decision 19): this connection has no
-    // name, so the window asks for one before the listener does anything else. Saying not
-    // now leaves nothing saved, which is what the rest of this test is about.
     await expect(await notNow()).toBe(true);
-    // **On the program's line, not Acter's** (roadmap 28.7). A session hands the keys to
-    // the far end as soon as there is one, so this is where a listener lands: the field
-    // labelled "Command line" that the far end draws into, with Acter's `<input>` hidden.
     await browser.waitUntil(async () => (await focusedId()) === 'far-end-input', {
       timeout: 15_000,
       timeoutMsg: `focus never landed on the program's line; it is on ${await focusedId()}`,
     });
   });
 
-  /** Decision 4's failure half, against a kind this machine genuinely cannot start.
-   *
-   * **Skipped rather than failed on a machine that has everything**, for the reason the
-   * Docker test in `real_session.rs` skips: a fully equipped machine has not discovered a
-   * defect. The path itself is covered without a machine by the dialog's own suite and by
-   * the router tests. */
   it('keeps itself open when the connection could not be started', async () => {
     await openNewConnection();
     const missing = (await rows()).find((row) => !row.available);
@@ -271,10 +213,7 @@ describe('the New connection dialog', () => {
 
     await browser.execute(() => document.getElementById('new-start')?.click());
 
-    // **A failure is acknowledged rather than announced** (ARCHITECTURE, dialogs, rule 10):
-    // it opens a modal that has to be dismissed, and the connect dialog is busy behind it
-    // until that happens. Dismissing it here is not tidying up — it is the behaviour under
-    // test, and leaving it open froze every test that followed when the modal first landed.
+    // The failure modal must be dismissed: left open, it blocks every test after this one.
     await browser.waitUntil(async () => await failureIsOpen(), {
       timeout: 15_000,
       timeoutMsg: 'a connection that could not be started said nothing to acknowledge',
@@ -290,10 +229,9 @@ describe('the New connection dialog', () => {
       timeoutMsg: 'OK never closed the failure dialog',
     });
 
-    // It stays open, and it stays open for good rather than closing a moment later.
+    // Paused so a dialog that closed a moment later would be caught.
     await browser.pause(1000);
     expect(await dialogIsOpen()).toBe(true);
-    // And the window is still on whatever it was on: a failure costs the user nothing.
     expect(await windowTitle()).toBe(before);
   });
 
@@ -314,10 +252,8 @@ describe('the New connection dialog', () => {
     expect(await windowTitle()).toBe(before);
   });
 
-  /** The panel is reachable, and so is Connect after it — the tab order decision 2 states.
-   * Tab itself is the platform's and an untrusted synthetic key does not move focus, so
-   * what is asserted here is that both are focusable at all, which is what makes the order
-   * possible; that Tab walks it is the NVDA pass's to confirm. */
+  /** An untrusted synthetic Tab does not move focus, so this asserts only that both can hold
+   * focus. */
   it('has a panel and a Connect button that can hold focus', async () => {
     await openNewConnection();
 
@@ -334,7 +270,6 @@ describe('the New connection dialog', () => {
   });
 });
 
-/** Whether an element is in the document at all, as far as a reader is concerned. */
 function isShown(id: string): Promise<boolean> {
   return browser.execute(
     (which: string) => document.getElementById(which)?.hidden === false,
@@ -342,9 +277,6 @@ function isShown(id: string): Promise<boolean> {
   );
 }
 
-// **The window's two faces** (spec A10), driven in the real window. This suite launches with
-// a scripted session, so it starts on the terminal face; what it can prove here is that the
-// faces are wired to the session rather than to anything the user pressed.
 describe('what the window shows', () => {
   it('shows the terminal window and not the empty one while connected', async () => {
     await browser.execute(() => document.getElementById('command-input')?.focus());
@@ -355,9 +287,6 @@ describe('what the window shows', () => {
     expect(await isShown('terminal-ended')).toBe(false);
   });
 
-  /** **The two windows are exclusive**, which is the whole model: a window with no session
-   * and a window with one are different things rather than one window whose controls wink
-   * in and out. */
   it('never shows both windows at once', async () => {
     const both = await browser.execute(
       () =>
@@ -368,9 +297,6 @@ describe('what the window shows', () => {
     expect(both).toBe(false);
   });
 
-  /** The buffer is in the document only once it has something in it. This suite has
-   * submitted commands by now in other specs, but each spec file gets its own app, so this
-   * one asserts the rule from both ends. */
   it('brings the buffer in with its first content', async () => {
     const before = await isShown('results');
     await submitCommand('small');
@@ -383,8 +309,6 @@ describe('what the window shows', () => {
     expect(await isShown('results')).toBe(true);
   });
 
-  /** The seam tabs will use: the buffer and the edit field are one thing, grouped, rather
-   * than two that happen to sit together in `<main>`. */
   it('keeps the buffer and the edit field together in one terminal window', async () => {
     const grouped = await browser.execute(() => {
       const terminal = document.getElementById('terminal-window');
@@ -397,9 +321,6 @@ describe('what the window shows', () => {
     expect(grouped).toBe(true);
   });
 
-  /** The dialog's keys belong to its widgets rather than to the reader's browse cursor, so
-   * its contents sit in an application region (spec A10). Asserted on the structure because
-   * what it changes is the reader's mode, which only the NVDA pass can hear. */
   it('holds both connect dialogs in an application region', async () => {
     const wrapped = await browser.execute(() => {
       const making = document.querySelector(
@@ -418,14 +339,6 @@ describe('what the window shows', () => {
   });
 });
 
-/**
- * **The saved-connection flow, end to end** (spec 26, definition of done 6). This is the
- * half only this suite can prove: a real menu item, a real `saved()` over the IPC bridge,
- * a real settings document behind it, and a session actually started from a name.
- *
- * The fixture the worker writes holds one saved connection, `the fake`, pointing at the
- * scripted far end — the only one this suite can start (`wdio.conf.ts`).
- */
 describe('the Connect dialog', () => {
   beforeEach(async () => {
     await browser.execute(() => {
@@ -445,28 +358,18 @@ describe('the Connect dialog', () => {
     await browser.execute(() => document.getElementById('command-input')?.focus());
   });
 
-  /** The names come from the real document through the real invoke. */
   it('lists the saved connection the fixture holds', async () => {
     await openConnect();
 
     expect(await savedNames()).toEqual(['the fake']);
   });
 
-  /**
-   * **Focus lands on the list**, so the first thing said is a saved connection's name
-   * rather than the dialog's title (decision 12).
-   */
   it('focuses the names rather than the dialog', async () => {
     await openConnect();
 
     await expect(await focusedId()).toBe('connect-names');
   });
 
-  /**
-   * **The panel is loaded from the row** (decision 13), which for a scripted connection
-   * is a kind with nothing to choose — so what this proves is that the row resolved to a
-   * profile at all and the dialog rendered its panel from it.
-   */
   it('loads the panel and the checkbox from the saved row', async () => {
     await openConnect();
 
@@ -481,10 +384,6 @@ describe('the Connect dialog', () => {
     expect(panel.setUp).toBe(true);
   });
 
-  /**
-   * **What only this suite can assert**: choosing a saved name really replaces the
-   * session, and the window renames itself for what it connected to.
-   */
   it('connects to the saved connection and renames the window for it', async () => {
     await openConnect();
 
@@ -503,11 +402,6 @@ describe('the Connect dialog', () => {
     );
   });
 
-  /**
-   * **Save connection writes into the real document**, and the name is there the next time
-   * the dialog is opened (definition of done 4). This is the round trip nothing below the
-   * E2E level can reach: a dialog, an invoke, a file, and a second read.
-   */
   it('saves a session under a new name and lists it afterwards', async () => {
     await openConnect();
     await browser.execute(() => document.getElementById('connect-start')?.click());
@@ -533,7 +427,6 @@ describe('the Connect dialog', () => {
     expect(await savedNames()).toEqual(['saved by the suite', 'the fake']);
   });
 
-  /** **Five buttons, and no Save among them** (decision 15). */
   it('has Connect, Rename, Forget, New connection and Cancel, and no Save', async () => {
     await openConnect();
 
@@ -552,10 +445,6 @@ describe('the Connect dialog', () => {
     ]);
   });
 
-  /**
-   * **New connection closes this dialog first** (decision 15): dialogs do not stack, so
-   * Cancel from there returns to the window rather than to this list.
-   */
   it('closes itself when New connection is chosen', async () => {
     await openConnect();
 
