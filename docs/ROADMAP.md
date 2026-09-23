@@ -72,7 +72,6 @@ lane's next step.
 
 **Lane 5: the look**
 
-- 52. **Open** — V1, to a sighted person, it looks like a terminal. Entry: [52-it-looks-like-a-terminal.md](roadmap/52-it-looks-like-a-terminal.md). Spec: none yet.
 - 53. **Open** — V2, the prompt, the command and the edit field share one visual line. Entry: [53-the-prompt-and-the-command-share-a-line.md](roadmap/53-the-prompt-and-the-command-share-a-line.md). Spec: none yet.
 - 54. **Open** — V3, the output carries the far end's colours. Entry: [54-the-output-carries-the-far-ends-colours.md](roadmap/54-the-output-carries-the-far-ends-colours.md). Spec: none yet.
 
@@ -209,7 +208,7 @@ lane's next step.
 
 ## Status board — lane 5: the look (**opened 2026-09-23**; may run parallel to every other lane; strict order)
 
-- 52. **Open** — V1, to a sighted person, it looks like a terminal. Entry: [52-it-looks-like-a-terminal.md](roadmap/52-it-looks-like-a-terminal.md). Spec: none yet.
+- 52. **Done** — V1, to a sighted person, it looks like a terminal. Spec: [v1-it-looks-like-a-terminal.md](specs/v1-it-looks-like-a-terminal.md)
 - 53. **Open** — V2, the prompt, the command and the edit field share one visual line. Entry: [53-the-prompt-and-the-command-share-a-line.md](roadmap/53-the-prompt-and-the-command-share-a-line.md). Spec: none yet.
 - 54. **Open** — V3, the output carries the far end's colours. Entry: [54-the-output-carries-the-far-ends-colours.md](roadmap/54-the-output-carries-the-far-ends-colours.md). Spec: none yet.
 
