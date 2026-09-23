@@ -232,27 +232,8 @@ export type SavedRow = {
 };
 
 /**
- *  A password on its way to the far end, and nowhere else.
- * 
- *  **The type is the guarantee, not a comment asking people to be careful.** It has no
- *  `Display`, so it cannot be interpolated into a message; its `Debug` prints a fixed
- *  placeholder, so it cannot ride into a log, a panic message or a `dbg!`; and it derives
- *  no `Serialize`, so it cannot be put on the wire or into the debug event tape that spec
- *  A3.2 records event ordering with — a password in a debug tape is a password on disk.
- * 
- *  **It deserializes and does not serialize, which is the asymmetry the product needs.** A
- *  password is typed into a dialog and has to reach the backend, so it arrives from the
- *  wire; nothing ever sends one the other way, so `Serialize` is absent and the compiler
- *  enforces that — including for the debug event recorder, which records what crosses the
- *  invoke boundary and therefore has nothing it could record.
- * 
- *  Reading it back is deliberately a call named [`Secret::expose`], so every place that
- *  takes the value out is a place a reader can find by searching for that word.
- * 
- *  **What this does not claim**: it does not scrub memory. Rust's `String` can reallocate,
- *  and a type that promised erasure it cannot deliver would be worse than one that is clear
- *  about its scope. The requirement in spec B9, decision 4 is that the value never reaches
- *  the buffer, the announcer, a log or the tape, and that is what these three absences buy.
+ *  Never give this `Display` or `Serialize`, and never let `Debug` print the value, or a
+ *  password can reach a log or the debug event tape; it does not scrub memory.
  */
 export type Secret = string;
 
