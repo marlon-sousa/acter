@@ -1,48 +1,6 @@
-//! Adapter: what a *Windows* computer actually has, behind acter-core's `ThisComputer` port
-//! — the WSL distributions `wsl.exe` reports, every file a named program really resolves to,
-//! and which shell a distribution's own account runs.
+//! Adapter: what a Windows computer has, behind acter-core's `ThisComputer` port.
 //!
-//! **One of two adapters behind that port since M2**, the other being
-//! [`unix_machine`](crate::unix_machine), with the composition root choosing. It is named
-//! for the platform it knows about rather than for "this machine", which is what it was
-//! called while it was the only one.
-//!
-//! **The only module in this crate that starts a process.** Everything else here is
-//! knowledge: what `cmd.exe` is started with is the same answer on every Windows machine,
-//! and which distributions are installed is the same answer on no two machines at all. That
-//! difference is ARCHITECTURE's classifying question, and it is why this is the one file with
-//! a `Command` in it.
-//!
-//! **A workspace test run must never reach the WSL half.** `cargo test --workspace` spawns
-//! no process, which is why the decode it depends on lives in
-//! [`distributions`](crate::wsl::distributions) as a pure function over captured bytes and is
-//! tested there, and why B5.5's reading of a passwd entry lives beside it in
-//! [`login_shell`](crate::wsl::login_shell). Discovery is different: looking a program up
-//! starts nothing, so the tests here ask the real machine about the shell every Windows
-//! machine has — as they did before B5.7, and for the same reason.
-//!
-//! # Since B5.5: the one call here that is given up on
-//!
-//! Both WSL questions start `wsl.exe`, and only one of them can afford to wait. Listing
-//! distributions happens while a user reads a dialog; asking a distribution what shell it
-//! runs happens in the seconds before there is a prompt, which are already the worst seconds
-//! in this product (roadmap 23.7). So that one runs under a deadline and every way of
-//! failing is the same `None` — advisory, never a gate (spec B5.5, decision 3).
-//!
-//! # Since B5.7: the answer is the files, not a boolean
-//!
-//! `is_available` walked `PATH` and answered whether *a* file existed; `LocalPty` then
-//! spawned the program by name and Windows resolved it a second time. Nothing guaranteed the
-//! two resolutions landed on the same file, which makes `PATH`-order hijacking cheap and
-//! would make any signature check theatre. So this resolves once and hands back the paths
-//! (spec B5.7, decision 1).
-//!
-//! **`PATH` is one source and not the whole of it** (decision 2). An MSI install with "add to
-//! PATH" unchecked is invisible to it; scoop and chocolatey put shims on it that are not the
-//! program; and on the developer's machine, measured 2026-08-27, `where pwsh` gives *two*
-//! hits for one install — the Store package directory and the execution alias beside it. What
-//! `PATH` alone knows is what the name means to this user, which is why it is kept and why
-//! the entry it resolves first is marked as the default.
+//! The only module in this crate that starts a process; its tests must not start `wsl.exe`.
 
 use std::env::{var_os, vars_os};
 use std::io::Read;
@@ -61,104 +19,25 @@ use crate::wsl::login_shell;
 
 mod roots;
 
-/// The client asked what is installed, and the flags that make it answer with names and
-/// nothing else.
-///
-/// `-l -q` rather than `--list --quiet` for no reason except that this is what was
-/// measured; `-q` is what strips the header line and the `(Default)` suffix, leaving one
-/// bare name per line.
+/// `-q` drops the header line and the `(Default)` suffix, leaving one bare name per line.
 const LIST: (&str, [&str; 2]) = ("wsl.exe", ["-l", "-q"]);
 
-/// The client, the flag that points it at one distribution, and the separator after which
-/// everything is the command to run inside it rather than an option to `wsl.exe`.
 const RUN: (&str, &str, &str) = ("wsl.exe", "-d", "--");
 
-/// The shell the question is handed to inside the distribution.
-///
-/// `sh` rather than the account's own shell, deliberately: the question is *about* that
-/// shell, so running it in that shell would need to know the answer first. Every
-/// distribution has an `sh`, and the question is written in the subset all of them share.
 const POSIX_SHELL: &str = "sh";
 
-/// How long a distribution has to say what shell it runs before the session starts without
-/// its answer.
-///
-/// **Four times the SSH probe's three seconds, and the difference is what is being waited
-/// for.** B9 asks over a connection that has already carried a key exchange and an
-/// authentication, so the far end is awake and one line is all that is left. This call can
-/// be the one that *boots* the distribution's virtual machine, and that is not a network
-/// wait at all.
-///
-/// **The number comes from measurement, and the first number tried was wrong.** On the
-/// developer's machine on 2026-08-29, Ubuntu 24.04 under WSL 2.5.7.0, `wsl.exe -- sh -c` was
-/// timed warm and then cold, four times, with `wsl --shutdown` between the cold runs. Warm:
-/// 148, 152, 165, 181, 188, 206 milliseconds. Cold: 5.35, 5.49, 5.74 and 6.30 **seconds** —
-/// a spread a six-second deadline lands in the middle of, which is the worst place for one
-/// to be, because it makes a cold bash distribution a coin toss between being integrated and
-/// being unnamed. Twelve is roughly twice the slowest cold start seen, which leaves the
-/// deadline for what it is meant to catch: a distribution that is not coming up at all.
-///
-/// **`wsl.exe -l -q` does not warm anything**, measured at 57 to 74 milliseconds whether the
-/// machine was cold or warm. It is the first command run *inside* a distribution that boots
-/// it, which is why the connect list can be built cheaply and this cannot.
-///
-/// **It is not twelve seconds added to the time before a prompt, and on a cold machine it is
-/// barely added at all.** Warm — the ordinary case, and every case after the first — a
-/// distribution answers in under a fifth of a second. Cold, this call is *what does the
-/// booting*, so the session's own start then finds a distribution that is already up; the
-/// boot was going to be paid either way, and roadmap 23.10 is the entry about a listener
-/// being told so while it happens.
-///
-/// # B9.5 narrowed why this number exists, and re-measuring kept the number
-///
-/// **The reason changed.** B5.5's amendment 1 chose twelve because what is injected was part
-/// of `ShellLaunch`, so the probe had to finish before the client could be started at all —
-/// which made a cold boot a coin toss between a distribution being integrated and being
-/// unnamed. Nothing is injected at launch any more (spec B9.5, decision 1), so the client is
-/// started while this call is still outstanding and the two wait on the same boot. The
-/// deadline stopped being "long enough that a cold boot is not a coin toss" and became "long
-/// enough that a distribution which is coming up is not given up on".
-///
-/// **Re-measured on 2026-08-29 under the new question**, same machine, Ubuntu 24.04 under WSL
-/// 2.5.7.0, `wsl.exe -d Ubuntu -- sh -c` timed six times warm and four times cold with
-/// `wsl --shutdown` before each cold run. Warm: 141, 151, 161, 161, 170 milliseconds. Cold:
-/// 5.22, 5.29, 5.35 and 5.35 **seconds** — a tighter cluster than B5.5 saw, and inside the
-/// 5.35-to-6.30-second spread it recorded. `wsl.exe -l -q` came in at 50 to 91 milliseconds
-/// cold or warm, which re-confirms that listing warms nothing and that it is the first command
-/// run *inside* a distribution that boots it.
-///
-/// **So the number stays, and that is the measurement's answer rather than an omission.**
-/// Halving it to six would put the deadline in the middle of the observed cold spread, which
-/// is the worst place for one to be and is precisely what B5.5's amendment recorded. Twelve is
-/// a little under twice the slowest cold start either pass has seen, and what B9.5 removed is
-/// not the wait but the *ordering*: a healthy cold start no longer pays this deadline in front
-/// of the client's own boot, because the two happen at once.
+/// Ubuntu 24.04 under WSL 2.5.7.0 answers `wsl.exe -d Ubuntu -- sh -c` in 141 to 206 ms warm
+/// and 5.22 to 6.30 s cold; `wsl.exe -l -q` does not boot a distribution.
 const PATIENCE: Duration = Duration::from_secs(12);
 
-/// How often the deadline is checked while the answer is outstanding.
-///
-/// Short enough that a warm distribution is not held back by the polling, long enough that
-/// waiting costs a thread almost nothing.
 const TICK: Duration = Duration::from_millis(25);
 
-/// The directory a Store package's files live in, which is what says an install came from the
-/// Store rather than from an installer.
 const WINDOWS_APPS: &str = "WindowsApps";
 
-/// The separator between a package full name and its publisher id:
-/// `Microsoft.PowerShell_7.6.5.0_x64__8wekyb3d8bbwe`.
 const PUBLISHER: &str = "__";
 
-/// The directory every versioned PowerShell 7 install sits under, in `%ProgramFiles%` and its
-/// twins — and the one Windows Terminal reads the version from, because the file cannot be
-/// trusted to say (decision 3).
 const POWERSHELL: &str = "PowerShell";
 
-/// This machine, asked directly.
-///
-/// Holds nothing and caches nothing: a user who installs a distribution while Acter is
-/// open should see it in the next list they open, and a cache would make them restart the
-/// program to be told the truth.
 #[derive(Debug, Default)]
 pub struct WindowsMachine;
 
@@ -169,21 +48,7 @@ impl WindowsMachine {
 }
 
 impl ThisComputer for WindowsMachine {
-    /// **Three failures told apart, because they need three different sentences** (spec
-    /// B5.3, decision 6). `wsl.exe` that will not start at all is a machine without the
-    /// feature; `wsl.exe` that runs and refuses is a machine whose WSL is broken, and it
-    /// is read back WSL's own explanation; `wsl.exe` that runs, succeeds and names nothing
-    /// is a machine with WSL and no distribution in it.
-    ///
-    /// **The refusal is read from standard output**, which is where `wsl.exe` writes it —
-    /// measured on 2026-08-24, where an unknown distribution produced
-    /// `There is no distribution with the supplied name.` on stdout, exit code 127, and an
-    /// empty standard error. Reading only stderr would have produced a broken-WSL sentence
-    /// with nothing after it.
-    /// **Nothing, and on Windows that is a fact rather than a refusal** (spec M2,
-    /// decision 1). `/etc/shells` is the list of shells an account may log in to, and
-    /// Windows has no such file and no such concept: a Windows account does not log in to a
-    /// shell. Nothing asks, either — the catalogue offers no `Terminal` kind here.
+    /// Empty: Windows has no `/etc/shells`, and an account does not log in to a shell.
     fn login_shells(&self) -> Vec<LoginShell> {
         Vec::new()
     }
@@ -208,17 +73,8 @@ impl ThisComputer for WindowsMachine {
         Ok(names)
     }
 
-    /// Every file this machine would start for this name, most preferred first.
-    ///
-    /// **Looked up rather than run**, which is the whole point and which B5.3 decided: the
-    /// question is asked while building a list of things the user *may* connect to, and
-    /// starting each candidate to find out whether it starts would open sessions nobody
-    /// asked for. Nothing here reads a version out of a file either (decision 3).
     fn installs(&self, program: &str) -> Vec<ShellInstall> {
         let mut found: Vec<ShellInstall> = Vec::new();
-        // **`PATH` first, and every match rather than the first**, because the order is the
-        // answer: the entry `PATH` resolves first is what typing the name in any other
-        // terminal starts, and that is the one fact no other source here knows.
         for (index, candidate) in on_path(program).into_iter().enumerate() {
             let standing = if index == 0 {
                 PathStanding::First
@@ -234,9 +90,6 @@ impl ThisComputer for WindowsMachine {
             keep(
                 &mut found,
                 resolve(&candidate, PathStanding::Absent).map(|install| ShellInstall {
-                    // The registry is the only source that says a version out loud, and for
-                    // Windows PowerShell it is the right one — so it wins over what the path
-                    // would have guessed, and only where the path guessed nothing.
                     provenance: match install.provenance {
                         Provenance::Indeterminable => Provenance::Registry { version },
                         known => known,
@@ -248,24 +101,7 @@ impl ThisComputer for WindowsMachine {
         found
     }
 
-    /// Which shell this distribution's account is configured to run.
-    ///
-    /// **A second `wsl.exe`, never a line typed into the session** (spec B5.5, decision 1).
-    /// This is the cheap half of B9's decision 7: WSL needs no channel and no protocol, only
-    /// another invocation whose output the terminal buffer never sees. Typing the question
-    /// into the session instead would put a command nobody typed in front of a screen
-    /// reader, which is B4.9's whole subject.
-    ///
-    /// **Advisory, never a gate** (decision 3). A client that is not there, a distribution
-    /// that will not start, an answer that is not a shell name and a deadline that passed
-    /// are all the same `None`, and `None` costs the session nothing: it starts anyway,
-    /// unintegrated and unnamed.
-    ///
-    /// **Standard error is discarded on purpose**, which is the opposite of what
-    /// [`wsl_distributions`](Self::wsl_distributions) does with it. There, a refusal is read
-    /// back to the user in WSL's own words because they asked to see a list and are owed an
-    /// explanation. Here nobody asked a question: a complaint would be an interruption in
-    /// the seconds before a prompt, describing an internal probe the user never started.
+    /// `None` when `wsl.exe` cannot start, the answer is not a shell name, or `PATIENCE` passes.
     fn login_shell(&self, distribution: Option<&str>) -> Option<String> {
         let (program, flag, separator) = RUN;
         let mut asking = Command::new(program);
@@ -278,17 +114,10 @@ impl ThisComputer for WindowsMachine {
     }
 }
 
-/// What a command wrote to standard output, or `None` if it did not finish in time.
+/// What a command wrote to standard output, or `None` if it could not start or outlived
+/// `patience`, in which case it is killed.
 ///
-/// **The child is killed rather than abandoned.** A `wsl.exe` left running after its answer
-/// stopped being wanted would keep a distribution awake and hold a pipe open, and the caller
-/// has already moved on to starting the session.
-///
-/// **Standard output is drained on its own thread**, which is what makes the deadline a
-/// deadline rather than a suggestion: a child that fills the pipe buffer blocks on the write
-/// and never exits, so a parent waiting for exit before reading would wait forever on
-/// exactly the output that was too long. Standard input is closed for the mirror-image
-/// reason — a child that asks a question nobody is there to answer would block on the read.
+/// Standard output is drained on its own thread because a child that fills the pipe never exits.
 fn answered_within(mut command: Command, patience: Duration) -> Option<Vec<u8>> {
     let mut child = command
         .stdin(Stdio::null())
@@ -306,14 +135,8 @@ fn answered_within(mut command: Command, patience: Duration) -> Option<Vec<u8>> 
     let deadline = Instant::now() + patience;
     loop {
         match child.try_wait() {
-            // Whether it succeeded is not asked. A distribution that answered and then
-            // exited non-zero — `getent` finding nothing, the fallback printing an empty
-            // `$SHELL` — still wrote whatever it wrote, and the reading is what decides
-            // whether that is a shell name. One judgement, in one place.
             Ok(Some(_)) => return reading.join().ok(),
             Ok(None) if Instant::now() < deadline => thread::sleep(TICK),
-            // The deadline passed, or the child could not be waited on at all. The reading
-            // thread ends on its own when the kill closes the pipe.
             _ => {
                 let _ = child.kill();
                 let _ = child.wait();
@@ -323,26 +146,13 @@ fn answered_within(mut command: Command, patience: Duration) -> Option<Vec<u8>> 
     }
 }
 
-/// Every file `PATH` resolves this name to, in the order Windows would consider them.
-///
-/// A name with no extension is looked for under every `PATHEXT` suffix, and a name that is a
-/// location is not looked for on `PATH` at all — both of which are the platform's own rules,
-/// and both of which `which_all` applies. It replaced a hand-written walk in B5.7: the
-/// hand-written one answered only the *first* match, which is the half of this question that
-/// cannot see a second install.
 fn on_path(program: &str) -> Vec<PathBuf> {
     which_all(program)
         .map(|found| found.collect())
         .unwrap_or_default()
 }
 
-/// One candidate, resolved through whatever stands between the name and the file.
-///
-/// **The alias is resolved here rather than left for verification** (decision 4). An app
-/// execution alias can be started and cannot be read, so an install that stayed pointed at
-/// one would have nothing to check; resolving it to the package file it stands for gives
-/// something with a real signature. A resolution that fails leaves the alias in place, which
-/// verification then reports as unverifiable with its reason — never quietly trusted.
+/// An alias that does not resolve stays the program, and verification reports it unverifiable.
 fn resolve(candidate: &Path, standing: PathStanding) -> Option<ShellInstall> {
     if !candidate.is_file() {
         return None;
@@ -355,8 +165,7 @@ fn resolve(candidate: &Path, standing: PathStanding) -> Option<ShellInstall> {
     })
 }
 
-/// The file an execution alias stands for, or `None` for anything that is not one — and for
-/// an alias whose package file is not there after all.
+/// `None` for a file that is not an execution alias, or whose package file is missing.
 #[cfg(windows)]
 fn package(candidate: &Path) -> Option<PathBuf> {
     crate::signature_target(candidate)
@@ -364,18 +173,14 @@ fn package(candidate: &Path) -> Option<PathBuf> {
         .filter(|program| program.is_file())
 }
 
-/// No aliases anywhere else, so nothing to resolve.
 #[cfg(not(windows))]
 fn package(_candidate: &Path) -> Option<PathBuf> {
     None
 }
 
-/// Adds an install unless the same file is already there.
-///
-/// **Deduplicated by the file, not by how it was found** (decision 2), and the first one
-/// wins — which is `PATH`'s, so the default survives being found again by a known root. On
-/// the developer's machine this is what turns the Store package and the execution alias
-/// beside it into the one install they are.
+/// The first install found for a file wins, so `PATH`'s standing survives a known root finding
+/// it again. On Windows 11 Pro 26200, `where pwsh` lists the Store package file and the execution
+/// alias that resolves to it.
 fn keep(found: &mut Vec<ShellInstall>, install: Option<ShellInstall>) {
     let Some(install) = install else {
         return;
@@ -389,11 +194,6 @@ fn keep(found: &mut Vec<ShellInstall>, install: Option<ShellInstall>) {
     found.push(install);
 }
 
-/// Whether two paths name the same file.
-///
-/// Compared case-insensitively because Windows filenames are, and after canonicalising when
-/// that is possible — a canonicalise that fails is not a reason to list one file twice, so
-/// the raw paths are compared instead.
 fn same_file(one: &Path, other: &Path) -> bool {
     let settle = |path: &Path| {
         std::fs::canonicalize(path)
@@ -405,11 +205,8 @@ fn same_file(one: &Path, other: &Path) -> bool {
     settle(one) == settle(other)
 }
 
-/// Where a file came from, read off the path and nothing else.
-///
-/// **Decision 3, made mechanical.** The provenance is the versioned directory name, the Store
-/// package identity, or nothing at all — never the file's own version resource, which
-/// measured 2026-08-27 reports the *Windows build* for `powershell.exe` rather than 5.1.
+/// Never reads the version resource: Windows PowerShell 5.1's `powershell.exe` reports
+/// FileVersion 10.0.26100.8875, the Windows build.
 fn provenance(program: &Path) -> Provenance {
     let parts: Vec<String> = program
         .components()
@@ -440,10 +237,6 @@ fn provenance(program: &Path) -> Provenance {
     Provenance::Indeterminable
 }
 
-/// The package family a package full name belongs to:
-/// `Microsoft.PowerShell_7.6.5.0_x64__8wekyb3d8bbwe` is the `Microsoft.PowerShell_8wekyb3d8bbwe`
-/// family, which is the identity `CreateProcess` resolves an alias through and the identity
-/// two versions of one package share.
 fn family(full_name: &str) -> Option<String> {
     let (before, publisher) = full_name.split_once(PUBLISHER)?;
     let name = before.split('_').next()?;
@@ -453,11 +246,6 @@ fn family(full_name: &str) -> Option<String> {
     Some(format!("{name}_{publisher}"))
 }
 
-/// Whether this file is one Windows ships, which is the directory it is in and nothing else.
-///
-/// `WindowsPowerShell\v1.0` is under `System32`, so both editions Windows ships answer yes —
-/// which is right: neither can be uninstalled and neither is told from another install of
-/// itself.
 fn in_windows(parts: &[String]) -> bool {
     let system = var_os("SystemRoot")
         .map(PathBuf::from)
@@ -470,17 +258,10 @@ fn in_windows(parts: &[String]) -> bool {
     under.len() > system.len() && under.starts_with(&system)
 }
 
-/// The directory `at` components into this path, for asking whether the file sits directly in
-/// a versioned install directory rather than somewhere below one.
 fn root_of(program: &Path, at: usize) -> PathBuf {
     program.components().take(at + 1).collect()
 }
 
-/// What `wsl.exe` said when it refused, as one speakable sentence.
-///
-/// Falls back to a sentence of our own rather than to an empty string: a message that ends
-/// mid-air after "it could not list its distributions." leaves a listener waiting for the
-/// half that never comes.
 fn refusal(stdout: &[u8], stderr: &[u8]) -> String {
     let said = decode_utf16le(stdout);
     let said = if said.trim().is_empty() {
@@ -496,8 +277,6 @@ fn refusal(stdout: &[u8], stderr: &[u8]) -> String {
     }
 }
 
-/// Every environment variable, for the roots that only exist on some machines — read here so
-/// [`roots`] takes them rather than reaching for them.
 fn environment() -> Vec<(String, PathBuf)> {
     vars_os()
         .filter_map(|(name, value)| Some((name.to_str()?.to_uppercase(), PathBuf::from(value))))
@@ -508,22 +287,11 @@ fn environment() -> Vec<(String, PathBuf)> {
 mod tests {
     use super::*;
 
-    /// A Windows path, spelled with the separators of the platform running this test.
-    ///
-    /// **The literals below are Windows' directory *names*, which is what these tests are
-    /// about; the backslashes between them are Windows' *spelling*, which is not** (M1).
-    /// `Path` splits on the host's separator, so `C:\Program Files\WindowsApps\...` is a single
-    /// component off Windows — and [`provenance`] walking one component found no `WindowsApps`
-    /// and answered `Indeterminable`. Three tests failed that way and a fourth passed while
-    /// asserting nothing, which is worse. Joining the parts gives every platform a real path
-    /// and every platform the same rule to check.
+    /// Joined from parts because `Path` splits only on the host's separator.
     fn at(parts: &[&str]) -> PathBuf {
         parts.iter().collect()
     }
 
-    /// **The measured shape of a Store install** (2026-08-27): `pwsh` resolves to a package
-    /// directory under `WindowsApps`, and what tells it from another install is the package
-    /// family rather than anything in the file.
     #[test]
     fn a_file_under_a_store_package_is_named_by_its_package_family() {
         let provenance = provenance(&at(&[
@@ -542,8 +310,6 @@ mod tests {
         );
     }
 
-    /// The preview package is the same family shape with preview in the name, and it has to
-    /// read differently or two entries would sound identical.
     #[test]
     fn a_preview_package_says_so() {
         let provenance = provenance(&at(&[
@@ -562,9 +328,6 @@ mod tests {
         );
     }
 
-    /// **The version comes from the directory** (decision 3), which is where Windows Terminal
-    /// reads it from too — and never from the file, which measured 2026-08-27 reports the
-    /// Windows build rather than its own version.
     #[test]
     fn an_msi_install_is_named_by_the_directory_it_was_installed_into() {
         assert_eq!(
@@ -583,16 +346,12 @@ mod tests {
         );
     }
 
-    /// **A file somewhere that says nothing is indeterminable, not guessed at** (decision 3).
-    /// A dotnet tool, a scoop shim and a directory somebody put on `PATH` are all this.
     #[test]
     fn a_file_somewhere_that_says_nothing_is_reported_as_saying_nothing() {
         for anywhere in [
             at(&["Users", "someone", ".dotnet", "tools", "pwsh.exe"]),
             at(&["Users", "someone", "scoop", "shims", "pwsh.exe"]),
             at(&["tools", "pwsh", "pwsh.exe"]),
-            // Under the PowerShell directory but not *in* a versioned one, so the name beside
-            // it is not a version and must not be read as one.
             at(&[
                 "Program Files",
                 POWERSHELL,
@@ -611,9 +370,6 @@ mod tests {
         }
     }
 
-    /// The shells Windows ships are Windows', both of them — `WindowsPowerShell\v1.0` is
-    /// under `System32`, and neither can be told from another install of itself because
-    /// neither can be uninstalled.
     #[cfg(windows)]
     #[test]
     fn the_shells_windows_ships_come_from_windows() {
@@ -637,9 +393,6 @@ mod tests {
         );
     }
 
-    /// A package full name that is not one resolves to no family, rather than to a family
-    /// made out of whatever was there — which would name an install after a directory
-    /// somebody happened to call `WindowsApps`.
     #[test]
     fn something_that_is_not_a_package_full_name_names_no_family() {
         assert_eq!(family("Microsoft.PowerShell"), None);
@@ -651,9 +404,6 @@ mod tests {
         );
     }
 
-    /// **The lookup and the spawn have to agree about what "installed" means**, which is now
-    /// literal: this asks the machine about the shell every Windows install has, and what
-    /// comes back is the file that will be started. No process is started either way.
     #[cfg(windows)]
     #[test]
     fn the_shell_every_windows_machine_has_resolves_to_a_file_that_is_there() {
@@ -681,9 +431,6 @@ mod tests {
         );
     }
 
-    /// One file is one install however many sources found it — which on the developer's
-    /// machine is what turns the Store package directory and the execution alias beside it
-    /// into the single install they are.
     #[cfg(windows)]
     #[test]
     fn one_file_found_twice_is_listed_once() {
@@ -700,9 +447,6 @@ mod tests {
         assert_eq!(seen.len(), listed, "no file appears twice: {installs:?}");
     }
 
-    /// A path is a location and not a name, so `PATH` is not searched for it — the same rule
-    /// Windows applies, and the difference between checking one file and checking one per
-    /// directory in the environment.
     #[cfg(windows)]
     #[test]
     fn a_program_named_by_its_full_path_is_the_only_install_of_itself() {
@@ -723,8 +467,6 @@ mod tests {
         );
     }
 
-    /// The sentence a listener actually hears when WSL refuses. It is WSL's own words,
-    /// decoded from the UTF-16LE they arrive in, on the stream WSL really writes them to.
     #[test]
     fn a_refusal_is_read_back_in_wsls_own_words_from_the_stream_it_wrote_them_to() {
         let mut said = Vec::new();
@@ -738,8 +480,6 @@ mod tests {
         );
     }
 
-    /// Nothing on either stream still ends in a whole sentence, because the reason is
-    /// appended to one and a listener would otherwise be left waiting for it.
     #[test]
     fn a_refusal_with_nothing_said_still_finishes_the_sentence_it_is_appended_to() {
         let spoken = NoDistributions::NotWorking {
