@@ -45,6 +45,7 @@ lane's next step.
 - 40. **Open** — The terminal engine can emit two rows in the wrong order after the cursor moves up. Entry: [40-terminal-engine-row-order-under-cursor-up.md](roadmap/40-terminal-engine-row-order-under-cursor-up.md). Spec: none yet.
 - 42. **Open** — A file started anyway goes unmentioned when the far end also has a note. Entry: [42-started-anyway-note-dropped-behind-far-end-note.md](roadmap/42-started-anyway-note-dropped-behind-far-end-note.md). Spec: none yet.
 - 43. **Open** — A leftover answer can resolve the next question in the same attempt. Entry: [43-a-stale-answer-resolves-the-next-question.md](roadmap/43-a-stale-answer-resolves-the-next-question.md). Spec: none yet.
+- 44. **Open** — A trusted signature whose subject merely contains "Microsoft" is announced as Microsoft's. Entry: [44-any-subject-naming-microsoft-is-called-microsoft.md](roadmap/44-any-subject-naming-microsoft-is-called-microsoft.md). Spec: none yet.
 
 **Lane 3: macOS**
 
@@ -155,6 +156,7 @@ History: [lane-2-domain.md](roadmap/lane-2-domain.md).
 - 40. **Open** — The terminal engine can emit two rows in the wrong order after the cursor moves up. Entry: [40-terminal-engine-row-order-under-cursor-up.md](roadmap/40-terminal-engine-row-order-under-cursor-up.md). Spec: none yet.
 - 42. **Open** — A file started anyway goes unmentioned when the far end also has a note. Entry: [42-started-anyway-note-dropped-behind-far-end-note.md](roadmap/42-started-anyway-note-dropped-behind-far-end-note.md). Spec: none yet.
 - 43. **Open** — A leftover answer can resolve the next question in the same attempt. Entry: [43-a-stale-answer-resolves-the-next-question.md](roadmap/43-a-stale-answer-resolves-the-next-question.md). Spec: none yet.
+- 44. **Open** — A trusted signature whose subject merely contains "Microsoft" is announced as Microsoft's. Entry: [44-any-subject-naming-microsoft-is-called-microsoft.md](roadmap/44-any-subject-naming-microsoft-is-called-microsoft.md). Spec: none yet.
 
 ## Status board — lane 3: macOS (**opened 2026-08-31**; may run parallel to lanes 1 and 2)
 
