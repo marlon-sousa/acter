@@ -27,26 +27,35 @@ pub enum SessionEvent {
     },
     /// OSC 133 D. A nonzero exit code follows as `Announce { Failed }`; a zero one is never
     /// sent.
-    CommandFinished { command_id: CommandId },
+    CommandFinished {
+        command_id: CommandId,
+    },
     /// Emitted only when the shell reports exit codes; otherwise the prompt already arrives as
     /// output.
-    PromptDrawn { text: String },
+    PromptDrawn {
+        text: String,
+    },
     /// The user stopped the command; no `CommandFinished` follows.
-    CommandInterrupted { command_id: CommandId },
+    CommandInterrupted {
+        command_id: CommandId,
+    },
     /// The startup grace period passed with no shell-integration marker; a marker arriving
     /// later upgrades the session silently.
     IntegrationUnavailable,
-    /// A program switched to the alternate screen.
     AltScreenEntered,
-    /// Back on the normal screen.
     AltScreenLeft,
-    /// The terminal title changed.
-    TitleChanged { title: String },
+    TitleChanged {
+        title: String,
+    },
     /// The far end's command line in far-end-line mode; `text` is `None` when only the caret
     /// moved, and `caret` counts characters from the anchor column.
-    FarEndLine { text: Option<String>, caret: u32 },
-    /// The transport's state changed.
-    ConnectionChanged { state: ConnectionState },
+    FarEndLine {
+        text: Option<String>,
+        caret: u32,
+    },
+    ConnectionChanged {
+        state: ConnectionState,
+    },
     /// Always sent after the `Output` it speaks about, on the same in-order channel, so
     /// spoken text is already in the buffer.
     Announce {
@@ -59,16 +68,21 @@ pub enum SessionEvent {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[serde(tag = "kind")]
 pub enum Announcement {
-    /// Under the auto-read threshold.
-    ReadAloud { text: String },
+    ReadAloud {
+        text: String,
+    },
     /// Past the auto-read threshold, announced by line count.
-    TooBig { lines: u32 },
+    TooBig {
+        lines: u32,
+    },
     /// The patience window elapsed with output still flowing.
     StillRunning,
     /// The babble guard tripped: output keeps arriving in the buffer, unannounced.
     OutputContinues,
     /// Nonzero exit code.
-    Failed { exit_code: ExitCode },
+    Failed {
+        exit_code: ExitCode,
+    },
 }
 
 #[cfg(test)]

@@ -43,7 +43,6 @@ fn line_owner_by_default() -> LineOwner {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "target")]
 pub enum SavedTarget {
-    /// `cmd.exe`.
     Cmd,
     /// No file path: the install is matched again at connect time, so an upgrade does not
     /// break it, and no match lists the connection as not available.
@@ -52,10 +51,12 @@ pub enum SavedTarget {
         #[serde(default)]
         provenance: Option<String>,
     },
-    /// Bash in one WSL distribution.
-    Wsl { distribution: String },
-    /// A program named directly.
-    Program { program: String },
+    Wsl {
+        distribution: String,
+    },
+    Program {
+        program: String,
+    },
     /// Never a password or a passphrase.
     Ssh {
         host: String,
@@ -65,7 +66,9 @@ pub enum SavedTarget {
     /// The macOS account's login shell, read at connect time.
     Terminal,
     /// Listed as not available in a release build.
-    Scripted { scenario: String },
+    Scripted {
+        scenario: String,
+    },
 }
 
 impl SavedTarget {

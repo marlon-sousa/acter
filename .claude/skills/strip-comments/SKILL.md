@@ -25,24 +25,30 @@ skill is the procedure; the spec is the judgement.
 3. A comment that contradicts the code is deleted if it is N and corrected if it is K.
    Never change the code to match a comment. Put the contradiction in the PR body under
    "found while stripping".
-4. Change no line that is not a comment. The one exception is renaming a test whose
-   narration you deleted so that the name carries the intent.
+4. Change no line that is not a comment, with two exceptions. You may rename a test whose
+   narration you deleted, so that the name carries the intent. You may also accept what
+   `cargo fmt` reflows after a deletion. Deleting a doc comment can change how rustfmt
+   lays out a whole enum: once one variant is a single line with no doc, it expands every
+   struct variant onto several lines. Never keep a doc comment only to hold the layout
+   still; delete it and run `cargo fmt`.
 5. Run the script on the file again. At or under 0.20 comment lines per code line, or
    every remaining comment is K2 or K3 and the PR body says so for that file.
 
 ## Before opening the PR
 
-1. Run the gate named in the spec for this PR. A red gate means a non-comment line
-   moved; find it and revert it. C2 also regenerates `ui/src/protocol.ts` and commits it.
+1. Run `cargo fmt --all`, then the gate named in the spec for this PR. A red gate means a
+   non-comment line moved; find it and revert it. C2 also regenerates `ui/src/protocol.ts`
+   and commits it.
 2. Run the script on the PR's files again for the "after" total.
 3. Flip the PR's line on the board in `docs/ROADMAP.md` to Done, in the lane list and
    under "What is next". Write nothing else there: the PR body is the record.
 
 ## PR body
 
-- The script's total line before and after. The code count must be identical; only the
-  comment count moves.
-- "No non-comment line changed", or the list of test renames.
+- The script's total line before and after. Only `cargo fmt` reflow may change the code
+  count; any other change to it means a non-comment line moved.
+- "No non-comment line changed", or the list of test renames and of the files where
+  `cargo fmt` reflowed code.
 - "Found while stripping": each comment that contradicted the code, with file and line,
   or "none".
 - Any file left above 0.20 and why.

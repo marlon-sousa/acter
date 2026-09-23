@@ -17,15 +17,20 @@ pub struct AttemptId(pub u32);
 #[serde(tag = "step")]
 pub enum ConnectStep {
     /// A complete sentence, spoken as it arrives.
-    Progress { said: String },
+    Progress {
+        said: String,
+    },
     Asked {
         attempt: AttemptId,
         question: ConnectQuestion,
     },
-    /// There is a session to attach to.
-    Arrived { connected: Connected },
+    Arrived {
+        connected: Connected,
+    },
     /// One sentence a listener can act on.
-    Failed { why: String },
+    Failed {
+        why: String,
+    },
 }
 
 /// What a person is asked, mid-connection.
@@ -75,13 +80,16 @@ pub enum ConnectQuestion {
 pub enum ConnectAnswer {
     /// Trust this server and record it.
     Trust,
-    /// Never serialized, printed or logged.
-    Password { secret: crate::Secret },
+    Password {
+        secret: crate::Secret,
+    },
     /// The only way to reach [`ProgramAnswer::Start`](crate::ProgramAnswer).
     StartAnyway,
     /// The only way to reach [`SetupAnswer::SetUp`](crate::SetupAnswer); `remember` is kept
     /// per shell, not per host or profile.
-    SetUpSession { remember: bool },
+    SetUpSession {
+        remember: bool,
+    },
     /// Refused, cancelled, or closed.
     GiveUp,
 }

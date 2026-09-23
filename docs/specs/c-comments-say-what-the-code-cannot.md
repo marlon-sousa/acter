@@ -137,17 +137,20 @@ quoted words.
 1. Run `python scripts/comment_ratio.py <file>` and note the line.
 2. Read the file top to bottom. For each comment paragraph, name its bucket, then delete
    or compress. Do not skip a paragraph because it is long; the long ones are the point.
-3. Touch nothing that is not a comment. No renames, no reformatting, no import ordering,
-   no "while I was here". A diff that changes a non-comment line fails review, with one
-   exception: a test whose narration is deleted may be renamed so the name carries the
-   intent, and only the name changes.
+3. Touch nothing that is not a comment. No renames, no reformatting by hand, no import
+   ordering, no "while I was here". A diff that changes a non-comment line fails review,
+   with two exceptions. A test whose narration is deleted may be renamed so the name
+   carries the intent, and only the name changes. And `cargo fmt` may reflow code after a
+   deletion: once one variant of an enum is a single line with no doc, rustfmt expands
+   every struct variant in it onto several lines. A doc comment is never kept only to hold
+   the layout still.
 4. Run the script again. The file's ratio should be at or under 0.20 comment lines per
    code line. A file above that is allowed only when every remaining comment is K2 or K3,
    and the PR body says so for that file.
 5. Run the gate for the PR (listed per PR below). Comments cannot change behaviour, so a
    red gate means a non-comment line moved; find it and revert it. The script's code
-   count for the file must be identical before and after; that is the reviewer's first
-   check.
+   count for the file must be identical before and after, except for what `cargo fmt`
+   reflowed; that is the reviewer's first check.
 
 The `///` doc comments become `pub` API docs on rustdoc and Specta copies the ones on IPC
 types into `ui/src/protocol.ts`. Both are fine to shrink: a `pub` item with a name that
@@ -163,7 +166,7 @@ under review can do the rest without one.
 
 Each PR body carries: the script's total line for the touched files before and after; a
 "found while stripping" list, possibly empty; and the sentence "no non-comment line
-changed" or the list of test renames.
+changed" or the list of test renames and of the files `cargo fmt` reflowed.
 
 ### C1 — `acter-core` policies
 
