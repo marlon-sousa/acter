@@ -29,6 +29,7 @@ lane's next step.
 
 - 14. **Open** — A4, completion path. Entry: [14-a4-completion-path.md](roadmap/14-a4-completion-path.md). Spec: none yet.
 - 15. **Open** — A5.3 and onward: iteration entries appear here as NVDA findings arrive. Spec: none yet.
+- 41. **Open** — The end-to-end test for F10 checks focus before the menu has taken it. Entry: [41-f10-menu-e2e-test-races-focus.md](roadmap/41-f10-menu-e2e-test-races-focus.md). Spec: none yet.
 
 **Lane 2: domain**
 
@@ -41,6 +42,7 @@ lane's next step.
 - 27.2. **Open** — A connection that waits for a person can be hung up on while it waits. Entry: [27.2-connection-waits-for-person-can-be.md](roadmap/27.2-connection-waits-for-person-can-be.md). Spec: none yet.
 - 27.3. **Open** — Reopening the Connect dialog re-reads the last thing the previous attempt said. Entry: [27.3-reopening-connect-dialog-re-reads-last.md](roadmap/27.3-reopening-connect-dialog-re-reads-last.md). Spec: none yet.
 - 27.7. **Open** — At a bash far end, nothing is read aloud when the session connects. Entry: [27.7-bash-far-end-nothing-read-aloud.md](roadmap/27.7-bash-far-end-nothing-read-aloud.md). Spec: none yet.
+- 40. **Open** — The terminal engine can emit two rows in the wrong order after the cursor moves up. Entry: [40-terminal-engine-row-order-under-cursor-up.md](roadmap/40-terminal-engine-row-order-under-cursor-up.md). Spec: none yet.
 
 **Lane 3: macOS**
 
@@ -96,6 +98,7 @@ History: [lane-1-ui.md](roadmap/lane-1-ui.md).
 - 13.9. **Done** — ten findings from the user's own pass over the shipped window, fixed in one general PR.
 - 14. **Open** — A4, completion path. Entry: [14-a4-completion-path.md](roadmap/14-a4-completion-path.md). Spec: none yet.
 - 15. **Open** — A5.3 and onward: iteration entries appear here as NVDA findings arrive. Spec: none yet.
+- 41. **Open** — The end-to-end test for F10 checks focus before the menu has taken it. Entry: [41-f10-menu-e2e-test-races-focus.md](roadmap/41-f10-menu-e2e-test-races-focus.md). Spec: none yet.
 
 ## Status board — lane 2: domain (pure Rust; may start anytime, parallel to lane 1)
 
@@ -150,6 +153,7 @@ History: [lane-2-domain.md](roadmap/lane-2-domain.md).
 - 27.7. **Open** — At a bash far end, nothing is read aloud when the session connects. Entry: [27.7-bash-far-end-nothing-read-aloud.md](roadmap/27.7-bash-far-end-nothing-read-aloud.md). Spec: none yet.
 - 27.5. **Done** — the status region says the whole sentence, and the announcement is that same string, from one function.
 - 27.1. **Done** — B9.5, the session is set up after it is established. Spec: [b9.5-the-session-is-set-up-after-it-is-established.md](specs/b9.5-the-session-is-set-up-after-it-is-established.md)
+- 40. **Open** — The terminal engine can emit two rows in the wrong order after the cursor moves up. Entry: [40-terminal-engine-row-order-under-cursor-up.md](roadmap/40-terminal-engine-row-order-under-cursor-up.md). Spec: none yet.
 
 ## Status board — lane 3: macOS (**opened 2026-08-31**; may run parallel to lanes 1 and 2)
 
