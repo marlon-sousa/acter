@@ -1,28 +1,6 @@
 //! Entity/value: the session transcript — the JSON a scripted session is played from,
 //! its validation, and the expansion of a step's payload into the exact bytes that go
 //! on the wire.
-//!
-//! **One format, two consumers.** A cargo test parses a transcript and feeds its bytes
-//! straight to the terminal engine — no transport, no runtime, no clock — which is
-//! ARCHITECTURE's golden-transcript tier. [`ScriptedTransport`](super::ScriptedTransport)
-//! replays the same file as a live session. There is deliberately no second dialect for
-//! tests (spec B3.5, decision 5).
-//!
-//! **A step is a delivery, not a read boundary.** It says what the far end emits and how
-//! long it waits first; where a read ends is the pipe's, and a transcript deliberately
-//! cannot say (spec B3.6, decision 3). Chunking used to be scriptable — a marker split
-//! across two reads was two steps with zero delay — which proved DESIGN's reliability
-//! case for exactly one hand-written marker. It is now
-//! [`Chunking`](crate::Chunking), a dimension every transcript is replayed under.
-//!
-//! **The marker shorthand is authoring convenience, never a bypass.** A `marker` payload
-//! expands to the real OSC 133 sequence terminated with BEL, so the recognizer in
-//! `acter-term` sees exactly the bytes a PowerShell prompt hook would emit. A fixture
-//! that wants the ST terminator, a malformed marker, or a forged one writes those bytes
-//! itself, with `text` or `base64` (decision 6).
-//!
-//! Pure data: no clock, no randomness, and no I/O beyond reading a `file` payload
-//! relative to the transcript it was named in.
 
 use std::fs::{read, read_to_string};
 use std::path::{Path, PathBuf};
@@ -30,70 +8,42 @@ use std::time::Duration;
 
 use serde::Deserialize;
 
-/// The escape sequence a `marker` payload expands into, up to the marker letter.
 const OSC133: &[u8] = b"\x1b]133;";
-/// BEL, the terminator the shorthand uses. Real shells emit this one and ST; a fixture
-/// that wants ST writes the bytes itself.
 const BEL: u8 = 0x07;
 
-/// One scripted session: how it greets, how it answers each line it knows, and what it
-/// does with a line it does not.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SessionTranscript {
-    /// The prompt sequence. Emitted when the session starts and again after every rule
-    /// that runs to completion — that is what makes this a shell rather than a tape
-    /// (decision 4). Conventionally prompt-start, the prompt text, command-line-start.
     #[serde(default)]
     on_start: Vec<Step>,
-    /// The lines this session knows how to answer, matched in order.
     rules: Vec<Rule>,
-    /// What any other line gets: A3 decision 4's echo and return to the prompt.
     default: Rule,
-    /// Where a `file` payload resolves from: the directory the transcript was read from.
-    /// `None` for a transcript that came from a string, which is why a `file` payload is
-    /// then rejected rather than guessed at.
+    /// `None` for a transcript parsed from a string, which rejects every `file` payload.
     #[serde(skip)]
     base: Option<PathBuf>,
 }
 
-/// One line this session answers, and how.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Rule {
-    /// The submitted line this rule answers, matched exactly. `None` on the default
-    /// rule, which is reached by not matching anything else.
+    /// `None` on the default rule.
     #[serde(rename = "match", default)]
     line: Option<String>,
-    /// Whether this rule cancels whatever sequence is in flight and runs instead.
-    ///
-    /// That covers a written `0x03` exactly as a real shell would answer it, and it
-    /// covers A3.1's literal `stop` line, without inventing stdin semantics a fake has
-    /// no business having. Which bytes the frontend sends on Ctrl+C is A3.2's question;
-    /// this makes both answers testable rather than deciding either (decision 7).
     #[serde(default)]
     interrupts: bool,
-    /// What the rule emits, in order.
     steps: Vec<Step>,
 }
 
-/// One delivery: a wait, then one payload, optionally repeated.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Step {
-    /// How long to wait before this delivery. Absent means no wait at all: the next
-    /// thing the far end says, with nothing observable between them.
     #[serde(default)]
     delay: DelayRange,
     payload: Payload,
-    /// How many times to deliver it. Absent means once.
     #[serde(default)]
     repeat: Repeat,
 }
 
-/// A delay as an inclusive millisecond range, reusing A3's shape: equal bounds are
-/// deterministic, unequal bounds are sampled per delivery so a manual session paces
-/// organically rather than metronomically.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct DelayRange {
@@ -101,49 +51,32 @@ pub(crate) struct DelayRange {
     max_ms: u64,
 }
 
-/// How many times a step delivers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(untagged)]
 pub(crate) enum Repeat {
-    /// Exactly this many deliveries: `"repeat": 12`.
     Times(u32),
-    /// Never stops: `"repeat": "forever"` — what `forever` and `tail` need, and the only
-    /// way a transcript can decline to ever end a command.
     Endless(Endless),
 }
 
-/// The one endless spelling, as its own type so `"repeat": "whenever"` is rejected
-/// rather than quietly read as something else.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum Endless {
     Forever,
 }
 
-/// What one delivery carries.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum Payload {
-    /// A UTF-8 string, so JSON's own escapes reach the byte stream: `"\r\n"` is a real
-    /// carriage return and line feed, and a JSON unicode escape carries a
-    /// real escape byte.
     Text(String),
-    /// An OSC 133 marker by letter, expanded to the real sequence.
     Marker {
         kind: MarkerKind,
-        /// Only a `D` carries one.
         #[serde(default)]
         exit_code: Option<i32>,
     },
-    /// Arbitrary bytes, standard base64 with padding — for a capture too small to be
-    /// worth its own file and too binary to write as text.
     Base64(String),
-    /// A raw capture, named relative to the transcript file. What B5's recorded golden
-    /// transcripts arrive as.
     File(String),
 }
 
-/// The four markers, spelled as the shell emits them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 pub(crate) enum MarkerKind {
     #[serde(rename = "A")]
@@ -168,7 +101,6 @@ impl MarkerKind {
 }
 
 impl Default for DelayRange {
-    /// No wait: the common case, for everything the far end says without pausing first.
     fn default() -> Self {
         Self::fixed(0)
     }
@@ -182,16 +114,10 @@ impl DelayRange {
         }
     }
 
-    /// Whether this range asks for no wait at all, in which case no timer is requested
-    /// from the clock — a zero wait is not a wait, and asking for one would make every
-    /// instant delivery depend on a clock tick no scenario asked for.
     pub(crate) const fn is_instant(self) -> bool {
         self.max_ms == 0
     }
 
-    /// The delay for one delivery. `roll` is the caller's source of variation, used only
-    /// when the bounds differ — so equal bounds never consume it and a fixed transcript
-    /// is reproducible to the millisecond.
     pub(crate) const fn pick(self, roll: u64) -> Duration {
         let ms = if self.max_ms <= self.min_ms {
             self.min_ms
@@ -229,22 +155,12 @@ impl Rule {
 }
 
 impl SessionTranscript {
-    /// The built-in transcript: the ten scenarios A3 scripted as events, expressed as
-    /// bytes. Embedded, so a dev run needs no file at all — A3's built-in defaults,
-    /// moved down a layer.
-    ///
-    /// Panics if it does not parse, which is a build-time fact rather than a runtime
-    /// condition: the file is compiled in, and a test below holds it to that.
     pub fn builtin() -> Self {
         Self::parse(include_str!("default_transcript.json"))
             .expect("the built-in transcript must parse")
     }
 
-    /// Parses and validates a transcript from JSON. A `file` payload is rejected,
-    /// because a string has no directory to resolve one against.
-    ///
-    /// The error is a speakable sentence: an unusable transcript is a loud failure, not
-    /// a silent fallback (A3's precedent for its script config).
+    /// Rejects a `file` payload; the error is a speakable sentence.
     pub fn parse(json: &str) -> Result<Self, String> {
         let transcript: Self = serde_json::from_str(json)
             .map_err(|e| format!("The session transcript is not valid JSON. {e}"))?;
@@ -252,8 +168,6 @@ impl SessionTranscript {
         Ok(transcript)
     }
 
-    /// Reads and validates a transcript from disk. `file` payloads resolve relative to
-    /// the transcript's own directory, so a transcript and its captures move together.
     pub fn load(path: impl AsRef<Path>) -> Result<Self, String> {
         let path = path.as_ref();
         let json = read_to_string(path).map_err(|e| {
@@ -273,14 +187,10 @@ impl SessionTranscript {
         Ok(transcript)
     }
 
-    /// The prompt sequence: emitted at the start of the session and again after each
-    /// completed rule.
     pub(crate) fn prompt(&self) -> &[Step] {
         &self.on_start
     }
 
-    /// The rule that answers `line`, falling back to the default rule. Matching is exact
-    /// on the whole submitted line, which is A3 decision 4 unchanged.
     pub(crate) fn rule_for(&self, line: &str) -> &Rule {
         self.rules
             .iter()
@@ -288,16 +198,12 @@ impl SessionTranscript {
             .unwrap_or(&self.default)
     }
 
-    /// Whether `line` is answered by a rule that cancels what is in flight. Asked before
-    /// a line is complete, so a written `0x03` can be acted on without waiting for a
-    /// newline that a control byte never carries.
     pub(crate) fn interrupts(&self, line: &str) -> bool {
         self.rules
             .iter()
             .any(|rule| rule.line.as_deref() == Some(line) && rule.interrupts)
     }
 
-    /// The exact bytes one payload puts on the wire.
     pub(crate) fn expand(&self, payload: &Payload) -> Result<Vec<u8>, String> {
         match payload {
             Payload::Text(text) => Ok(text.as_bytes().to_vec()),
@@ -330,9 +236,6 @@ impl SessionTranscript {
         }
     }
 
-    /// Everything a transcript must satisfy before anything replays it. Failing here is
-    /// the point: an authoring mistake that survives into a session shows up as a
-    /// terminal that behaves oddly, which is the hardest kind of defect to hear.
     fn validate(&self) -> Result<(), String> {
         if self.rules.is_empty() {
             return Err(
@@ -409,9 +312,6 @@ impl SessionTranscript {
     }
 }
 
-/// Decodes standard base64 with padding. Hand-written rather than taken as a dependency:
-/// this crate's dependency list is one of the spec's acceptance criteria, and a decoder
-/// for a fixture format is thirty lines.
 fn decode_base64(encoded: &str) -> Result<Vec<u8>, String> {
     let mut bits: u32 = 0;
     let mut held = 0;
@@ -453,8 +353,6 @@ mod tests {
 
     use super::*;
 
-    /// The reliability transcripts, which are fixtures for the pipeline test and load
-    /// cases for this one.
     fn fixture(name: &str) -> PathBuf {
         PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures")).join(name)
     }
@@ -470,8 +368,6 @@ mod tests {
         }
     }
 
-    /// A transcript with one rule and one default, so a test can say only the thing it
-    /// is about.
     fn one_rule(rule_json: &str) -> Result<SessionTranscript, String> {
         SessionTranscript::parse(&format!(
             r#"{{ "rules": [{rule_json}], "default": {{ "steps": [] }} }}"#
@@ -494,10 +390,6 @@ mod tests {
         }
     }
 
-    /// Decision 9's whole point: A3's fake scripted every verdict and this one scripts
-    /// none, so the numbers have to earn their scenarios against the real thresholds.
-    /// If `PacingConfig`'s defaults ever move, this test says which scenario stopped
-    /// meaning what it was written to mean.
     #[test]
     fn the_builtin_numbers_are_chosen_against_the_pacing_defaults() {
         let transcript = SessionTranscript::builtin();
@@ -553,8 +445,6 @@ mod tests {
         );
     }
 
-    /// The five the pipeline test does not replay end to end. They parse, they match,
-    /// and they ask for the delays they claim to; how they sound is B6's manual matrix.
     #[test]
     fn the_scenarios_asserted_at_transcript_level_request_the_delays_they_claim() {
         let transcript = SessionTranscript::builtin();
@@ -645,8 +535,6 @@ mod tests {
         );
     }
 
-    /// The shorthand is convenience, not a bypass: what reaches the wire is what a
-    /// PowerShell prompt hook emits, so the recognizer in acter-term sees no difference.
     #[test]
     fn the_marker_shorthand_expands_to_the_sequence_a_shell_emits() {
         let transcript = SessionTranscript::builtin();
@@ -740,8 +628,6 @@ mod tests {
         assert!(error.contains("never happen"), "got: {error}");
     }
 
-    /// An endless step with no delay would spin the emission loop with nothing else ever
-    /// getting a turn — including the interrupt that is the only way to stop it.
     #[test]
     fn an_endless_step_with_no_delay_is_rejected() {
         let error = one_rule(

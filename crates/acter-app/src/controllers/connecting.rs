@@ -1,19 +1,5 @@
-//! Controller (orchestrator): `Connecting` — one attempt to connect, from the invoke that
-//! starts it to the answer that lets it finish.
-//!
-//! **It exists because of a Tauri fact, and the fact is worth stating plainly.** A
-//! synchronous `#[tauri::command]` runs on the **main thread**. Starting an SSH far end
-//! blocks until a person has decided about a host key and typed a password. So a router
-//! that called `use_profile` directly would hold the main thread across a dialog, and the
-//! invoke carrying the *answer* could never be dispatched — a deadlock at the exact moment
-//! the dialog appears, not a slow connection. Everything in this file follows from that:
-//! the work goes on a task, the invokes return at once, and the two are joined by an
-//! attempt id.
-//!
-//! **What is here and what is not.** The waiting, the parking and the whole conversation
-//! are `acter_core::Conversation`'s, where they are tested with two threads and no
-//! framework. What is here is the part that genuinely needs Tauri: spawning onto the
-//! runtime, and remembering which attempt an answering invoke belongs to.
+//! Controller: `Connecting`, one attempt to connect from the invoke that starts it to the
+//! answer that lets it finish.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -24,16 +10,9 @@ use acter_core::{
     SetUp,
 };
 
-/// The attempts in flight, and the means to start another.
 pub(crate) struct Connecting {
     connect: Arc<dyn ConnectApi>,
-    /// Which conversations can still be answered.
-    ///
-    /// **A map rather than one slot**, because a user who gives up on a dialog and starts
-    /// again has two attempts alive for a moment. Keyed by the id every question carries,
-    /// so an answer can only ever reach the conversation that asked.
     live: Mutex<HashMap<AttemptId, Arc<Conversation>>>,
-    /// The attempt counter. Starts at 1, so 0 never names an attempt.
     next: AtomicU32,
 }
 
@@ -46,15 +25,8 @@ impl Connecting {
         }
     }
 
-    /// Starts an attempt and **returns immediately** with its id.
-    ///
-    /// Everything after this reaches the window as steps on `steps`: what is happening,
-    /// what is being asked, and finally whether there is a session. The invoke that called
-    /// this is already free.
-    /// **`set_up` is the Connect dialog's checkbox** (spec B9.5, decisions 9 and 10), and
-    /// **`origin` is the saved connection this attempt started from** (spec 26,
-    /// decision 11). Both are carried rather than decided here: this controller owns
-    /// attempts, not preferences and not the store.
+    /// Returns at once: a synchronous `#[tauri::command]` runs on the main thread, and holding
+    /// it while the attempt waits for a person would block the invoke carrying the answer.
     pub(crate) fn begin(
         &self,
         profile: ProfileId,
@@ -70,13 +42,9 @@ impl Connecting {
             .insert(attempt, Arc::clone(&conversation));
 
         let connect = Arc::clone(&self.connect);
-        // Every question this attempt may have to ask, which since B9.5 is four: the two a
-        // server raises, the one this machine raises about a file that did not verify, and the
-        // one that discloses what Acter would run inside the session once it is up.
         let questions = Arc::clone(&conversation) as Arc<dyn ConnectQuestions>;
-        // **`spawn_blocking`, not `spawn`.** What runs here parks on a `std` channel
-        // waiting for a person, and parking a runtime worker on a human is how a runtime
-        // starves. This is the pool that exists for exactly that.
+        // Blocking pool: this parks on a `std` channel waiting for a person, which would starve
+        // a runtime worker.
         tauri::async_runtime::spawn_blocking(move || {
             conversation.finished(connect.use_profile(
                 &profile,
@@ -88,13 +56,7 @@ impl Connecting {
         attempt
     }
 
-    /// Delivers an answer to whichever attempt asked for it.
-    ///
-    /// **An id that names no live attempt is ignored rather than reported.** It is the
-    /// ordinary consequence of a dialog the user abandoned, or of a window that reloaded
-    /// while a connection was in flight — not something to say out loud, and certainly not
-    /// something to guess a recipient for. A password delivered to the wrong question would
-    /// be the worst possible version of being helpful.
+    /// An id that names no live attempt is ignored.
     pub(crate) fn answer(&self, attempt: AttemptId, answer: ConnectAnswer) {
         let conversation = self
             .live
@@ -107,12 +69,6 @@ impl Connecting {
         }
     }
 
-    /// Forgets an attempt that has ended, so the map does not grow for the life of the
-    /// process.
-    ///
-    /// Called by the frontend when it has seen a terminal step, which is the only place
-    /// that knows the conversation is over from the *window's* point of view — an attempt
-    /// whose last question was never answered is still waiting until somebody says so.
     pub(crate) fn ended(&self, attempt: AttemptId) {
         self.live
             .lock()
@@ -132,11 +88,8 @@ mod tests {
 
     use super::*;
 
-    /// Long enough that a loaded machine is not what fails a test, short enough that a
-    /// genuine deadlock is reported rather than hanging the suite.
     const PATIENCE: Duration = Duration::from_secs(5);
 
-    /// A sink that hands each step to the test as it arrives.
     struct Watcher(Mutex<Sender<ConnectStep>>);
 
     impl Watcher {
@@ -152,8 +105,6 @@ mod tests {
         }
     }
 
-    /// Connecting, faked: it either fails, succeeds, or asks a question first — which is
-    /// the only three things that matter to this controller.
     struct Fake {
         asks: bool,
         outcome: Result<Connected, String>,
@@ -172,7 +123,6 @@ mod tests {
             questions: &Arc<dyn ConnectQuestions>,
         ) -> Result<Connected, String> {
             if self.asks {
-                // Blocks until somebody answers, exactly as a real SSH connection does.
                 questions.host_key(HostKeyQuestion {
                     host: "acter-ssh".to_owned(),
                     port: 2222,
@@ -188,9 +138,6 @@ mod tests {
             None
         }
 
-        /// **Nothing about saved connections**, and that is the seam holding: this
-        /// controller is about an attempt somebody started, and where a name came from is
-        /// answered by the service the attempt reaches.
         fn saved(&self) -> acter_core::SavedConnections {
             acter_core::SavedConnections {
                 rows: Vec::new(),
@@ -218,7 +165,6 @@ mod tests {
             unreachable!("this controller records no preference")
         }
 
-        /// Nothing on the command line: a launch switch is answered elsewhere.
         fn requested_at_launch(&self) -> Option<acter_core::LaunchRequest> {
             None
         }
@@ -234,9 +180,6 @@ mod tests {
         }
     }
 
-    /// **A far end that will not start ends the attempt with a sentence**, on the channel
-    /// rather than as a rejected invoke — because the invoke was answered the moment the
-    /// attempt began.
     #[test]
     fn a_profile_that_will_not_start_ends_the_attempt_with_a_speakable_sentence() {
         let (watcher, steps) = Watcher::new();
@@ -257,8 +200,6 @@ mod tests {
         );
     }
 
-    /// And one that starts ends with the session it made, which is what the window attaches
-    /// to.
     #[test]
     fn an_attempt_that_connects_ends_with_the_session_it_made() {
         let (watcher, steps) = Watcher::new();
@@ -283,9 +224,6 @@ mod tests {
         assert_eq!(connected.session, SessionId(4));
     }
 
-    /// **An answer reaches the attempt that asked, and no other.** Two attempts are alive
-    /// at once whenever a user gives up on one dialog and starts again, and a password
-    /// delivered to the wrong question is the worst version of being helpful.
     #[test]
     fn an_answer_reaches_only_the_attempt_that_asked_for_it() {
         let (watcher, steps) = Watcher::new();
@@ -305,7 +243,6 @@ mod tests {
         let asked = steps.recv_timeout(PATIENCE).expect("it asks");
         assert!(matches!(asked, ConnectStep::Asked { .. }));
 
-        // An answer for a different attempt reaches nobody, so the question is still open.
         connecting.answer(AttemptId(attempt.0 + 99), ConnectAnswer::Trust);
         assert!(
             steps.recv_timeout(Duration::from_millis(200)).is_err(),
@@ -319,8 +256,6 @@ mod tests {
         ));
     }
 
-    /// An attempt the window has finished with is forgotten, and answering it afterwards is
-    /// a no-op rather than a panic — a second click on a button that already worked.
     #[test]
     fn an_attempt_that_ended_is_forgotten() {
         let (watcher, steps) = Watcher::new();

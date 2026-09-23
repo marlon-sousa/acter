@@ -1,18 +1,8 @@
 //! Adapter (internal to the terminal-engine adapter): the stream-position sniffer.
 //!
-//! Its entire job is *where* in the byte stream something happened. It models no
-//! terminal state at all — the emulator does that — so of `ansi::Handler`'s seventy-two
-//! methods it implements exactly three and leaves the rest as the trait's default
-//! no-ops. Here that is correct rather than merely convenient: a method this type does
-//! not implement is a method it has no business implementing.
-//!
-//! Nothing is forwarded to the emulator from here, which is the point. Every `Handler`
-//! method has a default body, so a wrapper that forwarded all seventy-two would keep
-//! compiling when a future vte release *adds* one, silently pick up the new default
-//! no-op, and stop forwarding that capability — vte did exactly that in 0.13.0
-//! (`set_private_mode`, `unset_private_mode`, `report_mode`, `report_private_mode`) and
-//! again in 0.13.1 (SCP). Nothing forwards here, so nothing can be forgotten
-//! (spec B3, decision 1).
+//! Every `Handler` method has a default no-op body, so a type that forwarded to `Term` would
+//! silently stop forwarding any method a vte release adds, as vte 0.13.0 did with
+//! `set_private_mode`; this type forwards nothing.
 
 use std::str::from_utf8;
 
@@ -22,44 +12,32 @@ use alacritty_terminal::vte::ansi::{Handler, NamedPrivateMode, PrivateMode};
 /// Something the sniffer noticed at the current point in the byte stream.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum Signal {
-    /// A recognized OSC 133 shell-integration marker.
     Marker(Osc133Marker),
-    /// The emulator is about to swap screens.
     ScreenChanged(Screen),
 }
 
-/// Collects signals for the byte currently being parsed. The engine drains it after
-/// every byte, so the queue never holds more than one sequence's worth.
 #[derive(Debug, Default)]
 pub(super) struct Sniffer {
     signals: Vec<Signal>,
 }
 
 impl Sniffer {
-    /// Whether the byte just parsed completed something the engine must place.
     pub(super) fn signalled(&self) -> bool {
         !self.signals.is_empty()
     }
 
-    /// Drains what the byte just parsed produced, in order.
     pub(super) fn drain(&mut self) -> Vec<Signal> {
         std::mem::take(&mut self.signals)
     }
 }
 
 impl Handler for Sniffer {
-    /// The fork's escape hatch. vte parses OSC sequences it does not recognize and then
-    /// discards them, which would make shell-integration markers unobservable; the
-    /// patched crate hands them here instead. It carries no OSC 133 knowledge, so
-    /// interpreting the parameters is this crate's job.
     fn unhandled_osc(&mut self, params: &[&[u8]]) {
         if let Some(marker) = parse_osc133(params) {
             self.signals.push(Signal::Marker(marker));
         }
     }
 
-    /// The alternate screen arrives as private mode 1049, not as a `Handler` method of
-    /// its own — so this pair is how the switch becomes locatable in the stream.
     fn set_private_mode(&mut self, mode: PrivateMode) {
         if swaps_screen(mode) {
             self.signals.push(Signal::ScreenChanged(Screen::Alternate));
@@ -73,8 +51,8 @@ impl Handler for Sniffer {
     }
 }
 
-/// Exactly the mode the emulator itself keys `ALT_SCREEN` on, so the sniffer and the
-/// emulator can never disagree about which screen is current.
+/// alacritty_terminal 0.26 also leaves the alternate screen on a full reset (`ESC c`), which
+/// calls neither private-mode method, so that switch is never signalled.
 fn swaps_screen(mode: PrivateMode) -> bool {
     matches!(
         mode,
@@ -82,9 +60,7 @@ fn swaps_screen(mode: PrivateMode) -> bool {
     )
 }
 
-/// Reads an OSC 133 marker out of a sequence's parameters, or `None` if this is some
-/// other OSC entirely — which is the ordinary case, and the reason the fork's hook is
-/// generic rather than marker-aware.
+/// `None` for any OSC other than a known 133 marker.
 fn parse_osc133(params: &[&[u8]]) -> Option<Osc133Marker> {
     if params.first().copied() != Some(b"133".as_slice()) {
         return None;
@@ -94,10 +70,6 @@ fn parse_osc133(params: &[&[u8]]) -> Option<Osc133Marker> {
         b"A" => Some(Osc133Marker::PromptStart),
         b"B" => Some(Osc133Marker::CommandStart),
         b"C" => Some(Osc133Marker::OutputStart),
-        // Any parameter after the exit code is a `key=value` extra some shells append
-        // (`aid=`, and similar) and is ignored. A missing or unparseable code becomes a
-        // marker with no code rather than no marker: the block still ended, and B2's
-        // `Option<ExitCode>` exists for exactly this.
         b"D" => Some(Osc133Marker::CommandEnd(exit_code(params.get(2).copied()))),
         _ => None,
     }
@@ -121,8 +93,6 @@ mod tests {
         sniffer.drain()
     }
 
-    /// A handler that counts bells, for the one question the sniffer itself cannot answer:
-    /// whether a marker terminated by a bell rings one.
     #[derive(Default)]
     struct Bells(usize);
 
@@ -139,17 +109,6 @@ mod tests {
         counted.0
     }
 
-    /// **A bell that ends a marker is a terminator and not a bell**, and this is the assertion
-    /// that keeps it that way.
-    ///
-    /// OSC allows two spellings of its terminator, `ESC \` and a bell, and `sh`'s setup uses
-    /// the bell because busybox expands backslash escapes in `PS1` and the other spelling ate
-    /// the first character of the user's own prompt (spec B9.5, decision 8, measured
-    /// 2026-08-29). The bell is also DESIGN's beep, which a later entry may well make audible
-    /// — and a session that beeped at every prompt would be this entry's doing.
-    ///
-    /// The parser consumes it inside the sequence, so nothing rings: what a future beep hooks
-    /// is a bell in the ordinary stream, which still arrives.
     #[test]
     fn a_bell_that_ends_a_marker_never_rings() {
         assert_eq!(
@@ -165,8 +124,6 @@ mod tests {
         );
     }
 
-    /// The same markers, spelled with the other terminator, mean the same thing — so a shell
-    /// whose setup uses one is read exactly as a shell whose setup uses the other.
     #[test]
     fn the_two_spellings_of_the_terminator_are_the_same_markers() {
         assert_eq!(

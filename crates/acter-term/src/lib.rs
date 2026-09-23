@@ -1,6 +1,4 @@
-//! Adapter crate: wraps the terminal emulation engine behind acter-core's
-//! `TerminalEngine` port — bytes in; identified lines of extracted text, recognized
-//! OSC 133 markers, and alt-screen transitions out.
+//! Adapter crate: the terminal emulation engine behind acter-core's `TerminalEngine` port.
 //!
 //! Facade: this file only declares modules and re-exports the public API.
 #![warn(unreachable_pub)]

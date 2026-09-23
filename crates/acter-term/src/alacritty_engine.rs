@@ -1,27 +1,8 @@
-//! Adapter: the [`TerminalEngine`] implementation over `alacritty_terminal`. Bytes in;
-//! identified lines of extracted text, recognized OSC 133 markers and screen transitions
-//! out, as one ordered stream.
+//! Adapter: the [`TerminalEngine`] implementation over `alacritty_terminal`.
 //!
-//! **Two parsers over the same bytes, and nothing forwards.** One drives a real `Term`
-//! with zero forwarding; the other drives a [`Sniffer`] whose entire job is stream
-//! position. The alternative — one parser and a wrapper owning a `Term`, forwarding all
-//! seventy-two `Handler` methods — works today and fails quietly later, for the reason
-//! written up in [`sniffer`]. The cost accepted knowingly is one extra pass over each
-//! chunk, which is cheap next to the grid mutation the same bytes cause in `Term`.
-//!
-//! One residual, recorded rather than discovered: a parser holds synchronized-update
-//! (DCS 2026) timeout state, so the two instances could in principle flush buffered
-//! output at different moments. Both are advanced over the same slice back to back, so
-//! the window is microseconds against a timeout measured in hundreds of milliseconds,
-//! and it self-corrects on the next chunk.
-//!
-//! **Position comes from the sniffer; state comes from the emulator.** `Term::mode()`
-//! remains the authority on which screen is current, and [`AlacrittyEngine::screen`]
-//! reports it that way. What the emulator cannot supply is *where* in the stream a
-//! switch happened, and that matters: a single read routinely carries `ESC[?1049h`
-//! followed by an application's first full repaint, so polling the mode after the batch
-//! would attribute a screenful of `vim` chrome to the command the user just finished
-//! (spec B3, decision 2).
+//! A single read routinely carries `ESC[?1049h` followed by an application's first full
+//! repaint, so a screen switch is placed at its byte offset in the stream, not read from
+//! `Term::mode()` after the batch.
 
 mod extractor;
 mod listener;
@@ -39,11 +20,7 @@ use extractor::Extractor;
 use listener::DeviceReplies;
 use sniffer::{Signal, Sniffer};
 
-/// How many rows of scrolled-off output the emulator stages between extractions.
-///
-/// Not the user's scrollback: the extractor reclaims this after every scan, so it only
-/// has to hold the rows a single read can scroll away before anyone has looked at them.
-/// Sized far above that so the gap sentence stays a genuine last resort.
+/// Rows of history the emulator stages between extractions, not the user's scrollback.
 const STAGING_ROWS: usize = 10_000;
 
 /// One session's terminal emulator.
@@ -54,9 +31,7 @@ pub struct AlacrittyEngine {
     sniffer_parser: Processor<StdSyncHandler>,
     replies: DeviceReplies,
     extractor: Extractor,
-    /// Items produced outside [`TerminalEngine::advance`]. A resize settles the lines it
-    /// invalidates and has nowhere to return them, so they ride out with the next batch
-    /// rather than being dropped.
+    /// Lines a resize settled, returned with the next batch.
     pending: Vec<TerminalItem>,
 }
 
@@ -72,9 +47,6 @@ impl AlacrittyEngine {
         );
         let config = Config {
             scrolling_history: staging_rows,
-            // Set explicitly rather than left at the crate default, which accepts copy
-            // requests: this terminal has no clipboard story yet, so it takes part in
-            // none of OSC 52.
             osc52: Osc52::Disabled,
             ..Default::default()
         };
@@ -91,14 +63,11 @@ impl AlacrittyEngine {
         }
     }
 
-    /// Places one sniffed signal in the stream, and reports the screen the numbering is
-    /// about to belong to, when the signal is one that stops it meaning what it meant.
+    /// Returns the screen being switched to, or `None` when the row numbering still holds.
     fn place(&mut self, signal: Signal, items: &mut Vec<TerminalItem>) -> Option<Screen> {
         match signal {
-            // Only a command end freezes a block's lines. A prompt start or a command
-            // start would freeze the row the prompt is drawn on, which is the same row
-            // the shell then echoes the command onto — so the echo would arrive as a
-            // second line repeating the prompt.
+            // Settling on a prompt or command start would freeze the prompt's row, and the
+            // echoed command would then arrive as a second line repeating the prompt.
             Signal::Marker(marker) => {
                 if matches!(marker, Osc133Marker::CommandEnd(_)) {
                     self.extractor.settle_block(&self.term, items);
@@ -106,10 +75,7 @@ impl AlacrittyEngine {
                 items.push(TerminalItem::Marker(marker));
                 None
             }
-            // Settled from the grid that is still current: the emulator has not swapped
-            // yet, so the lines are read as they were on the screen being left. The rows
-            // are forgotten outright rather than frozen, because the screen arriving is a
-            // separate grid whose coordinates mean nothing to the one being left.
+            // The emulator has not swapped yet, so these lines are read from the screen being left.
             Signal::ScreenChanged(screen) => {
                 self.extractor.settle_and_forget(&self.term, items);
                 items.push(TerminalItem::ScreenChanged(screen));
@@ -120,14 +86,6 @@ impl AlacrittyEngine {
 }
 
 impl TerminalEngine for AlacrittyEngine {
-    /// Advances both parsers over the batch, cutting the emulator's stream wherever the
-    /// sniffer found something to place.
-    ///
-    /// The sniffer runs a byte at a time because a `Handler` call says *what* happened
-    /// and not *where*; stepping it is how the offset becomes known. The emulator, which
-    /// is the expensive one, still gets whole slices. Its own bytes are fed after the
-    /// text that preceded them, so a screen change is placed while the grid still holds
-    /// the screen being left.
     fn advance(&mut self, bytes: &[u8]) -> Vec<TerminalItem> {
         let mut items = take(&mut self.pending);
         let mut segment = 0;
@@ -139,25 +97,23 @@ impl TerminalEngine for AlacrittyEngine {
                 continue;
             }
 
-            // Everything up to, but not including, the byte that completed the sequence.
-            // The sequence's own bytes print nothing, so the grid is already in its
-            // pre-sequence state.
+            // Outside a synchronized update the sequence's own bytes print nothing, so the grid
+            // is still in its pre-sequence state.
             self.term_parser
                 .advance(&mut self.term, &bytes[segment..index]);
             self.extractor.extract(&mut self.term, &mut items);
 
             let mut renumbered = None;
             for signal in self.sniffer.drain() {
-                // The last renumbering wins: it is the one the grid ends up in.
+                // The last screen change wins: it is the grid the emulator ends up on.
                 renumbered = self.place(signal, &mut items).or(renumbered);
             }
 
             self.term_parser
                 .advance(&mut self.term, &bytes[index..=index]);
             match renumbered {
-                // The alternate screen arrives blank and is painted from its top row, so
-                // the epoch starts there; the normal screen comes back holding text that
-                // was emitted before the program took over, so it starts at the cursor.
+                // The alternate screen arrives blank and is painted from its top row; the normal
+                // screen comes back holding text that was already emitted.
                 Some(Screen::Alternate) => self.extractor.reanchor_to_top(&self.term),
                 Some(Screen::Normal) => self.extractor.reanchor(&self.term),
                 None => {}
@@ -178,8 +134,6 @@ impl TerminalEngine for AlacrittyEngine {
         }
     }
 
-    /// Resizing reflows the grid, so every row number the extractor holds stops meaning
-    /// what it meant. The open lines are settled first and their ids retired.
     fn resize(&mut self, columns: u16, screen_lines: u16) {
         let columns = columns.max(1);
         let screen_lines = screen_lines.max(1);
@@ -198,13 +152,6 @@ impl TerminalEngine for AlacrittyEngine {
         self.replies.take()
     }
 
-    /// Read straight off the grid, which is the only thing that knows.
-    ///
-    /// The point is the emulator's own cursor rather than anything this adapter tracks: a
-    /// program addressing the cursor with `ESC[2;1H` moves it without writing a character,
-    /// and a position derived from the text that arrived would never see that. Screen
-    /// coordinates, so the row is relative to the top of the screen area and history is not
-    /// counted — the caret this places is inside one row.
     fn cursor(&self) -> Cursor {
         let point = self.term.grid().cursor.point;
         Cursor {
@@ -251,7 +198,6 @@ mod tests {
         TerminalItem::Marker(marker)
     }
 
-    /// Just the line items, as tuples, for tests that do not care about markers.
     fn lines(items: &[TerminalItem]) -> Vec<(u64, String, LineRevision)> {
         items
             .iter()
@@ -266,21 +212,10 @@ mod tests {
         lines(items).into_iter().map(|(_, text, _)| text).collect()
     }
 
-    /// A sequence the far end never finished, which is what an interrupt produces: a
-    /// program killed mid-write can put `ESC ] 1 3 3 ; D` on the wire with no terminator,
-    /// and the shell then prints `^C` and draws a fresh prompt behind it.
-    ///
-    /// The danger is a parser that accumulates to the *next* terminator: it would swallow
-    /// the `^C` and the new prompt's `A` into the abandoned sequence, and a listener would
-    /// hear a command that never ends followed by a prompt that never comes. So what is
-    /// pinned here is recovery — the next prompt's markers are still recognized — rather
-    /// than any particular fate for the truncated one, which is genuinely lost and whose
-    /// loss the tracker already survives (spec B4, decision 8).
     #[test]
     fn a_sequence_an_interrupt_cut_short_does_not_swallow_the_prompt_after_it() {
         let mut engine = AlacrittyEngine::new(40, 5);
 
-        // The abandoned `D`, no terminator, then exactly what a shell does next.
         let items = engine
             .advance(b"\x1b]133;D^C\r\n\x1b]133;A\x07prompt$ \x1b]133;B\x07next\r\n\x1b]133;C\x07");
 
@@ -299,8 +234,6 @@ mod tests {
         );
     }
 
-    /// The same shape one byte at a time, because an interrupt lands wherever it lands and
-    /// the truncation and the recovery can be split across reads.
     #[test]
     fn a_truncated_sequence_recovers_the_same_way_arriving_byte_by_byte() {
         let mut engine = AlacrittyEngine::new(40, 5);
@@ -480,11 +413,6 @@ mod tests {
         );
     }
 
-    /// The empty line is not noise: this program switched screens without homing the
-    /// cursor and wrote on the second row, so the first row of the alternate screen
-    /// really is blank — and blank rows above content are spacing a user navigating by
-    /// line depends on. A fresh grid is scanned from its top precisely so that nothing
-    /// painted above the cursor can be lost.
     #[test]
     fn a_screen_change_settles_open_lines_before_the_transition() {
         let mut engine = engine();
@@ -503,11 +431,6 @@ mod tests {
         assert_eq!(engine.screen(), Screen::Alternate);
     }
 
-    /// What a full-screen program actually writes: enter, home the cursor, clear, then
-    /// paint from the top row. The cursor was part-way down the normal screen when the
-    /// switch happened, so anchoring the new epoch there would drop every row painted
-    /// above it — for `nano` its title bar, for `vim` most of the file (found by B3.5's
-    /// pipeline test, the first caller to feed this engine a real repaint).
     #[test]
     fn a_repaint_from_the_top_of_the_alternate_screen_loses_no_rows() {
         let mut engine = engine();
@@ -634,8 +557,6 @@ mod tests {
         );
     }
 
-    /// Replays a stream the way a correct consumer would: append a delta, replace on a
-    /// rewrite or a settlement, keyed by id and kept in the order lines first appeared.
     fn replay(items: &[TerminalItem]) -> Vec<String> {
         let mut ids: Vec<LineId> = Vec::new();
         let mut texts: Vec<String> = Vec::new();
@@ -662,17 +583,12 @@ mod tests {
         texts
     }
 
-    /// Blank lines are dropped before the two equality properties compare, because one
-    /// case genuinely cannot be expressed: when a line grows past the right margin onto a
-    /// row that already held a line of its own, that line stops existing, and the stream
-    /// has no item for "this line is gone" — it settles empty instead. Blank-line
-    /// preservation is table-tested above, where it can be stated exactly.
+    /// A line swallowed by a wrapping line above it settles empty (see `Extractor::absorb`), so
+    /// blank lines cannot be compared exactly.
     fn without_blanks(lines: Vec<String>) -> Vec<String> {
         lines.into_iter().filter(|line| !line.is_empty()).collect()
     }
 
-    /// Everything the same bytes leave in a grid that keeps all of its history — the
-    /// reference the emitted stream is measured against.
     fn reference_lines(bytes: &[u8], columns: usize, screen_lines: usize) -> Vec<String> {
         let config = Config {
             scrolling_history: 100_000,
@@ -695,12 +611,9 @@ mod tests {
         items
     }
 
-    /// Fragments a terminal actually emits. Screen swaps, resizes and block-closing
-    /// markers are deliberately absent from the transcripts used for the two equality
-    /// properties: each one retires the ids it settles, so a later rewrite of the same
-    /// rows becomes a *new* line — the duplication decision 7 accepts on purpose, and
-    /// which an equality against the final grid cannot express. Both are covered by
-    /// table tests above, and the panic property below takes genuinely arbitrary bytes.
+    /// Screen swaps, resizes and block-closing markers are left out: each retires the ids it
+    /// settles, so a later rewrite of those rows is a new line that no equality against the
+    /// final grid can express.
     fn any_fragment() -> impl Strategy<Value = Vec<u8>> {
         prop_oneof![
             "[a-z ]{0,10}".prop_map(String::into_bytes),
@@ -729,8 +642,6 @@ mod tests {
     }
 
     proptest! {
-        /// Moved here from B2 by B2's own decision: the property belongs wherever bytes
-        /// are actually parsed, and this is the entry that parses them.
         #[test]
         fn never_panics_on_arbitrary_bytes(chunks in prop::collection::vec(any_bytes(), 0..4)) {
             let mut engine = AlacrittyEngine::with_staging_rows(12, 4, 64);
@@ -741,10 +652,6 @@ mod tests {
             let _ = engine.screen();
         }
 
-        /// B2's cardinal property, re-expressed for identified lines: replaying the
-        /// stream reconstructs exactly the text the terminal finished with, in row
-        /// order. Equality, not "at least once" — revision removed the duplication that
-        /// would have forced the weaker statement.
         #[test]
         fn no_line_is_ever_lost(transcript in any_transcript(), chunk in 1usize..40) {
             let items = drive(&transcript, chunk);
@@ -755,8 +662,6 @@ mod tests {
             );
         }
 
-        /// The individual items depend on where the reads fell — a line emitted in one
-        /// piece or three — but what they reconstruct to does not.
         #[test]
         fn reconstruction_is_independent_of_chunking(transcript in any_transcript()) {
             let whole = without_blanks(replay(&drive(&transcript, transcript.len().max(1))));
@@ -766,9 +671,6 @@ mod tests {
             }
         }
 
-        /// A settlement is a line's last word, so nothing may follow it and no line may
-        /// settle twice. Markers are included here, because settling is exactly what
-        /// they trigger.
         #[test]
         fn every_id_settles_at_most_once_and_nothing_follows_it(
             transcript in any_transcript(),

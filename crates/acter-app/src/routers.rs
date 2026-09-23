@@ -1,8 +1,7 @@
 //! Facade for this crate's routers, one file per router.
 //!
-//! Glob re-exports are required here: `#[tauri::command]` generates hidden
-//! companion items (`__cmd__<name>` etc.) that `generate_handler!` resolves
-//! alongside the function, and a named re-export would leave them behind.
+//! Glob re-exports are required: `#[tauri::command]` generates hidden companion items that
+//! `generate_handler!` resolves alongside the function, and a named re-export leaves them behind.
 
 mod about;
 mod connect;
@@ -33,35 +32,15 @@ mod tests {
     use crate::adapters::Settings;
     use crate::container::{AppState, SettingsFolder, Standing, Version, state};
 
-    /// The scripted far end these tests connect to when they want a session: a debug build
-    /// offers it, and no process is spawned to run it.
     const BUILTIN: &str = "builtin";
 
-    /// A settings folder nothing else in this run will use, so two tests writing at once
-    /// cannot see each other's connections.
     static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
-    /// Builds the app on the Tauri mock runtime with the real connect service wired into
-    /// managed state, then invokes `cmd` through the real IPC pipeline — the same path a
-    /// webview `invoke` takes (registration, state extraction, argument deserialization),
-    /// none of which unit tests reach. No sink is attached, so nothing a session produces
-    /// has anywhere to go and only the invoke surface is exercised.
-    ///
-    /// `session` says whether to connect to the scripted far end first, which is the
-    /// difference between the two windows B7 created: one with a session behind it and one
-    /// with nothing. Both are built inside the async runtime for the reason the container
-    /// does the same: a session starts tasks.
     fn invoke_with(session: bool, cmd: &str, args: Value) -> Result<Value, Value> {
         let mock = mock_app(session);
         invoke_on(&mock, cmd, args)
     }
 
-    /// A built app, its webview, and the connect service behind its state.
-    ///
-    /// **Held together, and the service held twice**, so a test can invoke more than once
-    /// against one window and then ask the service what became of it — which is what
-    /// connecting needs since B9, because the answer arrives behind the invoke rather than
-    /// in it.
     struct Mock {
         webview: tauri::WebviewWindow<tauri::test::MockRuntime>,
         service: Arc<ConnectService>,
@@ -70,10 +49,6 @@ mod tests {
 
     fn mock_app(session: bool) -> Mock {
         let runtime = tauri::async_runtime::handle();
-        // **A settings folder of this test's own** (spec 26, decision 3): the variable
-        // exists precisely so a suite is not run against whatever this machine happens to
-        // hold, and a test that saved a connection into the developer's real folder would
-        // be a test that changed what the next manual pass meets.
         let settings = Arc::new(Settings::open(
             SettingsFolder {
                 path: std::env::temp_dir().join(format!(
@@ -85,6 +60,7 @@ mod tests {
             },
             Version::development("in-a-test"),
         ));
+        // Entered because starting a session spawns tasks.
         let service = {
             let _entered = runtime.inner().enter();
             let service = Arc::new(state(&settings));
@@ -159,12 +135,10 @@ mod tests {
         .map(|body| body.deserialize::<Value>().expect("response was not JSON"))
     }
 
-    /// A window with a session behind it.
     fn invoke(cmd: &str, args: Value) -> Result<Value, Value> {
         invoke_with(true, cmd, args)
     }
 
-    /// A window connected to nothing, which is what an ordinary launch opens since B7.
     fn invoke_unconnected(cmd: &str, args: Value) -> Result<Value, Value> {
         invoke_with(false, cmd, args)
     }
@@ -182,9 +156,6 @@ mod tests {
         );
     }
 
-    /// The keystroke protocol over the wire: a `KeyPress` deserialized from the shape the
-    /// frontend will send, and a `KeyAck` back. Nothing is running in a session nobody
-    /// submitted to, which is one of the two answers the ack exists to give.
     #[test]
     fn send_key_takes_a_key_press_and_answers_a_key_ack() {
         let out = invoke(
@@ -209,9 +180,6 @@ mod tests {
         );
     }
 
-    /// **The unconnected window, through the pipeline a real one uses.** A line typed into
-    /// it comes back refused rather than acknowledged, so the frontend has something to say
-    /// and something to decide — chiefly not to clear the field the user typed into.
     #[test]
     fn a_line_submitted_into_an_unconnected_window_is_refused_over_the_wire() {
         let out = invoke_unconnected("submit_command", json!({ "sessionId": 1, "line": "dir" }))
@@ -221,8 +189,6 @@ mod tests {
         assert_eq!(ack, SubmitAck::NotConnected);
     }
 
-    /// And the same window asked what it is connected to: nothing, which is what makes the
-    /// frontend announce that it is empty and say where to go.
     #[test]
     fn an_unconnected_window_answers_no_connection() {
         let out = invoke_unconnected("connected", json!({})).expect("connected should succeed");
@@ -230,8 +196,6 @@ mod tests {
         assert_eq!(out, Value::Null);
     }
 
-    /// A session that was started answers with the id every later invoke carries and the
-    /// label the window names itself with.
     #[test]
     fn a_connected_window_answers_which_far_end_it_is_on() {
         let out = invoke("connected", json!({})).expect("connected should succeed");
@@ -241,9 +205,6 @@ mod tests {
         assert_eq!(connected.label, "Scripted: builtin");
     }
 
-    /// The list crosses the wire whole. What is in it depends on the machine running the
-    /// suite, so what is asserted is the shape every row has and the one entry a debug
-    /// build always offers.
     #[test]
     fn connectable_lists_rows_the_frontend_can_render() {
         let out = invoke_unconnected("connectable", json!({})).expect("connectable should succeed");
@@ -269,13 +230,6 @@ mod tests {
         );
     }
 
-    /// **Connecting, end to end through the IPC pipeline**: the profile and the channel are
-    /// deserialized from the shape the frontend sends, and an attempt id comes back at once.
-    ///
-    /// **It answers with an id rather than a session, and that is the change B9 made.**
-    /// Connecting can stop partway to ask a person something, so the invoke cannot be the
-    /// thing that answers — the session arrives later, as a step. What this asserts is that
-    /// the invoke returns immediately and that the work really did start behind it.
     #[test]
     fn use_profile_answers_an_attempt_id_and_starts_the_work_behind_it() {
         let mock = mock_app(false);
@@ -285,11 +239,7 @@ mod tests {
             "use_profile",
             json!({
                 "profile": { "profile": "Scripted", "name": BUILTIN },
-                // The Connect dialog's checkbox, which travels with the attempt (spec B9.5,
-                // decision 9). Ticked is what the dialog sends by default.
                 "setUp": "Yes",
-                // No saved connection behind it: this is New connection, which is the
-                // shape that has no origin (spec 26, decision 11).
                 "origin": null,
                 "steps": "__CHANNEL__:1",
             }),
@@ -299,7 +249,6 @@ mod tests {
         let attempt: AttemptId = serde_json::from_value(out).expect("an attempt id comes back");
         assert_eq!(attempt.0, 1, "the first attempt of this window");
 
-        // The session appears behind the invoke rather than in it, so this waits for it.
         let deadline = Instant::now() + Duration::from_secs(10);
         let connected = loop {
             if let Some(connected) = mock.service.connected() {
@@ -315,9 +264,6 @@ mod tests {
         assert_eq!(connected.session.0, 1, "the first session of this window");
     }
 
-    /// An answer for an attempt nobody is running is ignored rather than rejected: it is the
-    /// ordinary consequence of a dialog abandoned or a window reloaded, and the invoke still
-    /// has to return normally.
     #[test]
     fn an_answer_for_an_attempt_that_is_not_running_is_ignored() {
         let mock = mock_app(false);
@@ -332,11 +278,6 @@ mod tests {
             .expect("ending something stale is not an error");
     }
 
-    /// **The About dialog's facts, through the pipeline the dialog uses.** They stopped
-    /// being constants when the settings folder and the stamped version joined them
-    /// (spec 26, decisions 3 and 5): both come out of managed state, so what this pins is
-    /// that the state really reaches the router and that the lines a listener hears are
-    /// whole.
     #[test]
     fn about_answers_the_build_the_version_and_the_settings_folder() {
         let out = invoke_unconnected("about", json!({})).expect("about should succeed");
@@ -364,9 +305,6 @@ mod tests {
         );
     }
 
-    /// **The saved connections cross the wire as typed rows** (spec 26, decision 11), not
-    /// as a document the frontend reads. An empty document is the ordinary first run and
-    /// says nothing went wrong.
     #[test]
     fn saved_answers_rows_the_dialog_can_render() {
         let out = invoke_unconnected("saved", json!({})).expect("saved should succeed");
@@ -382,9 +320,6 @@ mod tests {
         );
     }
 
-    /// **Both halves of `save_connection` are sentences a listener hears**, and the
-    /// refusal half crosses the wire as a rejected promise — which is what the dialog
-    /// already handles for a connection that could not be made.
     #[test]
     fn saving_with_nothing_connected_is_refused_over_the_wire_in_a_sentence() {
         let why = invoke_unconnected("save_connection", json!({ "name": "work laptop" }))
@@ -396,8 +331,6 @@ mod tests {
         );
     }
 
-    /// And a session behind the window is saved, renamed and forgotten through the real
-    /// pipeline — three invokes, each answering the sentence to say.
     #[test]
     fn a_connection_is_saved_renamed_and_forgotten_through_the_real_invokes() {
         let mock = mock_app(true);
@@ -438,7 +371,6 @@ mod tests {
         );
     }
 
-    /// **The preference of decision 19, through its two named invokes and no others.**
     #[test]
     fn the_offer_to_save_is_asked_and_answered_over_the_wire() {
         let mock = mock_app(false);
@@ -452,8 +384,7 @@ mod tests {
         assert_eq!(after, Value::Bool(false));
     }
 
-    /// **An ordinary launch asks for nothing** (spec 26, decision 20). The suite runs with
-    /// no `--connect` on its own command line, so this is the answer the window opens on.
+    /// Holds only while the test binary's own command line carries no `--connect`.
     #[test]
     fn an_ordinary_launch_carries_no_request_over_the_wire() {
         let out = invoke_unconnected("requested_at_launch", json!({}))

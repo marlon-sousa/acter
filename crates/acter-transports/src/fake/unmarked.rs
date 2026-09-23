@@ -1,36 +1,12 @@
 //! Adapter: [`Unmarked`] — a [`FakeShell`] decorator that emits no shell-integration
 //! markers.
-//!
-//! **A far end with no integration is not a different transcript** (spec B3.6, decision
-//! 4). It is any shell with its markers removed, which is also the honest model of
-//! DESIGN's reliability case 2: integration missing is something that happens *to* a
-//! working shell, not a shell that answers only the handful of lines somebody thought to
-//! write down. So this wraps a shell and drops what it says in OSC 133, and the session
-//! still draws a prompt, still echoes, and still answers every rule its transcript knows.
-//!
-//! **What it changes is what is said, never when.** Every delivery keeps its delay and
-//! its repeat; only its bytes are rewritten. A delivery whose whole payload was a marker
-//! becomes empty and therefore produces no read at all — see
-//! [`Chunking::cut`](super::Chunking::cut).
-//!
-//! **It strips per delivery**, which is where a shell's markers are: the transcript's
-//! marker shorthand always expands inside one payload, and where a read ends is the
-//! pipe's business rather than the shell's (decision 3).
-//!
-//! One decorator ships, not a family. This one has a consumer the moment it lands — B6's
-//! unintegrated path and the manual matrix; a slow-to-start shell or one with an unusual
-//! prompt each waits for the entry that needs it.
 
 use super::shell::{FakeShell, Script, Submission};
 
-/// The escape sequence every OSC 133 marker starts with.
 const OSC133: &[u8] = b"\x1b]133;";
-/// BEL, one of the two terminators a marker can end with.
 const BEL: u8 = 0x07;
-/// ST, the other one: escape then backslash.
 const ST: &[u8] = b"\x1b\\";
 
-/// A shell whose markers never reach the wire.
 pub struct Unmarked<S> {
     shell: S,
 }
@@ -51,8 +27,6 @@ impl<S: FakeShell> FakeShell for Unmarked<S> {
         Self::unmarked(self.shell.greet())
     }
 
-    /// Untouched: line discipline is not integration, and a shell with no prompt hook
-    /// still takes what is typed exactly as it did before.
     fn accept(&mut self, pending: &mut Vec<u8>) -> Vec<Submission> {
         self.shell.accept(pending)
     }
@@ -66,10 +40,7 @@ impl<S: FakeShell> FakeShell for Unmarked<S> {
     }
 }
 
-/// `bytes` with every OSC 133 sequence removed, terminator included.
-///
-/// A sequence with no terminator at all runs to the end of the delivery, which is the
-/// only reading available: everything after an unterminated introducer is inside it.
+/// A sequence with no terminator runs to the end of the delivery.
 fn without_markers(bytes: &[u8]) -> Vec<u8> {
     let mut kept = Vec::with_capacity(bytes.len());
     let mut rest = bytes;
@@ -85,7 +56,6 @@ fn without_markers(bytes: &[u8]) -> Vec<u8> {
     kept
 }
 
-/// Where the marker's terminator ends, counted from the start of `inside`.
 fn end_of_marker(inside: &[u8]) -> Option<usize> {
     let bel = inside.iter().position(|byte| *byte == BEL).map(|at| at + 1);
     let st = position_of(inside, ST).map(|at| at + ST.len());
@@ -148,8 +118,6 @@ mod tests {
         );
     }
 
-    /// The property the decorator exists for, asserted over everything the built-in
-    /// shell can say rather than over one rule.
     #[test]
     fn no_osc_133_sequence_reaches_the_pipe_from_anything_it_says() {
         let mut shell = builtin();
@@ -177,8 +145,6 @@ mod tests {
         }
     }
 
-    /// Everything else the far end says is left exactly as it was, including escape
-    /// sequences that are not markers: an unintegrated shell is not a plain-text one.
     #[test]
     fn text_around_a_marker_survives_untouched() {
         assert_eq!(
@@ -198,8 +164,6 @@ mod tests {
         assert_eq!(without_markers(b"a\x1b]133;A\x1b\\b"), b"ab");
     }
 
-    /// Real shells emit both terminators, and a sequence that ran off the end of the
-    /// delivery has no text after it to keep.
     #[test]
     fn an_unterminated_marker_takes_the_rest_of_the_delivery_with_it() {
         assert_eq!(without_markers(b"kept\x1b]133;D;0"), b"kept");
@@ -212,8 +176,6 @@ mod tests {
 
         assert_eq!(shell.accept(&mut pending), [line("small")]);
         assert_eq!(pending, b"hal");
-        // The interrupt the shipped product actually sends: Ctrl+C reaches the far
-        // end as this byte, not as a line somebody typed (spec A3.2, decision 8).
         assert!(shell.interrupts(&Submission::new(vec![0x03], false)));
         assert!(!shell.interrupts(&line("small")));
     }

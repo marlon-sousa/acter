@@ -59,9 +59,6 @@ lane's next step.
 
 **Lane 4: comments**
 
-- 7. **Open** — C7, `acter-transports` sources and examples. Spec: [c-comments-say-what-the-code-cannot.md](specs/c-comments-say-what-the-code-cannot.md)
-- 8. **Open** — C8, `acter-transports` tests. Spec: [c-comments-say-what-the-code-cannot.md](specs/c-comments-say-what-the-code-cannot.md)
-- 9. **Open** — C9, `acter-app` and `acter-term`. Spec: [c-comments-say-what-the-code-cannot.md](specs/c-comments-say-what-the-code-cannot.md)
 - 10. **Open** — C10, frontend sources under `ui/src`. Spec: [c-comments-say-what-the-code-cannot.md](specs/c-comments-say-what-the-code-cannot.md)
 - 11. **Open** — C11, frontend tests under `ui/test` and `e2e`. Spec: [c-comments-say-what-the-code-cannot.md](specs/c-comments-say-what-the-code-cannot.md)
 - 12. **Open** — C12, retire the lane histories under `docs/roadmap/`. Entry: [c12-retire-the-lane-histories.md](roadmap/c12-retire-the-lane-histories.md). Spec: none yet.
@@ -183,9 +180,9 @@ History: [lane-3-macos.md](roadmap/lane-3-macos.md).
 - 4. **Done** — C4, `acter-core` services `connect.rs` and `conversation.rs`. Spec: [c-comments-say-what-the-code-cannot.md](specs/c-comments-say-what-the-code-cannot.md)
 - 5. **Done** — C5, `acter-core` services `session.rs`. Spec: [c-comments-say-what-the-code-cannot.md](specs/c-comments-say-what-the-code-cannot.md)
 - 6. **Done** — C6, `acter-shells`. Spec: [c-comments-say-what-the-code-cannot.md](specs/c-comments-say-what-the-code-cannot.md)
-- 7. **Open** — C7, `acter-transports` sources and examples. Spec: [c-comments-say-what-the-code-cannot.md](specs/c-comments-say-what-the-code-cannot.md)
-- 8. **Open** — C8, `acter-transports` tests. Spec: [c-comments-say-what-the-code-cannot.md](specs/c-comments-say-what-the-code-cannot.md)
-- 9. **Open** — C9, `acter-app` and `acter-term`. Spec: [c-comments-say-what-the-code-cannot.md](specs/c-comments-say-what-the-code-cannot.md)
+- 7. **Done** — C7, `acter-transports` sources and examples. Spec: [c-comments-say-what-the-code-cannot.md](specs/c-comments-say-what-the-code-cannot.md)
+- 8. **Done** — C8, `acter-transports` tests. Spec: [c-comments-say-what-the-code-cannot.md](specs/c-comments-say-what-the-code-cannot.md)
+- 9. **Done** — C9, `acter-app` and `acter-term`. Spec: [c-comments-say-what-the-code-cannot.md](specs/c-comments-say-what-the-code-cannot.md)
 - 10. **Open** — C10, frontend sources under `ui/src`. Spec: [c-comments-say-what-the-code-cannot.md](specs/c-comments-say-what-the-code-cannot.md)
 - 11. **Open** — C11, frontend tests under `ui/test` and `e2e`. Spec: [c-comments-say-what-the-code-cannot.md](specs/c-comments-say-what-the-code-cannot.md)
 - 12. **Open** — C12, retire the lane histories under `docs/roadmap/`. Entry: [c12-retire-the-lane-histories.md](roadmap/c12-retire-the-lane-histories.md). Spec: none yet.
