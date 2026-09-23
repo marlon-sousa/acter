@@ -1,12 +1,5 @@
 // @vitest-environment jsdom
 // Role: test — the About dialog: what it reads out, and where focus is before and after.
-//
-// Three of its four behaviours are the platform's (announced as a dialog, focus trapped
-// while open, Escape closes) and are not restated here — asserting that a `<dialog>` is a
-// dialog tests jsdom. What is Acter's, and therefore what this pins: the facts come from
-// the build rather than from the HTML, Tab stays inside a dialog with a single control,
-// and focus lands in the edit field when it closes, because what opened it was a menu
-// that no longer exists (spec A7, decision 3).
 
 import { beforeEach, describe, expect, it } from 'vitest';
 
@@ -26,8 +19,6 @@ const SKELETON = `
   <input id="command-input" />
 `;
 
-/** The build's answer, stubbed. The point of the port is that none of these strings is
- * ever typed into the page, so the test supplies values the HTML could not have. */
 class StubShell implements AppShell {
   asked = 0;
 
@@ -93,8 +84,8 @@ beforeEach(() => {
   shell = new StubShell();
   dialog = byId<HTMLDialogElement>('about-dialog');
   returned = 0;
-  // jsdom implements `<dialog>` only partially depending on version; these two keep the
-  // suite about Acter's behaviour rather than about jsdom's coverage of the element.
+  // Some jsdom versions lack `showModal` and `close` on `<dialog>`, so every dialog test
+  // patches them in when absent.
   dialog.showModal ??= function showModal(this: HTMLDialogElement) {
     this.open = true;
   };
@@ -115,16 +106,9 @@ describe('what it says', () => {
     expect(said('about-licence')).toContain('MIT');
   });
 
-  /** The version is spoken, so it is a sentence rather than a bare number: "Version 1.2.3"
-   * and "MIT licence" are what a listener hears, and every user-facing string in this
-   * product is a domain requirement. */
   it('says the version and the licence as words, not as bare values', async () => {
     await open();
 
-    // **The sentence, then the identifier** (spec 26, decision 5). What is read out is a
-    // sentence, because `development-521c956` is a value and nothing should try to spell a
-    // commit aloud; the identifier stays on the line because the dialog is copyable text
-    // and a bug report has to be able to carry it.
     expect(said('about-version')).toBe(
       'Version 9.9.9-from-the-build. 9.9.9-from-the-build',
     );
@@ -139,9 +123,6 @@ describe('what it says', () => {
 });
 
 describe('where focus is', () => {
-  /** Measured through NVDA on 2026-08-24 before this was written: with one focusable
-   * control, Tab left the button and landed on the dialog's own document, NVDA dropped
-   * back into browse mode, and it took a second Escape to leave. */
   it('tab stays inside a dialog that has a single control', async () => {
     await open();
     const close = byId('about-close');
@@ -171,8 +152,6 @@ describe('where focus is', () => {
     expect(document.activeElement?.id).toBe('about-close');
   });
 
-  /** It cannot return focus to whatever opened it, because that was a menu item that has
-   * since closed — so the destination is stated rather than remembered. */
   it('closing it puts focus in the edit field', async () => {
     await open();
 

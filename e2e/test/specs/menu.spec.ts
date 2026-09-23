@@ -1,26 +1,15 @@
 // Role: e2e spec — the menu bar and the About dialog, driven end to end in the real
 // WebView2 window.
-//
-// **This suite could not have existed a day earlier.** A7's spec said, of the native menu
-// bar it was written for, that no suite in this project could open it: `MockRuntime` does
-// not execute native webview libraries and WebDriver drives the webview only. The menu bar
-// moved into the document because a native one freezes NVDA, and this is the half of that
-// change that pays for itself in tests.
-//
-// Elements are located by role and accessible name wherever a name exists, so this fails
-// if the semantics regress rather than only if the markup moves.
 
 import { $, browser, expect } from '@wdio/globals';
 import { useActersLine } from '../helpers';
 
-/** Where focus actually is, as an id — the question every assertion here asks. */
 function focusedId(): Promise<string> {
   return browser.execute(() => document.activeElement?.id ?? '');
 }
 
-/** The embedded WebDriver synthesizes untrusted key events, exactly as `helpers.ts`
- * records for Enter and Ctrl+C. F10 and Alt are bound on `document`, so dispatching there
- * exercises the app's own listener and everything after it. */
+/** Dispatched on `document`, where F10 and Alt are bound; see helpers.ts for why keys are
+ * synthesized rather than typed. */
 function press(key: string, options: { alt?: boolean; type?: string } = {}) {
   return browser.execute(
     (k: string, alt: boolean, type: string) => {
@@ -40,26 +29,7 @@ function press(key: string, options: { alt?: boolean; type?: string } = {}) {
   );
 }
 
-/** **The bar is wired asynchronously, and pressing before it exists is a real race.**
- * `main.ts` installs the keyboard contract inside `shell.platform().then(...)`, an IPC
- * round trip, so for the first moments of a session there is a document with a menu bar in
- * it and nothing listening for F10.
- *
- * Without a guard the suite passed on a fast machine and failed on CI, on a different test
- * each run: `opens on Alt pressed and released alone` once and `opens on F10 with focus on
- * the first item` the next, both reporting focus still in the edit field.
- *
- * **The first guard watched the wrong thing and the flake came back.** It waited for
- * `#menu-bar-region` to lose its `hidden` attribute, on the premise that the reveal was
- * "exactly the moment the listeners are attached" — and in `main.ts` the reveal came
- * *before* `installMenuBar`, not after it. `menu.spec.ts` was red on main again on
- * 2026-08-30, on this same test, expecting `menu-acter` and getting `command-input`.
- *
- * So this guard asks the question the whole file depends on instead of a proxy for it:
- * **press F10 until focus actually lands in the bar.** It is indifferent to how the race is
- * lost — a late install, a reload, an ordering nobody expected — because it waits for the
- * behaviour rather than for a sign of it. `main.ts` reveals the region after wiring it now,
- * which is the right order on its own terms; this no longer depends on that being true. */
+/** The menu bar is wired after an IPC round trip, so F10 is pressed until focus reaches it. */
 before(async () => {
   await browser.waitUntil(
     async () => {
@@ -76,7 +46,6 @@ before(async () => {
 describe('the menu bar', () => {
   beforeEach(async () => {
     await useActersLine();
-    // Every test starts from where the user lives.
     await browser.execute(() => document.getElementById('command-input')?.focus());
   });
 
@@ -86,9 +55,6 @@ describe('the menu bar', () => {
     await expect(await focusedId()).toBe('menu-acter');
   });
 
-  /** Alt is answered on keyup and disarmed by anything in between, which is what keeps
-   * Alt+Tab and Alt+F4 working. Both halves are exercised here in the real webview,
-   * because it is the real webview that receives Alt first. */
   it('opens on Alt pressed and released alone', async () => {
     await press('Alt', { alt: true });
     await press('Alt', { type: 'keyup' });
@@ -124,8 +90,6 @@ describe('the menu bar', () => {
   });
 });
 
-/** Is the dialog open right now? Asked of the element rather than of the DOM's shape,
- * because `open` is what `showModal` sets and what `close` clears. */
 function dialogIsOpen(): Promise<boolean> {
   return browser.execute(
     () =>
@@ -133,15 +97,7 @@ function dialogIsOpen(): Promise<boolean> {
   );
 }
 
-/** Walk the menu to About Acter and activate it, then wait for the dialog to be open.
- * Factored out because three tests need the same six steps, and because the waiting is
- * the part that has to be right: CI is slower than this machine, and the facts come back
- * over IPC before the dialog is shown.
- *
- * **Two ArrowRights since A13**, Help having arrived between Acter and About. A helper
- * that counts keypresses to reach a menu is a helper that breaks when a menu is added,
- * which is what happened — so the walk asserts nothing and the caller asserts the dialog,
- * and the test above is the one that pins the bar's order. */
+/** The dialog opens only after its facts come back over IPC, so this waits for it. */
 async function openAbout(): Promise<void> {
   await press('F10');
   await press('ArrowRight');
@@ -156,10 +112,8 @@ async function openAbout(): Promise<void> {
 
 describe('the About dialog', () => {
   beforeEach(async () => {
-    // Every test here starts from a closed dialog and a focused edit field, and *waits*
-    // for that rather than assuming it: the previous test leaves the dialog open, closing
-    // is what returns focus, and a test that began before either had happened would fail
-    // for a reason that has nothing to do with what it is testing.
+    // The previous test may leave the dialog open, and closing it is what moves focus, so
+    // this waits for the close before placing focus.
     await browser.execute(() => {
       const dialog = document.getElementById('about-dialog') as HTMLDialogElement | null;
       dialog?.close();
@@ -171,29 +125,17 @@ describe('the About dialog', () => {
     await browser.execute(() => document.getElementById('command-input')?.focus());
   });
 
-  /** The whole path: menu bar, into a menu, activate, and a dialog carrying facts that
-   * came from the Rust side rather than from the page. */
   it('opens from the menu and reads its facts from the build', async () => {
     await openAbout();
 
     const dialog = await $('#about-dialog');
-    // The name is filled by the adapter from the `about` command; the HTML ships empty.
     await expect(await dialog.getText()).toContain('Acter');
     await expect(await dialog.getText()).toContain('MIT licence');
     await expect(await dialog.getText()).toContain('Marlon Brandão de Sousa');
-    // **The version is the one the build stamped, said in words** (spec 26, decision 5).
-    // A release reads "Version 1.0.0."; a development build — which is every build this
-    // suite ever drives, since it targets the debug profile — reads "Development build,
-    // commit" and the short commit. Asserting either would pin this suite to one of them,
-    // so what it pins is the shape both have: a sentence, then the identifier a bug report
-    // carries.
     const said = await browser.execute(
       () => document.getElementById('about-version')?.textContent ?? '',
     );
     await expect(/^(Version|Development build, commit) .+\. \S+$/.test(said)).toBe(true);
-    // **And where Acter keeps its settings**, in one line: the path, then a whole sentence
-    // saying how it came to be using it. This suite runs against a fixture folder, so what
-    // it says is that it was told — which is the standing `ACTER_SETTINGS_DIR` produces.
     const settings = await browser.execute(
       () => document.getElementById('about-settings')?.textContent ?? '',
     );
@@ -201,8 +143,6 @@ describe('the About dialog', () => {
     await expect(settings).toContain('Acter was told where to keep its settings.');
   });
 
-  /** Measured through NVDA before it was fixed: Tab left the only control for the
-   * dialog's own document, and the reader dropped back into browse mode. */
   it('keeps Tab inside itself', async () => {
     await openAbout();
 
@@ -215,9 +155,7 @@ describe('the About dialog', () => {
   it('closes on Escape and leaves focus in the edit field', async () => {
     await openAbout();
 
-    // Escape on a modal dialog is the platform's own, and an untrusted synthetic key does
-    // not reach it — so this closes the dialog the way its own close button does, which is
-    // the path the app owns. That Escape closes it is the NVDA pass's to confirm.
+    // An untrusted synthetic Escape does not reach the modal dialog's own close.
     await browser.execute(() => document.getElementById('about-close')?.click());
 
     await browser.waitUntil(async () => (await focusedId()) === 'command-input', {
@@ -227,7 +165,6 @@ describe('the About dialog', () => {
   });
 });
 
-/** Is the Help dialog open right now? Asked of the element for `dialogIsOpen`'s reason. */
 function helpIsOpen(): Promise<boolean> {
   return browser.execute(
     () =>
@@ -235,11 +172,6 @@ function helpIsOpen(): Promise<boolean> {
   );
 }
 
-/** **This suite exists because the e2e gap is what let A13 through red** (spec A13). The
- * unit suites caught the menu bar gaining a third item and the e2e one did not, because
- * nothing here exercised Help at all — so the failure arrived as a CI surprise on a PR
- * that had been driven with a screen reader and called done. Help has two ways in and both
- * are now walked end to end in the real webview. */
 describe('the Help dialog', () => {
   beforeEach(async () => {
     await browser.execute(() => {
@@ -253,8 +185,6 @@ describe('the Help dialog', () => {
     await browser.execute(() => document.getElementById('command-input')?.focus());
   });
 
-  /** F1 is bound on the document rather than on any control, because the sentence that
-   * sends a user here is announced while the window may be showing anything. */
   it('opens on F1 from the edit field', async () => {
     await press('F1');
 
@@ -276,10 +206,6 @@ describe('the Help dialog', () => {
     });
   });
 
-  /** The topic is prose to be read, so it must not be an application region and must keep
-   * its headings — the two things a reader needs to arrow it and skim it. Asserted on the
-   * shipped markup rather than on a skeleton, which is what the unit suite can only
-   * approximate. */
   it('carries a readable topic rather than a widget', async () => {
     await press('F1');
     await browser.waitUntil(helpIsOpen, { timeout: 15_000 });
@@ -294,9 +220,6 @@ describe('the Help dialog', () => {
     });
 
     await expect(shape.applications).toBe(0);
-    // Seven since spec 26, when "Saving a connection" was added (decision 23): what Acter
-    // is, moving around the window, who gets your keys, connecting, saving a connection,
-    // the two kinds of session, and the dialog that asks.
     await expect(shape.headings).toBe(7);
     await expect(shape.describedBy).toBe('help-summary');
   });

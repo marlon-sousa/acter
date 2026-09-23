@@ -1,10 +1,6 @@
 // @vitest-environment jsdom
 // Role: test — the window's two titles, its status region, and which of its two faces it is
 // showing.
-//
-// What matters for the titles is that they cannot disagree: they are set from one value, so
-// a test that checks only one of them would pass while the other said something else. What
-// matters for the faces is that focus is never stranded (spec A10).
 
 import { beforeEach, describe, expect, it } from 'vitest';
 
@@ -22,7 +18,6 @@ let farEndInput: HTMLElement;
 let connectButton: HTMLElement;
 let reconnectButton: HTMLElement;
 let chrome: WindowChrome;
-/** What the operating system's title bar was told, in order. */
 let native: string[];
 
 function byId(id: string): HTMLElement {
@@ -59,8 +54,6 @@ beforeEach(() => {
   connectButton = byId('connect-button');
   reconnectButton = byId('reconnect-button');
   native = [];
-  // No startup hold: the hold is a reader-timing measurement of its own, asserted in its
-  // own test, and every other rule here is about *where* focus goes rather than when.
   chrome = new WindowChrome(
     {
       heading,
@@ -81,15 +74,6 @@ beforeEach(() => {
 });
 
 describe('what the window is called', () => {
-  /** All three, from one value. The native title is the one the desktop reads out in the
-   * task switcher, and it is the one A9 shipped without: assigning `document.title` in a
-   * Tauri window leaves the native title alone, which the user's NVDA reported on
-   * 2026-08-25 while the document said something else. */
-  // **Focus lands on whichever command line is in front** (roadmap 28.7). A session hands
-  // the keys to the program, so the local form is hidden by default now — and this method is
-  // what the Connect dialog returns focus to when it closes. Asking the `<input>` alone
-  // focused a hidden element, which is a no-op, and left the listener on nothing at all
-  // after the commonest action there is. The same mistake as 28.3, in a second place.
   it('lands on the program line while the local form is hidden', () => {
     chrome.showTerminal(true);
     chrome.showLocalLine(false);
@@ -116,7 +100,6 @@ describe('what the window is called', () => {
     expect(heading.textContent).toBe('Acter - PowerShell');
   });
 
-  /** With nothing behind it the window is just the product, in both places. */
   it('is the product alone when nothing is connected', () => {
     chrome.connectedTo('PowerShell');
     chrome.connectedTo(null);
@@ -126,8 +109,6 @@ describe('what the window is called', () => {
     expect(heading.textContent).toBe('Acter');
   });
 
-  /** The names come from the connect list, so they arrive with spaces and punctuation in
-   * them; nothing here may mangle one. */
   it('passes a name through exactly as it was given', () => {
     chrome.connectedTo('WSL: Ubuntu');
 
@@ -143,8 +124,6 @@ describe('the status region', () => {
     expect(status.textContent).toBe('connected');
   });
 
-  /** A live region reassigned the same text can still fire an accessibility event, and a
-   * status that repeats itself for no reason is one a listener learns to ignore. */
   it('does not rewrite itself with text it already says', () => {
     chrome.status('connected');
     const first = status.firstChild;
@@ -162,10 +141,6 @@ describe('the status region', () => {
   });
 });
 
-// **The window's two faces** (spec A10). With a session there is a terminal window: a
-// results buffer and an edit field. With none there is a Connect button and nothing to type
-// into, because a field that can submit nothing is a control a listener has to arrow past to
-// reach the only thing that would help them.
 describe('which face the window shows', () => {
   it('opens on the empty window, with no terminal at all', () => {
     chrome.showTerminal(false);
@@ -183,9 +158,6 @@ describe('which face the window shows', () => {
     expect(ended.hidden).toBe(true);
   });
 
-  /** **The two windows are exclusive**, and once a session has run the empty one never
-   * comes back: it holds nothing, and swapping to it would take the transcript off the
-   * screen. What answers a session ending is the terminal window's own ended state. */
   it('stays on the terminal window when the session ends, and swaps the edit field out', () => {
     chrome.showTerminal(true);
 
@@ -197,8 +169,6 @@ describe('which face the window shows', () => {
     expect(ended.hidden).toBe(false);
   });
 
-  /** The disconnect rule, and the reason it is not in this method: the buffer is the record
-   * of a session that ended, and a user who typed `exit` by accident must not lose it. */
   it('never touches the results buffer', () => {
     const results = byId('results');
     results.hidden = false;
@@ -208,13 +178,6 @@ describe('which face the window shows', () => {
     expect(results.hidden).toBe(false);
   });
 
-  /** **Focus is rescued, never stolen.** Hiding the element focus is inside strands it on
-   * the document body, where a listener has nothing under them and no obvious way back.
-   *
-   * **And it is rescued onto the Connect button, transcript or no transcript** — reported
-   * by the user on 2026-08-30, reversing the rule of 2026-08-26 that sent it into the
-   * buffer. What a listener has to do something about is that they have no session; the
-   * transcript is kept, unmoved, and one Tab away. */
   it('moves focus to the Connect button when the session ends', () => {
     chrome.showTerminal(true);
     results.hidden = false;
@@ -225,8 +188,6 @@ describe('which face the window shows', () => {
     expect(document.activeElement).toBe(reconnectButton);
   });
 
-  /** And the same with nothing in the buffer, which is now the same case rather than the
-   * only case that behaved this way. */
   it('moves focus to the Connect button when there is no transcript either', () => {
     chrome.showTerminal(true);
     input.focus();
@@ -245,15 +206,12 @@ describe('which face the window shows', () => {
     expect(document.activeElement).toBe(input);
   });
 
-  /** A window opening with focus nowhere is the launch case, and it must land somewhere. */
   it('places focus when there was none', () => {
     chrome.showTerminal(false);
 
     expect(document.activeElement).toBe(connectButton);
   });
 
-  /** But a user reading the buffer when their shell exits keeps their place: focus was not
-   * in what went away, so nothing moves it. */
   it('leaves focus alone when it is somewhere else', () => {
     chrome.showTerminal(true);
     heading.tabIndex = -1;
@@ -265,11 +223,6 @@ describe('which face the window shows', () => {
   });
 });
 
-// **Where the menu bar and the dialogs come back to.** They returned to the edit field by
-// name, which was right while there was always one — and since A10 there is not. Measured
-// with NVDA on 2026-08-26: Escape out of the menu bar in an unconnected window focused a
-// hidden input, which does nothing at all, and left the listener stranded on a menu item
-// they had just closed.
 describe('coming back to the window', () => {
   it('returns to the edit field when a session is showing', () => {
     chrome.showTerminal(true);
@@ -290,8 +243,6 @@ describe('coming back to the window', () => {
     expect(document.activeElement).toBe(connectButton);
   });
 
-  /** And to the terminal window's own button once a session has run there, because that is
-   * the window the listener is in. */
   it('returns to the ended terminal window button after a session has run', () => {
     chrome.showTerminal(true);
     chrome.showTerminal(false);
@@ -303,8 +254,6 @@ describe('coming back to the window', () => {
     expect(document.activeElement).toBe(reconnectButton);
   });
 
-  /** Including when there is a transcript to read: it is reached from the button rather
-   * than instead of it (reported 2026-08-30). */
   it('returns to that button when there is a transcript as well', () => {
     chrome.showTerminal(true);
     results.hidden = false;
@@ -318,10 +267,6 @@ describe('coming back to the window', () => {
   });
 });
 
-// **Focus moved while the page is still loading does not take the reader's browse cursor
-// with it** — measured with NVDA on 2026-08-26, where the window opened with the Connect
-// button focused and the first Enter opened the menu bar instead of pressing it. So the
-// first placement waits; every later one must not.
 describe('the startup hold', () => {
   function held(): WindowChrome {
     return new WindowChrome(
@@ -353,8 +298,6 @@ describe('the startup hold', () => {
     expect(document.activeElement).toBe(connectButton);
   });
 
-  /** A disconnect mid-session must move focus at once: the field the user was typing in has
-   * just gone, and a listener with focus on nothing is exactly what the rescue exists for. */
   it('places every later one immediately', async () => {
     const chrome = held();
     chrome.showTerminal(false);

@@ -1,7 +1,5 @@
-// Role: adapter (WebAudio) — the decided home of the completion beep (decision 1): a
-// short 880 Hz tone. The AudioContext is created lazily on first beep (browsers block
-// audio until a user gesture, and the first beep only follows a submitted command) and
-// reused thereafter. A brief gain envelope avoids the click of a hard start/stop.
+// Role: adapter (WebAudio) — the completion beep.
+// The AudioContext must be created lazily: browsers block audio until a user gesture.
 
 import type { BeepView } from '../ports/beep_view';
 
@@ -19,7 +17,6 @@ export class BeepAudio implements BeepView {
     oscillator.frequency.value = FREQUENCY_HZ;
 
     const gain = context.createGain();
-    // Fade in and out over a few milliseconds so the tone starts and stops cleanly.
     gain.gain.setValueAtTime(0, now);
     gain.gain.linearRampToValueAtTime(0.2, now + 0.01);
     gain.gain.setValueAtTime(0.2, now + DURATION_S - 0.01);

@@ -1,18 +1,4 @@
-// Role: container (composition root) — wires the WebdriverIO runner to the built
-// Acter binary. The only place E2E infrastructure is configured; specs see only the
-// running app through the `browser` global.
-//
-// Session model: WebdriverIO talks DIRECTLY to the WebDriver server embedded in the
-// app (tauri-plugin-wdio-webdriver, registered in debug builds only — see
-// crates/acter-app/src/container.rs). No @wdio/tauri-service, no tauri-driver, no
-// msedgedriver: the in-app server is a complete W3C endpoint, and the service layer
-// was evaluated and dropped (see the T2 spec amendment — its session management
-// added silent 5s probes for an optional companion plugin and pinned every worker
-// to one shared app instance).
-//
-// Isolation model: one worker per spec file, and each worker spawns its OWN app
-// instance on a unique port (beforeSession) and kills it afterwards (afterSession).
-// Specs are fully independent; raising maxInstances parallelizes them safely.
+// Role: container (composition root) — wires the WebdriverIO runner to the built Acter binary.
 
 import { spawn, type ChildProcess } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
@@ -20,39 +6,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-// The workspace target dir sits one level up from e2e/. `npm run test:e2e` builds
-// the app before the runner starts (see the root script).
-//
-// The build MUST enable the `custom-protocol` feature and MUST be the debug
-// profile. Tauri keys dev-vs-embedded assets on that feature, not on the profile:
-// without it the app loads `devUrl` (the Vite dev server, not running under test)
-// instead of the embedded frontend. Debug, because the embedded WebDriver plugin is
-// registered under debug_assertions only — release binaries carry no automation
-// surface. The frontend bundle is identical in both profiles.
+// The build must enable `custom-protocol` and be the debug profile: without the feature the
+// app loads `devUrl`, and the embedded WebDriver server exists in debug builds only.
 const appBinaryPath = fileURLToPath(
   new URL('../target/debug/acter.exe', import.meta.url),
 );
 
 const BASE_PORT = 4600;
 
-// The simulated session E2E runs against: the *built-in transcript with time taken
-// out* (spec B6, decision 12).
-//
-// This used to be a hand-written `ACTER_FAKE_SCRIPT` config, and B6 deleted both the
-// variable and the domain-level fake it configured. Faking is a transport choice now,
-// so the deterministic-and-fast requirement T2 decision 8 stated has to be met at the
-// transport: same shell, same rules, same text, same marker structure — only the waits
-// are different. Every delay range becomes an equal-bounds 20 ms, which is what makes a
-// run reproducible (unequal bounds are sampled per delivery, so `tail` and `burst`
-// would otherwise pace themselves anywhere between three and eight seconds a chunk).
-//
-// Repeat counts are left exactly as they are, `forever` included: how many times a
-// thing happens is part of the scenario, and `stop.spec.ts` needs a script that
-// genuinely never ends.
-//
-// Reading the crate's transcript rather than copying it is deliberate. A copy would
-// drift from the shell the manual accessibility matrix runs against, and then E2E would
-// be asserting about a session nobody uses.
 const TRANSCRIPT_SOURCE = fileURLToPath(
   new URL(
     '../crates/acter-transports/src/scripted/default_transcript.json',
@@ -80,7 +41,6 @@ interface Transcript {
   [key: string]: unknown;
 }
 
-/** The built-in transcript with every wait replaced by a deterministic 20 ms. */
 function fastTranscript(): Transcript {
   const transcript = JSON.parse(
     readFileSync(TRANSCRIPT_SOURCE, 'utf8'),
@@ -100,8 +60,7 @@ function fastTranscript(): Transcript {
   return transcript;
 }
 
-// Module state is per worker process (each spec file runs in its own worker, and
-// the worker loads this config module independently).
+// Module state is per worker: each spec file runs in its own worker process.
 let app: ChildProcess | undefined;
 
 async function waitReady(port: number, timeoutMs: number): Promise<void> {
@@ -136,8 +95,7 @@ export const config: WebdriverIO.Config = {
   specs: ['./test/specs/**/*.spec.ts'],
   maxInstances: 1,
 
-  // Connection details are set per worker in beforeSession; these are placeholders
-  // so the runner has a complete config before the hook runs.
+  // Placeholders: beforeSession sets the real port for each worker.
   hostname: '127.0.0.1',
   port: BASE_PORT,
   path: '/',
@@ -162,27 +120,14 @@ export const config: WebdriverIO.Config = {
 
   reporters: ['spec'],
 
-  // Spawn this worker's private app instance on a unique port derived from the
-  // worker id (cid "0-2" → worker index 2), then point the session at it.
   beforeSession: async (cfg, _capabilities, _specs, cid) => {
     const workerIndex = Number(cid?.split('-')[1] ?? 0);
     const port = BASE_PORT + workerIndex;
 
-    // Write this worker's own copy of the fast transcript and point the app at it, so
-    // E2E runs entirely on a session it generated (spec acceptance criterion 7). A file
-    // per worker, because `ACTER_TRANSCRIPT` takes a path and workers are independent.
     const configDir = mkdtempSync(join(tmpdir(), 'acter-e2e-'));
     const configPath = join(configDir, 'transcript.json');
     writeFileSync(configPath, JSON.stringify(fastTranscript()));
 
-    // **A settings folder of this worker's own** (spec 26, decision 3). The variable exists
-    // precisely so a suite is not run against whatever this machine happens to hold: a run
-    // that saved a connection into the developer's real folder would change what their next
-    // manual pass meets, and two workers sharing one folder would see each other's writes.
-    //
-    // It holds one saved connection to start with, so the Connect dialog has something to
-    // list and `connect.spec.ts` can drive the saved-connection flow without saving first.
-    // A scripted one, because it is the only far end this suite can actually start.
     const settingsDir = join(configDir, 'settings');
     mkdirSync(settingsDir, { recursive: true });
     writeFileSync(
@@ -202,12 +147,8 @@ export const config: WebdriverIO.Config = {
       }),
     );
 
-    // `ACTER_SHELL` is cleared, not merely left unset. The parent environment is spread
-    // in, and that variable exists precisely so a manual accessibility run can export it —
-    // so a developer who did would have every spec here silently retargeted at a real
-    // `cmd.exe`, where `forever` is not a command and the assertions mean nothing. A
-    // suite that quietly tests a different session than it claims is worse than one that
-    // fails.
+    // `ACTER_SHELL` is cleared because a manual accessibility run may export it, which would
+    // retarget every spec at a real `cmd.exe`.
     app = spawn(appBinaryPath, [], {
       env: {
         ...process.env,
@@ -225,15 +166,8 @@ export const config: WebdriverIO.Config = {
     cfg.path = '/';
   },
 
-  // **This suite drives Acter's own line, so it says so** (roadmap 28.7). A session now
-  // starts with the program holding the keys, which is right for a listener and wrong for
-  // nine spec files that submit through Acter's form and assert focus on its `<input>` —
-  // that field is hidden while the program has them, and focusing a hidden element is a
-  // no-op.
-  //
-  // The hook asserts the default before undoing it, so it is also where a regression in the
-  // default would surface: if a session ever stops handing the keys over, this fails here
-  // rather than passing quietly everywhere.
+  // A session starts with the program holding the keys, and the specs type into Acter's own
+  // `<input>`, which stays hidden until Ctrl+Shift+K takes them back.
   before: async () => {
     const browser = (globalThis as { browser: WebdriverIO.Browser }).browser;
     await browser.waitUntil(
@@ -275,12 +209,9 @@ export const config: WebdriverIO.Config = {
     app = undefined;
   },
 
-  // On any failure, drop a screenshot next to the run so CI can upload it as an
-  // artifact (readable-output acceptance criterion).
   afterTest: async function (test, _context, { passed }) {
     if (!passed) {
-      // Created on demand: the directory is not in the tree, and saveScreenshot fails
-      // rather than creating it — which lost the artifact exactly when it was wanted.
+      // saveScreenshot fails rather than create a missing directory.
       mkdirSync('./screenshots', { recursive: true });
       const safe = test.title.replace(/[^a-z0-9]+/gi, '-').toLowerCase();
       await browser.saveScreenshot(`./screenshots/${safe}.png`);

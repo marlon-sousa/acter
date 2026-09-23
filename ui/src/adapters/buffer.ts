@@ -1,52 +1,27 @@
-// Role: adapter (DOM) — the results buffer region: one h2 per command keyed by
-// CommandId, with output chunks appended under it as they arrive. A block for text no
-// command accounts for has no h2 at all; see Block below.
+// Role: adapter (DOM) — the results buffer region: one h2 per command keyed by CommandId.
 
 import type { CommandId, LineId, LineRevision } from '../protocol';
 import type { BufferView } from '../ports/buffer_view';
 
 interface Block {
-  // Absent until something says what this block is running. Text that belongs to no
-  // command the user submitted — the shell's own prompt, its banner, the prompt a bare
-  // Enter brings back — is a block with **no heading**, which is what DESIGN says it
-  // gets. Rendering that as an *empty* heading is a different thing and a worse one: a
-  // level 2 heading announcing nothing, which heading navigation lands on and cannot
-  // read (found in B4.9's manual pass).
+  // Null while nothing says what the block runs; never an empty h2, which heading navigation
+  // lands on and cannot read.
   heading: HTMLElement | null;
   output: HTMLElement;
-  // The lines this block has shown, by the id the engine minted for each.
-  //
-  // **The buffer applies revisions by id since 28** (decision 8), and that is what makes the
-  // transcript honest at a far end. A terminal's output is not append-only: `readline`
-  // repaints the row it is editing, and `gh` blanks its option rows when the prompt is
-  // answered and rewrites the question row to carry the answer. Appending every event grew
-  // a junk line per arrow press and kept three option rows the far end had already erased.
   lines: Map<LineId, HTMLElement>;
 }
 
 export class BufferDom implements BufferView {
-  // CommandId -> that command's heading and output container.
   private readonly blocks = new Map<CommandId, Block>();
 
   constructor(private readonly region: HTMLElement) {}
 
-  /**
-   * The buffer is in the document only while it has something in it (spec A10).
-   *
-   * An empty region is a thing a listener arrows onto and hears nothing useful from, and
-   * since B7 an empty buffer is what every launch opens with rather than a state that lasts
-   * until the first prompt arrives. Every method that puts something in calls this; only
-   * `clear` takes it away again.
-   */
+  // Every method that puts something in the region must call this; only `clear` hides it.
   private show(): void {
     this.region.hidden = false;
   }
 
   appendPrompt(text: string): void {
-    // A paragraph rather than a heading, and outside any block: the prompt belongs to the
-    // gap between what just finished and what runs next, which is exactly where it is
-    // drawn. Closing the current block first would be wrong — blocks are closed by the
-    // shell, not by the buffer — so this is simply appended at the end of the region.
     const prompt = this.region.ownerDocument.createElement('p');
     prompt.className = 'prompt';
     prompt.textContent = text;
@@ -55,27 +30,19 @@ export class BufferDom implements BufferView {
   }
 
   clear(): void {
-    // The blocks map goes with the DOM. Leaving it behind would make the next session's
-    // first command id — which starts again at 1 — find a block belonging to a shell that
-    // is gone, and append its output under the previous shell's heading.
+    // The map must go with the DOM: the next session's command ids start again at 1.
     this.region.replaceChildren();
     this.blocks.clear();
     this.region.hidden = true;
   }
 
   openBlock(commandId: CommandId, commandLine: string): void {
-    // Idempotent. If the block already exists (an event opened it before the submit
-    // ack arrived), a non-empty line updates its heading; an empty line leaves it be,
-    // so the authoritative line from the ack wins the race and a later empty-line
-    // event never clobbers it.
+    // An empty line never overwrites a heading, so the submit ack's line wins a race with an event.
     const existing = this.blocks.get(commandId);
     if (existing !== undefined) {
       if (commandLine === '') {
         return;
       }
-      // A block that opened with nothing to call it, now named: the heading is created
-      // here and put in front of the output it belongs to, so the block reads in the
-      // same order it would have had all along.
       if (existing.heading === null) {
         existing.heading = this.newHeading(commandLine);
         existing.output.before(existing.heading);
@@ -98,20 +65,10 @@ export class BufferDom implements BufferView {
   private newHeading(commandLine: string): HTMLElement {
     const heading = document.createElement('h2');
     heading.textContent = commandLine;
-    // Programmatically focusable (a heading is never in the tab order) so focus()
-    // can land here without adding it to sequential navigation.
     heading.tabIndex = -1;
     return heading;
   }
 
-  /**
-   * Apply one output event to the line it names.
-   *
-   * `Appended` extends that line; `Rewritten` and `Settled` replace it, because both carry
-   * the row whole. A row the far end erased becomes an empty line rather than disappearing:
-   * the vertical structure is what a listener navigates by, and a line that vanished from
-   * under them mid-read is worse than a blank one.
-   */
   applyLine(
     commandId: CommandId,
     line: LineId,
@@ -120,8 +77,7 @@ export class BufferDom implements BufferView {
   ): void {
     const block = this.blocks.get(commandId);
     if (block === undefined) {
-      // The controller opens a block before appending; this guard keeps a scripting
-      // race from throwing rather than silently losing output.
+      // Output for a block that was never opened is dropped.
       return;
     }
     const existing = block.lines.get(line);

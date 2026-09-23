@@ -1,10 +1,4 @@
 // Role: port (driving) — what the frontend may ask of one session.
-//
-// **Every call carries the session id since B7**, and it is no longer a constant. A window
-// can be connected to one far end and then another, so the id names *which* — a line
-// submitted a moment before the user replaced their shell must not run in the new one, in
-// a working directory and on a machine they never chose for it. Which session is current
-// is `ConnectApi`'s answer, held by the controller and passed here.
 
 import type {
   KeyAck,
@@ -17,55 +11,19 @@ import type {
 
 export interface BackendApi {
   /**
-   * Establish the per-session event stream. `onEvent` is invoked for every
-   * SessionEvent the backend emits (the inbound Channel path). Resolves once the
-   * attach invoke has been acknowledged.
-   *
-   * Called once per connection, after `ConnectApi.use` resolves — deliberately a separate
-   * call, so the caller can clear a buffer still holding the previous shell's output
-   * before any of the new one's arrives (spec B7, decision 1). Nothing said before the
-   * attach is lost: the session holds what it said until somebody attaches (spec A9).
+   * Call after `ConnectApi.use` resolves; until then the session keeps at most `BACKLOG`
+   * events (crates/acter-core/src/services/session.rs).
    */
   attachSession(
     session: SessionId,
     onEvent: (event: SessionEvent) => void,
   ): Promise<void>;
   /**
-   * Submit a line for execution. Resolves immediately with the correlation id every
-   * later event about this command carries — an invoke never waits on the shell.
-   *
-   * Answers `NotConnected` instead when there is nothing behind this window, or when the
-   * session named here is one that has since been replaced. Nothing was written anywhere,
-   * and the line is still the caller's to keep.
+   * Answers `NotConnected` when nothing is behind this window or the session named has been
+   * replaced; nothing was written and the line is still the caller's.
    */
   submitCommand(session: SessionId, line: string): Promise<SubmitAck>;
-  /**
-   * Report a keystroke the frontend did not consume, and learn what became of it.
-   *
-   * The key, not the meaning: the binding table lives in the domain, so a new binding
-   * is a backend change with no frontend release. There is deliberately no
-   * `interrupt()` beside this — a meaning-shaped method would put that table back on
-   * this side of the wire.
-   *
-   * No command id: the session acts on whatever is running, because an id the frontend
-   * supplied can only be stale by the time the invoke lands.
-   */
   sendKey(session: SessionId, key: KeyPress): Promise<KeyAck>;
-  /**
-   * Hand the line to the far end, or take it back (spec 28, decision 1).
-   *
-   * The state lives in the domain because the domain is what acts on it: which bytes a key
-   * becomes, whether Enter opens a block, and which row goes in front of the listener all
-   * depend on it. Holding it here would need a second binding table here, which is what this
-   * seam exists to prevent.
-   */
   setLineOwner(session: SessionId, owner: LineOwner): Promise<void>;
-  /**
-   * Paste into the far end's own line editor (spec 28, decision 10).
-   *
-   * One call rather than a run of `sendKey`s, because whether the text is wrapped in
-   * `ESC[200~` and `ESC[201~` depends on a mode only the emulator tracks — and both branches
-   * occur in ordinary use, so neither can be assumed here.
-   */
   paste(session: SessionId, text: string): Promise<void>;
 }

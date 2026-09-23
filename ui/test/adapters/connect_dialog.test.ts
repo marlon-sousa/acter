@@ -1,10 +1,6 @@
 // @vitest-environment jsdom
-// Role: test — the Connect dialog's behaviour since spec 26: what it lists, what the panel
-// is loaded with, what a listener hears on arrowing, and what Rename and Forget do to the
-// row they are on (decisions 12 to 16).
-//
-// **The dialog this file used to drive is `new_connection_dialog.test.ts` now.** File →
-// Connect opens the list of saved names, and File → New connection opens the list of kinds.
+// Role: test — the Connect dialog: what it lists, what the panel is loaded with, what a
+// listener hears on arrowing, and what Rename and Forget do to the row they are on.
 
 import { beforeEach, describe, expect, it } from 'vitest';
 
@@ -25,9 +21,6 @@ import type {
   SetUp,
 } from '../../src/protocol';
 
-// The dialog's static skeleton, copied from views/main_window.html. It is a copy on
-// purpose: what this file asserts is the behaviour over that structure, and the structure
-// itself is what the E2E spec and the NVDA pass drive in the real document.
 const SKELETON = `
 <dialog id="connect-dialog" aria-labelledby="connect-title">
   <div role="application" aria-label="Connect">
@@ -114,11 +107,9 @@ function kinds(): Connectable[] {
 class FakeConnect implements ConnectApi {
   rows: SavedRow[] = [];
   unreadable: string | null = null;
-  /** How many times the list was asked for, so "fresh every time" is assertable. */
   asked = 0;
   renamed: [string, string][] = [];
   forgot: string[] = [];
-  /** The sentence a rename or a forget rejects with, when a test wants a refusal. */
   refuses: string | null = null;
 
   connectable(): Promise<Connectable[]> {
@@ -176,7 +167,6 @@ class FakeAnnouncer implements AnnouncerView {
   documentReturned(): void {
     this.said.push('document returned');
   }
-  /** Nothing is queued in a fake: it says everything the moment it is told. */
   drained(): Promise<void> {
     return Promise.resolve();
   }
@@ -193,7 +183,6 @@ class FakeConnecting {
   }
 }
 
-/** The two dialogs this one opens on top of itself, each answering what a test says. */
 class FakeAsking {
   renameWith: string | null = null;
   forgetIt = false;
@@ -213,14 +202,12 @@ function byId<T extends HTMLElement>(id: string): T {
   return document.getElementById(id) as T;
 }
 
-/** The names, in the order the list holds them. */
 function names(): string[] {
   return Array.from(
     byId('connect-names').querySelectorAll('[role="option"]'),
   ).map((option) => option.textContent ?? '');
 }
 
-/** Which one is selected, or null while none is. */
 function chosen(): string | null {
   return (
     byId('connect-names').querySelector('[role="option"][aria-selected="true"]')
@@ -228,7 +215,6 @@ function chosen(): string | null {
   );
 }
 
-/** Arrow down through the list, the way a person does. */
 function arrowDown(times = 1): void {
   for (let step = 0; step < times; step += 1) {
     byId('connect-names').dispatchEvent(
@@ -276,7 +262,6 @@ function make(): ConnectDialog {
 
 beforeEach(() => {
   document.body.innerHTML = SKELETON;
-  // jsdom has no dialog implementation; these are the two parts this adapter uses.
   const element = byId<HTMLDialogElement>('connect-dialog');
   element.showModal = function showModal(this: HTMLDialogElement) {
     this.open = true;
@@ -297,10 +282,6 @@ beforeEach(() => {
 });
 
 describe('opening', () => {
-  /**
-   * **The list is the saved names** (decision 12), asked for afresh so a connection saved
-   * in another window is there without a restart.
-   */
   it('lists the saved names the backend answered', async () => {
     connect.rows = [row('Ada'), ssh('work laptop', 2222)];
 
@@ -310,11 +291,6 @@ describe('opening', () => {
     expect(connect.asked).toBe(1);
   });
 
-  /**
-   * **Focus lands on the first name**, so the everyday case is open, arrow, Enter — and
-   * the first thing a listener hears is a connection's name rather than the dialog's own
-   * title.
-   */
   it('focuses the list, with the first name chosen', async () => {
     connect.rows = [row('Ada'), row('Bob')];
 
@@ -324,10 +300,6 @@ describe('opening', () => {
     expect(chosen()).toBe('Ada');
   });
 
-  /**
-   * **And says nothing on the way in.** The listbox announces the name focus lands on;
-   * an announcement on top of that is the second utterance A8 measured being heard twice.
-   */
   it('announces nothing of its own as it opens', async () => {
     connect.rows = [row('Ada')];
 
@@ -336,10 +308,6 @@ describe('opening', () => {
     expect(announcer.announcements).toEqual([]);
   });
 
-  /**
-   * **With nothing saved it still opens** (decision 16), with the list replaced by a
-   * sentence that says what to do about itself and focus on New connection.
-   */
   it('says there is nothing saved yet and puts focus on New connection', async () => {
     await dialog.open();
 
@@ -347,16 +315,11 @@ describe('opening', () => {
     expect(byId('connect-empty').textContent).toBe(NOTHING_SAVED);
     expect(byId('connect-names').hidden).toBe(true);
     expect(document.activeElement?.id).toBe('connect-new');
-    // **And a reader says it as the dialog opens** (dialogs rule 5). Found with NVDA
-    // 2026.1.1 on 2026-09-12: without this the dialog announced its name and the button
-    // focus landed on, and the sentence was in the document and never said.
     expect(
       byId<HTMLDialogElement>('connect-dialog').getAttribute('aria-describedby'),
     ).toBe('connect-empty');
   });
 
-  /** And it is taken away again when there is a list, so a dialog with rows never reads
-   * out a sentence about being empty. */
   it('describes itself with the empty sentence only while it is empty', async () => {
     connect.rows = [row('Ada')];
 
@@ -367,18 +330,12 @@ describe('opening', () => {
     ).toBe(false);
   });
 
-  /** The empty sentence says what to do, and it is one a reader can speak. */
   it('has an empty sentence that is a whole one and names the way out', () => {
     expect(NOTHING_SAVED.endsWith('.')).toBe(true);
     expect(NOTHING_SAVED).toContain('New connection');
     expect(NOTHING_SAVED).not.toContain('  ');
   });
 
-  /**
-   * **A document that would not parse is reported where the empty list would be**
-   * (decisions 9 and 16). There is nothing saved either way, and the difference is whether
-   * the person should go looking for a file — so the backend's sentence takes its place.
-   */
   it('says what went wrong with the document instead of saying the list is empty', async () => {
     connect.unreadable =
       'Acter could not understand the connections it had saved, so it has started with none.';
@@ -392,7 +349,6 @@ describe('opening', () => {
 });
 
 describe('arrowing onto a name', () => {
-  /** **One line, and it is the domain's** (decision 13): the kind and what identifies it. */
   it('announces the kind and what identifies it', async () => {
     connect.rows = [row('Ada'), ssh('work laptop', 2222)];
     await dialog.open();
@@ -402,7 +358,6 @@ describe('arrowing onto a name', () => {
     expect(announcer.announcements).toEqual(['SSH, marlon at example.org, port 2222']);
   });
 
-  /** And never moves focus, which is what makes a list a list. */
   it('moves the selection without moving focus', async () => {
     connect.rows = [row('Ada'), row('Bob')];
     await dialog.open();
@@ -413,10 +368,6 @@ describe('arrowing onto a name', () => {
     expect(document.activeElement?.id).toBe('connect-names');
   });
 
-  /**
-   * **The panel is loaded with the row's values** (decision 13): the SSH form filled in
-   * rather than empty, which is the whole difference from the New connection dialog.
-   */
   it('fills the SSH form in from the saved connection', async () => {
     connect.rows = [ssh('work laptop', 2222)];
 
@@ -427,7 +378,6 @@ describe('arrowing onto a name', () => {
     expect(byId<HTMLInputElement>('saved-ssh-user').value).toBe('marlon');
   });
 
-  /** And the distribution already selected, for the kind that has a list. */
   it('selects the saved distribution in the panel', async () => {
     connect.rows = [
       row('linux', {
@@ -444,7 +394,6 @@ describe('arrowing onto a name', () => {
     expect(selected?.textContent).toBe('Debian');
   });
 
-  /** And the checkbox as it was saved, which is the other of the two settings. */
   it('sets the checkbox from the saved connection', async () => {
     connect.rows = [row('quiet', { set_up: 'No' }), row('loud', { set_up: 'Yes' })];
 
@@ -455,10 +404,6 @@ describe('arrowing onto a name', () => {
     expect(byId<HTMLInputElement>('connect-set-up').checked).toBe(true);
   });
 
-  /**
-   * **A row that cannot be started says so and shows what to do** (decision 13), rather
-   * than being dropped from a list that would then teach a listener Acter forgot it.
-   */
   it('says a row is not available and puts its instructions in the panel', async () => {
     connect.rows = [
       row('Ada'),
@@ -479,10 +424,6 @@ describe('arrowing onto a name', () => {
 });
 
 describe('connecting', () => {
-  /**
-   * **The panel's current values, with the row's name as the origin** (decisions 11 and
-   * 14): editing the port connects to that port and writes nothing.
-   */
   it('connects with what the panel now holds, as the saved connection', async () => {
     connect.rows = [ssh('work laptop', 2222)];
     await dialog.open();
@@ -504,7 +445,6 @@ describe('connecting', () => {
     expect(attempted[0]?.origin).toBe('work laptop');
   });
 
-  /** Enter connects from anywhere in the dialog that is not a button, as today. */
   it('connects on Enter from the list', async () => {
     connect.rows = [row('Ada')];
     await dialog.open();
@@ -518,7 +458,6 @@ describe('connecting', () => {
     expect(attempted).toHaveLength(1);
   });
 
-  /** The connecting dialog is named with the connection's own name, not a kind's label. */
   it('names the saved connection in the dialog that says it is connecting', async () => {
     connect.rows = [row('work laptop')];
     await dialog.open();
@@ -530,10 +469,6 @@ describe('connecting', () => {
     expect(connecting.shown).toEqual(['work laptop']);
   });
 
-  /**
-   * **The far end is named only once the dialog is out of the way** (roadmap 13.3), and
-   * the region is given a wordless change to lose first.
-   */
   it('closes, tells the announcer the document is back, and only then says what it is on', async () => {
     connect.rows = [row('Ada')];
     await dialog.open();
@@ -547,7 +482,6 @@ describe('connecting', () => {
     expect(byId<HTMLDialogElement>('connect-dialog').open).toBe(false);
   });
 
-  /** A failure leaves the dialog open and focus back on the list, not on a button. */
   it('stays open on failure with focus back on the names', async () => {
     connect.rows = [row('Ada')];
     succeeds = false;
@@ -564,7 +498,6 @@ describe('connecting', () => {
 });
 
 describe('renaming', () => {
-  /** **Focus returns to the renamed row** (decision 15), and the sentence is said once. */
   it('renames the row and puts focus back on it', async () => {
     connect.rows = [row('Ada'), row('Bob')];
     asking.renameWith = 'Zoe';
@@ -581,7 +514,6 @@ describe('renaming', () => {
     expect(announcer.announcements).toContain('Bob is now called Zoe.');
   });
 
-  /** Cancelling changes nothing and leaves the listener where they were. */
   it('changes nothing when the rename dialog is cancelled', async () => {
     connect.rows = [row('Ada')];
     asking.renameWith = null;
@@ -595,10 +527,6 @@ describe('renaming', () => {
     expect(document.activeElement?.id).toBe('connect-names');
   });
 
-  /**
-   * **A refusal is the backend's sentence, announced** — the name rule and the collision
-   * are decided in one place, and this says what that place answered.
-   */
   it('announces the backend refusal and leaves the list alone', async () => {
     connect.rows = [row('Ada'), row('Bob')];
     asking.renameWith = 'Ada';
@@ -617,7 +545,6 @@ describe('renaming', () => {
 });
 
 describe('forgetting', () => {
-  /** **It asks once**, and the question names the row and says what does not change. */
   it('asks before it forgets, naming the row', async () => {
     connect.rows = [row('Ada')];
     asking.forgetIt = false;
@@ -631,7 +558,6 @@ describe('forgetting', () => {
     expect(names()).toEqual(['Ada']);
   });
 
-  /** The question is a whole one, and it says what is *not* touched. */
   it('asks a question a listener can act on', () => {
     const asked = forgetting('work laptop');
 
@@ -640,10 +566,6 @@ describe('forgetting', () => {
     expect(asked).not.toContain('  ');
   });
 
-  /**
-   * **Focus lands on the row that follows** (decision 15), because a listener who removed
-   * a row is still working through the list.
-   */
   it('removes the row and lands on the one that follows', async () => {
     connect.rows = [row('Ada'), row('Bob'), row('Cleo')];
     asking.forgetIt = true;
@@ -660,7 +582,6 @@ describe('forgetting', () => {
     expect(announcer.announcements).toContain('Bob is no longer saved.');
   });
 
-  /** Forgetting the last row lands on the one before it rather than nowhere. */
   it('lands on the row before when there is no row after', async () => {
     connect.rows = [row('Ada'), row('Bob')];
     asking.forgetIt = true;
@@ -673,7 +594,6 @@ describe('forgetting', () => {
     expect(chosen()).toBe('Ada');
   });
 
-  /** **And on New connection when the list is empty**, which is decision 16's landing. */
   it('lands on New connection when the last one is forgotten', async () => {
     connect.rows = [row('Ada')];
     asking.forgetIt = true;
@@ -690,13 +610,6 @@ describe('forgetting', () => {
 });
 
 describe('tabbing out of the list', () => {
-  /**
-   * **Found with NVDA 2026.1.1 on 2026-09-12**, driving this dialog as `user`: Tab from
-   * the names did nothing at all. The cycle landed on the sentence the dialog shows
-   * *instead of* its list — hidden whenever there is anything saved — and focusing a
-   * hidden element is a no-op, so the key was swallowed. It is the same failure
-   * `dialog_tab` already records for a disabled control, reached by a hidden one.
-   */
   it('reaches the panel rather than the hidden empty sentence', async () => {
     connect.rows = [ssh('work laptop', 2222)];
     await dialog.open();
@@ -708,10 +621,6 @@ describe('tabbing out of the list', () => {
     expect(document.activeElement?.id).toBe('saved-ssh-host');
   });
 
-  /**
-   * **And the empty sentence is never a tab stop at all** (ARCHITECTURE, dialogs rule 6):
-   * prose that needs reading belongs in the description, which is where it is.
-   */
   it('never puts the empty sentence in the tab cycle', async () => {
     await dialog.open();
     byId('connect-new').focus();
@@ -726,10 +635,6 @@ describe('tabbing out of the list', () => {
 });
 
 describe('the other two buttons', () => {
-  /**
-   * **New connection closes this dialog first** (decision 15): dialogs do not stack, so
-   * Cancel from there returns to the window rather than to this list.
-   */
   it('closes itself before opening New connection', async () => {
     connect.rows = [row('Ada')];
     await dialog.open();
@@ -751,7 +656,6 @@ describe('the other two buttons', () => {
     expect(returned).toBe(1);
   });
 
-  /** **There is no Save here** (decision 15): saving happens from a live session. */
   it('has no Save button, because there is one way to save', () => {
     expect(byId<HTMLDialogElement>('connect-dialog').querySelector('#connect-save')).toBe(
       null,
@@ -759,7 +663,6 @@ describe('the other two buttons', () => {
   });
 });
 
-/** Let the promises a click starts run out, which is three microtask turns deep here. */
 async function settle(): Promise<void> {
   for (let turn = 0; turn < 8; turn += 1) {
     await Promise.resolve();

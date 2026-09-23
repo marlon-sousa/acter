@@ -15,19 +15,8 @@ export function bindKeys(
     void controller.submit();
   });
 
-  // F1, F6 and Escape are Acter's own and belong to the whole window, so they listen on
-  // the document. What the *session* hears does not: see below.
-  //
-  // **F1 is the platform's "explain this"** and is unclaimed here — one keystroke with
-  // nothing to disambiguate, which is the argument A7 made for F10 (spec A13, decision 3).
-  // It is on the document rather than on the edit field because the sentence that sends a
-  // user here is announced while the window may be showing anything: the buffer, the
-  // Connect button of a window with no session, or nothing focused at all.
   document.addEventListener('keydown', (event) => {
-    // **Ctrl+Shift+K is layer 1 and is never reported as a keystroke** (DESIGN's default
-    // bindings; spec 28, decision 1). Layer 1 is always Acter's, in both line-ownership
-    // states, which is what makes the way back always pressable: a user who has handed the
-    // keyboard to a far end that has stopped answering can still take it back.
+    // Checked first: the way back from a far end must stay pressable in both states.
     if (isFarEndToggle(event)) {
       event.preventDefault();
       void controller.toggleLineOwner();
@@ -40,34 +29,20 @@ export function bindKeys(
       event.preventDefault();
       controller.toggleFocusArea();
     } else if (event.key === 'Escape' && !event.defaultPrevented) {
-      // Escape is contextual, and `defaultPrevented` is what tells the two contexts apart
-      // without asking anybody: the far-end field's own listener runs first and consumes it
-      // — there it is the far end's, leaving insert mode in `vi`, closing a completion menu
-      // in `readline`, cancelling a `gh` prompt — and everywhere else it is still Acter's
-      // way back from the results buffer to whichever command line is in front.
+      // The far-end field's own listener runs first and prevents an Escape that is the far end's.
       controller.escapeToCommandLine();
     }
   });
 
-  // Bound to the edit field rather than the document, which is the whole of DESIGN's
-  // "the session hears a keystroke only while the edit field has focus": a keydown
-  // reaches this listener only when the field already has focus, so the rule holds by
-  // construction instead of by a condition a later edit can forget.
-  //
-  // The results buffer deliberately has no such listener. There, `Ctrl+C` is the screen
-  // reader's own copy command — in NVDA's browse mode it is answered by the reader and
-  // never delivered here at all — and a binding that cannot be pressed is worse than no
-  // binding, because it reads as an interrupt the user can rely on (DESIGN, layer 2).
+  // On the edit field, not the document, so the session hears keys only while the field has focus.
   editField.addEventListener('keydown', (event) => {
     if (!isReportable(event)) {
       return;
     }
-    // Over a selection the platform still owns this keystroke: it is the native copy, so
-    // it is neither prevented nor reported.
+    // Over a selection the key is the native copy: neither prevented nor reported.
     if (controller.editFieldHasSelection()) {
       return;
     }
-    // Nothing native is left to run, so stop the browser attempting an empty copy.
     event.preventDefault();
     void controller.reportKey({
       key: { Char: event.key },
@@ -80,27 +55,18 @@ export function bindKeys(
   if (farEndField === undefined) {
     return;
   }
-  // **Every key is prevented and nothing is ever inserted locally** (spec 28, decision 2).
-  // The element is editable so that the reader speaks typed characters out of its own
-  // text-box behaviour — a `contenteditable` that is not editable says nothing when you type
-  // into it, measured — but what appears in it is only ever what the far end drew.
+  // The field must stay editable: a contenteditable that is not editable says nothing when typed into.
   farEndField.addEventListener('keydown', (event) => {
-    // Layer 1 stays Acter's here as everywhere, and the document listener above has it.
     if (isLayerOne(event)) {
       return;
     }
-    // **The platform's own chord goes to the platform, unsent and unprevented** (spec 37).
-    // Returning before `preventDefault` is the whole of the fix: swallowing it would stop
-    // the character reaching the far end and still leave `Cmd+K` doing nothing at all,
-    // which is the same defect in different clothes.
+    // Must return before preventDefault, so the platform's chord still works.
     if (platformOwns(event)) {
       return;
     }
     const key = keyOf(event);
     if (key === null) {
-      // A key with no measured spelling goes nowhere rather than going as a guess: the far
-      // end would answer it and say nothing about having done so. It is not prevented
-      // either, so anything the platform still owns keeps working.
+      // Neither sent nor prevented.
       return;
     }
     event.preventDefault();
@@ -111,8 +77,6 @@ export function bindKeys(
       alt: event.altKey,
     });
   });
-  // A paste is one invoke rather than a run of keystrokes, because only the backend knows
-  // whether the far end asked for bracketed paste (spec 28, decision 10).
   farEndField.addEventListener('paste', (event) => {
     event.preventDefault();
     const text = event.clipboardData?.getData('text') ?? '';
@@ -120,16 +84,10 @@ export function bindKeys(
       void controller.pasteToFarEnd(text);
     }
   });
-  // Belt and braces for any path that reaches the content without a cancellable keydown —
-  // a drop, an IME commit, the browser's own edit menu.
+  // A drop, an IME commit and the edit menu reach the content without a cancellable keydown.
   farEndField.addEventListener('beforeinput', (event) => event.preventDefault());
 }
 
-// The keystroke that hands the line over and takes it back (DESIGN's default bindings).
-//
-// Matched on the physical letter rather than on `event.key`, which a held Shift turns into
-// `K`: a binding that only fires for one of the two spellings is a binding that works until
-// somebody's keyboard layout disagrees.
 function isFarEndToggle(event: KeyboardEvent): boolean {
   return (
     (event.key === 'k' || event.key === 'K') &&
@@ -140,39 +98,15 @@ function isFarEndToggle(event: KeyboardEvent): boolean {
   );
 }
 
-// A chord carrying the platform's own modifier — Command on macOS, the Windows key on
-// Windows — and therefore not a keystroke this application may claim (spec 37, decision 1).
-//
-// **Measured 2026-09-03**, VoiceOver 15.0 on macOS 15.0, at a real `bash` while the far end
-// held the line: `Cmd+K` did not open Connect, it put a `k` on the far end's command line,
-// and `Cmd+C` did not copy, it put a `c` there. The line then ran as typed. M3's checklist
-// had passed both, because in local-line mode this listener is not in the path.
-//
-// **`metaKey` and not `altKey`, and the word between them is a trap.** In terminal
-// vocabulary Meta *is* Alt, which is why DESIGN's layer 3 says "Alt combos (Meta keys)" and
-// means the `ESC`-prefixed sequences a far end genuinely reads; in the DOM `metaKey` is
-// Command or the Windows key, which no terminal has ever received. This is the second, and
-// `Ctrl` and `Alt` stay the far end's untouched.
+// The DOM's `metaKey` is Command or the Windows key, never the terminal's Meta, which is Alt.
 function platformOwns(event: KeyboardEvent): boolean {
   return event.metaKey;
 }
 
-// DESIGN's layer 1: the `Ctrl+Shift` combinations that are Acter's own, in both states.
 function isLayerOne(event: KeyboardEvent): boolean {
   return event.ctrlKey && event.shiftKey;
 }
 
-// The two keystrokes this frontend reports from the edit field, and the whole of what it
-// forwards from there. Everything else it owns outright: text keys belong to the edit field,
-// and DESIGN's layer 1 is Acter's own — reserved rather than free, so reporting it would
-// have the session answer "unbound" for a key that is already spoken for.
-//
-// **`Ctrl+D` was added by roadmap 23.5**, and its absence was the whole of that entry: the
-// path existed end to end — `SessionIntent::Eof`, the binding, the shell adapter's measured
-// answer — and the key never left the page, so a listener pressing it in a real PowerShell
-// session met silence and a session that was still there.
-//
-// Modifiers are matched exactly. A different combination is a different keystroke.
 function isReportable(event: KeyboardEvent): boolean {
   return (
     (event.key === 'c' || event.key === 'd') &&
@@ -183,12 +117,7 @@ function isReportable(event: KeyboardEvent): boolean {
   );
 }
 
-// The DOM's name for a key, as the protocol spells it — or `null` for one the domain has no
-// measured byte sequence for.
-//
-// The named keys are exactly `policies::key_bytes`' table. The frontend sends the name and
-// never the bytes: which spelling an arrow is depends on modes only the emulator tracks, and
-// this side has never been able to know (spec 28, decision 4).
+// Null for a key with no measured byte sequence; the named keys must match `policies::key_bytes`.
 function keyOf(event: KeyboardEvent): Key | null {
   switch (event.key) {
     case 'ArrowUp':
@@ -214,9 +143,6 @@ function keyOf(event: KeyboardEvent): Key | null {
     case 'Escape':
       return 'Escape';
     default:
-      // A character key is one character. Everything longer is a named key nobody has
-      // measured — the function keys, `PageUp`, `Insert`, the dead keys — and it goes
-      // nowhere rather than going wrong.
       return [...event.key].length === 1 ? { Char: event.key } : null;
   }
 }

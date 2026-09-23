@@ -1,11 +1,5 @@
 // Role: adapter (DOM) — the About dialog: fill it from the build, open it modally, and
 // put focus back in the edit field when it closes.
-//
-// The platform does the parts that matter and does them better than we would: a modal
-// `<dialog>` is announced as a dialog, traps focus while it is open, and closes on
-// Escape. What is left is what it cannot know — where focus belongs afterwards, which is
-// the edit field, because what opened this was a menu that no longer exists (spec A7,
-// decision 3).
 
 import { keepTabInside } from './dialog_tab';
 import type { AppShell } from '../ports/app_shell';
@@ -26,26 +20,14 @@ export class AboutDialog {
   }
 
   async open(): Promise<void> {
-    // Opening an open dialog throws `InvalidStateError`, and the throw is silent: the
-    // promise rejects into a `void` call and the user is left with whatever was on screen.
-    // A menu that is asked twice — a double Enter, a click on an item already chosen — is
-    // an ordinary thing, so this answers it rather than breaking.
     if (this.dialog.open) {
       return;
     }
     const facts = await this.shell.about();
     this.fill('#about-name', facts.name);
-    // **The sentence rather than the identifier** (spec 26, decision 5). It used to be
-    // "Version" and whatever Cargo said; the build stamps the real one now, and
-    // `development-521c956` is a value a listener should not have to hear spelled out.
-    // The identifier is still in the dialog, on the same line, because this is copyable
-    // text and a bug report has to be able to carry it.
     this.fill('#about-version', `${facts.version_said} ${facts.version}`);
     this.fill('#about-copyright', facts.copyright);
     this.fill('#about-licence', `${facts.licence} licence`);
-    // One line rather than two: a listener arrowing this dialog hears where the folder is
-    // and how it got there together, which is the question they asked (spec 26,
-    // decision 5).
     this.fill(
       '#about-settings',
       `Settings folder: ${facts.settings_folder}. ${facts.settings_standing}`,

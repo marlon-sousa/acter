@@ -1,11 +1,6 @@
 // @vitest-environment jsdom
 // Role: test — what a listener meets when part of the window belongs to another operating
 // system.
-//
-// The rule under test is one sentence: an element marked for a platform this is not is
-// **gone**, not hidden. It matters because the help now has instructions that differ by
-// platform — where the menu bar is, and which key opens it — and an instruction for
-// somebody else's computer is worse than no instruction at all (spec M3, decision 8).
 
 import { beforeEach, describe, expect, it } from 'vitest';
 
@@ -41,8 +36,6 @@ describe('text that belongs to one platform', () => {
     expect(document.getElementById('windows-keys')).toBeNull();
   });
 
-  /// Unmarked is the ordinary case: almost everything in the window is the same on every
-  /// platform, and marking it all would be a list to keep in step with nothing.
   it('leaves anything unmarked alone', () => {
     applyPlatformText(document, 'linux');
 
@@ -50,9 +43,6 @@ describe('text that belongs to one platform', () => {
     expect(document.getElementById('either')).not.toBeNull();
   });
 
-  /// **Removed rather than hidden**, asserted as its own fact: a hidden region is still in
-  /// the document for anything that walks it, and a listener who arrows into one meets a
-  /// region that says nothing (spec A7).
   it('removes rather than hides, so nothing empty is left to meet', () => {
     applyPlatformText(document, 'macos');
 
@@ -60,8 +50,6 @@ describe('text that belongs to one platform', () => {
     expect(document.body.textContent).not.toContain('F10 opens the menu bar');
   });
 
-  /// A platform nobody wrote for keeps only what everybody shares, which is the honest
-  /// answer: instructions naming a menu bar that is not there would be worse than silence.
   it('shows a platform nothing was written for only what is common', () => {
     applyPlatformText(document, 'freebsd');
 

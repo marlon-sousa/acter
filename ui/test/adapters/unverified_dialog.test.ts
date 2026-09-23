@@ -1,10 +1,5 @@
 // @vitest-environment jsdom
 // Role: test — the dialog that asks whether to start a program Windows would not vouch for.
-//
-// What is asserted here is mostly about **not starting being the default**, because that is
-// the one property a mistake in this file would quietly take away — and about the file path
-// being walkable, because a path nobody can read character by character is a path nobody can
-// tell from the one they expected (spec B5.7, decision 6).
 
 import { beforeEach, describe, expect, it } from 'vitest';
 
@@ -39,10 +34,6 @@ function build(): { dialog: HTMLDialogElement; ask: UnverifiedDialog } {
       </form>
     </dialog>`;
   const dialog = document.getElementById('unverified-dialog') as HTMLDialogElement;
-  // jsdom implements `<dialog>` only partially depending on version; these keep the suite
-  // about Acter's behaviour rather than about jsdom's coverage of the element. `close`
-  // carries the value the way the platform does, because the returned value is exactly what
-  // this adapter reads the decision from.
   dialog.showModal ??= function showModal(this: HTMLDialogElement) {
     this.open = true;
   };
@@ -74,9 +65,6 @@ describe('UnverifiedDialog', () => {
     const answered = ask.ask(UNSIGNED);
     const summary = document.getElementById('unverified-summary')?.textContent ?? '';
 
-    // **Spoken as the dialog opens**, via aria-describedby: what they chose, what was found,
-    // and what to do about it. The sentence is the backend's own — the words are decided in
-    // one place, in the domain, and this renders them.
     expect(summary).toContain('PowerShell 7');
     expect(summary).toContain('Nothing has signed this file');
     expect(summary).toContain('Start it only if');
@@ -91,15 +79,10 @@ describe('UnverifiedDialog', () => {
     const answered = ask.ask(UNSIGNED);
     const shown = document.getElementById('unverified-program') as HTMLInputElement;
 
-    // **The full path, in a text box.** The thing this check defeats is somebody putting a
-    // different file where a name used to point, so which directory it is in is the whole of
-    // what makes it recognisably wrong — and inside `role="application"` a paragraph cannot
-    // be arrowed at all.
     expect(shown.tagName).toBe('INPUT');
     expect(shown.value).toBe(UNSIGNED.program);
     expect(shown.readOnly).toBe(false);
 
-    // Editable so the caret is real, and every edit refused so the value cannot change.
     const refused = new InputEvent('beforeinput', { cancelable: true, bubbles: true });
     shown.dispatchEvent(refused);
     expect(refused.defaultPrevented).toBe(true);
@@ -120,8 +103,6 @@ describe('UnverifiedDialog', () => {
     const second = build();
     const again = second.ask.ask(UNSIGNED);
 
-    // Nothing signed it, so there is nobody to name — and an empty box labelled "Signed by"
-    // is a tab stop that answers a question with silence.
     expect(document.getElementById('unverified-signer')).toBeNull();
     second.dialog.close('refuse');
     await again;
@@ -137,9 +118,6 @@ describe('UnverifiedDialog', () => {
   });
 
   it('answers do-not-start for every other way out of the dialog', async () => {
-    // **The default is not to start, and every way of leaving reaches it**: the refusing
-    // button, Escape, and the dialog being closed by anything else at all. This is the one
-    // property a mistake here would quietly take away.
     for (const how of ['refuse', undefined, 'anything else']) {
       const { dialog, ask } = build();
 
@@ -162,8 +140,6 @@ describe('UnverifiedDialog', () => {
     });
     shown.dispatchEvent(pressed);
 
-    // Neither outcome is reachable by the key people press without thinking; going to a
-    // button is itself the deliberate act.
     expect(pressed.defaultPrevented).toBe(true);
     expect(dialog.open).toBe(true);
 

@@ -27,6 +27,7 @@ lane's next step.
 
 **Lane 1: UI and testing infrastructure**
 
+- 13.5. **Open** — The first Enter after a window opens does not always press the focused control. Entry: [13.5-first-enter-after-window-opens-misses-the-focus.md](roadmap/13.5-first-enter-after-window-opens-misses-the-focus.md). Spec: none yet.
 - 14. **Open** — A4, completion path. Entry: [14-a4-completion-path.md](roadmap/14-a4-completion-path.md). Spec: none yet.
 - 15. **Open** — A5.3 and onward: iteration entries appear here as NVDA findings arrive. Spec: none yet.
 - 41. **Open** — The end-to-end test for F10 checks focus before the menu has taken it. Entry: [41-f10-menu-e2e-test-races-focus.md](roadmap/41-f10-menu-e2e-test-races-focus.md). Spec: none yet.
@@ -36,11 +37,15 @@ lane's next step.
 - 22.7. **Open** — B4.7, the results buffer is the pager. Entry: [22.7-b4-7-results-buffer-pager.md](roadmap/22.7-b4-7-results-buffer-pager.md). Spec: none yet.
 - 22.8. **Open** — B4.8, a real shell session thinks a command is always running. Entry: [22.8-b4-8-real-shell-session-thinks.md](roadmap/22.8-b4-8-real-shell-session-thinks.md). Spec: none yet.
 - 22.9. **Open** — A silent success says nothing at all. Entry: [22.9-silent-success-says-nothing-all.md](roadmap/22.9-silent-success-says-nothing-all.md). Spec: none yet.
+- 22.11. **Open** — Caret text from an unclaimed device-query reply still reaches the buffer past the injection point. Entry: [22.11-device-query-reply-reaches-command-line.md](roadmap/22.11-device-query-reply-reaches-command-line.md). Spec: none yet.
 - 22.14. **Open** — A marked cmd session grows one empty block after its first command. Entry: [22.14-marked-cmd-session-grows-one-empty.md](roadmap/22.14-marked-cmd-session-grows-one-empty.md). Spec: none yet.
 - 23.7. **Open** — A session that is starting says nothing while it starts. Entry: [23.7-session-starting-says-nothing-while-starts.md](roadmap/23.7-session-starting-says-nothing-while-starts.md). Spec: none yet.
 - 23.10. **Open** — A cold WSL start outruns the five-second grace period. Entry: [23.10-cold-wsl-start-outruns-five-second.md](roadmap/23.10-cold-wsl-start-outruns-five-second.md). Spec: none yet.
+- 23.14. **Open** — In busybox sh, the markers cost the line editor sixteen columns it does not have. Entry: [23.14-busybox-markers-cost-sixteen-columns.md](roadmap/23.14-busybox-markers-cost-sixteen-columns.md). Spec: none yet.
+- 23.17. **Open** — A fresh zsh account meets an interactive wizard, and Acter's setup line answers it. Entry: [23.17-fresh-zsh-account-meets-a-wizard.md](roadmap/23.17-fresh-zsh-account-meets-a-wizard.md). Spec: none yet.
 - 27.2. **Open** — A connection that waits for a person can be hung up on while it waits. Entry: [27.2-connection-waits-for-person-can-be.md](roadmap/27.2-connection-waits-for-person-can-be.md). Spec: none yet.
 - 27.3. **Open** — Reopening the Connect dialog re-reads the last thing the previous attempt said. Entry: [27.3-reopening-connect-dialog-re-reads-last.md](roadmap/27.3-reopening-connect-dialog-re-reads-last.md). Spec: none yet.
+- 27.6. **Open** — Windows PowerShell's screen-reader warning is spoken after the prompt the buffer puts it before. Entry: [27.6-powershell-warning-spoken-after-prompt.md](roadmap/27.6-powershell-warning-spoken-after-prompt.md). Spec: none yet.
 - 27.7. **Open** — At a bash far end, nothing is read aloud when the session connects. Entry: [27.7-bash-far-end-nothing-read-aloud.md](roadmap/27.7-bash-far-end-nothing-read-aloud.md). Spec: none yet.
 - 40. **Open** — The terminal engine can emit two rows in the wrong order after the cursor moves up. Entry: [40-terminal-engine-row-order-under-cursor-up.md](roadmap/40-terminal-engine-row-order-under-cursor-up.md). Spec: none yet.
 - 42. **Open** — A file started anyway goes unmentioned when the far end also has a note. Entry: [42-started-anyway-note-dropped-behind-far-end-note.md](roadmap/42-started-anyway-note-dropped-behind-far-end-note.md). Spec: none yet.
@@ -61,20 +66,12 @@ lane's next step.
 - 38. **Open** — The set-up dialog reads its whole command aloud on macOS. Entry: [38-set-up-dialog-reads-whole-command.md](roadmap/38-set-up-dialog-reads-whole-command.md). Spec: none yet.
 - 39. **Open** — Four smaller things the same run measured, each its own fix. Entry: [39-four-smaller-things-same-run-measured.md](roadmap/39-four-smaller-things-same-run-measured.md). Spec: none yet.
 
-**Lane 4: comments**
-
-- 10. **Open** — C10, frontend sources under `ui/src`. Spec: [c-comments-say-what-the-code-cannot.md](specs/c-comments-say-what-the-code-cannot.md)
-- 11. **Open** — C11, frontend tests under `ui/test` and `e2e`. Spec: [c-comments-say-what-the-code-cannot.md](specs/c-comments-say-what-the-code-cannot.md)
-- 12. **Open** — C12, retire the lane histories under `docs/roadmap/`. Entry: [c12-retire-the-lane-histories.md](roadmap/c12-retire-the-lane-histories.md). Spec: none yet.
-
 **Keyboard routing and the changed row**
 
 - 28.12. **Open** — Ctrl+C at an idle prompt says a command failed. Entry: [28.12-ctrl-c-idle-prompt-says-command.md](roadmap/28.12-ctrl-c-idle-prompt-says-command.md). Spec: none yet.
 - 29. **Open** — A program that is waiting says so. Entry: [29-program-waiting-says-so.md](roadmap/29-program-waiting-says-so.md). Spec: none yet.
 
 ## Status board — lane 1: UI and testing infrastructure
-
-History: [lane-1-ui.md](roadmap/lane-1-ui.md).
 
 - 1. **Done** — PR 0, scaffold. Spec: [pr0-scaffold.md](specs/pr0-scaffold.md)
 - 2. **Done** — A1, static shell. Spec: [a1-static-shell.md](specs/a1-static-shell.md)
@@ -90,20 +87,19 @@ History: [lane-1-ui.md](roadmap/lane-1-ui.md).
 - 12. **Done** — A7, the menu bar and About. Spec: [a7-menu-bar-and-about.md](specs/a7-menu-bar-and-about.md)
 - 13. **Done** — A8, the Connect dialog. Spec: [a8-connect-dialog.md](specs/a8-connect-dialog.md)
 - 13.1. **Done** — A9, the window says what it is connected to. Spec: [a9-the-window-says-where-you-are.md](specs/a9-the-window-says-where-you-are.md)
-- 13.2. **Closed by 13.4 (A10)** — an empty results buffer reads as a bare letter.
+- 13.2. **Closed by 13.4 (A10)** — an empty results buffer reads as a bare letter. Entry: [13.2-empty-results-buffer-reads-as-a-bare-letter.md](roadmap/13.2-empty-results-buffer-reads-as-a-bare-letter.md).
 - 13.3. **Done** — the far end a connection reached is spoken, every time. Spec: [13.3-the-connection-sentence-is-heard.md](specs/13.3-the-connection-sentence-is-heard.md)
 - 13.4. **Done** — A10, the window has two faces, and the connected one is the terminal window. Spec: [a10-the-window-has-two-faces.md](specs/a10-the-window-has-two-faces.md)
+- 13.5. **Open** — The first Enter after a window opens does not always press the focused control. Entry: [13.5-first-enter-after-window-opens-misses-the-focus.md](roadmap/13.5-first-enter-after-window-opens-misses-the-focus.md). Spec: none yet.
 - 13.6. **Done** — A11, PowerShell is one kind and its editions are its variants. Spec: [a11-powershell-is-one-kind.md](specs/a11-powershell-is-one-kind.md)
 - 13.7. **Done** — A13, what a session can tell you, and where that is explained. Spec: [a13-what-a-session-can-tell-you-and-where-that-is-explained.md](specs/a13-what-a-session-can-tell-you-and-where-that-is-explained.md)
 - 13.8. **Done** — B9.5 rewrote the connection sentence into A13's register. Spec: [b9.5-the-session-is-set-up-after-it-is-established.md](specs/b9.5-the-session-is-set-up-after-it-is-established.md)
-- 13.9. **Done** — ten findings from the user's own pass over the shipped window, fixed in one general PR.
+- 13.9. **Done** — ten findings from the user's own pass over the shipped window, fixed in one general PR. Spec: amendments to [a8-connect-dialog.md](specs/a8-connect-dialog.md) (G, H, I), [a10-the-window-has-two-faces.md](specs/a10-the-window-has-two-faces.md), [a13-what-a-session-can-tell-you-and-where-that-is-explained.md](specs/a13-what-a-session-can-tell-you-and-where-that-is-explained.md) and [b9.5-the-session-is-set-up-after-it-is-established.md](specs/b9.5-the-session-is-set-up-after-it-is-established.md) (7 to 11)
 - 14. **Open** — A4, completion path. Entry: [14-a4-completion-path.md](roadmap/14-a4-completion-path.md). Spec: none yet.
 - 15. **Open** — A5.3 and onward: iteration entries appear here as NVDA findings arrive. Spec: none yet.
 - 41. **Open** — The end-to-end test for F10 checks focus before the menu has taken it. Entry: [41-f10-menu-e2e-test-races-focus.md](roadmap/41-f10-menu-e2e-test-races-focus.md). Spec: none yet.
 
 ## Status board — lane 2: domain (pure Rust; may start anytime, parallel to lane 1)
-
-History: [lane-2-domain.md](roadmap/lane-2-domain.md).
 
 - 14. **Done** — B1, foundations. Spec: [b1-foundations.md](specs/b1-foundations.md)
 - 15. **Done** — B1.1, pacing policy review fixes. Spec: [b1-foundations.md](specs/b1-foundations.md)
@@ -118,12 +114,13 @@ History: [lane-2-domain.md](roadmap/lane-2-domain.md).
 - 22.2. **Done** — B4.2, text that scrolled away must not be said twice. Spec: [b4.2-scrolled-text-not-said-twice.md](specs/b4.2-scrolled-text-not-said-twice.md)
 - 22.3. **Done** — B4.3, a shell that exited sometimes sends one more read. Spec: [b4.3-a-teardown-read-that-races-the-close.md](specs/b4.3-a-teardown-read-that-races-the-close.md)
 - 22.4. **Done** — B4.4, autoread in a session with no boundaries. Spec: [b4.4-autoread-with-no-boundaries.md](specs/b4.4-autoread-with-no-boundaries.md)
-- 22.5. **Done** — B4.5, cmd.exe can carry OSC 133 A and B.
+- 22.5. **Done** — B4.5, cmd.exe can carry OSC 133 A and B. Spec: [b4.5-cmd-markers-and-unclaimed-replies.md](specs/b4.5-cmd-markers-and-unclaimed-replies.md)
 - 22.6. **Done** — B4.6, an interrupt through a proxied shell. Spec: [b4.6-an-interrupt-through-a-proxied-shell.md](specs/b4.6-an-interrupt-through-a-proxied-shell.md)
 - 22.7. **Open** — B4.7, the results buffer is the pager. Entry: [22.7-b4-7-results-buffer-pager.md](roadmap/22.7-b4-7-results-buffer-pager.md). Spec: none yet.
 - 22.8. **Open** — B4.8, a real shell session thinks a command is always running. Entry: [22.8-b4-8-real-shell-session-thinks.md](roadmap/22.8-b4-8-real-shell-session-thinks.md). Spec: none yet.
 - 22.9. **Open** — A silent success says nothing at all. Entry: [22.9-silent-success-says-nothing-all.md](roadmap/22.9-silent-success-says-nothing-all.md). Spec: none yet.
-- 22.10. **Closed 2026-08-22** — an interrupt can release a backlog of submitted lines into one block.
+- 22.10. **Closed 2026-08-22** — an interrupt can release a backlog of submitted lines into one block. Entry: [22.10-interrupt-releases-backlog-into-one-block.md](roadmap/22.10-interrupt-releases-backlog-into-one-block.md).
+- 22.11. **Open** — Caret text from an unclaimed device-query reply still reaches the buffer past the injection point. Entry: [22.11-device-query-reply-reaches-command-line.md](roadmap/22.11-device-query-reply-reaches-command-line.md). Spec: none yet.
 - 22.12. **Done** — B4.9, hearing what you just typed, and a bare Enter that goes nowhere. Spec: [b4.9-hearing-what-you-just-typed.md](specs/b4.9-hearing-what-you-just-typed.md)
 - 22.13. **Done** — B4.10, an echo whose last characters arrived as a settlement. Spec: [b4.10-an-echo-that-scrolled-as-it-finished.md](specs/b4.10-an-echo-that-scrolled-as-it-finished.md)
 - 22.14. **Open** — A marked cmd session grows one empty block after its first command. Entry: [22.14-marked-cmd-session-grows-one-empty.md](roadmap/22.14-marked-cmd-session-grows-one-empty.md). Spec: none yet.
@@ -144,6 +141,8 @@ History: [lane-2-domain.md](roadmap/lane-2-domain.md).
 - 23.15. **Done** — B9.6 asked it to. Spec: [b9.6-verdicts-in-sh-and-nothing-read-aloud-at-connect.md](specs/b9.6-verdicts-in-sh-and-nothing-read-aloud-at-connect.md)
 - 23.16. **Done** — B5.8, zsh is a shell Acter sets up. Spec: [b5.8-zsh-is-a-shell-acter-sets-up.md](specs/b5.8-zsh-is-a-shell-acter-sets-up.md)
 - 23.13. **Done** — the connection sentence is sometimes not announced. Spec: [13.3-the-connection-sentence-is-heard.md](specs/13.3-the-connection-sentence-is-heard.md)
+- 23.14. **Open** — In busybox sh, the markers cost the line editor sixteen columns it does not have. Entry: [23.14-busybox-markers-cost-sixteen-columns.md](roadmap/23.14-busybox-markers-cost-sixteen-columns.md). Spec: none yet.
+- 23.17. **Open** — A fresh zsh account meets an interactive wizard, and Acter's setup line answers it. Entry: [23.17-fresh-zsh-account-meets-a-wizard.md](roadmap/23.17-fresh-zsh-account-meets-a-wizard.md). Spec: none yet.
 - 24. **Done** — B6.1, correlation that cannot drift. Spec: [b6.1-correlation-that-cannot-drift.md](specs/b6.1-correlation-that-cannot-drift.md)
 - 25. **Done** — B7, sessions that start at runtime. Spec: [b7-sessions-that-start-at-runtime.md](specs/b7-sessions-that-start-at-runtime.md)
 - 26. **Done** — the connection manager, and where Acter keeps its settings. Spec: [26-connection-manager.md](specs/26-connection-manager.md)
@@ -152,7 +151,8 @@ History: [lane-2-domain.md](roadmap/lane-2-domain.md).
 - 27.3. **Open** — Reopening the Connect dialog re-reads the last thing the previous attempt said. Entry: [27.3-reopening-connect-dialog-re-reads-last.md](roadmap/27.3-reopening-connect-dialog-re-reads-last.md). Spec: none yet.
 - 27.4. **Done** — B6.2, what the far end said before its first marker. Spec: [b6.2-what-the-far-end-said-before-its-first-marker.md](specs/b6.2-what-the-far-end-said-before-its-first-marker.md)
 - 27.7. **Open** — At a bash far end, nothing is read aloud when the session connects. Entry: [27.7-bash-far-end-nothing-read-aloud.md](roadmap/27.7-bash-far-end-nothing-read-aloud.md). Spec: none yet.
-- 27.5. **Done** — the status region says the whole sentence, and the announcement is that same string, from one function.
+- 27.5. **Done** — the status region says the whole sentence, and the announcement is that same string, from one function. Spec: [a9-the-window-says-where-you-are.md](specs/a9-the-window-says-where-you-are.md)
+- 27.6. **Open** — Windows PowerShell's screen-reader warning is spoken after the prompt the buffer puts it before. Entry: [27.6-powershell-warning-spoken-after-prompt.md](roadmap/27.6-powershell-warning-spoken-after-prompt.md). Spec: none yet.
 - 27.1. **Done** — B9.5, the session is set up after it is established. Spec: [b9.5-the-session-is-set-up-after-it-is-established.md](specs/b9.5-the-session-is-set-up-after-it-is-established.md)
 - 40. **Open** — The terminal engine can emit two rows in the wrong order after the cursor moves up. Entry: [40-terminal-engine-row-order-under-cursor-up.md](roadmap/40-terminal-engine-row-order-under-cursor-up.md). Spec: none yet.
 - 42. **Open** — A file started anyway goes unmentioned when the far end also has a note. Entry: [42-started-anyway-note-dropped-behind-far-end-note.md](roadmap/42-started-anyway-note-dropped-behind-far-end-note.md). Spec: none yet.
@@ -165,11 +165,9 @@ History: [lane-2-domain.md](roadmap/lane-2-domain.md).
 
 ## Status board — lane 3: macOS (**opened 2026-08-31**; may run parallel to lanes 1 and 2)
 
-History: [lane-3-macos.md](roadmap/lane-3-macos.md).
-
 - 32. **Done** — M1, Acter runs on macOS, and SSH is what it offers. Spec: [m1-acter-runs-on-macos.md](specs/m1-acter-runs-on-macos.md)
 - 33. **Done** — M2, the Terminal row: the shells this Mac has, and who signed them. Spec: [m2-the-terminal-row.md](specs/m2-the-terminal-row.md)
-- 33.1. **Answered, and it was the launch** — VoiceOver was told nothing has keyboard focus because the binary was not in a bundle.
+- 33.1. **Answered, and it was the launch** — VoiceOver was told nothing has keyboard focus because the binary was not in a bundle. Entry: [33.1-voiceover-found-no-focus-in-an-unbundled-build.md](roadmap/33.1-voiceover-found-no-focus-in-an-unbundled-build.md).
 - 33.2. **Open** — The echo of a long submitted line may drop a character per wrapped row. Entry: [33.2-echo-long-submitted-line-may-drop.md](roadmap/33.2-echo-long-submitted-line-may-drop.md). Spec: none yet.
 - 34. **Done** — M3, the menu bar macOS actually has. Spec: [m3-the-menu-bar-macos-has.md](specs/m3-the-menu-bar-macos-has.md)
 - 34.1. **Open** — M3.5, the macOS help says how to set VoiceOver up. Entry: [34.1-m3-5-macos-help-says-how.md](roadmap/34.1-m3-5-macos-help-says-how.md). Spec: none yet.
@@ -191,13 +189,11 @@ History: [lane-3-macos.md](roadmap/lane-3-macos.md).
 - 7. **Done** — C7, `acter-transports` sources and examples. Spec: [c-comments-say-what-the-code-cannot.md](specs/c-comments-say-what-the-code-cannot.md)
 - 8. **Done** — C8, `acter-transports` tests. Spec: [c-comments-say-what-the-code-cannot.md](specs/c-comments-say-what-the-code-cannot.md)
 - 9. **Done** — C9, `acter-app` and `acter-term`. Spec: [c-comments-say-what-the-code-cannot.md](specs/c-comments-say-what-the-code-cannot.md)
-- 10. **Open** — C10, frontend sources under `ui/src`. Spec: [c-comments-say-what-the-code-cannot.md](specs/c-comments-say-what-the-code-cannot.md)
-- 11. **Open** — C11, frontend tests under `ui/test` and `e2e`. Spec: [c-comments-say-what-the-code-cannot.md](specs/c-comments-say-what-the-code-cannot.md)
-- 12. **Open** — C12, retire the lane histories under `docs/roadmap/`. Entry: [c12-retire-the-lane-histories.md](roadmap/c12-retire-the-lane-histories.md). Spec: none yet.
+- 10. **Done** — C10, frontend sources under `ui/src`. Spec: [c-comments-say-what-the-code-cannot.md](specs/c-comments-say-what-the-code-cannot.md)
+- 11. **Done** — C11, frontend tests under `ui/test` and `e2e`. Spec: [c-comments-say-what-the-code-cannot.md](specs/c-comments-say-what-the-code-cannot.md)
+- 12. **Done** — C12, retire the lane histories under `docs/roadmap/`. Spec: [c-comments-say-what-the-code-cannot.md](specs/c-comments-say-what-the-code-cannot.md)
 
 ## Keyboard routing and the changed row — carved out of the phase 2 gate
-
-History: [keyboard-routing.md](roadmap/keyboard-routing.md).
 
 - 28. **Done** — far-end-line mode: the keyboard goes to the far end, and the row it redraws is what you hear. Spec: [28-far-end-line-mode.md](specs/28-far-end-line-mode.md)
 - 28.1. **Done** — Acter wrote the row after the reader had stopped waiting for it. Spec: [28-far-end-line-mode.md](specs/28-far-end-line-mode.md)
@@ -206,14 +202,14 @@ History: [keyboard-routing.md](roadmap/keyboard-routing.md).
 - 28.4. **Done** — Tab completion was applied silently. Spec: [28-far-end-line-mode.md](specs/28-far-end-line-mode.md)
 - 28.6. **Done** — after a listing Tab the far-end field held the candidate list instead of the line being edited, and stayed wrong. Spec: [28-far-end-line-mode.md](specs/28-far-end-line-mode.md)
 - 28.5. **Done** — an anchor taken from a prompt still being drawn headed the next block with the whole row. Spec: [28-far-end-line-mode.md](specs/28-far-end-line-mode.md)
-- 28.7. **Done** — you could not tell who had your keys, and the default was backwards.
+- 28.7. **Done** — you could not tell who had your keys, and the default was backwards. Decided in [DESIGN.md](DESIGN.md) under "Edit field ownership".
 - 28.8. **Done** — who gets your keys is remembered per connection. Spec: [26-connection-manager.md](specs/26-connection-manager.md)
 - 28.9. **Done** — a trailing space was invisible, so deleting one was silent. Spec: [28-far-end-line-mode.md](specs/28-far-end-line-mode.md)
 - 28.10. **Done** — in an integrated session the prompt was announced on every completion redraw. Spec: [28-far-end-line-mode.md](specs/28-far-end-line-mode.md)
 - 28.11. **Done** — a failing command was announced again at every empty Enter. Spec: [b6-session-service.md](specs/b6-session-service.md)
 - 28.12. **Open** — Ctrl+C at an idle prompt says a command failed. Entry: [28.12-ctrl-c-idle-prompt-says-command.md](roadmap/28.12-ctrl-c-idle-prompt-says-command.md). Spec: none yet.
 - 29. **Open** — A program that is waiting says so. Entry: [29-program-waiting-says-so.md](roadmap/29-program-waiting-says-so.md). Spec: none yet.
-- 30. **Closed 2026-09-02** — measured, and the answer went into 28.
+- 30. **Closed 2026-09-02** — measured, and the answer went into 28. Entry: [30-a-widget-selection-is-visible-to-a-text-diff.md](roadmap/30-a-widget-selection-is-visible-to-a-text-diff.md).
 
 ## Convergence (requires B4, B5 and B6 all Done)
 

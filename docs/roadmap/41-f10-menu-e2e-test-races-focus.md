@@ -14,3 +14,8 @@ and main had been green in every run before.
 The test presses F10 and reads the focused element once, immediately. Nothing in the test
 waits for focus to move. The `before` hook in the same file uses `waitUntil` with a
 30-second timeout for F10 to reach the menu bar, but the test itself does not.
+
+A second possible cause, noticed on 2026-09-23 while stripping comments for C11 and not
+verified: the `before` hook ends with focus in the menu bar, and `beforeEach` only focuses
+`command-input` without closing the bar. `ui/test/adapters/menu_bar.test.ts` records that
+a second F10 while focus is on a bar item leaves the bar instead of entering it.

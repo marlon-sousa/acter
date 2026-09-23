@@ -1,9 +1,5 @@
 // @vitest-environment jsdom
 // Role: test — which keystrokes the frontend forwards to the session and which it keeps.
-//
-// The subject is the adapter's routing decision, so the controller is a stub recording
-// what it was asked: whether the *answer* to a reported key is spoken is the controller's
-// own test.
 
 import { beforeEach, describe, expect, it } from 'vitest';
 
@@ -16,7 +12,6 @@ class StubController {
   toggled = 0;
   escaped = 0;
   submitted = 0;
-  /** What the edit field answers about a selection; the adapter's one input. */
   selection = false;
 
   submit(): Promise<void> {
@@ -76,10 +71,8 @@ function keydown(
   return event.defaultPrevented;
 }
 
-// bindKeys registers on `document`, which jsdom keeps for the whole file: binding per
-// test would leave every earlier test's listener attached, and a stale one calling
-// preventDefault would answer for the one under test. So it is bound once and the stub
-// is reset instead.
+// bindKeys listens on `document`, which jsdom keeps for the whole file, so it is bound once
+// and the stub is reset per test; a listener bound per test would outlive its test.
 document.body.innerHTML =
   '<form id="command-form"><input id="command-input"></form>' +
   '<span id="far-end-input" contenteditable="true" role="textbox"></span>' +
@@ -104,10 +97,6 @@ beforeEach(() => {
   helpOpened = 0;
 });
 
-// **F1 belongs to the window, not to a control** (spec A13, decision 3). The sentence
-// that sends a user here is announced while the window may be showing anything, so the
-// key has to work from the buffer and from a window with no edit field at all — which is
-// what listening on the document buys, and what these two assert.
 describe('F1 opens Help (A13)', () => {
   it('opens it from the edit field, and answers the key', () => {
     const prevented = keydown(editField, 'F1');
@@ -133,9 +122,6 @@ describe('Ctrl+C from the edit field (A3.2)', () => {
     expect(prevented).toBe(true);
   });
 
-  // The half of DESIGN's layer 2 sentence that never reaches the backend: over a
-  // selection this is the platform's copy, so the key is neither reported nor prevented
-  // — preventing it would break the copy just as surely as reporting it would.
   it('leaves the native copy alone when the field holds a selection', () => {
     controller.selection = true;
 
@@ -151,8 +137,6 @@ describe('Ctrl+C from the edit field (A3.2)', () => {
     expect(controller.reported).toEqual([]);
   });
 
-  // Layer 1 is Acter's own and reserved rather than free. Reporting it would have the
-  // session answer "unbound" for a key that is already spoken for.
   it('does not report Ctrl+Shift+C or Ctrl+Alt+C', () => {
     keydown(editField, 'C', { ctrl: true, shift: true });
     keydown(editField, 'c', { ctrl: true, alt: true });
@@ -161,11 +145,6 @@ describe('Ctrl+C from the edit field (A3.2)', () => {
   });
 });
 
-// The rule DESIGN states and this adapter enforces by construction: only the edit field
-// carries the listener, so a keystroke anywhere else is not the session's to hear. In the
-// results buffer Ctrl+C is the screen reader's own copy command — in NVDA's browse mode
-// it never reaches the page at all — and a binding that cannot be pressed is worse than
-// no binding.
 describe('Ctrl+C outside the edit field', () => {
   it('is not reported from the results buffer', () => {
     const prevented = keydown(results, 'c', { ctrl: true });
@@ -183,8 +162,6 @@ describe('Ctrl+C outside the edit field', () => {
 });
 
 describe('the keys the frontend keeps', () => {
-  // F6 and Escape are Acter's own and belong to the whole window, so unlike Ctrl+C they
-  // are still heard wherever focus happens to be.
   it('F6 toggles the focus area and is prevented, from anywhere', () => {
     expect(keydown(results, 'F6')).toBe(true);
     expect(controller.toggled).toBe(1);
@@ -198,10 +175,6 @@ describe('the keys the frontend keeps', () => {
     expect(controller.reported).toEqual([]);
   });
 
-  // **Escape at the far end's line is the far end's** (spec 28). There it leaves insert mode
-  // in `vi`, closes a completion menu in `readline` and cancels a `gh` prompt — so the field
-  // consumes it, and the document listener reads `defaultPrevented` rather than asking
-  // anybody which mode is on.
   it('leaves Escape alone when the far end line consumed it', () => {
     keydown(farEndField, 'Escape');
 
@@ -211,8 +184,6 @@ describe('the keys the frontend keeps', () => {
     ]);
   });
 
-  // And from anywhere else it is still the way back to the command line, which is what
-  // roadmap 28.3 is about: the buffer has to have a way out in both states.
   it('still returns from the results buffer while the far end owns the line', () => {
     keydown(results, 'Escape');
 
@@ -220,10 +191,6 @@ describe('the keys the frontend keeps', () => {
   });
 });
 
-// **Ctrl+D leaving the page is the whole of roadmap 23.5.** The path existed end to end —
-// the intent, the binding, PowerShell's measured `exit` — and `isReportable` answered true
-// for `Ctrl+C` and nothing else, so a listener pressing it in a real session met silence and
-// a session that was still there (measured 2026-08-25, NVDA 2026.1.1, silent capture).
 describe('Ctrl+D from the edit field (23.5)', () => {
   it('reports the keystroke and prevents the browser default', () => {
     const prevented = keydown(editField, 'd', { ctrl: true });
@@ -242,9 +209,6 @@ describe('Ctrl+D from the edit field (23.5)', () => {
   });
 });
 
-// **Ctrl+Shift+K is layer 1 and is never reported as a keystroke** (DESIGN's default
-// bindings). Layer 1 is Acter's in both states, which is what makes the way back always
-// pressable — including from a far end that has stopped answering.
 describe('Ctrl+Shift+K hands the line over and takes it back', () => {
   it('toggles from anywhere in the window, and is answered', () => {
     expect(keydown(results, 'K', { ctrl: true, shift: true })).toBe(true);
@@ -270,9 +234,6 @@ describe('Ctrl+Shift+K hands the line over and takes it back', () => {
   });
 });
 
-// The far-end field reports the *named* key and never the bytes: which spelling an arrow is
-// depends on modes only the emulator tracks, and this side has never been able to know
-// (spec 28, decision 4).
 describe('the far end field', () => {
   it('reports each named key by name and prevents it', () => {
     const rows: Array<[string, string]> = [
@@ -312,8 +273,6 @@ describe('the far end field', () => {
     ]);
   });
 
-  // A key with no measured spelling goes nowhere rather than going as a guess: the far end
-  // would answer it and say nothing about having done so.
   it('sends nothing for a key nobody measured, and does not prevent it', () => {
     for (const key of ['F5', 'PageUp', 'Insert', 'ScrollLock']) {
       controller.reset();
@@ -332,11 +291,6 @@ describe('the far end field', () => {
   });
 });
 
-// **Measured 2026-09-03**, VoiceOver 15.0 on macOS 15.0, at a real `bash` while the far end
-// held the line: `Cmd+K` did not open Connect, it put a `k` on the far end's command line,
-// and `Cmd+C` did not copy, it put a `c` there. Both halves of the fix are asserted here,
-// and the second is the one that matters: a chord the platform owns must also go
-// **unprevented**, or `Cmd+K` merely stops doing anything at all (spec 37, decision 2).
 describe('a chord the platform owns (spec 37)', () => {
   it('sends nothing to the far end and lets the accelerator through', () => {
     for (const key of ['k', 'c', 'v', 'w', 'q', '/']) {
@@ -349,8 +303,6 @@ describe('a chord the platform owns (spec 37)', () => {
     }
   });
 
-  // The edit field forwards exactly two keys, and both have a `Cmd` spelling on the platform
-  // where this bites — `Cmd+C` is copy and `Cmd+D` is a system chord. Neither is `Ctrl`.
   it('reports neither of the edit field two keys when the platform modifier is held', () => {
     for (const key of ['c', 'd']) {
       controller.reset();
@@ -362,8 +314,6 @@ describe('a chord the platform owns (spec 37)', () => {
     }
   });
 
-  // Layer 1 keeps its exact spelling, so a platform chord that happens to contain it is the
-  // platform's rather than silently Acter's (spec 37, decision 3).
   it('leaves the line owner alone when the platform modifier is held', () => {
     const prevented = keydown(farEndField, 'k', { ctrl: true, shift: true, meta: true });
 
@@ -379,8 +329,6 @@ describe('a chord the platform owns (spec 37)', () => {
     expect(prevented).toBe(true);
   });
 
-  // The condition this spec adds removes nothing: `Ctrl` and `Alt` are what a terminal
-  // carries, and in far-end-line mode plain `Ctrl+C` is the interrupt by another road.
   it('leaves Ctrl and Alt keystrokes reaching the far end untouched', () => {
     keydown(farEndField, 'c', { ctrl: true });
     keydown(farEndField, 'b', { alt: true });

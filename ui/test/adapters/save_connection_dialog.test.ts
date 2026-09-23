@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-// Role: test — the three small dialogs spec 26 adds: Save connection in both its shapes,
-// Rename, and the question Forget asks (decisions 15, 18 and 19).
+// Role: test — the Save connection dialog in both its shapes, the Rename dialog, and the
+// question Forget asks.
 
 import { beforeEach, describe, expect, it } from 'vitest';
 
@@ -58,7 +58,6 @@ function byId<T extends HTMLElement>(id: string): T {
   return document.getElementById(id) as T;
 }
 
-/** jsdom has no dialog implementation; these are the two parts these adapters use. */
 function shim(id: string): void {
   const element = byId<HTMLDialogElement>(id);
   element.showModal = function showModal(this: HTMLDialogElement) {
@@ -87,7 +86,6 @@ function connected(over: Partial<Connected> = {}): Connected {
 }
 
 let save: SaveConnectionDialog;
-/** How many times the dialog sent focus back to the window. */
 let returned: number;
 let rename: RenameConnectionDialog;
 let forget: ForgetConnectionDialog;
@@ -131,18 +129,10 @@ beforeEach(() => {
 });
 
 describe('what the Save dialog suggests', () => {
-  /**
-   * **The session's origin when it has one** (decision 18): File → Save connection after
-   * somebody changed a port offers the name they already know it by.
-   */
   it('offers the name the session was started under', () => {
     expect(suggestion(connected({ saved_as: 'work laptop' }))).toBe('work laptop');
   });
 
-  /**
-   * **And otherwise a name they would have typed**, which is the connect list's own label
-   * with the category taken off — exactly decision 18's list.
-   */
   it('offers a name that says what the far end is', () => {
     expect(suggestion(connected())).toBe('marlon at example.org');
     expect(suggestion(connected({ label: 'WSL: Ubuntu' }))).toBe('Ubuntu');
@@ -153,12 +143,6 @@ describe('what the Save dialog suggests', () => {
 });
 
 describe('the Save dialog', () => {
-  /**
-   * **Save is disabled while there is no name to save under**, reported by the user on
-   * 2026-09-12: a button whose only possible outcome is a refusal costs a listener a
-   * keystroke to be told no. It is the New connection dialog's own rule, which this dialog
-   * was written after and did not follow (ARCHITECTURE, dialogs rule 1).
-   */
   it('disables Save until the field holds a name', async () => {
     const asking = save.ask('', false);
     const ok = byId<HTMLButtonElement>('save-ok');
@@ -170,8 +154,6 @@ describe('the Save dialog', () => {
     field.dispatchEvent(new Event('input'));
     expect(ok.disabled).toBe(false);
 
-    // **Trimmed, because a field holding a space holds nothing a listener can tell apart
-    // from an empty one** — and it is what the backend's own name rule trims to.
     field.value = '   ';
     field.dispatchEvent(new Event('input'));
     expect(ok.disabled).toBe(true);
@@ -180,11 +162,6 @@ describe('the Save dialog', () => {
     await asking;
   });
 
-  /**
-   * **And Enter asks the same question the button does.** The defect of 2026-08-26,
-   * reported against the SSH form: a key handler that reaches the action directly makes a
-   * disabled button a lie told to whoever tabbed to it.
-   */
   it('does nothing on Enter while there is no name', async () => {
     const asking = save.ask('', false);
     let settled = false;
@@ -204,10 +181,6 @@ describe('the Save dialog', () => {
     await asking;
   });
 
-  /**
-   * **Focus lands on the field with its text selected** (decision 18), so typing replaces
-   * the suggestion and a listener who likes it presses Enter.
-   */
   it('opens on the field, prefilled and selected', async () => {
     const asking = save.ask('work laptop', false);
 
@@ -234,7 +207,6 @@ describe('the Save dialog', () => {
     });
   });
 
-  /** Enter from the field saves, because the whole dialog is one box and two buttons. */
   it('saves on Enter from the field', async () => {
     const asking = save.ask('work laptop', false);
 
@@ -248,7 +220,6 @@ describe('the Save dialog', () => {
     });
   });
 
-  /** Escape, and every other way of closing, saves nothing. */
   it('answers nothing when it is closed', async () => {
     const asking = save.ask('work laptop', false);
 
@@ -257,12 +228,6 @@ describe('the Save dialog', () => {
     await expect(asking).resolves.toEqual({ name: null, stopOffering: false });
   });
 
-  /**
-   * **Closing puts focus back in the window** — found by the end-to-end suite on
-   * 2026-09-12, where it did not: this dialog opens over the window rather than over
-   * another dialog, and the platform restored focus to a control the window had since
-   * hidden, which is a no-op. A listener was left on nothing with nowhere to arrow from.
-   */
   it('sends focus back to the window however it closes', async () => {
     const cancelled = save.ask('work laptop', false);
     click('save-cancel');
@@ -276,10 +241,6 @@ describe('the Save dialog', () => {
     expect(returned).toBe(2);
   });
 
-  /**
-   * **The File-menu shape has neither the paragraph nor the checkbox** (decision 19): they
-   * are about the *offer*, and there is no offer when the user asked.
-   */
   it('hides the extras that belong to the offer when the user asked for it', async () => {
     const asking = save.ask('work laptop', false);
 
@@ -291,11 +252,6 @@ describe('the Save dialog', () => {
     await asking;
   });
 
-  /**
-   * **And the offering shape has both, with Not now in place of Cancel** — there is
-   * nothing to cancel, and a listener who meets Cancel on an offer they did not ask for is
-   * being told they interrupted something.
-   */
   it('shows them, and says Not now, when Acter is the one asking', async () => {
     const asking = save.ask('marlon at example.org', true);
 
@@ -308,10 +264,6 @@ describe('the Save dialog', () => {
     await asking;
   });
 
-  /**
-   * **The checkbox is recorded whichever button they pressed** (decision 19): ticking it
-   * is a decision about the offer rather than about this connection.
-   */
   it('reports the checkbox whether they saved or said not now', async () => {
     const saying = save.ask('one', true);
     byId<HTMLInputElement>('save-not-again').checked = true;
@@ -324,7 +276,6 @@ describe('the Save dialog', () => {
     await expect(saving).resolves.toEqual({ name: 'two', stopOffering: true });
   });
 
-  /** And it starts unticked every time, so nothing is carried over from last time. */
   it('starts with the box unticked', async () => {
     const first = save.ask('one', true);
     byId<HTMLInputElement>('save-not-again').checked = true;
@@ -338,10 +289,6 @@ describe('the Save dialog', () => {
     await second;
   });
 
-  /**
-   * **A refusal keeps the dialog open** with focus back in the field (decision 18), which
-   * is where trying something else begins.
-   */
   it('stays open and puts focus back in the field when it is refused', async () => {
     const asking = save.ask('work laptop', false);
     click('save-ok');
@@ -353,7 +300,6 @@ describe('the Save dialog', () => {
     expect(document.activeElement?.id).toBe('save-name');
   });
 
-  /** Both sentences it can carry are whole ones a reader can speak. */
   it('says why it is there, as a sentence', async () => {
     const asked = save.ask('work laptop', false);
     const forTheMenu = byId('save-why').textContent ?? '';
@@ -376,7 +322,6 @@ describe('the Save dialog', () => {
 });
 
 describe('the Rename dialog', () => {
-  /** Rename is disabled while the field is empty, for the Save dialog's reason. */
   it('disables Rename until the field holds a name', async () => {
     const renaming = rename.ask('work laptop');
     const ok = byId<HTMLButtonElement>('rename-ok');
@@ -388,7 +333,6 @@ describe('the Rename dialog', () => {
     field.dispatchEvent(new Event('input'));
     expect(ok.disabled).toBe(true);
 
-    // And Enter is refused by the same predicate rather than around it.
     field.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
     await Promise.resolve();
     expect(byId<HTMLDialogElement>('rename-connection-dialog').open).toBe(true);
@@ -434,10 +378,6 @@ describe('the Rename dialog', () => {
 });
 
 describe('the Forget dialog', () => {
-  /**
-   * **Focus opens on Cancel**, so the answer Enter gives is the one that keeps the
-   * connection: this is the one action here nobody can undo.
-   */
   it('opens on Cancel, with the question as its description', async () => {
     const asking = forget.ask('Forget Ada? Nothing else changes.');
 
@@ -458,7 +398,6 @@ describe('the Forget dialog', () => {
     await expect(keeping).resolves.toBe(false);
   });
 
-  /** Escape, and every other way of closing, keeps the connection. */
   it('keeps the connection when it is closed any other way', async () => {
     const asking = forget.ask('Forget Ada?');
 

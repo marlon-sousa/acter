@@ -32,10 +32,6 @@ function build(): {
       </form>
     </dialog>`;
   const dialog = document.getElementById('password-dialog') as HTMLDialogElement;
-  // jsdom implements `<dialog>` only partially depending on version; these keep the suite
-  // about Acter's behaviour rather than about jsdom's coverage of the element. `close`
-  // carries the value the way the platform does, because the returned value is exactly what
-  // this adapter reads the decision from.
   dialog.showModal ??= function showModal(this: HTMLDialogElement) {
     this.open = true;
   };
@@ -63,8 +59,6 @@ describe('PasswordDialog', () => {
     document.body.innerHTML = '';
   });
 
-  // A listener answering two connections, or one that reappeared, is otherwise typing a
-  // password into a dialog that could belong to anything.
   it('says which account on which host is being signed in to', async () => {
     const { dialog, ask } = build();
 
@@ -78,8 +72,6 @@ describe('PasswordDialog', () => {
     await answered;
   });
 
-  // **A second prompt with no explanation is indistinguishable from the first one not
-  // having been submitted**, which is precisely the confusion this product exists to remove.
   it('says so when a password was already tried and refused', async () => {
     const { dialog, ask } = build();
 
@@ -118,8 +110,6 @@ describe('PasswordDialog', () => {
     });
   });
 
-  // **Nothing is left in the document**, so a password is not sitting in a window that
-  // stays open for hours, or in a screenshot taken later.
   it('clears the field once the value has been handed over', async () => {
     const { dialog, field, ask } = build();
 
@@ -131,8 +121,6 @@ describe('PasswordDialog', () => {
     expect(field.value).toBe('');
   });
 
-  // Not giving one is a decision rather than a failure, and every way out except the submit
-  // button means it.
   it.each(['cancel', ''])('gives up when closed with %o', async (value) => {
     const { dialog, field, ask } = build();
 

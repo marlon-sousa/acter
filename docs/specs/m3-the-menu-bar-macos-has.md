@@ -255,7 +255,9 @@ unit tests could: **an unbundled build has no menu bar as far as the system is c
 keystroke, and System Events called acter-app frontmost at the same moment — macOS does not
 make a bare binary the *active* application. Wrapped in a minimal `.app`, the same build
 announced Acter, File, Edit, View, Window and Help immediately, and its application menu took
-the bundle's name.
+the bundle's name. Under the bundle, VoiceOver on macOS 15.0 opened a menu in about a
+quarter of a second, against the 18 to 68 seconds A7 measured for a native menu under NVDA
+2026.1.1 on Windows.
 
 So this entry's value is real and **its delivery depends on M4**, which is now recorded on
 both entries. The same run closed roadmap 33.1: under the bundle, `describe item with

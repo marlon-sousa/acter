@@ -1,7 +1,5 @@
-// Role: e2e spec — axe-core injected into the real WebView2. Asserts zero
-// critical/serious accessibility violations on the running app. DOM-semantics
-// regressions (missing names, bad roles, live-region misuse) become machine-caught;
-// NVDA speech stays a manual pass (out of scope, per DESIGN.md).
+// Role: e2e spec — axe-core injected into the real WebView2, asserting zero critical or
+// serious accessibility violations on the running app.
 
 import axe from 'axe-core';
 import { $, browser, expect } from '@wdio/globals';
@@ -21,14 +19,10 @@ interface AxeResults {
 
 describe('axe-core: no critical or serious violations', () => {
   it('passes an axe audit of the running app', async () => {
-    // Populate the buffer first, so axe audits the app in a real used state
-    // (heading + response present), not just the empty shell.
     await submitCommand('audit me');
     await $('#results h2').waitForExist({ timeout: 10_000 });
 
-    // Inject the axe-core library into the page, then run it there. The embedded
-    // WebDriver's execute endpoint awaits returned promises, so a plain async
-    // execute works (executeAsync is not needed).
+    // The embedded WebDriver's execute endpoint awaits a returned promise.
     await browser.execute(axe.source);
     const results = (await browser.execute(() => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -41,7 +35,6 @@ describe('axe-core: no critical or serious violations', () => {
     );
 
     if (blocking.length > 0) {
-      // Readable failure output: rule, impact, and the offending selectors.
       const report = blocking
         .map(
           (violation) =>

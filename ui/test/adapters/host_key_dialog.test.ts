@@ -1,8 +1,5 @@
 // @vitest-environment jsdom
 // Role: test — the host-key dialog, which is the security decision in SSH.
-//
-// What is asserted here is mostly about **refusal being the default**, because that is the
-// one property a mistake in this file would quietly take away.
 
 import { beforeEach, describe, expect, it } from 'vitest';
 
@@ -34,10 +31,6 @@ function build(): { dialog: HTMLDialogElement; ask: HostKeyDialog } {
       </form>
     </dialog>`;
   const dialog = document.getElementById('host-key-dialog') as HTMLDialogElement;
-  // jsdom implements `<dialog>` only partially depending on version; these keep the suite
-  // about Acter's behaviour rather than about jsdom's coverage of the element. `close`
-  // carries the value the way the platform does, because the returned value is exactly what
-  // this adapter reads the decision from.
   dialog.showModal ??= function showModal(this: HTMLDialogElement) {
     this.open = true;
   };
@@ -71,9 +64,6 @@ describe('HostKeyDialog', () => {
     const summary = document.getElementById('host-key-summary')?.textContent ?? '';
     const offered = document.getElementById('host-key-offered') as HTMLInputElement;
 
-    // **Spoken as the dialog opens**, via aria-describedby: which host, and why it is
-    // asking. Found by driving NVDA on 2026-08-26, where a dialog that carried this only
-    // in its body announced its own name and nothing else.
     expect(summary).toContain('acter-ssh');
     expect(summary).toContain('2222');
     expect(summary).toContain('never connected to this server before');
@@ -83,11 +73,6 @@ describe('HostKeyDialog', () => {
     await answered;
   });
 
-  // **A read-only edit field, not prose** — reported by the user on 2026-08-26 and it was a
-  // real defect. This dialog is inside `role="application"`, where the arrows do not read a
-  // paragraph, so the only way to walk one is a review cursor: outside the vocabulary an
-  // ordinary user is assumed to have. A text box arrows in every mode, which is what
-  // comparing forty-three characters against a printed value actually takes.
   it('puts the fingerprint somewhere the arrow keys can walk', async () => {
     const { dialog, ask } = build();
 
@@ -96,11 +81,7 @@ describe('HostKeyDialog', () => {
 
     expect(shown.tagName).toBe('INPUT');
     expect(shown.value).toBe(UNKNOWN.fingerprint);
-    // **Not `readonly`, and that is deliberate** — measured with NVDA on 2026-08-26: a
-    // read-only input in this webview reports its value and answers "blank" to every caret
-    // key, so the one thing a fingerprint must be, walkable, was the thing it was not.
     expect(shown.readOnly).toBe(false);
-    // Labelled by a real label, now that it is a real control.
     expect(
       document.querySelector('label[for="host-key-offered"]')?.textContent,
     ).toContain('offering now');
@@ -109,7 +90,6 @@ describe('HostKeyDialog', () => {
     await answered;
   });
 
-  // Editable so the caret is real; every edit refused so the value cannot change.
   it('refuses every attempt to change the fingerprint', async () => {
     const { dialog, ask } = build();
 
@@ -120,7 +100,6 @@ describe('HostKeyDialog', () => {
     shown.dispatchEvent(edit);
     expect(edit.defaultPrevented).toBe(true);
 
-    // And anything that got past a cancellable event is put back.
     shown.value = 'SHA256:something-else-entirely';
     shown.dispatchEvent(new Event('input', { bubbles: true }));
     expect(shown.value).toBe(UNKNOWN.fingerprint);
@@ -129,8 +108,6 @@ describe('HostKeyDialog', () => {
     await answered;
   });
 
-  // Nothing in this dialog is a paragraph to tab to: a paragraph is not a control, and one
-  // in the tab order is a stop that answers nothing (reported 2026-08-26).
   it('has no paragraph in the tab order', async () => {
     const { dialog, ask } = build();
 
@@ -142,7 +119,6 @@ describe('HostKeyDialog', () => {
     await answered;
   });
 
-  // **A changed key is a different sentence, not the same one with a different value.**
   it('says something different, and more serious, about a changed key', async () => {
     const { dialog, ask } = build();
 
@@ -170,8 +146,6 @@ describe('HostKeyDialog', () => {
     await expect(answered).resolves.toEqual({ answer: 'Trust' });
   });
 
-  // **The heart of decision 3.** Escape, the refusing button, and anything else that closes
-  // this dialog all mean the same thing, and it is not "connect".
   it.each(['refuse', '', 'anything else'])(
     'gives up when the dialog closes with %o',
     async (value) => {
@@ -184,9 +158,6 @@ describe('HostKeyDialog', () => {
     },
   );
 
-  // **Focus starts on the thing they are here to read** (asked for 2026-08-26). It is safe
-  // to land on the fingerprint rather than on the refusing button precisely because this
-  // dialog has no default action.
   it('opens with focus on the fingerprint', async () => {
     const { dialog, ask } = build();
 
@@ -198,11 +169,6 @@ describe('HostKeyDialog', () => {
     await answered;
   });
 
-  /**
-   * **No default action.** "We need a planned user action" — the two outcomes here are
-   * trust and refuse, and neither may be reachable by the key somebody presses without
-   * thinking. A form's implicit submission would otherwise choose one for them.
-   */
   it('does nothing when Enter is pressed anywhere but a button', async () => {
     const { dialog, ask } = build();
 
@@ -222,7 +188,6 @@ describe('HostKeyDialog', () => {
     await answered;
   });
 
-  /** A button somebody went to still answers Enter: going there was the deliberate act. */
   it('still lets a focused button be pressed with Enter', async () => {
     const { dialog, ask } = build();
 
@@ -241,8 +206,6 @@ describe('HostKeyDialog', () => {
     await answered;
   });
 
-  // A `known_hosts` file that could not be read means this may be being asked about a host
-  // the user already trusts, and they are told so rather than left to wonder.
   it('passes on an aside about a file it could not read', async () => {
     const { dialog, ask } = build();
 
@@ -251,7 +214,6 @@ describe('HostKeyDialog', () => {
       aside: 'Acter could not read your own OpenSSH known hosts file.',
     });
 
-    // Said with the rest as the dialog opens, rather than left as one more thing to find.
     expect(document.getElementById('host-key-summary')?.textContent).toContain(
       'could not read',
     );
