@@ -1,5 +1,5 @@
-//! Facade over the crate's ports — every trait seam in the system, grouped by
-//! direction. Trait declarations only, so no tests.
+//! Port: a trait seam between the domain and the world. Facade over the crate's
+//! ports, grouped by direction; declares modules and re-exports their public API.
 
 mod driven;
 mod driving;

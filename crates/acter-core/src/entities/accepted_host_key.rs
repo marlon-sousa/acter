@@ -3,51 +3,35 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Where a record came from, and therefore whether Acter may write it down.
+/// Only `Acter` records are ever written.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum HostKeyOrigin {
-    /// Somebody accepted this server in Acter's own dialog. The default, because it is
-    /// the only thing the document can hold.
     #[default]
     Acter,
-    /// Read out of the user's own `~/.ssh/known_hosts`. Never written anywhere: a copy
-    /// in Acter's document would be stale the moment `ssh` changed it.
+    /// Read from `~/.ssh/known_hosts`.
     Native,
 }
 
-/// One server whose identity this person accepted.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AcceptedHostKey {
-    /// The machine, as it was typed into the Connect dialog.
+    /// As typed into the Connect dialog.
     pub host: String,
     /// Kept even when it is 22: a host on two ports is two identities.
     pub port: u16,
-    /// Which kind of key, as OpenSSH names it: `ssh-ed25519`, `ssh-rsa`,
-    /// `ecdsa-sha2-nistp256`. A key recorded under a different algorithm reads as an
-    /// unknown key, not a changed one.
+    /// As OpenSSH names it; a key under another algorithm is unknown, not changed.
     pub algorithm: String,
-    /// The key's fingerprint as `ssh-keygen -l` prints it: `SHA256:` and unpadded base64
-    /// — the same string the dialog showed when this was accepted.
+    /// As `ssh-keygen -l` prints it.
     pub fingerprint: String,
-    /// The day it was accepted, as `2026-09-12`. A day and not a moment: an hour and a
-    /// minute add nothing to "when did I trust this" while making the line longer to
-    /// read.
-    ///
-    /// Empty for a [`HostKeyOrigin::Native`] record: `ssh` does not date its own file,
-    /// and inventing a day for something somebody else wrote would be inventing a fact.
+    /// `2026-09-12`, and empty for a native record.
     pub accepted: String,
-    /// Whether Acter wrote this down or read it out of the user's own file. Skipped on
-    /// the way to and from the document: a record in the document is Acter's own; a
-    /// native one is assembled at the moment it is read and lives no longer than the
-    /// question it answers.
+    /// Not serialized: every record in the document is Acter's own.
     #[serde(skip)]
     pub origin: HostKeyOrigin,
 }
 
 impl AcceptedHostKey {
-    /// Exact comparison, safe only for Acter's own records: they are written with the
-    /// host as typed, with no wildcards or hashed host lines to verify, unlike
-    /// `~/.ssh/known_hosts`.
+    /// Exact comparison, correct only for Acter's own records; `known_hosts` has wildcards
+    /// and hashed hosts.
     pub fn is_for(&self, host: &str, port: u16) -> bool {
         self.host == host && self.port == port
     }

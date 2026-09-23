@@ -1,14 +1,11 @@
-//! Entity/value: per-command pacing state and the DESIGN-decided pacing numbers.
-//! `PacingState` is threaded through `policies::autoread`'s free functions, which
-//! return a new state alongside each decision; it never mutates itself and never reads
-//! a clock.
+//! Entity/value: per-command pacing state and the pacing numbers `policies::autoread`
+//! reads.
 
 use std::time::Duration;
 
-/// `consecutive_auto_reads` never exceeds `PacingConfig::babble_limit`; `patience_fired`
-/// latches true at most once per command; `continuous_since` never runs ahead of
-/// `last_output_at`. The caller does not construct or inspect the fields directly, only
-/// threads the value through the policy's free functions.
+/// Invariants `policies::autoread` alone enforces: `consecutive_auto_reads` never exceeds
+/// `babble_limit`, `patience_fired` latches once per command, and `continuous_since` never
+/// passes `last_output_at`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct PacingState {
     pub(crate) consecutive_auto_reads: u32,
@@ -16,47 +13,27 @@ pub struct PacingState {
     pub(crate) babble_tripped: bool,
     /// Offset of the last chunk that carried real text; empty chunks do not move it.
     pub(crate) last_output_at: Duration,
-    /// Offset at which the current run of *unread* continuous output began — the last
-    /// chunk that arrived after a quiescent gap, or after follow mode read one aloud.
-    /// Patience is measured from here, so silence before output flows is never counted
-    /// as output flowing.
+    /// Where the current run of unread output began; patience is measured from here.
     pub(crate) continuous_since: Duration,
 }
 
-/// Every DESIGN-decided pacing number appears exactly once, here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PacingConfig {
     /// Silence after which accumulated output becomes a chunk.
     pub quiescence: Duration,
     /// Continuous output with no quiescent gap for this long announces once.
     pub patience: Duration,
-    /// Auto-read line cap; exceeding it (or `max_chars`) announces "too big".
+    /// Exceeding this or `max_chars` announces "too big".
     pub max_lines: usize,
-    /// Auto-read char cap; exceeding it (or `max_lines`) announces "too big".
     pub max_chars: usize,
     /// Consecutive auto-read chunks within one command that trip the babble guard.
     pub babble_limit: u32,
-    /// How long a session waits for its first shell-integration marker before it is
-    /// flagged unintegrated. Chosen to cover shell startup, since the injected snippet
-    /// emits markers on the first prompt; a false `Unintegrated` degrades every command
-    /// in the session, while a late detection costs only one command's boundaries and
-    /// then recovers ([`SessionState::markers_observed`](crate::SessionState::markers_observed)
-    /// upgrades from `Unintegrated`).
+    /// How long a session waits for its first shell-integration marker.
     pub integration_grace: Duration,
-    /// How long a keystroke's answer coalesces before the far end's line reaches the
-    /// listener, while the far end owns the line.
-    ///
-    /// A coalescing gap added on top of the far end's own round trip, not a latency
-    /// budget. NVDA polls the caret every 10ms up to `caretMoveTimeoutMs` (100ms
-    /// default, user-raisable to 2000 in Advanced settings; `source/editableText.py`,
-    /// `EditableText._caretMovementScriptHelper`) and on timeout speaks the caret that
-    /// did not move. Measured with `acter-transports/examples/latency.rs`: `bash` under
-    /// WSL answered left in 1ms, Home in 0ms, up in 3ms, Backspace in 4ms; Windows
-    /// PowerShell answered all four in 0ms; `cmd.exe` in 0 to 1ms.
+    /// Added after the far end's own echo while it owns the line; see
+    /// acter-transports' examples/latency.rs.
     pub far_end_settle: Duration,
-    /// The rendering cadence: how long output coalesces before it reaches the buffer.
-    /// ARCHITECTURE's number, not a policy decision: it governs the rendering path, and
-    /// the buffer loads whenever content arrives.
+    /// How long output coalesces before it reaches the buffer.
     pub render_tick: Duration,
 }
 

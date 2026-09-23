@@ -1,15 +1,5 @@
 //! Entity/value: the payloads of the frontend-to-backend command (invoke) surface —
 //! what an invoke carries in, and what it answers with.
-//!
-//! An invoke never waits on the shell: `submit_command` returns immediately with the
-//! correlation id every later event carries, or with the one refusal a session can give
-//! before it has begun, an unconnected window.
-//!
-//! The frontend reports the key, never the meaning: what `Ctrl+C` *does* is a binding,
-//! bindings are configuration, and configuration is the backend's, behind this seam. Only
-//! the keys the frontend did not claim for itself ever arrive here — layer 1 is Acter's
-//! own commands and `Ctrl+C` *with* a selection is a copy, both consumed locally — so
-//! this is a short list, not every keypress crossing the IPC boundary.
 
 use serde::{Deserialize, Serialize};
 use specta::Type;
@@ -17,172 +7,91 @@ use specta::Type;
 use crate::{CommandId, ConnectionKind, SessionId, SetUp};
 
 /// The immediate answer to `submit_command`.
-///
-/// Two answers rather than one: a window that is not connected to anything is a state a
-/// user can be in from the moment Acter opens, and a line typed into it has to be
-/// *answered* rather than swallowed — silence is indistinguishable from a shell that is
-/// thinking, and the text the user typed has to survive so they can connect and press
-/// Enter again.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[serde(tag = "status")]
 pub enum SubmitAck {
-    /// Accepted: this is the id correlating this submission with its `CommandStarted` /
-    /// `Output` / `CommandFinished` events.
+    /// The id every later `CommandStarted`, `Output` and `CommandFinished` of this line carries.
     Accepted { command_id: CommandId },
-    /// There is no session behind this window, so nothing was written anywhere.
-    ///
-    /// Carries no sentence: what a listener hears is the frontend's pinned string, the
-    /// same one the unconnected window announced when it opened, because hearing the same
-    /// words twice is how a user learns this is one state rather than two problems.
+    /// No session is behind this window and nothing was written; the frontend owns the sentence.
     NotConnected,
 }
 
-/// One thing a user can connect to, as [`ConnectApi::connectable`](crate::ConnectApi)
-/// answers and the connect list renders it. Not the same value as
-/// [`Connection`](crate::Connection), which decides what belongs on this platform: this
-/// is what that becomes once a real machine has answered.
-///
-/// One row per kind, not one per thing that can be started, so a listener arrows five
-/// rows rather than four plus however many distributions this machine happens to have.
-/// What goes in the panel is [`variants`](Connectable::variants).
+/// One row of the connect list: one per kind, whatever this machine has of it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
 pub struct Connectable {
-    /// What to hand [`ConnectApi::use_profile`](crate::ConnectApi) to start this row
-    /// itself, when the user has chosen no variant — which for WSL means the distribution
-    /// WSL calls the default, and for every other kind is the only thing the row means.
+    /// What starts the row when no variant is chosen; for WSL, the default distribution.
     pub id: ProfileId,
-    /// What the user hears: "Command Prompt", "PowerShell 7", "WSL", with
-    /// `(not available)` on the end when this machine cannot start it.
+    /// Ends in `(not available)` when this machine cannot start it.
     pub label: String,
-    /// Whether choosing this row can start a session. A row that cannot is still listed,
-    /// still focusable and still says so in its name.
     pub available: bool,
     /// What to say about a row that cannot be connected to, and `None` when it can.
     pub instructions: Option<String>,
-    /// The things *within* this kind that a user chooses between: WSL's installed
-    /// distributions today, the user's saved connections of this kind with B8. A row with
-    /// variants starts the one the user chose; with none, it starts itself.
+    /// WSL's distributions, or one entry per PowerShell install; empty when the row starts
+    /// itself.
     pub variants: Vec<Variant>,
 }
 
-/// One thing inside a kind, as the connect dialog's panel lists it. Named without
-/// repeating its kind: the row above already said WSL.
+/// One entry in a connect-list row's panel.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
 pub struct Variant {
-    /// What to hand [`ConnectApi::use_profile`](crate::ConnectApi) to start this one.
     pub id: ProfileId,
-    /// What the user hears in the panel: "Ubuntu", not "WSL: Ubuntu", with
-    /// `(not available)` on the end when this machine cannot start it.
+    /// Named without its kind: "Ubuntu", not "WSL: Ubuntu".
     pub label: String,
-    /// Whether choosing this one can start a session. A variant can be missing while its
-    /// kind is not: a machine with Windows PowerShell and no PowerShell 7 has the kind
-    /// and one of its two editions, and the missing one stays listed.
-    ///
-    /// Always true for a WSL distribution: distributions are *discovered*, so one that
-    /// is not installed cannot be enumerated and has no name to list.
+    /// Always true for a WSL distribution, since only installed ones can be enumerated.
     pub available: bool,
     /// What to say about a variant that cannot be started, and `None` when it can.
     pub instructions: Option<String>,
 }
 
-/// Which far end this window is on now, and what to call it.
-///
-/// Returned by both `use_profile` and `connected`, because they answer the same question:
-/// the first having just changed the answer, the second having merely been asked.
+/// Which far end this window is on now; `use_profile` and `connected` both answer it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
 pub struct Connected {
-    /// The new session's id, which every later invoke about it carries.
-    ///
-    /// Minted per connection rather than fixed at 1, so a line submitted to the session
-    /// the user just replaced is refused rather than run in the new one.
+    /// Minted per connection, so a line aimed at a replaced session is refused.
     pub session: SessionId,
-    /// What to call it: the same words the connect list used, so what a user chose and
-    /// what the window then calls itself are not two different names for one thing.
     pub label: String,
-    /// What else there is to say about this far end, once, at connection — and `None`
-    /// when there is nothing. Lets a listener hear one sentence rather than two: an SSH
-    /// session that is unintegrated says so and also says *what it is*, and the frontend
-    /// appends this to the connection announcement and suppresses the session's own one.
+    /// Appended once to the connection announcement, and `None` when there is nothing to add.
     pub note: Option<String>,
-    /// Whether that note already told the listener that this session cannot say how a
-    /// command went, so the session's own `IntegrationUnavailable` is not said a second
-    /// time. Computed by the one function that composes the note, so the two cannot
-    /// disagree.
+    /// Whether `note` already said this session cannot report how a command went, so
+    /// `IntegrationUnavailable` is not spoken again.
     pub limit_explained: bool,
-    /// The saved connection this session was started from, or `None` for one nobody has
-    /// named yet. The frontend's own knowledge travelling back, since the user may have
-    /// edited the panel before pressing Connect.
+    /// The saved connection this session was started from, or `None` for an unsaved one.
     pub saved_as: Option<String>,
-    /// Who holds the line as this session opens: what the saved connection asked for, and
-    /// the default otherwise.
     pub line_owner: LineOwner,
 }
 
 /// One thing that can be started: which far end, and which of it.
-///
-/// A typed value rather than an opaque string, so the factory that turns one into a
-/// running session matches exhaustively and a variant cannot be added without somebody
-/// deciding how to start it. It crosses the wire because the connect list is rendered by
-/// the frontend and handed back unchanged.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Type)]
 #[serde(tag = "profile")]
 pub enum ProfileId {
-    /// One of the catalogue's kinds, started however that kind is started.
-    ///
-    /// `Wsl` here is legal and means "whatever distribution WSL calls the default", which
-    /// is a real session and the one `wsl.exe` with no arguments opens. The connect list
-    /// never offers it, because that list can name the distributions and a user choosing
-    /// by ear is better served by a name than by "the default".
+    /// `Wsl` here means whatever distribution WSL calls the default.
     Shell { kind: ConnectionKind },
-    /// One *particular* install of a kind: which edition it is, and the file that is it.
-    /// [`Self::Shell`] leaves the file to whatever `PATH` resolves at spawn time; this
-    /// carries the file the list already resolved, so what is verified and what is
-    /// started are the same bytes.
+    /// One install, carrying the file discovery resolved, so the file verified is the file
+    /// started.
     Install {
-        /// Which edition this is, so a session started from it says what it says today.
         kind: ConnectionKind,
-        /// The file, resolved once at discovery.
         program: String,
-        /// What tells this install from another of the same edition, when anything does:
-        /// `preview`, `Microsoft Store`, or the directory it lives in.
-        ///
-        /// `None` on the ordinary machine with one install.
+        /// `preview`, `Microsoft Store` or the install's directory, and `None` when nothing
+        /// needs telling apart.
         provenance: Option<String>,
     },
-    /// Bash inside one named WSL distribution, spelled as `wsl.exe -l -q` spelled it.
+    /// Spelled as `wsl.exe -l -q` spelled it.
     Distribution { name: String },
-    /// A program named directly rather than chosen from a list: what `ACTER_SHELL` carries
-    /// today.
-    ///
-    /// Started with whatever adapter recognises the name, and with none at all if nothing
-    /// does — which is a session Acter supports and says nothing about.
+    /// A program named by `ACTER_SHELL`.
     Program { program: String },
-    /// A machine that is not this one, reached over SSH. Three fields rather than a
-    /// string to parse: `user@host:port` is a spelling, and a spelling can be got wrong.
-    /// Nothing is stored here: a password is asked for every time and never written down.
     Ssh {
         host: String,
         port: u16,
         user: String,
     },
-    /// One of the scripted far ends: a built-in name, or a path to a transcript.
-    ///
-    /// Debug builds only. A release build does not hide these: it never lists them and
-    /// never constructs them.
+    /// A built-in scenario name or a transcript path; debug builds only.
     Scripted { name: String },
 }
 
 impl ProfileId {
-    /// What a listener is told this is, with nothing about whether it can be started.
-    ///
-    /// The `(not available)` suffix is deliberately not here: whether a machine has
-    /// something is not the profile's knowledge, and it is added where the list is built.
+    /// What a listener is told this is; `(not available)` is added where the list is built.
     pub fn label(&self) -> String {
         match self {
             Self::Shell { kind } => kind.label().to_owned(),
-            // The provenance is in the name rather than a version number, because no
-            // version can be read off the file reliably, and it is absent on the machine
-            // with one install, so that machine hears exactly what it hears today.
             Self::Install {
                 kind,
                 provenance: None,
@@ -193,11 +102,8 @@ impl ProfileId {
                 provenance: Some(which),
                 ..
             } => format!("{} ({which})", kind.label()),
-            // What it is before which one it is: "Ubuntu" on its own names no machine, and
-            // a listener arrowing a list needs the category first.
             Self::Distribution { name } => format!("WSL: {name}"),
-            // Same ordering rule as `SavedTarget::summary` in saved_connection.rs: the
-            // account before the machine, and the port only when it is not 22.
+            // Keep in step with `SavedTarget::summary` in saved_connection.rs.
             Self::Ssh { host, port, user } => {
                 if *port == 22 {
                     format!("SSH: {user} at {host}")
@@ -211,15 +117,8 @@ impl ProfileId {
     }
 }
 
-/// The program as the user named it, without the extension a label gains nothing from.
-///
-/// Path and case are left alone: somebody who named a specific `pwsh.exe` by full path is
-/// telling us which one they meant, and a label that quietly renamed it would be answering
-/// a question they did not ask.
-///
-/// Trimmed, because `cmd.exe` hands over the whitespace: `set ACTER_SHELL=x && acter`
-/// puts everything up to the `&&` into the value, trailing space included. The same
-/// trimming decides which adapter the session gets, so it happens once, here.
+/// The program's file name without `.exe`, trimmed because `set ACTER_SHELL=x && acter` in
+/// `cmd.exe` keeps the space before `&&`.
 fn named(program: &str) -> String {
     let program = program.trim();
     let file = program.rsplit(['/', '\\']).next().unwrap_or(program);
@@ -229,10 +128,7 @@ fn named(program: &str) -> String {
         .to_owned()
 }
 
-/// One keystroke the frontend did not consume, described rather than interpreted.
-///
-/// Modifiers are flags rather than a set because a keystroke has exactly these three
-/// and a listener never asks "which modifiers", only "was Ctrl held".
+/// One keystroke the frontend did not consume.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
 pub struct KeyPress {
     pub key: Key,
@@ -241,18 +137,10 @@ pub struct KeyPress {
     pub alt: bool,
 }
 
-/// Which key, as the frontend read it off the keyboard event.
-///
-/// `Char` alone would do for local editing, but a key aimed at the far end has to be
-/// spelled as bytes, and an arrow is not a character.
-///
-/// The list is what [`key_bytes`](crate::key_bytes) has a measured spelling for and stops
-/// there. The function keys are still absent, and so is every key nobody has measured a far
-/// end's answer to: a variant with a guessed spelling is worse than no variant, because the
-/// far end simply does something else and says nothing about it.
+/// Only keys [`key_bytes`](crate::key_bytes) has a measured spelling for; a new variant needs
+/// its measured bytes there.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
 pub enum Key {
-    /// A character key, as the frontend read it off the keyboard event.
     Char(char),
     Up,
     Down,
@@ -267,59 +155,32 @@ pub enum Key {
     Escape,
 }
 
-/// Who owns the line being edited: Acter, or the far end. A state rather than a setting,
-/// and never inferred: a Tab that completes against Acter's history while the far end
-/// holds its own line buffer corrupts a command line, so ownership moves whole or not at
-/// all, and the user is the only thing that moves it.
+/// Who owns the line being edited; only the user moves it, never an inference.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, Type)]
 pub enum LineOwner {
-    /// Acter owns the line: its own history, its own completion, and nothing crosses to the
-    /// far end until Enter. The default in every session.
+    /// Acter's history and completion, and nothing reaches the far end until Enter.
     #[default]
     Local,
-    /// The far end owns the line: every key that is not layer 1 goes to it as it is typed,
-    /// and what the user hears back is the row the far end redrew.
+    /// Every key Acter does not consume goes to the far end as it is typed.
     FarEnd,
 }
 
-/// What became of a keystroke: the two questions the frontend cannot answer itself.
-///
-/// A key nothing is bound to and a bound key that found nothing running are different
-/// things to say to a listener, so they are different answers here. Which words each
-/// one becomes is the frontend's; this only reports what happened.
+/// What became of a keystroke.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
 pub enum KeyAck {
-    /// No binding for this keystroke. Nothing was attempted.
     Unbound,
-    /// Bound, and acted on: the intent reached the session.
     Applied,
-    /// Bound, but there was no running command to act on — and, for a key aimed at the far
-    /// end rather than at a command, nothing left listening at all.
+    /// Bound, but no command was running, or nothing was left listening.
     NothingToActOn,
-    /// Bound, and this far end has no measured answer for it.
-    ///
-    /// Different from [`Self::NothingToActOn`]: "this shell has no key for end of input"
-    /// and "there is nothing left to send it to" are two different things to tell a
-    /// listener.
+    /// Bound, but this far end has no measured bytes for it.
     Unsupported,
 }
 
 /// What the command line asked this launch to connect to.
-///
-/// Asked for by the backend and carried out by the frontend: the window is the one place
-/// a connection can ask its questions, such as a host-key dialog, and there is none until
-/// the frontend is running.
-///
-/// A name nothing is saved under is a sentence rather than a silence: a windowed binary
-/// has no console, so the window opens unconnected and says what was asked for.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[serde(tag = "request")]
 pub enum LaunchRequest {
-    /// Start this saved connection, exactly as choosing its row in the Connect dialog would.
-    ///
-    /// The name as the document spells it, not as the switch did: the frontend looks the
-    /// row up by name, and a lookup that had to allow for case would be a second place
-    /// deciding what two names being the same means.
+    /// The name as the document spells it, not as the switch did.
     Connect { name: String },
     /// Nothing is saved under this name, and [`said`](Self::Unknown::said) is what the
     /// unconnected window announces instead.
@@ -327,8 +188,6 @@ pub enum LaunchRequest {
 }
 
 impl LaunchRequest {
-    /// The request for a name nothing is saved under, with the sentence already written,
-    /// so the words a listener hears are one string in one place.
     pub fn unknown(name: &str) -> Self {
         Self::Unknown {
             name: name.to_owned(),
@@ -337,56 +196,31 @@ impl LaunchRequest {
     }
 }
 
-/// What a listener is told about a name nothing is saved under, wherever it is met: on the
-/// command line, or in a rename or a forget aimed at a row that is not there any more.
 pub fn no_such_connection(name: &str) -> String {
     format!("There is no saved connection named {name}.")
 }
 
-/// The saved connections as the Connect dialog meets them.
-///
-/// Not [`StoredConnections`](crate::StoredConnections): that is what the document holds;
-/// this is what that becomes once the machine has been asked — every row carrying the
-/// profile its panel is loaded from, and whether this machine can start it now.
+/// The saved connections resolved against this machine, as the Connect dialog lists them.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
 pub struct SavedConnections {
-    /// The names, alphabetically and without case. Stable, never most-recent-first: a
-    /// listener learns positions, and a list that reorders itself under them is a list
-    /// they have to read from the top every time.
+    /// Sorted by name without case, and never reordered by use.
     pub rows: Vec<SavedRow>,
-    /// What went wrong with a document that would not parse, and `None` when nothing
-    /// did. The dialog says this where it would otherwise say the list is empty.
+    /// What went wrong with a document that would not parse, and `None` when nothing did.
     pub unreadable: Option<String>,
 }
 
 /// One saved connection, as a row in that list.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
 pub struct SavedRow {
-    /// What the user called it, as they typed it — which is the whole of what the list
-    /// shows, because a name is what they chose to recognise it by.
     pub name: String,
-    /// What to load the panel from, and what to hand
-    /// [`ConnectApi::use_profile`](crate::ConnectApi) if nothing in the panel is changed.
-    ///
-    /// Resolved against discovery rather than taken from the document: a saved
-    /// PowerShell edition is matched to wherever it lives now, so an upgrade does not
-    /// break a connection somebody saved a year ago.
+    /// Resolved against this machine's installs, not copied from the document.
     pub id: ProfileId,
-    /// The kind and what identifies it, as one line a listener hears on arrowing onto the
-    /// name: "SSH, marlon at example.org", "WSL, Ubuntu", "PowerShell 7".
+    /// Heard on arrowing onto the name: "SSH, marlon at example.org".
     pub summary: String,
-    /// Whether Acter may set this session up, so the panel's checkbox opens on what was
-    /// saved.
     pub set_up: SetUp,
-    /// Who holds the line when it opens, applied where the frontend already decides that
-    /// — a saved choice wins over the default there.
     pub line_owner: LineOwner,
-    /// Whether this machine can start it now. A distribution that was uninstalled, an
-    /// edition that is gone and a scripted scenario in a release build are all listed and
-    /// all unavailable, for the reason a missing kind is listed.
     pub available: bool,
-    /// What to do about a row that cannot be started, and `None` when it can — a panel of
-    /// instructions under a working row is noise a listener has to arrow past.
+    /// What to do about a row that cannot be started, and `None` when it can.
     pub instructions: Option<String>,
 }
 

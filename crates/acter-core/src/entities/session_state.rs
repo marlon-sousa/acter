@@ -1,28 +1,19 @@
 //! Entity/value: session-scoped state — rendering mode, shell-integration status, and
-//! which screen (normal or alternate) is on display. Transitions return a new state;
-//! per-command block lifecycle belongs to the boundary tracker, not here.
+//! which screen (normal or alternate) is on display.
 
 use crate::Mode;
 
 /// Whether OSC 133 markers have been observed for this session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Integration {
-    /// No markers seen yet; still within the startup grace period.
+    /// Within the startup grace period, no marker seen yet.
     Pending,
-    /// Markers observed: command boundaries are trustworthy.
     Integrated,
-    /// No markers within the grace period: every command degrades to patience-only
-    /// behavior until markers are observed.
+    /// Commands fall back to the patience timer until a marker arrives.
     Unintegrated,
 }
 
 impl Integration {
-    /// OSC 133 markers observed. Resolves `Pending`, and recovers `Unintegrated`; an
-    /// already-`Integrated` session is unaffected.
-    ///
-    /// The transitions live on the value rather than only on [`SessionState`] because
-    /// both the actor and the service's pump apply them, and sharing keeps the two from
-    /// disagreeing about what the same facts meant.
     pub fn markers_observed(self) -> Self {
         match self {
             Self::Pending | Self::Unintegrated => Self::Integrated,
@@ -30,8 +21,6 @@ impl Integration {
         }
     }
 
-    /// The startup grace period elapsed with no markers observed. Resolves `Pending` to
-    /// `Unintegrated`; a session already resolved either way is unaffected.
     pub fn grace_period_expired(self) -> Self {
         match self {
             Self::Pending => Self::Unintegrated,
@@ -40,18 +29,12 @@ impl Integration {
     }
 }
 
-/// Which screen the terminal is currently rendering.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Screen {
     Normal,
     Alternate,
 }
 
-/// Session-scoped facts: what kind of session this is and what is on screen.
-/// [`Integration::Pending`] resolves to `Integrated` or `Unintegrated` exactly once;
-/// markers observed after `Unintegrated` recover to `Integrated`; alt-screen transitions
-/// are idempotent — entering twice is one entry, because a program redrawing does not
-/// mean it re-entered.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SessionState {
     pub mode: Mode,
@@ -60,8 +43,6 @@ pub struct SessionState {
 }
 
 impl SessionState {
-    /// The state of a freshly attached session: given mode, integration pending,
-    /// normal screen.
     pub fn new(mode: Mode) -> Self {
         Self {
             mode,
@@ -70,8 +51,6 @@ impl SessionState {
         }
     }
 
-    /// OSC 133 markers observed. Resolves `Pending`, and recovers `Unintegrated`; an
-    /// already-`Integrated` session is unaffected.
     pub fn markers_observed(self) -> Self {
         Self {
             integration: self.integration.markers_observed(),
@@ -79,8 +58,6 @@ impl SessionState {
         }
     }
 
-    /// The startup grace period elapsed with no markers observed. Resolves `Pending`
-    /// to `Unintegrated`; a session already resolved either way is unaffected.
     pub fn grace_period_expired(self) -> Self {
         Self {
             integration: self.integration.grace_period_expired(),
@@ -88,7 +65,6 @@ impl SessionState {
         }
     }
 
-    /// Toggle between non-interactive and interactive rendering (Ctrl+Shift+E).
     pub fn mode_toggled(self) -> Self {
         let mode = match self.mode {
             Mode::NonInteractive => Mode::Interactive,
@@ -97,8 +73,6 @@ impl SessionState {
         Self { mode, ..self }
     }
 
-    /// A program entered the alternate screen. Idempotent: a redraw does not mean it
-    /// re-entered.
     pub fn alt_screen_entered(self) -> Self {
         Self {
             screen: Screen::Alternate,
@@ -106,7 +80,6 @@ impl SessionState {
         }
     }
 
-    /// The alternate screen was left; non-interactive rendering resumes. Idempotent.
     pub fn alt_screen_left(self) -> Self {
         Self {
             screen: Screen::Normal,

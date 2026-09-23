@@ -1,13 +1,7 @@
 //! Entity/value: what Acter runs inside a session once that session is established, and
 //! whether it is allowed to.
 //!
-//! Sent after the session is established, not before it starts: a startup file the user
-//! owns is loaded first and would otherwise get the last word over Acter's own line.
-//!
-//! What a setup earns is a property of the setup, not of the shell's name: bash's program
-//! reaches all four boundaries, while POSIX `sh` has `PS1` and no prompt hook and so
-//! reaches only the prompt boundary. Which line belongs to which shell is a policy and
-//! lives in `acter-shells`; this is the shape of its answer.
+//! Sent after the user's startup files have run, so they cannot override it.
 
 use serde::{Deserialize, Serialize};
 use specta::Type;
@@ -16,20 +10,18 @@ use crate::ShellMarkers;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionSetup {
-    /// Shown to the user before it runs, and not hidden afterwards.
+    /// Shown to the user before it runs.
     pub line: String,
-    /// What the far end will be able to mark once this line has run.
+    /// What the far end can mark once this line has run.
     pub markers: ShellMarkers,
 }
 
-/// Whether this connection may set its session up at all. Ticked by default. Travels
-/// with the attempt; not persisted. Distinct from whether this person has said not to be
-/// asked about a given shell again, which is kept behind [`Explained`](crate::Explained).
+/// Whether this connection may set its session up; not asking again about a shell is
+/// kept separately, behind [`Explained`](crate::Explained).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
 pub enum SetUp {
-    /// Ask about it unless this person has said not to, then send the line.
+    /// Ask, unless told not to about this shell, then send the line.
     Yes,
-    /// No dialog, no setup line.
     No,
 }
 

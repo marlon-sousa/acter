@@ -1,4 +1,5 @@
-//! Facade for this crate's services, one file per service.
+//! Service: a domain's actionable surface. Facade over the crate's services,
+//! one file per service; declares modules and re-exports their public API.
 
 mod connect;
 mod conversation;

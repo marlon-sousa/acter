@@ -1,154 +1,76 @@
-//! Entity/value: one saved connection — a name, what it connects to, and the two settings
-//! a session has. Plus the rule a name has to keep, which is a rule about being read aloud.
-//!
-//! What it holds is the kind's own facts and never a resolved file path. A saved
-//! PowerShell connection remembers the edition and the provenance the list showed it
-//! under; the file is found again at connect time by matching those against what
-//! discovery answers now, so upgrading PowerShell does not break a connection somebody
-//! saved a year ago. A saved WSL connection remembers the distribution's name as
-//! `wsl.exe -l -q` spelled it, and a saved SSH connection remembers the host, the port and
-//! the account.
-//!
-//! A password is never in one, and neither is a passphrase. Both are asked at connect
-//! time, in the window, and there is no field here that could hold either — the guarantee
-//! is the type's rather than a reviewer's.
-//!
-//! Two settings and no more: whether Acter may set the session up, and who holds the line
-//! when it opens. A starting directory and an auto-read threshold have a place in the
-//! format and no implementation, because settings nothing reads are settings nothing tests.
+//! Entity/value: one saved connection — a name, what it connects to, and how it opens —
+//! and the rule a name has to keep.
 
 use serde::{Deserialize, Serialize};
 
 use crate::{ConnectionKind, LineOwner, ProfileId, SetUp};
 
-/// The characters a name cannot contain, spelled out in words where a listener meets them
-/// (see [`refused`]). Every name here is read aloud, and a name full of punctuation is
-/// read aloud badly.
 const FORBIDDEN: [char; 9] = ['/', '\\', ':', '*', '?', '"', '<', '>', '|'];
 
-/// What a listener is told when a name breaks the rule. Spelled out in words, because a
-/// screen reader reads the characters themselves unreliably — a sentence containing a
-/// bare `*` and a bare `?` is a sentence most readers render as something between silence
-/// and noise.
+/// Names the characters in words, because screen readers speak a bare `*` or `?` unreliably.
 const ILLEGAL: &str = "A name cannot contain slash, backslash, colon, star, question mark, \
                        quote, less than, greater than or bar.";
 
-/// And what they are told when there is no name at all, which the rule also forbids and
-/// which is the likelier mistake: a field left as it was found, or cleared and not refilled.
 const EMPTY: &str = "A connection needs a name.";
 
-/// What is said about a WSL session that named no distribution, which is the one profile
-/// here that cannot be written down.
-///
-/// Saving it would write down "whatever WSL calls the default", and starting *that* again
-/// is what New connection already does — so the row would answer nothing, and would quietly
-/// answer something different the day somebody changed their default.
-///
-/// No window can reach this: the panel's Connect stays disabled until a distribution is
-/// chosen. What is left is a value [`ProfileId`] admits and nothing constructs, and a
-/// total function has to answer something, so it answers this rather than writing
-/// nonsense down, and says what to do instead.
+/// Unreachable from the window, whose Connect stays disabled until a distribution is chosen.
 const NO_DISTRIBUTION: &str = "This session did not name a WSL distribution, so saving it \
                                would not give you anything to start again. Choose a \
                                distribution in New connection and save that.";
 
-/// One connection somebody saved: what to call it, what it reaches, and how it opens.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SavedConnection {
-    /// What the user called it, as they typed it. Kept as typed and compared without
-    /// case, so a listener hears their own spelling back and two rows cannot differ by
-    /// something nobody can hear.
+    /// Kept as typed; compared with [`same_name`].
     pub name: String,
-    /// What it connects to.
     pub target: SavedTarget,
-    /// Whether Acter may set the session up so it can say how commands went. Saved
-    /// rather than asked again.
     #[serde(default = "set_up_by_default")]
     pub set_up: SetUp,
-    /// Who holds the line when this connection opens. Saved so a connection that always
-    /// wants Acter's line does not have to be told so every time.
     #[serde(default = "line_owner_by_default")]
     pub line_owner: LineOwner,
 }
 
-/// The default a document written before this field existed reads as, and the default the
-/// Connect dialog's checkbox carries: ticked.
 fn set_up_by_default() -> SetUp {
     SetUp::Yes
 }
 
-/// Who holds the line when nothing says: the far end, which is what a new session does.
-/// Not [`LineOwner`]'s own `Default`, which is `Local` because that is the state a
-/// session's *machinery* starts in; what this answers is what a connection somebody
-/// saved before the field existed should open on, and that is the product's default
-/// rather than the type's.
+/// A new session opens with the far end holding the line, unlike `LineOwner::default()`.
 fn line_owner_by_default() -> LineOwner {
     LineOwner::FarEnd
 }
 
-/// What a saved connection reaches — one variant per kind, carrying only that kind's facts.
-///
-/// Tagged, so a kind added later is a new variant rather than a field somebody has to
-/// remember to read. A document written by an older Acter still loads, because every
-/// field a variant grows carries a serde default.
+/// Every field a variant gains needs a serde default, so documents written by an older Acter
+/// still load.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "target")]
 pub enum SavedTarget {
-    /// `cmd.exe`, which is one thing and has no facts of its own.
+    /// `cmd.exe`.
     Cmd,
-    /// One PowerShell edition, and where the list found it.
-    ///
-    /// Not the resolved file path: the path is resolved again at connect time by
-    /// matching these two against what discovery answers now, so a PowerShell upgrade
-    /// does not break a saved connection. If nothing matches, the connection is listed
-    /// and not available, with the same instructions the variant would carry.
+    /// No file path: the install is matched again at connect time, so an upgrade does not
+    /// break it, and no match lists the connection as not available.
     PowerShell {
-        /// Which edition, as [`ConnectionKind`] names them.
         edition: ConnectionKind,
-        /// What told this install from another of the same edition when it was saved:
-        /// `preview`, `Microsoft Store`, or the directory it lives in. `None` on the
-        /// ordinary machine with one install.
         #[serde(default)]
         provenance: Option<String>,
     },
-    /// Bash inside one named WSL distribution.
-    ///
-    /// The name is required, and that is the whole point of saving one: a saved WSL
-    /// connection earns its place by meaning "this distribution, no questions"; one that
-    /// named none would be a row that opens whatever WSL calls the default, which is
-    /// what New connection already does in one more keystroke — and which would
-    /// silently become a different machine the day somebody changed their default.
+    /// Bash in one WSL distribution.
     Wsl { distribution: String },
-    /// A program named directly. No arguments field until something starts a program with
-    /// arguments.
+    /// A program named directly.
     Program { program: String },
-    /// A machine that is not this one. Never a password and never a passphrase.
+    /// Never a password or a passphrase.
     Ssh {
         host: String,
         port: u16,
         account: String,
     },
-    /// The shell this macOS account logs in to. Which shell that is is read from the
-    /// machine at connect time, so it has nothing of its own to store.
+    /// The macOS account's login shell, read at connect time.
     Terminal,
-    /// One of the scripted far ends.
-    ///
-    /// Saveable in a debug build like any other kind, because the fake is a permanent
-    /// supported session kind and because the end-to-end suite needs a saved connection
-    /// it can start without a shell. A release build lists it as not available, since it
-    /// never constructs one.
+    /// Listed as not available in a release build.
     Scripted { scenario: String },
 }
 
 impl SavedTarget {
-    /// What this profile is, written down — or the sentence to say when it cannot be.
-    ///
-    /// The resolved file is deliberately dropped: an `Install` carries the file the list
-    /// found; what survives here is the edition and the provenance, which is what can be
-    /// matched against a machine that has changed since.
-    ///
-    /// One session cannot be written down at all, and it is the one that names no WSL
-    /// distribution. See [`NO_DISTRIBUTION`].
+    /// Rejects with a whole spoken sentence for WSL with no distribution, which would
+    /// silently follow whatever WSL's default becomes.
     pub fn of(id: &ProfileId) -> Result<Self, String> {
         Ok(match id {
             ProfileId::Shell {
@@ -195,12 +117,7 @@ impl SavedTarget {
         })
     }
 
-    /// The profile this target names, before any machine has been asked about it.
-    ///
-    /// It is the fallback rather than the answer: what the Connect dialog's panel is
-    /// loaded from is resolved against discovery, because a PowerShell edition can have
-    /// moved and a distribution can be gone; this is what that resolution starts from and
-    /// what a kind with nothing to resolve simply is.
+    /// Not yet resolved against this machine's installs.
     pub fn profile(&self) -> ProfileId {
         match self {
             Self::Cmd => ProfileId::Shell {
@@ -231,13 +148,7 @@ impl SavedTarget {
         }
     }
 
-    /// The one line a listener hears when they arrow onto this connection's name: the kind,
-    /// and what identifies it.
-    ///
-    /// Commas rather than the colon [`ProfileId::label`] uses: that label names a row in
-    /// a list of *kinds*, where the colon separates a category from a member; this is
-    /// said after the user's own name for the connection, as a description of it, and a
-    /// reader speaks a comma as the pause it is.
+    /// Commas where [`ProfileId::label`] has a colon, since a screen reader pauses at a comma.
     pub fn summary(&self) -> String {
         match self {
             Self::Cmd => ConnectionKind::Cmd.label().to_owned(),
@@ -252,8 +163,6 @@ impl SavedTarget {
             } => format!("{}, {which}", edition.label()),
             Self::Wsl { distribution } => format!("WSL, {distribution}"),
             Self::Program { program } => format!("Program, {program}"),
-            // The account before the machine, because that is the order it is decided in,
-            // and the port only when it is not the one every SSH server uses.
             Self::Ssh {
                 host,
                 port,
@@ -270,15 +179,9 @@ impl SavedTarget {
     }
 }
 
-/// The port every SSH server listens on unless somebody moved it, which is the one a
-/// listener does not need to hear on every row.
 const DEFAULT_SSH_PORT: u16 = 22;
 
-/// Why this name cannot be used, or `None` when it can.
-///
-/// A whole sentence rather than a code, for the reason every refusal in this domain
-/// carries its own words: the sentence is what a listener hears, and it is decided in one
-/// place rather than by whichever caller happened to meet the refusal.
+/// The spoken sentence saying why this name cannot be used, or `None` when it can.
 pub fn refused(name: &str) -> Option<&'static str> {
     if name.trim().is_empty() {
         return Some(EMPTY);
@@ -289,11 +192,7 @@ pub fn refused(name: &str) -> Option<&'static str> {
     None
 }
 
-/// Whether these two names are the same name.
-///
-/// Case-insensitively, and not for Windows' sake: two connections whose names differ
-/// only in case are two rows a listener cannot tell apart, which is a reason that holds
-/// on every platform this product will ever run on.
+/// Case-insensitive, since names differing only in case sound the same.
 pub fn same_name(one: &str, another: &str) -> bool {
     one.trim().to_lowercase() == another.trim().to_lowercase()
 }

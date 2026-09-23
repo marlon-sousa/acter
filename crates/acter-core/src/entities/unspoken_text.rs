@@ -1,36 +1,23 @@
-//! Entity/value: the text a running command has produced but not yet announced, with
-//! the one invariant that keeps a session actor's memory bounded.
+//! Entity/value: the text a running command has produced but not yet announced.
 //!
-//! Once the accumulated span passes the auto-read threshold its verdict is settled as
-//! [`ReadMode::TooBig`] forever, since a too-big announcement needs only the line count;
-//! from that point the bytes are dropped and only counts are kept. That is what bounds a
-//! gapless flood (`yes`, a busy `tail -f`): under a flood no quiescent gap ever occurs, so
-//! without this nothing would ever be flushed.
-//!
-//! One line survives the drop: the final unterminated row, kept beside the counts at the
-//! cost of one row of memory. In a session with no shell integration the prompt is that
-//! row, and no `PromptDrawn` announces it separately.
+//! Past the auto-read threshold the verdict cannot change back, since the size only grows,
+//! so the text is dropped and only counts are kept; that bounds memory under a gapless flood
+//! such as `yes`.
 
 use crate::PacingConfig;
 use crate::entities::ReadMode;
 use crate::policies::{TextSize, measure, verdict};
 
-/// Unannounced text for one command. Line counts stay exact whether or not the text is
-/// still held; the character count is exact only while it is, and afterwards is an
-/// over-estimate that stays above `max_chars` — which is all the threshold needs, since
-/// the verdict is already settled.
+/// Once the text is dropped the character count is an over-estimate; line counts stay exact.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct UnspokenText {
-    /// `None` once the verdict is settled as too big and the bytes were dropped; this is
-    /// why the type cannot derive `Default`, since an empty accumulator holds an empty
-    /// string, not nothing.
+    /// `None` once dropped; empty is `Some("")`, hence the manual `Default`.
     text: Option<String>,
     newlines: usize,
     chars: usize,
     ends_with_newline: bool,
     any: bool,
-    /// Whatever has arrived since the last line ending. Kept whether or not the bytes are,
-    /// because it is one row rather than a span.
+    /// Kept after the text is dropped; in an unintegrated session this row is the prompt.
     last_line: String,
 }
 
@@ -75,8 +62,6 @@ impl UnspokenText {
         }
     }
 
-    /// Matches what [`measure`] would report for the whole span: exactly for lines, and
-    /// for chars until the bytes are dropped.
     pub(crate) fn size(&self) -> TextSize {
         let trailing = usize::from(self.any && !self.ends_with_newline);
         TextSize {
@@ -85,16 +70,13 @@ impl UnspokenText {
         }
     }
 
-    /// The row the far end is still sitting on: everything since the last line ending.
-    ///
-    /// `None` when the span ends at one, and when what is outstanding is only
-    /// whitespace: some shells draw a prompt across two rows and the first is blank.
+    /// `None` when the span ends at a line ending or the row is only whitespace, as the
+    /// blank first row of a two-row prompt is.
     pub(crate) fn last_line(&self) -> Option<&str> {
         (!self.last_line.trim().is_empty()).then_some(self.last_line.as_str())
     }
 
-    /// Takes the span, leaving the accumulator empty. The text is `None` when it was
-    /// dropped.
+    /// The text is `None` when it was dropped.
     pub(crate) fn take(&mut self) -> (Option<String>, TextSize) {
         let size = self.size();
         let text = self.text.take();

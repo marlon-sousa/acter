@@ -1,54 +1,30 @@
 //! Entity/value: what connecting says while it happens, what it asks, and what it is told
 //! back.
-//!
-//! An SSH connection stops partway on things that are not failures — a host key nobody
-//! has seen, a password nobody has typed — and each is a question for the person in
-//! front of the window, asked before there is a session to ask it in.
-//!
-//! Stream out and separate invokes back, rather than one invoke that waits: Tauri has no
-//! way for a backend to ask the frontend something and await the answer, since events and
-//! channels are one-way and `eval` returns nothing. A `#[tauri::command]` without `async`
-//! runs on the main thread, so an invoke that blocked waiting for a dialog would be
-//! holding the very thread the answering invoke needs in order to be dispatched — it
-//! would deadlock, at the exact moment the host-key dialog appeared. So every invoke here
-//! returns at once and the steps travel on a `Channel`, the same mechanism
-//! `attach_session` already uses.
 
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
 use crate::Connected;
 
-/// Which attempt to connect a step or an answer belongs to.
-///
-/// Minted per attempt: a user who gives up on one dialog and starts again has two
-/// conversations in flight for a moment, and an answer typed into the first must never
-/// resolve the second.
+/// Minted per attempt, so an answer to an abandoned dialog never resolves a newer attempt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Type)]
 #[serde(transparent)]
 pub struct AttemptId(pub u32);
 
-/// One thing that happens while a connection is being made.
-///
-/// The frontend reads these in order until one of the last two arrives, which is what ends
-/// the conversation.
+/// One thing that happens while a connection is being made; `Arrived` or `Failed` ends the
+/// sequence.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[serde(tag = "step")]
 pub enum ConnectStep {
-    /// Something is happening and it is worth saying out loud.
-    ///
-    /// A listener with no feedback cannot tell a slow network from a dead one, and an SSH
-    /// connection can take seconds before anything at all is certain. The sentence is
-    /// complete and is read exactly as it arrives.
+    /// A complete sentence, spoken as it arrives.
     Progress { said: String },
-    /// The connection cannot go on until somebody answers this.
     Asked {
         attempt: AttemptId,
         question: ConnectQuestion,
     },
-    /// There is a session, and this is what to attach to.
+    /// There is a session to attach to.
     Arrived { connected: Connected },
-    /// There is no session, and this is why — one sentence a listener can act on.
+    /// One sentence a listener can act on.
     Failed { why: String },
 }
 
@@ -56,115 +32,57 @@ pub enum ConnectStep {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[serde(tag = "question")]
 pub enum ConnectQuestion {
-    /// This server's identity is not one Acter has a record of.
-    ///
-    /// An unknown key and a changed one are the same variant carrying different facts:
-    /// one decision, trust this server or do not, so the dialog's words differ rather
-    /// than its shape. What makes them different sentences is
-    /// [`recorded`](Self::HostKey::recorded) being present.
     HostKey {
         host: String,
         port: u16,
-        /// What this server offered, as `ssh-keygen -l` prints it, so it can be compared
-        /// against what a provider or a colleague gave the user.
+        /// As `ssh-keygen -l` prints it.
         fingerprint: String,
-        /// The fingerprint that was on file, when one was — which is what makes this the
-        /// serious question rather than the routine one. `None` for a host nobody has a
-        /// record of.
+        /// The fingerprint on file, and `None` for a host with no record.
         recorded: Option<String>,
-        /// Something true that is not the answer: a `known_hosts` file that could not be
-        /// read, so the user knows this may be being asked about a host they already trust.
+        /// Something true that is not the answer, such as an unreadable `known_hosts`, and
+        /// `None` when there is nothing.
         aside: Option<String>,
     },
     /// The file this machine is about to start did not verify.
-    ///
-    /// Never a gate: it arrives here rather than removing a row from the list. Everything
-    /// discovered is listed, and starting an unverified one asks first, the shape used
-    /// for an unknown host key.
     Unverified {
-        /// What the user chose, as they heard it in the list.
         label: String,
-        /// The file that would be started, in full — **the path rather than the name**,
-        /// because `PATH`-order hijacking is what this defeats, and which directory the file
-        /// is in is the whole of what makes it recognisably wrong.
+        /// The full path.
         program: String,
-        /// What was found and what it means, as whole sentences ending in what to do next.
-        /// Composed once, in the domain, so the words are decided in one place.
+        /// Whole sentences ending in what to do next.
         said: String,
-        /// Who signed it, when anything could be read about that — carried separately from
-        /// the sentence so a dialog can put it somewhere it can be read character by
-        /// character.
+        /// Who signed it, and `None` when nothing could be read.
         signer: Option<String>,
     },
-    /// The connection succeeded, the far end runs this shell, and this is what Acter would
-    /// run inside the session so a listener hears more about what they run.
-    ///
-    /// The one question here that is not a warning. The checkbox on the Connect dialog is
-    /// what authorises the setup; this is what discloses it, and both are needed.
-    ///
-    /// The sentences arrive composed rather than as facts to assemble: the words a
-    /// listener hears are decided in the domain, in one place, and the dialog renders
-    /// them. What the dialog owns is the shape — four paragraphs that can be arrowed, and
-    /// the command in a field that can be walked character by character.
+    /// What Acter would run inside this shell to integrate it.
     SetUpSession {
-        /// The shell the far end said it runs, carried on its own so a dialog can name what
-        /// it is asking about without parsing a sentence.
         shell: String,
-        /// "Acter has detected that this session runs bash."
         detected: String,
-        /// What the person gets for saying yes — and, for a shell that reaches only the
-        /// prompt boundaries, what they do not.
         offer: String,
-        /// The command Acter would run, **verbatim**, for a read-only field: the same
-        /// treatment a host-key fingerprint and a program path get, and for the same reason.
         command: String,
-        /// What refusing costs, which is A13's shipped sentence with what still works in
-        /// front of it.
         refusal: String,
     },
-    /// The server will take a password, and there is not one yet.
     Password {
         host: String,
         user: String,
-        /// Whether one was already tried and refused. Said rather than left to be inferred
-        /// from the dialog opening twice, which is indistinguishable from the first one
-        /// not having been submitted.
+        /// Whether a password was already tried and refused.
         again: bool,
     },
 }
 
-/// What the person decided.
-///
-/// Deserialize only: an answer arrives from a dialog and never travels the other way, and
-/// deriving `Serialize` here would not compile, since [`Secret`](crate::Secret) has none.
-/// The guarantee is the type system's rather than a reviewer's.
+/// What the person decided; never serialized, since [`Secret`](crate::Secret) cannot be.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Type)]
 #[serde(tag = "answer")]
 pub enum ConnectAnswer {
-    /// Trust this server, and remember it so the same host does not ask again.
+    /// Trust this server and record it.
     Trust,
-    /// Here is the password.
-    ///
-    /// Carries a [`Secret`](crate::Secret), which deserializes from the wire and can never
-    /// be serialized back onto it, printed, or logged.
+    /// Never serialized, printed or logged.
     Password { secret: crate::Secret },
-    /// Start this file even though it did not verify.
-    ///
-    /// The one way to reach [`ProgramAnswer::Start`](crate::ProgramAnswer), so nothing but
-    /// a person deliberately saying so can start an unverified program. What was agreed
-    /// to is then said out loud at connection, so nobody is left unsure.
+    /// The only way to reach [`ProgramAnswer::Start`](crate::ProgramAnswer).
     StartAnyway,
-    /// Set this session up, and — if `remember` — do not ask about this shell again.
-    ///
-    /// The one way to reach [`SetupAnswer::SetUp`](crate::SetupAnswer). `remember` is the
-    /// dialog's own "do not show this dialog again", and it is kept per shell and for no
-    /// host and no profile.
+    /// The only way to reach [`SetupAnswer::SetUp`](crate::SetupAnswer); `remember` is kept
+    /// per shell, not per host or profile.
     SetUpSession { remember: bool },
-    /// Stop: the key was refused, the dialog was cancelled, or the user changed their mind.
-    ///
-    /// One variant for all three: the connection does the same thing for each, and the
-    /// sentence a listener hears is about what did *not* happen rather than about which
-    /// control they used to say so.
+    /// Refused, cancelled, or closed.
     GiveUp,
 }
 

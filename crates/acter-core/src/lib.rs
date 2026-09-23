@@ -1,7 +1,5 @@
-//! Acter domain crate: entities, policies, ports (driven and driving), services,
-//! and the IPC protocol types. No I/O and no framework dependencies live here.
-//!
-//! Facade: this file only declares modules and re-exports the public API.
+//! Acter domain crate: entities, policies, ports, services and the IPC protocol
+//! types. Facade: this file only declares modules and re-exports the public API.
 #![warn(unreachable_pub)]
 
 mod controllers;
@@ -21,8 +19,6 @@ pub use entities::{
     ShellMarkers, Signer, StoredSettings, SubmitAck, TerminalItem, Variant, Verdict,
     no_such_connection, refused, same_name,
 };
-// `PacingAction`, `PacingOutcome`, `verdict` and the three transition functions are
-// `pub(crate)` in `policies`, not re-exported here.
 pub use policies::{
     Anchor, Binding, BoundaryEvent, BoundaryTracker, Caret, Connection, FarEndAnswer, Keystroke,
     MenuItem, Region, RowChange, Standard, SystemMenu, TextSize, binding_for, catalogue, ended,

@@ -1,41 +1,21 @@
 //! Entity/value: the kinds of far end Acter can connect to, what each is called, and what
 //! it says when this machine cannot start it.
-//!
-//! A kind is not an adapter: `acter-shells` knows how to *start* cmd, while this knows
-//! that cmd is a thing a user can choose, what it is called in a list, and what to tell
-//! somebody whose machine does not have it. The two are separate because the same adapter
-//! appears in the list more than once — two PowerShell editions, one entry per WSL
-//! distribution — and because a kind has to exist in order to be reported missing.
-//!
-//! Every string here is read aloud, so it is written to be heard: what is missing first,
-//! then what to do, then where.
 
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Type)]
 pub enum ConnectionKind {
-    /// `cmd.exe`, which is on every Windows machine and cannot be removed.
     Cmd,
-    /// PowerShell, whichever edition. One row in the connect list; the editions are its
-    /// variants.
+    /// One row; its editions are the two below.
     PowerShell,
-    /// Windows PowerShell 5.1, which ships with Windows. A variant of [`Self::PowerShell`]
-    /// rather than a row of its own, and never listed at the top level.
+    /// 5.1, shipped with Windows.
     WindowsPowerShell,
-    /// PowerShell 7 or later, which is installed separately. A variant, as above.
+    /// 7 or later.
     PowerShellSeven,
-    /// Bash inside a WSL distribution.
     Wsl,
-    /// A shell on this Mac, with the shells `/etc/shells` names as its variants.
-    ///
-    /// What macOS itself calls it. Names no program: which shell an account logs into is
-    /// read from the passwd entry when the list is built.
+    /// A macOS login shell, with `/etc/shells` as its variants.
     Terminal,
-    /// A far end that is not on this machine, reached over SSH.
-    ///
-    /// The only row that needs a form rather than a choice: host, port and account are
-    /// fields, not variants to pick.
     Ssh,
 }
 
@@ -52,34 +32,22 @@ impl ConnectionKind {
         }
     }
 
-    /// Both what the machine is asked about and what the factory starts.
-    ///
-    /// A name rather than a path, resolved by the same `PATH` rules Windows itself
-    /// applies, so a machine that has moved its PowerShell is still answered correctly
-    /// ([`ThisComputer::installs`](crate::ThisComputer::installs)).
-    ///
-    /// WSL answers with the client rather than with a distribution: which distributions
-    /// exist is discovery, and lives behind [`ThisComputer`](crate::ThisComputer).
+    /// A file name that [`ThisComputer::installs`](crate::ThisComputer::installs) resolves;
+    /// empty for a kind with no local executable.
     pub fn program(self) -> &'static str {
         match self {
             Self::Cmd => "cmd.exe",
-            // Ships with Windows; what "PowerShell" with no edition chosen means.
             Self::PowerShell => "powershell.exe",
             Self::WindowsPowerShell => "powershell.exe",
             Self::PowerShellSeven => "pwsh.exe",
             Self::Wsl => "wsl.exe",
-            // Nothing static to name: what a Terminal row starts is whichever shell this
-            // account logs in to. `catalogue` never asks, and `login_shells` answers instead.
+            // `login_shells` answers instead.
             Self::Terminal => "",
-            // Nothing on this machine: Acter speaks the SSH protocol itself, so there is no
-            // executable to look for. `catalogue` never asks.
             Self::Ssh => "",
         }
     }
 
-    /// Empty for a kind that is one thing. PowerShell's editions are known rather than
-    /// discovered: the same answer on every machine, unlike WSL distributions, which can
-    /// only be enumerated by running `wsl.exe`.
+    /// Empty for every kind but PowerShell.
     pub fn editions(self) -> &'static [ConnectionKind] {
         match self {
             Self::PowerShell => &[Self::WindowsPowerShell, Self::PowerShellSeven],
@@ -87,14 +55,7 @@ impl ConnectionKind {
         }
     }
 
-    /// What to tell somebody whose machine cannot start this kind: what is missing, what
-    /// to type, and where.
-    ///
-    /// Names a command to type, not a path through a graphical installer: a GUI route
-    /// described in prose is worse for a blind user than a line to type or paste.
-    ///
-    /// The kinds that cannot go missing still answer: assuming an absence is impossible is
-    /// worse than a sentence never said.
+    /// A command to type, never a GUI route described in prose.
     pub fn instructions(self) -> &'static str {
         match self {
             Self::Cmd => {
