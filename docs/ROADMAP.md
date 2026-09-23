@@ -69,6 +69,12 @@ lane's next step.
 - 38. **Open** — The set-up dialog reads its whole command aloud on macOS. Entry: [38-set-up-dialog-reads-whole-command.md](roadmap/38-set-up-dialog-reads-whole-command.md). Spec: none yet.
 - 39. **Open** — Four smaller things the same run measured, each its own fix. Entry: [39-four-smaller-things-same-run-measured.md](roadmap/39-four-smaller-things-same-run-measured.md). Spec: none yet.
 
+**Lane 5: the look**
+
+- 52. **Open** — V1, to a sighted person, it looks like a terminal. Entry: [52-it-looks-like-a-terminal.md](roadmap/52-it-looks-like-a-terminal.md). Spec: none yet.
+- 53. **Open** — V2, the prompt, the command and the edit field share one visual line. Entry: [53-the-prompt-and-the-command-share-a-line.md](roadmap/53-the-prompt-and-the-command-share-a-line.md). Spec: none yet.
+- 54. **Open** — V3, the output carries the far end's colours. Entry: [54-the-output-carries-the-far-ends-colours.md](roadmap/54-the-output-carries-the-far-ends-colours.md). Spec: none yet.
+
 **Keyboard routing and the changed row**
 
 - 28.12. **Open** — Ctrl+C at an idle prompt says a command failed. Entry: [28.12-ctrl-c-idle-prompt-says-command.md](roadmap/28.12-ctrl-c-idle-prompt-says-command.md). Spec: none yet.
@@ -198,6 +204,12 @@ lane's next step.
 - 10. **Done** — C10, frontend sources under `ui/src`. Spec: [c-comments-say-what-the-code-cannot.md](specs/c-comments-say-what-the-code-cannot.md)
 - 11. **Done** — C11, frontend tests under `ui/test` and `e2e`. Spec: [c-comments-say-what-the-code-cannot.md](specs/c-comments-say-what-the-code-cannot.md)
 - 12. **Done** — C12, retire the lane histories under `docs/roadmap/`. Spec: [c-comments-say-what-the-code-cannot.md](specs/c-comments-say-what-the-code-cannot.md)
+
+## Status board — lane 5: the look (**opened 2026-09-23**; may run parallel to every other lane; strict order)
+
+- 52. **Open** — V1, to a sighted person, it looks like a terminal. Entry: [52-it-looks-like-a-terminal.md](roadmap/52-it-looks-like-a-terminal.md). Spec: none yet.
+- 53. **Open** — V2, the prompt, the command and the edit field share one visual line. Entry: [53-the-prompt-and-the-command-share-a-line.md](roadmap/53-the-prompt-and-the-command-share-a-line.md). Spec: none yet.
+- 54. **Open** — V3, the output carries the far end's colours. Entry: [54-the-output-carries-the-far-ends-colours.md](roadmap/54-the-output-carries-the-far-ends-colours.md). Spec: none yet.
 
 ## Keyboard routing and the changed row — carved out of the phase 2 gate
 
