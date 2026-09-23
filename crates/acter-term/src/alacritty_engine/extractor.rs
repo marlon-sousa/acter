@@ -3,7 +3,7 @@
 
 use std::collections::BTreeMap;
 use std::mem::take;
-use std::ops::Bound::{Excluded, Included};
+use std::ops::Bound::{Excluded, Included, Unbounded};
 
 use acter_core::{LineId, LineRevision, TerminalItem};
 use alacritty_terminal::Term;
@@ -150,18 +150,40 @@ impl Extractor {
                 }
             }
             Some(_) | None => {
-                let id = self.mint();
-                if settled {
-                    out.push(item(id, text, LineRevision::Settled));
-                } else {
-                    out.push(item(id, text.clone(), LineRevision::Appended));
-                    self.lines.insert(
-                        row,
-                        Tracked {
-                            id: Some(id),
-                            emitted: text,
-                        },
-                    );
+                self.absorb(row, last, out);
+                match self.take_place_below(last, out) {
+                    Some((id, _)) if settled => out.push(item(id, text, LineRevision::Settled)),
+                    Some((id, shown)) => {
+                        match text.strip_prefix(shown.as_str()) {
+                            Some("") => {}
+                            Some(delta) => {
+                                out.push(item(id, delta.to_owned(), LineRevision::Appended));
+                            }
+                            None => out.push(item(id, text.clone(), LineRevision::Rewritten)),
+                        }
+                        self.lines.insert(
+                            row,
+                            Tracked {
+                                id: Some(id),
+                                emitted: text,
+                            },
+                        );
+                    }
+                    None => {
+                        let id = self.mint();
+                        if settled {
+                            out.push(item(id, text, LineRevision::Settled));
+                        } else {
+                            out.push(item(id, text.clone(), LineRevision::Appended));
+                            self.lines.insert(
+                                row,
+                                Tracked {
+                                    id: Some(id),
+                                    emitted: text,
+                                },
+                            );
+                        }
+                    }
                 }
             }
         }
@@ -190,6 +212,46 @@ impl Extractor {
                 out.push(item(id, String::new(), LineRevision::Settled));
             }
         }
+    }
+
+    /// A reader places each id where it first appeared, so a new line above live lines takes the
+    /// first one's id and hands every id one line down. `None` when no live line is below.
+    fn take_place_below(
+        &mut self,
+        last: usize,
+        out: &mut Vec<TerminalItem>,
+    ) -> Option<(LineId, String)> {
+        let below: Vec<usize> = self
+            .lines
+            .range((Excluded(last), Unbounded))
+            .filter(|(_, tracked)| tracked.id.is_some())
+            .map(|(key, _)| *key)
+            .collect();
+        let (&first, rest) = below.split_first()?;
+        let taken = self
+            .lines
+            .get(&first)
+            .and_then(|tracked| tracked.id.map(|id| (id, tracked.emitted.clone())))?;
+
+        let mut receiver = first;
+        for &next in rest {
+            let (id, emitted) = {
+                let tracked = &self.lines[&next];
+                (tracked.id, tracked.emitted.clone())
+            };
+            self.lines.insert(receiver, Tracked { id, emitted });
+            receiver = next;
+        }
+        let fresh = self.mint();
+        out.push(item(fresh, String::new(), LineRevision::Appended));
+        self.lines.insert(
+            receiver,
+            Tracked {
+                id: Some(fresh),
+                emitted: String::new(),
+            },
+        );
+        Some(taken)
     }
 
     /// The last row worth scanning, skipping the unwritten blank rows at the bottom of the

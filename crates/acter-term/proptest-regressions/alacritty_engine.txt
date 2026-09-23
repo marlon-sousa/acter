@@ -6,3 +6,6 @@
 # everyone who runs the test benefits from these saved cases.
 cc 46c6981160e07e59232fb24c77208d9fc31a8ecbaa7f3332c700a171b955b678 # shrinks to transcript = [27, 91, 50, 75, 13, 10, 27, 91, 51, 49, 109, 27, 91, 66, 27, 91, 51, 49, 109, 27, 91, 66, 97, 27, 91, 65], chunk = 9
 cc 5d3f843a1b4f09c9549b9568debcbcdca1edd250e8a1b328f33acdd1048aa2ee # shrinks to transcript = [13, 10, 97, 27, 91, 65]
+cc 7f868fe05335bfc4803d7306e084d8396a7935d7460d4c00282f273c9f3b1a02 # roadmap 40, no_line_is_ever_lost, PR #66
+cc 95462c408b57ea8b7c66954fec5ed923db1ec8210789bb8bf13302d6580fa302 # roadmap 40, no_line_is_ever_lost, PR #67
+cc 67b21f56d1ea70dd752c7a5793451e845233c2b165012986195495f579b19305 # roadmap 40, reconstruction_is_independent_of_chunking, PR #71
