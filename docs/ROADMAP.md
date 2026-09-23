@@ -33,6 +33,7 @@ lane's next step.
 - 41. **Open** — The end-to-end test for F10 checks focus before the menu has taken it. Entry: [41-f10-menu-e2e-test-races-focus.md](roadmap/41-f10-menu-e2e-test-races-focus.md). Spec: none yet.
 - 49. **Open** — A new menu action compiles and does nothing. Entry: [49-a-new-menu-action-compiles-and-does-nothing.md](roadmap/49-a-new-menu-action-compiles-and-does-nothing.md). Spec: none yet.
 - 50. **Open** — The far-end toggle depends on the keyboard layout. Entry: [50-the-far-end-toggle-depends-on-the-keyboard-layout.md](roadmap/50-the-far-end-toggle-depends-on-the-keyboard-layout.md). Spec: none yet.
+- 52.1. **Open** — A prompt lands in a different place in the buffer from one run to the next. Entry: [52.1-a-prompt-lands-in-a-different-place-each-run.md](roadmap/52.1-a-prompt-lands-in-a-different-place-each-run.md). Spec: none yet.
 
 **Lane 2: domain**
 
@@ -109,6 +110,7 @@ lane's next step.
 - 41. **Open** — The end-to-end test for F10 checks focus before the menu has taken it. Entry: [41-f10-menu-e2e-test-races-focus.md](roadmap/41-f10-menu-e2e-test-races-focus.md). Spec: none yet.
 - 49. **Open** — A new menu action compiles and does nothing. Entry: [49-a-new-menu-action-compiles-and-does-nothing.md](roadmap/49-a-new-menu-action-compiles-and-does-nothing.md). Spec: none yet.
 - 50. **Open** — The far-end toggle depends on the keyboard layout. Entry: [50-the-far-end-toggle-depends-on-the-keyboard-layout.md](roadmap/50-the-far-end-toggle-depends-on-the-keyboard-layout.md). Spec: none yet.
+- 52.1. **Open** — A prompt lands in a different place in the buffer from one run to the next. Entry: [52.1-a-prompt-lands-in-a-different-place-each-run.md](roadmap/52.1-a-prompt-lands-in-a-different-place-each-run.md). Spec: none yet.
 
 ## Status board — lane 2: domain (pure Rust; may start anytime, parallel to lane 1)
 
