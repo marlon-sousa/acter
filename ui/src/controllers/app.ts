@@ -409,7 +409,7 @@ export class AppController {
       case 'FarEndLine':
         // Not announced: NVDA speaks the text box's own changes, and a live region
         // answering as well produced two utterances, measured with NVDA.
-        this.farEndField?.render(event.text, event.caret, this.completing);
+        this.farEndField?.render(event.text, event.caret, event.anchored, this.completing);
         this.completing = false;
         break;
       case 'TitleChanged':

@@ -215,11 +215,16 @@ class FakeWindow implements WindowView {
 }
 
 class FakeFarEndField implements FarEndFieldView {
-  rendered: Array<{ text: string | null; caret: number; completed: boolean }> = [];
+  rendered: Array<{
+    text: string | null;
+    caret: number;
+    anchored: boolean;
+    completed: boolean;
+  }> = [];
   showing = false;
   focused = false;
-  render(text: string | null, caret: number, completed = false): void {
-    this.rendered.push({ text, caret, completed });
+  render(text: string | null, caret: number, anchored: boolean, completed = false): void {
+    this.rendered.push({ text, caret, anchored, completed });
   }
   show(showing: boolean): void {
     this.showing = showing;
@@ -1048,14 +1053,30 @@ describe('handing the line to the far end (28)', () => {
     await controller.toggleLineOwner();
     announcer.announcements = [];
 
-    backend.emit({ type: 'FarEndLine', text: 'cargo test --all', caret: 16 });
-    backend.emit({ type: 'FarEndLine', text: null, caret: 3 });
+    backend.emit({ type: 'FarEndLine', text: 'cargo test --all', caret: 16, anchored: true });
+    backend.emit({ type: 'FarEndLine', text: null, caret: 3, anchored: true });
 
     expect(farEndField.rendered).toEqual([
-      { text: 'cargo test --all', caret: 16, completed: false },
-      { text: null, caret: 3, completed: false },
+      { text: 'cargo test --all', caret: 16, anchored: true, completed: false },
+      { text: null, caret: 3, anchored: true, completed: false },
     ]);
     expect(announcer.announcements).toEqual([]);
+  });
+
+  it('tells the field when its row is not the command line', async () => {
+    const { backend, farEndField, controller } = await makeApp();
+    await controller.toggleLineOwner();
+
+    backend.emit({
+      type: 'FarEndLine',
+      text: '> Skip pushing the branch',
+      caret: 0,
+      anchored: false,
+    });
+
+    expect(farEndField.rendered).toEqual([
+      { text: '> Skip pushing the branch', caret: 0, anchored: false, completed: false },
+    ]);
   });
 
   it('marks the answer to a completion, and only that one', async () => {
@@ -1063,12 +1084,12 @@ describe('handing the line to the far end (28)', () => {
     await controller.toggleLineOwner();
 
     await controller.reportKey({ key: 'Tab', ctrl: false, shift: false, alt: false });
-    backend.emit({ type: 'FarEndLine', text: 'echo ', caret: 5 });
-    backend.emit({ type: 'FarEndLine', text: 'echo one', caret: 8 });
+    backend.emit({ type: 'FarEndLine', text: 'echo ', caret: 5, anchored: true });
+    backend.emit({ type: 'FarEndLine', text: 'echo one', caret: 8, anchored: true });
 
     expect(farEndField.rendered).toEqual([
-      { text: 'echo ', caret: 5, completed: true },
-      { text: 'echo one', caret: 8, completed: false },
+      { text: 'echo ', caret: 5, anchored: true, completed: true },
+      { text: 'echo one', caret: 8, anchored: true, completed: false },
     ]);
   });
 
@@ -1078,10 +1099,10 @@ describe('handing the line to the far end (28)', () => {
 
     await controller.reportKey({ key: 'Tab', ctrl: false, shift: false, alt: false });
     await controller.reportKey({ key: 'Up', ctrl: false, shift: false, alt: false });
-    backend.emit({ type: 'FarEndLine', text: 'echo one', caret: 8 });
+    backend.emit({ type: 'FarEndLine', text: 'echo one', caret: 8, anchored: true });
 
     expect(farEndField.rendered).toEqual([
-      { text: 'echo one', caret: 8, completed: false },
+      { text: 'echo one', caret: 8, anchored: true, completed: false },
     ]);
   });
 

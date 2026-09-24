@@ -98,6 +98,11 @@ main {
   overflow-x: auto;
 }
 
+#far-end-input.detached {
+  color: transparent;
+  caret-color: transparent;
+}
+
 .visually-hidden,
 #command-form > label,
 #far-end-label,
@@ -318,6 +323,12 @@ input[type='checkbox'] {
   #command-input:focus-visible,
   #far-end-input:focus-visible {
     outline: 2px solid Highlight;
+  }
+
+  #far-end-input.detached {
+    color: transparent;
+    caret-color: transparent;
+    forced-color-adjust: none;
   }
 
   [role='option'][aria-selected='true'] {
