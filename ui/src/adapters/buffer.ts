@@ -46,9 +46,10 @@ export class BufferDom implements BufferView {
       if (existing.heading === null) {
         existing.heading = this.newHeading(commandLine);
         existing.output.before(existing.heading);
-        return;
+      } else {
+        existing.heading.textContent = commandLine;
       }
-      existing.heading.textContent = commandLine;
+      markEcho(existing.heading);
       return;
     }
 
@@ -59,6 +60,9 @@ export class BufferDom implements BufferView {
 
     this.region.append(...(heading === null ? [output] : [heading, output]));
     this.blocks.set(commandId, { heading, output, lines: new Map() });
+    if (heading !== null) {
+      markEcho(heading);
+    }
     this.show();
   }
 
@@ -91,6 +95,10 @@ export class BufferDom implements BufferView {
     } else {
       existing.textContent = text;
     }
+    const next = block.output.nextElementSibling;
+    if (next instanceof HTMLElement && next.tagName === 'H2') {
+      markEcho(next);
+    }
     this.show();
   }
 
@@ -104,4 +112,18 @@ export class BufferDom implements BufferView {
     return this.region.contains(document.activeElement);
   }
 
+}
+
+// Marks a heading whose text already ends the line above it; the stylesheet hides it from sight only.
+function markEcho(heading: HTMLElement): void {
+  const before = heading.previousElementSibling;
+  const above = before?.classList.contains('response') ? before.lastElementChild : before;
+  const text = heading.textContent?.trimEnd() ?? '';
+  const line = above?.textContent?.trimEnd() ?? '';
+  const echoed =
+    text !== '' &&
+    line.length > text.length &&
+    line.endsWith(text) &&
+    /\s/.test(line.charAt(line.length - text.length - 1));
+  heading.classList.toggle('echoed', echoed);
 }

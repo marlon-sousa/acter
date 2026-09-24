@@ -269,3 +269,84 @@ describe('being there at all', () => {
     expect(region.hidden).toBe(true);
   });
 });
+
+describe('a heading that repeats the line above it', () => {
+  function echoed(region: HTMLElement): boolean[] {
+    return Array.from(region.querySelectorAll('h2')).map((h) => h.classList.contains('echoed'));
+  }
+
+  it('is marked when the row above ends with its text', () => {
+    const region = makeRegion();
+    const buffer = new BufferDom(region);
+    buffer.openBlock(1, "Read-Host 'Your name'");
+    buffer.applyLine(1, 1, 'Appended', 'Your name: Marlon');
+    buffer.openBlock(2, 'Marlon');
+
+    expect(echoed(region)).toEqual([false, true]);
+  });
+
+  it('is not marked when the row above says something else', () => {
+    const region = makeRegion();
+    const buffer = new BufferDom(region);
+    buffer.openBlock(1, 'echo hello');
+    buffer.applyLine(1, 1, 'Appended', 'hello');
+    buffer.openBlock(2, 'git status');
+
+    expect(echoed(region)).toEqual([false, false]);
+  });
+
+  it('is not marked when the row above is only the same text', () => {
+    const region = makeRegion();
+    const buffer = new BufferDom(region);
+    buffer.openBlock(1, 'echo ls');
+    buffer.applyLine(1, 1, 'Appended', 'ls');
+    buffer.openBlock(2, 'ls');
+
+    expect(echoed(region)).toEqual([false, false]);
+  });
+
+  it('is not marked when the match starts inside a word', () => {
+    const region = makeRegion();
+    const buffer = new BufferDom(region);
+    buffer.openBlock(1, 'cat names');
+    buffer.applyLine(1, 1, 'Appended', 'dials');
+    buffer.openBlock(2, 'ls');
+
+    expect(echoed(region)).toEqual([false, false]);
+  });
+
+  it('is not marked after a prompt paragraph', () => {
+    const region = makeRegion();
+    const buffer = new BufferDom(region);
+    buffer.appendPrompt('PS C:\>');
+    buffer.openBlock(1, 'Get-Date');
+
+    expect(echoed(region)).toEqual([false]);
+  });
+
+  it('follows the row above when it arrives or changes after the heading', () => {
+    const region = makeRegion();
+    const buffer = new BufferDom(region);
+    buffer.openBlock(1, '');
+    buffer.openBlock(2, "read -p 'Name: ' n");
+    expect(echoed(region)).toEqual([false]);
+
+    buffer.applyLine(1, 1, 'Appended', "marlon@splyt:~$ read -p 'Name: ' n");
+    expect(echoed(region)).toEqual([true]);
+
+    buffer.applyLine(1, 1, 'Rewritten', 'something else');
+    expect(echoed(region)).toEqual([false]);
+  });
+
+  it('follows its own text when the block is renamed', () => {
+    const region = makeRegion();
+    const buffer = new BufferDom(region);
+    buffer.openBlock(1, 'x');
+    buffer.applyLine(1, 1, 'Appended', 'Your name: Marlon');
+    buffer.openBlock(2, 'typo');
+    expect(echoed(region)).toEqual([false, false]);
+
+    buffer.openBlock(2, 'Marlon');
+    expect(echoed(region)).toEqual([false, true]);
+  });
+});

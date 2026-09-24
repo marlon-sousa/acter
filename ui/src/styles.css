@@ -100,7 +100,8 @@ main {
 
 .visually-hidden,
 #command-form > label,
-#far-end-label {
+#far-end-label,
+#results h2.echoed:not(:focus) {
   position: absolute;
   width: 1px;
   height: 1px;
