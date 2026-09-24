@@ -31,6 +31,7 @@ pub enum SessionInput {
     FarEndLine {
         text: Option<String>,
         caret: u32,
+        anchored: bool,
     },
     PromptDrawn {
         text: String,
@@ -212,9 +213,17 @@ impl SessionActor {
             SessionInput::PromptDrawn { text } => {
                 self.sink.send(SessionEvent::PromptDrawn { text })
             }
-            SessionInput::FarEndLine { text, caret } => {
+            SessionInput::FarEndLine {
+                text,
+                caret,
+                anchored,
+            } => {
                 self.flush_render();
-                self.sink.send(SessionEvent::FarEndLine { text, caret });
+                self.sink.send(SessionEvent::FarEndLine {
+                    text,
+                    caret,
+                    anchored,
+                });
             }
             SessionInput::MarkersObserved => self.session = self.session.markers_observed(),
             SessionInput::GracePeriodExpired => {

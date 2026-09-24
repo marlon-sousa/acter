@@ -344,7 +344,7 @@ struct Due {
 struct FarEndLine {
     owner: LineOwner,
     anchor: Option<Anchor>,
-    /// Whether a submission cleared the anchor; a far end that hides its cursor also has none.
+    /// Whether Enter or Ctrl+C cleared the anchor; a far end that hides its cursor also has none.
     awaiting_prompt: bool,
     changed: Vec<RowChange>,
     watching: bool,
@@ -511,6 +511,8 @@ impl Pump {
         let bytes = key_bytes(&key, self.engine.modes());
         if key.key == Key::Enter {
             self.far_end_submitted().await;
+        } else if bytes == [0x03] {
+            self.await_prompt();
         }
         self.far_end.was = self.caret();
         self.far_end.changed.clear();
@@ -520,8 +522,7 @@ impl Pump {
 
     async fn far_end_submitted(&mut self) {
         let line = self.row_from_anchor().trim().to_owned();
-        self.far_end.anchor = None;
-        self.far_end.awaiting_prompt = true;
+        self.await_prompt();
         if line.is_empty() {
             return;
         }
@@ -530,6 +531,11 @@ impl Pump {
         self.close(None).await;
         self.open(command_id, Some(line));
         self.settle_running();
+    }
+
+    fn await_prompt(&mut self) {
+        self.far_end.anchor = None;
+        self.far_end.awaiting_prompt = true;
     }
 
     fn paste(&mut self, text: &str) {
@@ -567,8 +573,9 @@ impl Pump {
             held: &self.far_end.held,
         });
         match answer {
-            FarEndAnswer::Row { text, caret } => self.far_end_line(Some(text), caret),
-            FarEndAnswer::Caret { caret } => self.far_end_line(None, caret),
+            FarEndAnswer::Row { text, caret } => self.far_end_line(Some(text), caret, true),
+            FarEndAnswer::Detached { text } => self.far_end_line(Some(text), 0, false),
+            FarEndAnswer::Caret { caret } => self.far_end_line(None, caret, true),
             FarEndAnswer::Nothing => {}
         }
     }
@@ -628,7 +635,7 @@ impl Pump {
             column: cursor.column,
         });
         let text = self.row_from_anchor();
-        self.far_end_line(Some(text), 0);
+        self.far_end_line(Some(text), 0, true);
     }
 
     fn row_from_anchor(&self) -> String {
@@ -650,13 +657,14 @@ impl Pump {
         })
     }
 
-    fn far_end_line(&mut self, text: Option<String>, caret: usize) {
+    fn far_end_line(&mut self, text: Option<String>, caret: usize, anchored: bool) {
         if let Some(text) = text.as_ref() {
             self.far_end.held = text.clone();
         }
         self.send(SessionInput::FarEndLine {
             text,
             caret: u32::try_from(caret).unwrap_or(u32::MAX),
+            anchored,
         });
     }
 
@@ -1489,11 +1497,15 @@ mod tests {
             self.settle().await;
         }
 
-        fn far_end_lines(&self) -> Vec<(Option<String>, u32)> {
+        fn far_end_lines(&self) -> Vec<(Option<String>, u32, bool)> {
             self.events()
                 .into_iter()
                 .filter_map(|event| match event {
-                    SessionEvent::FarEndLine { text, caret } => Some((text, caret)),
+                    SessionEvent::FarEndLine {
+                        text,
+                        caret,
+                        anchored,
+                    } => Some((text, caret, anchored)),
                     _ => None,
                 })
                 .collect()
@@ -3360,7 +3372,7 @@ mod tests {
 
             assert_eq!(
                 session.far_end_lines(),
-                vec![(Some(String::new()), 0)],
+                vec![(Some(String::new()), 0, true)],
                 "the anchor is taken where the far end's cursor came to rest"
             );
         }
@@ -3378,7 +3390,7 @@ mod tests {
 
             assert_eq!(
                 session.far_end_lines().last(),
-                Some(&(Some("ls".to_owned()), 2)),
+                Some(&(Some("ls".to_owned()), 2, true)),
                 "the prompt stays behind and the command line is what is handed over"
             );
         }
@@ -3401,7 +3413,7 @@ mod tests {
 
             assert_eq!(
                 session.far_end_lines().last(),
-                Some(&(Some("ls ".to_owned()), 3)),
+                Some(&(Some("ls ".to_owned()), 3, true)),
                 "the cursor is past the row's last character, so the space is there"
             );
 
@@ -3412,7 +3424,7 @@ mod tests {
 
             assert_eq!(
                 session.far_end_lines().last(),
-                Some(&(Some("ls".to_owned()), 2)),
+                Some(&(Some("ls".to_owned()), 2, true)),
                 "the line the listener holds is a character shorter, which is a change"
             );
         }
@@ -3431,7 +3443,7 @@ mod tests {
 
             assert_eq!(
                 session.far_end_lines().last(),
-                Some(&(Some("exit".to_owned()), 4)),
+                Some(&(Some("exit".to_owned()), 4, true)),
                 "the anchor is what keeps the prompt out of it"
             );
         }
@@ -3448,7 +3460,7 @@ mod tests {
 
             assert_eq!(
                 session.far_end_lines().last(),
-                Some(&(Some("echo one".to_owned()), 8))
+                Some(&(Some("echo one".to_owned()), 8, true))
             );
         }
 
@@ -3468,7 +3480,7 @@ mod tests {
 
             assert_eq!(
                 session.far_end_lines().last(),
-                Some(&(None, 5)),
+                Some(&(None, 5, true)),
                 "no text, because no text changed"
             );
         }
@@ -3493,7 +3505,7 @@ mod tests {
 
             assert_eq!(
                 session.far_end_lines().last(),
-                Some(&(Some("Get-Command".to_owned()), 11)),
+                Some(&(Some("Get-Command".to_owned()), 11, true)),
                 "row count routes nothing: this is ordinary Tab completion"
             );
         }
@@ -3522,7 +3534,7 @@ mod tests {
 
             assert_eq!(
                 session.far_end_lines().last(),
-                Some(&(Some("> Skip pushing the branch".to_owned()), 0)),
+                Some(&(Some("> Skip pushing the branch".to_owned()), 0, false)),
                 "one option per press, and not the one they just left"
             );
         }
@@ -3557,7 +3569,7 @@ mod tests {
 
             assert_eq!(
                 session.far_end_lines().last(),
-                Some(&(Some("> Skip pushing the branch".to_owned()), 0)),
+                Some(&(Some("> Skip pushing the branch".to_owned()), 0, false)),
                 "the row that gained content is the answer, anchor or no anchor"
             );
         }
@@ -3582,7 +3594,7 @@ mod tests {
             );
             assert_eq!(
                 session.far_end_lines().last(),
-                Some(&(Some("echo one".to_owned()), 8)),
+                Some(&(Some("echo one".to_owned()), 8, true)),
                 "and it is the recalled line, with the caret at its end"
             );
         }
@@ -3618,7 +3630,7 @@ mod tests {
             );
             assert_eq!(
                 session.far_end_lines().last(),
-                Some(&(Some("> Push an existing repository".to_owned()), 0)),
+                Some(&(Some("> Push an existing repository".to_owned()), 0, false)),
                 "and it is the option they moved to, not the row that was erased"
             );
         }
@@ -3685,7 +3697,7 @@ mod tests {
             session.advance_to(4_000).await;
             assert_eq!(
                 session.far_end_lines().last(),
-                Some(&(Some("ls /tmp/al".to_owned()), 10)),
+                Some(&(Some("ls /tmp/al".to_owned()), 10, true)),
                 "the line being edited, before any of this"
             );
 
@@ -3701,7 +3713,7 @@ mod tests {
 
             assert_eq!(
                 session.far_end_lines().last(),
-                Some(&(Some("ls /tmp/al".to_owned()), 10)),
+                Some(&(Some("ls /tmp/al".to_owned()), 10, true)),
                 "the field holds the line being edited, not the candidates"
             );
 
@@ -3714,7 +3726,7 @@ mod tests {
 
             assert_eq!(
                 session.far_end_lines().last(),
-                Some(&(Some("ls /tmp/a".to_owned()), 9)),
+                Some(&(Some("ls /tmp/a".to_owned()), 9, true)),
                 "one character shorter, still without the prompt"
             );
         }
@@ -3755,7 +3767,7 @@ mod tests {
             );
             assert_eq!(
                 session.far_end_lines().last(),
-                Some(&(Some("ls /tmp/al".to_owned()), 10)),
+                Some(&(Some("ls /tmp/al".to_owned()), 10, true)),
                 "and the field still holds the line being edited"
             );
         }
@@ -3776,7 +3788,7 @@ mod tests {
 
             assert_eq!(
                 session.far_end_lines().last(),
-                Some(&(Some(String::new()), 0)),
+                Some(&(Some(String::new()), 0, true)),
                 "the new command line is empty, and it is the one the field now holds"
             );
 
@@ -3787,7 +3799,7 @@ mod tests {
 
             assert_eq!(
                 session.far_end_lines().last(),
-                Some(&(Some("ls".to_owned()), 2))
+                Some(&(Some("ls".to_owned()), 2, true))
             );
         }
 
@@ -3867,6 +3879,57 @@ mod tests {
                 session.interrupts(),
                 0,
                 "nothing asked the transport to interrupt anything"
+            );
+        }
+
+        #[tokio::test]
+        async fn ctrl_c_leaves_no_command_line_for_enter_to_submit() {
+            let session = at_a_prompt().await;
+            session.owner(LineOwner::FarEnd).await;
+            let _ = session.press(named(Key::Char('l'))).await;
+            session.emit(vec![line(1, "ls")]).await;
+            session.cursor_at(15, 0).await;
+            session.advance_to(4_000).await;
+            let before = session.started().len();
+
+            let _ = session.press(ctrl('c')).await;
+            let _ = session.press(named(Key::Enter)).await;
+
+            assert_eq!(
+                session.started().len(),
+                before,
+                "the cancelled line is not submitted by the Enter after it"
+            );
+        }
+
+        #[tokio::test]
+        async fn the_settling_after_ctrl_c_anchors_at_the_new_prompt() {
+            let session = at_a_prompt().await;
+            session.owner(LineOwner::FarEnd).await;
+            let _ = session.press(named(Key::Char('l'))).await;
+            session.emit(vec![line(1, "ls")]).await;
+            session.cursor_at(15, 0).await;
+            session.advance_to(4_000).await;
+
+            let _ = session.press(ctrl('c')).await;
+            session.emit(vec![line(4, "user@host:~$ ")]).await;
+            session.cursor_at(13, 1).await;
+            session.advance_to(8_000).await;
+
+            assert_eq!(
+                session.far_end_lines().last(),
+                Some(&(Some(String::new()), 0, true)),
+                "the field holds the new, empty command line and not the prompt"
+            );
+
+            let _ = session.press(named(Key::Char('d'))).await;
+            session.emit(vec![line(4, "d")]).await;
+            session.cursor_at(14, 1).await;
+            session.advance_to(12_000).await;
+
+            assert_eq!(
+                session.far_end_lines().last(),
+                Some(&(Some("d".to_owned()), 1, true))
             );
         }
 
@@ -4055,7 +4118,7 @@ mod tests {
             );
             assert_eq!(
                 session.far_end_lines().last(),
-                Some(&(Some("cd a".to_owned()), 4)),
+                Some(&(Some("cd a".to_owned()), 4, true)),
                 "while the field still holds the line being edited"
             );
         }
