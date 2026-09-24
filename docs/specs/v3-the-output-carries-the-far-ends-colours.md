@@ -7,6 +7,13 @@ Lane 5, the look; roadmap entry 54. It ships as two PRs, V3 and V3.1. The spec l
 Every output row reaches the frontend as plain text. A sighted person misses the red error, the
 coloured `ls` listing and the green and red of `git diff` before anything else.
 
+Found on 2026-09-23, in the conversation that agreed V1, and recorded as roadmap entry 54.
+DESIGN.md records that the terminal grid carries attributes and the buffer does not. The user
+wanted the palette chosen here; DESIGN's look section names Campbell. The user's direction the
+same day: colour is not announced for now. It travels with the text as metadata, so it can be
+drawn for a sighted person, and whether and how a screen reader user ever hears it is decided
+later, with the colour already there to work from.
+
 Read from the code on 2026-09-23:
 
 - **The engine has colour and drops it.** `alacritty_terminal` 0.26.0's `Cell` holds
@@ -49,8 +56,15 @@ Campbell, the palette DESIGN's look section names, against the session backgroun
      strings;
    - `Style` holds `fg` and `bg` as `Option<Colour>`, plus `bold`, `dim`, `italic`,
      `underline`, `inverse` and `strike`;
-   - `Colour` is `Named(0..15)`, `Indexed(16..255)` or `Rgb { r, g, b }`;
-   - the terminal's own default foreground and background are `None`;
+   - `Colour` is `Named(0..15)`, `Indexed(16..255)` or `Rgb { r, g, b }`, sent as
+     `{ kind: "Named", index }`, `{ kind: "Indexed", index }` or `{ kind: "Rgb", r, g, b }`;
+   - a 256-colour index below 16 is sent as the `Named` colour it is;
+   - the terminal's own default foreground and background are `None`, and so is every other
+     colour outside the palette that the emulator names (the cursor's, the bright and dim
+     foregrounds);
+   - the emulator's dim palette colours, which only its renderer produces, are sent as their
+     base colour with `dim` set;
+   - every underline style (double, curly, dotted, dashed) is `underline`;
    - `HIDDEN` text is sent as it is with no run, because the grid already holds what the far
      end printed.
    - Runs with the default style are left out, so a line with no colour carries an empty list.
@@ -65,6 +79,13 @@ Campbell, the palette DESIGN's look section names, against the session backgroun
    never spoken. For every consumer except the buffer, a `Rewritten` whose text equals the
    row's current text is not a change: far-end row diffs and echo detection ignore it. So
    PSReadLine's colour-only menu highlight moves on screen and causes nothing else.
+   - It does not move the cursor row, redraw the prompt, or make the row owed, so the row's
+     settlement is not spoken again.
+   - It reaches the buffer only where the row's text already did: a row shown in the open
+     block, a row printed at the far end's prompt and not yet published, or a row held while
+     an echo is awaited, whose held part takes the new runs. It never adds a row.
+   - A line that has already settled keeps the colours it settled with; only a change of its
+     text makes it a new line, as today.
 5. **The protocol carries the runs to the buffer and nowhere else.**
    `SessionEvent::Output` gains `runs: Vec<StyleRun>`. `PromptDrawn`, `FarEndLine` and
    announcements do not change.
