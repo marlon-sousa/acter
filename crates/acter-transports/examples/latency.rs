@@ -105,7 +105,10 @@ async fn measure(
                 }
                 let mut changed = 0usize;
                 for item in &items {
-                    if let TerminalItem::Line { id, text, revision } = item {
+                    if let TerminalItem::Line {
+                        id, text, revision, ..
+                    } = item
+                    {
                         changed += 1;
                         println!(
                             "      +{:>4} ms  line {:>3} {:?} {:?}",

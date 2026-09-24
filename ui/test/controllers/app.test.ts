@@ -531,6 +531,7 @@ describe('event rendering (decision 2)', () => {
       revision: 'Appended',
       text: 'hello from acter',
       prompt: false,
+      runs: [],
     });
     backend.emit({
       type: 'Announce',
@@ -586,6 +587,7 @@ describe('event rendering (decision 2)', () => {
       revision: 'Appended',
       text: 'hello',
       prompt: false,
+      runs: [],
     });
     backend.emit({
       type: 'Announce',
@@ -608,6 +610,7 @@ describe('event rendering (decision 2)', () => {
       revision: 'Appended',
       text,
       prompt: false,
+      runs: [],
     });
     backend.emit({
       type: 'Announce',
@@ -633,6 +636,7 @@ describe('event rendering (decision 2)', () => {
       revision: 'Appended',
       text: 'still working',
       prompt: false,
+      runs: [],
     });
 
     expect(buffer.appended).toEqual([{ commandId: 1, line: 1, revision: 'Appended', text: 'still working' }]);
@@ -650,6 +654,7 @@ describe('event rendering (decision 2)', () => {
       revision: 'Appended',
       text: 'hello from acter',
       prompt: false,
+      runs: [],
     });
     backend.emit({
       type: 'Announce',
@@ -673,6 +678,7 @@ describe('event rendering (decision 2)', () => {
       revision: 'Appended',
       text: 'error: boom',
       prompt: false,
+      runs: [],
     });
     backend.emit({
       type: 'Announce',
@@ -710,6 +716,7 @@ describe('event rendering (decision 2)', () => {
       revision: 'Appended',
       text: 'phase one',
       prompt: false,
+      runs: [],
     });
     backend.emit({
       type: 'Announce',
@@ -726,6 +733,7 @@ describe('event rendering (decision 2)', () => {
       revision: 'Appended',
       text: 'late',
       prompt: false,
+      runs: [],
     });
     expect(buffer.opened).toEqual([
       { commandId: 1, commandLine: '' },
@@ -744,6 +752,7 @@ describe('event rendering (decision 2)', () => {
       revision: 'Appended',
       text: 'a\nb',
       prompt: false,
+      runs: [],
     });
     backend.emit({
       type: 'Announce',
@@ -766,6 +775,7 @@ describe('event rendering (decision 2)', () => {
       revision: 'Appended',
       text: 'a\nb',
       prompt: false,
+      runs: [],
     });
     backend.emit({
       type: 'Announce',
@@ -789,6 +799,7 @@ describe('event rendering (decision 2)', () => {
       revision: 'Appended',
       text: 'a\nb',
       prompt: false,
+      runs: [],
     });
     backend.emit({
       type: 'Announce',
@@ -802,6 +813,7 @@ describe('event rendering (decision 2)', () => {
       revision: 'Appended',
       text: 'trickle',
       prompt: false,
+      runs: [],
     });
     backend.emit({
       type: 'Announce',
@@ -837,6 +849,7 @@ describe('event rendering (decision 2)', () => {
       revision: 'Appended',
       text: 'a\nb',
       prompt: false,
+      runs: [],
     });
     backend.emit({
       type: 'Announce',
@@ -851,6 +864,7 @@ describe('event rendering (decision 2)', () => {
       revision: 'Appended',
       text: 'ok',
       prompt: false,
+      runs: [],
     });
     backend.emit({
       type: 'Announce',
@@ -924,6 +938,7 @@ describe('event rendering (decision 2)', () => {
       revision: 'Appended',
       text: 'orphan chunk',
       prompt: false,
+      runs: [],
     });
 
     expect(buffer.opened).toEqual([{ commandId: 7, commandLine: '' }]);
@@ -956,6 +971,7 @@ describe('event rendering (decision 2)', () => {
       revision: 'Appended',
       text: 'hello from acter',
       prompt: false,
+      runs: [],
     });
 
     expect(buffer.opened).toEqual([{ commandId: 1, commandLine: 'small' }]);
@@ -1239,6 +1255,7 @@ describe('Announce (B1.5): speech is its own event', () => {
       revision: 'Appended',
       text: 'hello\n',
       prompt: false,
+      runs: [],
     });
     backend.emit({
       type: 'Announce',
@@ -1261,6 +1278,7 @@ describe('Announce (B1.5): speech is its own event', () => {
       revision: 'Appended',
       text: 'y\ny\n',
       prompt: false,
+      runs: [],
     });
     backend.emit({
       type: 'Announce',
@@ -1344,6 +1362,7 @@ describe('Announce (B1.5): speech is its own event', () => {
       revision: 'Appended',
       text,
       prompt: false,
+      runs: [],
     });
     }
 
@@ -1510,6 +1529,7 @@ describe('connecting to a profile (spec B7)', () => {
       revision: 'Appended',
       text: 'from the old shell',
       prompt: false,
+      runs: [],
     });
     expect(buffer.appended).toHaveLength(1);
 
@@ -1679,6 +1699,7 @@ describe('the two faces of the window (spec A10)', () => {
       revision: 'Appended',
       text: 'some history',
       prompt: false,
+      runs: [],
     });
     const before = buffer.cleared;
 

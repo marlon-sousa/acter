@@ -10,14 +10,14 @@ mod services;
 
 pub use controllers::{Requests, SessionActor, SessionInput, Wake};
 pub use entities::{
-    AcceptedHostKey, Announcement, AttemptId, CommandId, ConnectAnswer, ConnectQuestion,
+    AcceptedHostKey, Announcement, AttemptId, Colour, CommandId, ConnectAnswer, ConnectQuestion,
     ConnectStep, Connectable, Connected, ConnectionKind, ConnectionState, ExitCode, FORMAT, Fault,
     HostKeyOrigin, Integration, Key, KeyAck, KeyPress, LaunchRequest, LineId, LineOwner,
     LineRevision, MenuAction, Mode, Osc133Marker, PacingConfig, PacingState, PathStanding,
     ProfileId, Provenance, SavedConnection, SavedConnections, SavedRow, SavedTarget, Screen,
     SessionEvent, SessionId, SessionIntent, SessionSetup, SessionState, SetUp, ShellInstall,
-    ShellMarkers, Signer, StoredSettings, SubmitAck, TerminalItem, Variant, Verdict,
-    no_such_connection, refused, same_name,
+    ShellMarkers, Signer, StoredSettings, Style, StyleRun, SubmitAck, TerminalItem, Variant,
+    Verdict, join_runs, no_such_connection, refused, same_name, slice_runs,
 };
 pub use policies::{
     Anchor, Binding, BoundaryEvent, BoundaryTracker, Caret, Connection, FarEndAnswer, Keystroke,

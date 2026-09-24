@@ -5,7 +5,7 @@
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
-use crate::{CommandId, ConnectionState, ExitCode, LineId, LineRevision};
+use crate::{CommandId, ConnectionState, ExitCode, LineId, LineRevision, StyleRun};
 
 /// Everything the backend streams to the frontend about one session.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
@@ -25,6 +25,8 @@ pub enum SessionEvent {
         revision: LineRevision,
         text: String,
         prompt: bool,
+        /// Counted from the start of `text`; see [`TerminalItem::Line`](crate::TerminalItem).
+        runs: Vec<StyleRun>,
     },
     /// OSC 133 D. A nonzero exit code follows as `Announce { Failed }`; a zero one is never
     /// sent.
@@ -91,6 +93,7 @@ pub enum Announcement {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{Colour, Style};
     use serde_json::json;
 
     fn every_variant() -> Vec<SessionEvent> {
@@ -109,6 +112,7 @@ mod tests {
                 revision: LineRevision::Appended,
                 text: "hello".to_owned(),
                 prompt: false,
+                runs: vec![],
             },
             SessionEvent::Output {
                 command_id: CommandId(1),
@@ -116,6 +120,15 @@ mod tests {
                 revision: LineRevision::Rewritten,
                 text: "hello again".to_owned(),
                 prompt: false,
+                runs: vec![StyleRun {
+                    start: 6,
+                    len: 5,
+                    style: Style {
+                        fg: Some(Colour::Indexed { index: 208 }),
+                        underline: true,
+                        ..Style::default()
+                    },
+                }],
             },
             SessionEvent::CommandFinished {
                 command_id: CommandId(1),
@@ -191,6 +204,7 @@ mod tests {
             revision: LineRevision::Appended,
             text: "line".to_owned(),
             prompt: false,
+            runs: vec![],
         };
         assert_eq!(
             serde_json::to_value(&event).unwrap(),
@@ -201,6 +215,7 @@ mod tests {
                 "revision": "Appended",
                 "text": "line",
                 "prompt": false,
+                "runs": [],
             })
         );
     }
@@ -214,6 +229,7 @@ mod tests {
                 revision: LineRevision::Rewritten,
                 text: String::new(),
                 prompt: false,
+                runs: vec![],
             })
             .unwrap(),
             json!({
@@ -223,7 +239,46 @@ mod tests {
                 "revision": "Rewritten",
                 "text": "",
                 "prompt": false,
+                "runs": [],
             })
+        );
+    }
+
+    #[test]
+    fn output_carries_the_runs_that_style_its_text() {
+        let event = SessionEvent::Output {
+            command_id: CommandId(3),
+            line: LineId(9),
+            revision: LineRevision::Appended,
+            text: "error: gone".to_owned(),
+            prompt: false,
+            runs: vec![StyleRun {
+                start: 0,
+                len: 5,
+                style: Style {
+                    fg: Some(Colour::Named { index: 1 }),
+                    bold: true,
+                    ..Style::default()
+                },
+            }],
+        };
+
+        assert_eq!(
+            serde_json::to_value(&event).unwrap()["runs"],
+            json!([{
+                "start": 0,
+                "len": 5,
+                "style": {
+                    "fg": { "kind": "Named", "index": 1 },
+                    "bg": null,
+                    "bold": true,
+                    "dim": false,
+                    "italic": false,
+                    "underline": false,
+                    "inverse": false,
+                    "strike": false,
+                },
+            }])
         );
     }
 

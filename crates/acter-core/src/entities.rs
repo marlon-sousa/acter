@@ -19,6 +19,7 @@ mod shell_install;
 mod shell_markers;
 mod signature_verdict;
 mod stored_settings;
+mod style_run;
 mod terminal_item;
 mod unspoken_text;
 
@@ -43,5 +44,7 @@ pub use shell_install::{PathStanding, Provenance, ShellInstall};
 pub use shell_markers::ShellMarkers;
 pub use signature_verdict::{Fault, Signer, Verdict};
 pub use stored_settings::{FORMAT, StoredSettings};
+pub(crate) use style_run::utf16_len;
+pub use style_run::{Colour, Style, StyleRun, join_runs, slice_runs};
 pub use terminal_item::{LineId, LineRevision, TerminalItem};
 pub(crate) use unspoken_text::UnspokenText;

@@ -5,24 +5,56 @@ use std::collections::BTreeMap;
 use std::mem::take;
 use std::ops::Bound::{Excluded, Included, Unbounded};
 
-use acter_core::{LineId, LineRevision, TerminalItem};
+use acter_core::{Colour, LineId, LineRevision, Style, StyleRun, TerminalItem, slice_runs};
 use alacritty_terminal::Term;
 use alacritty_terminal::event::EventListener;
 use alacritty_terminal::grid::{Dimensions, Grid};
 use alacritty_terminal::index::Line;
 use alacritty_terminal::term::TermMode;
 use alacritty_terminal::term::cell::{Cell, Flags};
-use alacritty_terminal::vte::ansi::{ClearMode, Handler};
+use alacritty_terminal::vte::ansi::{ClearMode, Color, Handler, NamedColor, Rgb};
 
 const SCROLLBACK_GAP: &str = "Some output was lost before it could be read: more lines \
                               arrived at once than the terminal can hold.";
 
-/// `id` is `None` once the line has settled; the text stays so that only a row that changes
-/// afterwards becomes a new line.
+/// `id` is `None` once the line has settled; the text stays so that only a row whose text
+/// changes afterwards becomes a new line.
 #[derive(Debug)]
 struct Tracked {
     id: Option<LineId>,
-    emitted: String,
+    emitted: Styled,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct Styled {
+    text: String,
+    runs: Vec<StyleRun>,
+}
+
+impl Styled {
+    fn plain(text: &str) -> Self {
+        Self {
+            text: text.to_owned(),
+            runs: Vec::new(),
+        }
+    }
+
+    fn units(&self) -> u32 {
+        utf16_len(&self.text)
+    }
+
+    fn push(&mut self, characters: impl IntoIterator<Item = char>, style: Style) {
+        let start = self.units();
+        self.text.extend(characters);
+        let len = self.units() - start;
+        if style == Style::default() || len == 0 {
+            return;
+        }
+        match self.runs.last_mut() {
+            Some(last) if last.style == style && last.start + last.len == start => last.len += len,
+            _ => self.runs.push(StyleRun { start, len, style }),
+        }
+    }
 }
 
 /// Rows are keyed by an absolute number that survives scrolling and eviction, because
@@ -61,7 +93,11 @@ impl Extractor {
         if view.saturated(self.staging_rows) {
             self.settle_from_record(out);
             let id = self.mint();
-            out.push(item(id, SCROLLBACK_GAP.to_owned(), LineRevision::Settled));
+            out.push(item(
+                id,
+                Styled::plain(SCROLLBACK_GAP),
+                LineRevision::Settled,
+            ));
             self.scan_floor = view.oldest;
         }
 
@@ -88,9 +124,9 @@ impl Extractor {
             let Some(id) = tracked.id.take() else {
                 continue;
             };
-            let (text, _) = view.read_line(*row);
-            out.push(item(id, text.clone(), LineRevision::Settled));
-            tracked.emitted = text;
+            let (line, _) = view.read_line(*row);
+            out.push(item(id, line.clone(), LineRevision::Settled));
+            tracked.emitted = line;
         }
     }
 
@@ -102,8 +138,8 @@ impl Extractor {
         let view = View::of(term, self.base);
         for (row, tracked) in take(&mut self.lines) {
             if let Some(id) = tracked.id {
-                let (text, _) = view.read_line(row);
-                out.push(item(id, text, LineRevision::Settled));
+                let (line, _) = view.read_line(row);
+                out.push(item(id, line, LineRevision::Settled));
             }
         }
     }
@@ -118,7 +154,7 @@ impl Extractor {
 
     /// Emits the line starting at `row` and returns the absolute row it ends on.
     fn emit_line(&mut self, view: &View<'_>, row: usize, out: &mut Vec<TerminalItem>) -> usize {
-        let (text, last) = view.read_line(row);
+        let (line, last) = view.read_line(row);
         // A line is final once all of it, continuation rows included, has left the screen area.
         let settled = last < view.top;
 
@@ -128,23 +164,19 @@ impl Extractor {
                 emitted,
             }) => {
                 if settled {
-                    out.push(item(id, text, LineRevision::Settled));
+                    out.push(item(id, line, LineRevision::Settled));
                 } else {
-                    match text.strip_prefix(emitted.as_str()) {
-                        Some("") => {}
-                        Some(delta) => out.push(item(id, delta.to_owned(), LineRevision::Appended)),
-                        None => out.push(item(id, text.clone(), LineRevision::Rewritten)),
-                    }
+                    revise(id, &emitted, &line, out);
                     self.lines.insert(
                         row,
                         Tracked {
                             id: Some(id),
-                            emitted: text,
+                            emitted: line,
                         },
                     );
                 }
             }
-            Some(frozen) if frozen.emitted == text => {
+            Some(frozen) if frozen.emitted.text == line.text => {
                 if !settled {
                     self.lines.insert(row, frozen);
                 }
@@ -152,34 +184,28 @@ impl Extractor {
             Some(_) | None => {
                 self.absorb(row, last, out);
                 match self.take_place_below(last, out) {
-                    Some((id, _)) if settled => out.push(item(id, text, LineRevision::Settled)),
+                    Some((id, _)) if settled => out.push(item(id, line, LineRevision::Settled)),
                     Some((id, shown)) => {
-                        match text.strip_prefix(shown.as_str()) {
-                            Some("") => {}
-                            Some(delta) => {
-                                out.push(item(id, delta.to_owned(), LineRevision::Appended));
-                            }
-                            None => out.push(item(id, text.clone(), LineRevision::Rewritten)),
-                        }
+                        revise(id, &shown, &line, out);
                         self.lines.insert(
                             row,
                             Tracked {
                                 id: Some(id),
-                                emitted: text,
+                                emitted: line,
                             },
                         );
                     }
                     None => {
                         let id = self.mint();
                         if settled {
-                            out.push(item(id, text, LineRevision::Settled));
+                            out.push(item(id, line, LineRevision::Settled));
                         } else {
-                            out.push(item(id, text.clone(), LineRevision::Appended));
+                            out.push(item(id, line.clone(), LineRevision::Appended));
                             self.lines.insert(
                                 row,
                                 Tracked {
                                     id: Some(id),
-                                    emitted: text,
+                                    emitted: line,
                                 },
                             );
                         }
@@ -209,7 +235,7 @@ impl Extractor {
             .collect();
         for key in swallowed {
             if let Some(Tracked { id: Some(id), .. }) = self.lines.remove(&key) {
-                out.push(item(id, String::new(), LineRevision::Settled));
+                out.push(item(id, Styled::default(), LineRevision::Settled));
             }
         }
     }
@@ -220,7 +246,7 @@ impl Extractor {
         &mut self,
         last: usize,
         out: &mut Vec<TerminalItem>,
-    ) -> Option<(LineId, String)> {
+    ) -> Option<(LineId, Styled)> {
         let below: Vec<usize> = self
             .lines
             .range((Excluded(last), Unbounded))
@@ -243,12 +269,12 @@ impl Extractor {
             receiver = next;
         }
         let fresh = self.mint();
-        out.push(item(fresh, String::new(), LineRevision::Appended));
+        out.push(item(fresh, Styled::default(), LineRevision::Appended));
         self.lines.insert(
             receiver,
             Tracked {
                 id: Some(fresh),
-                emitted: String::new(),
+                emitted: Styled::default(),
             },
         );
         Some(taken)
@@ -293,8 +319,78 @@ impl Extractor {
     }
 }
 
-fn item(id: LineId, text: String, revision: LineRevision) -> TerminalItem {
-    TerminalItem::Line { id, text, revision }
+fn item(id: LineId, line: Styled, revision: LineRevision) -> TerminalItem {
+    TerminalItem::Line {
+        id,
+        text: line.text,
+        revision,
+        runs: line.runs,
+    }
+}
+
+fn revise(id: LineId, was: &Styled, now: &Styled, out: &mut Vec<TerminalItem>) {
+    let from = was.units();
+    match now.text.strip_prefix(was.text.as_str()) {
+        Some(delta) if slice_runs(&now.runs, 0, from) == was.runs => {
+            if !delta.is_empty() {
+                let added = Styled {
+                    text: delta.to_owned(),
+                    runs: slice_runs(&now.runs, from, now.units()),
+                };
+                out.push(item(id, added, LineRevision::Appended));
+            }
+        }
+        _ => out.push(item(id, now.clone(), LineRevision::Rewritten)),
+    }
+}
+
+fn utf16_len(text: &str) -> u32 {
+    u32::try_from(text.encode_utf16().count()).unwrap_or(u32::MAX)
+}
+
+fn style_of(cell: &Cell) -> Style {
+    let (fg, dimmed) = colour(cell.fg);
+    let (bg, _) = colour(cell.bg);
+    let flags = cell.flags;
+    Style {
+        fg,
+        bg,
+        bold: flags.contains(Flags::BOLD),
+        dim: dimmed || flags.contains(Flags::DIM),
+        italic: flags.contains(Flags::ITALIC),
+        underline: flags.intersects(Flags::ALL_UNDERLINES),
+        inverse: flags.contains(Flags::INVERSE),
+        strike: flags.contains(Flags::STRIKEOUT),
+    }
+}
+
+/// `None` is the terminal's default colour; the flag is whether the colour was a dim one.
+fn colour(colour: Color) -> (Option<Colour>, bool) {
+    match colour {
+        Color::Spec(Rgb { r, g, b }) => (Some(Colour::Rgb { r, g, b }), false),
+        Color::Indexed(index) if index < 16 => (Some(Colour::Named { index }), false),
+        Color::Indexed(index) => (Some(Colour::Indexed { index }), false),
+        Color::Named(
+            named @ (NamedColor::DimBlack
+            | NamedColor::DimRed
+            | NamedColor::DimGreen
+            | NamedColor::DimYellow
+            | NamedColor::DimBlue
+            | NamedColor::DimMagenta
+            | NamedColor::DimCyan
+            | NamedColor::DimWhite),
+        ) => (
+            Some(Colour::Named {
+                index: named.to_bright() as u8,
+            }),
+            true,
+        ),
+        Color::Named(NamedColor::DimForeground) => (None, true),
+        Color::Named(named) if (named as usize) < 16 => {
+            (Some(Colour::Named { index: named as u8 }), false)
+        }
+        Color::Named(_) => (None, false),
+    }
 }
 
 /// Absolute rows run from `oldest` (top of history) to `bottom`; a row is in history when it is
@@ -330,25 +426,26 @@ impl<'a> View<'a> {
     }
 
     /// Follows the wrap flag and returns the logical line with the absolute row it ends on.
-    fn read_line(&self, row: usize) -> (String, usize) {
-        let mut text = String::new();
+    fn read_line(&self, row: usize) -> (Styled, usize) {
+        let mut line = Styled::default();
         let mut last = row;
         loop {
-            let wraps = self.read_row(last, &mut text);
+            let wraps = self.read_row(last, &mut line);
             if !wraps || last >= self.bottom {
                 break;
             }
             last += 1;
         }
-        let trimmed = text.trim_end().len();
-        text.truncate(trimmed);
-        (text, last)
+        let trimmed = line.text.trim_end().len();
+        line.text.truncate(trimmed);
+        line.runs = slice_runs(&line.runs, 0, line.units());
+        (line, last)
     }
 
     /// Appends one row's characters and reports whether it wraps into the next.
-    fn read_row(&self, row: usize, text: &mut String) -> bool {
-        let line = &self.grid[self.line_of(row)];
-        for cell in line {
+    fn read_row(&self, row: usize, line: &mut Styled) -> bool {
+        let cells = &self.grid[self.line_of(row)];
+        for cell in cells {
             // Keeping wide-glyph spacer cells would double every CJK character.
             if cell
                 .flags
@@ -356,19 +453,21 @@ impl<'a> View<'a> {
             {
                 continue;
             }
-            text.push(cell.c);
-            if let Some(zerowidth) = cell.zerowidth() {
-                text.extend(zerowidth);
-            }
+            let zerowidth = cell.zerowidth().unwrap_or_default();
+            line.push(
+                std::iter::once(cell.c).chain(zerowidth.iter().copied()),
+                style_of(cell),
+            );
         }
-        line.last()
+        cells
+            .last()
             .is_some_and(|cell| cell.flags.contains(Flags::WRAPLINE))
     }
 
     fn row_is_blank(&self, row: usize) -> bool {
-        let mut text = String::new();
-        self.read_row(row, &mut text);
-        text.trim_end().is_empty()
+        let mut line = Styled::default();
+        self.read_row(row, &mut line);
+        line.text.trim_end().is_empty()
     }
 
     fn line_of(&self, row: usize) -> Line {
@@ -378,15 +477,23 @@ impl<'a> View<'a> {
 
 #[cfg(test)]
 pub(super) fn grid_lines<T: EventListener>(term: &Term<T>) -> Vec<String> {
+    styled_grid_lines(term)
+        .into_iter()
+        .map(|(text, _)| text)
+        .collect()
+}
+
+#[cfg(test)]
+pub(super) fn styled_grid_lines<T: EventListener>(term: &Term<T>) -> Vec<(String, Vec<StyleRun>)> {
     let view = View::of(term, 0);
     let mut lines = Vec::new();
     let mut row = view.oldest;
     while row <= view.bottom {
-        let (text, last) = view.read_line(row);
-        lines.push(text);
+        let (line, last) = view.read_line(row);
+        lines.push((line.text, line.runs));
         row = last + 1;
     }
-    while lines.last().is_some_and(|line| line.is_empty()) {
+    while lines.last().is_some_and(|(text, _)| text.is_empty()) {
         lines.pop();
     }
     lines

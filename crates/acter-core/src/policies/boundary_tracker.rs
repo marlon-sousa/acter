@@ -11,7 +11,9 @@
 //! engine and only carried here; command ids and the integration grace period belong to
 //! the service above it, because both need state this layer does not have.
 
-use crate::{ExitCode, LineId, LineRevision, Osc133Marker, Screen, ShellMarkers, TerminalItem};
+use crate::{
+    ExitCode, LineId, LineRevision, Osc133Marker, Screen, ShellMarkers, StyleRun, TerminalItem,
+};
 
 /// Where a piece of text fell relative to the markers around it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -45,6 +47,7 @@ pub enum BoundaryEvent {
         id: LineId,
         text: String,
         revision: LineRevision,
+        runs: Vec<StyleRun>,
     },
     /// The open block closed. `exit` is `None` when the end was not a well-formed `D`
     /// carrying a code — either a bare `D`, or a prompt reappearing mid-block.
@@ -111,13 +114,19 @@ impl BoundaryTracker {
             match item {
                 // Empty text passes through rather than being swallowed: the pacing
                 // policy depends on receiving it too.
-                TerminalItem::Line { id, text, revision } => {
+                TerminalItem::Line {
+                    id,
+                    text,
+                    revision,
+                    runs,
+                } => {
                     self.observe_row(id, &mut events);
                     events.push(BoundaryEvent::Line {
                         region: self.region,
                         id,
                         text,
                         revision,
+                        runs,
                     });
                 }
                 // A marker can end a command-line region in a shell that marks no `C`:
@@ -251,6 +260,7 @@ mod tests {
     use proptest::prelude::*;
 
     use super::*;
+    use crate::Style;
 
     /// A counter for tests that do not care which id they get, only that one is carried.
     static NEXT_ID: AtomicU64 = AtomicU64::new(1);
@@ -270,6 +280,7 @@ mod tests {
             id: LineId(id),
             text: s.to_owned(),
             revision,
+            runs: vec![],
         }
     }
 
@@ -319,6 +330,7 @@ mod tests {
                     id: LineId(7),
                     text: "hello".to_owned(),
                     revision: LineRevision::Settled,
+                    runs: vec![],
                 },
                 BoundaryEvent::BlockEnded {
                     exit: Some(ExitCode(0)),
@@ -381,6 +393,7 @@ mod tests {
                     id: LineId(3),
                     text: "still the prompt".to_owned(),
                     revision: LineRevision::Appended,
+                    runs: vec![],
                 },
             ]
         );
@@ -419,6 +432,7 @@ mod tests {
                     id: LineId(1),
                     text: "output".to_owned(),
                     revision: LineRevision::Appended,
+                    runs: vec![],
                 },
                 BoundaryEvent::BlockEnded { exit: None },
                 BoundaryEvent::Line {
@@ -426,6 +440,7 @@ mod tests {
                     id: LineId(2),
                     text: "prompt".to_owned(),
                     revision: LineRevision::Appended,
+                    runs: vec![],
                 },
             ]
         );
@@ -477,6 +492,7 @@ mod tests {
             id: LineId(9),
             text: String::new(),
             revision: LineRevision::Appended,
+            runs: vec![],
         }));
     }
 
@@ -527,6 +543,7 @@ mod tests {
                     id: LineId(1),
                     text: "before".to_owned(),
                     revision: LineRevision::Appended,
+                    runs: vec![],
                 },
                 BoundaryEvent::ScreenChanged(Screen::Alternate),
                 BoundaryEvent::Line {
@@ -534,6 +551,7 @@ mod tests {
                     id: LineId(2),
                     text: "after".to_owned(),
                     revision: LineRevision::Appended,
+                    runs: vec![],
                 },
             ]
         );
@@ -560,15 +578,31 @@ mod tests {
         ]
     }
 
+    fn any_run() -> impl Strategy<Value = StyleRun> {
+        (any::<u32>(), any::<u32>(), any::<bool>()).prop_map(|(start, len, bold)| StyleRun {
+            start,
+            len,
+            style: Style {
+                bold,
+                ..Style::default()
+            },
+        })
+    }
+
     fn any_item() -> impl Strategy<Value = TerminalItem> {
         prop_oneof![
-            (any::<u64>(), any::<String>(), any_revision()).prop_map(|(id, text, revision)| {
-                TerminalItem::Line {
+            (
+                any::<u64>(),
+                any::<String>(),
+                any_revision(),
+                prop::collection::vec(any_run(), 0..3)
+            )
+                .prop_map(|(id, text, revision, runs)| TerminalItem::Line {
                     id: LineId(id),
                     text,
                     revision,
-                }
-            }),
+                    runs,
+                }),
             Just(TerminalItem::Marker(Osc133Marker::PromptStart)),
             Just(TerminalItem::Marker(Osc133Marker::CommandStart)),
             Just(TerminalItem::Marker(Osc133Marker::OutputStart)),
@@ -598,11 +632,14 @@ mod tests {
             let emitted: Vec<_> = events
                 .iter()
                 .filter_map(|event| match event {
-                    BoundaryEvent::Line { id, text, revision, .. } => Some(TerminalItem::Line {
-                        id: *id,
-                        text: text.clone(),
-                        revision: *revision,
-                    }),
+                    BoundaryEvent::Line { id, text, revision, runs, .. } => {
+                        Some(TerminalItem::Line {
+                            id: *id,
+                            text: text.clone(),
+                            revision: *revision,
+                            runs: runs.clone(),
+                        })
+                    }
                     BoundaryEvent::ScreenChanged(screen) => {
                         Some(TerminalItem::ScreenChanged(*screen))
                     }

@@ -16,6 +16,12 @@ export type Announcement = { kind: "ReadAloud"; text: string } |
 /**  Minted per attempt, so an answer to an abandoned dialog never resolves a newer attempt. */
 export type AttemptId = number;
 
+export type Colour = 
+/**  One of the sixteen palette colours, 0 to 15. */
+{ kind: "Named"; index: number } | 
+/**  An entry of the 256-colour table from 16 to 255. */
+{ kind: "Indexed"; index: number } | { kind: "Rgb"; r: number; g: number; b: number };
+
 export type CommandId = number;
 
 /**  What the person decided; never serialized, since [`Secret`](crate::Secret) cannot be. */
@@ -248,7 +254,9 @@ export type SessionEvent =
  *  What to put in the buffer, never what to say; speech is only ever an
  *  [`Announce`](SessionEvent::Announce). `prompt` marks a row the shell drew as its prompt.
  */
-{ type: "Output"; command_id: CommandId; line: LineId; revision: LineRevision; text: string; prompt: boolean } | 
+{ type: "Output"; command_id: CommandId; line: LineId; revision: LineRevision; text: string; prompt: boolean; 
+/**  Counted from the start of `text`; see [`TerminalItem::Line`](crate::TerminalItem). */
+runs: StyleRun[] } | 
 /**
  *  OSC 133 D. A nonzero exit code follows as `Announce { Failed }`; a zero one is never
  *  sent.
@@ -289,6 +297,25 @@ export type SessionId = number;
 export type SetUp = 
 /**  Ask, unless told not to about this shell, then send the line. */
 "Yes" | "No";
+
+/**  A `None` colour is the terminal's own default. */
+export type Style = {
+	fg: Colour | null,
+	bg: Colour | null,
+	bold: boolean,
+	dim: boolean,
+	italic: boolean,
+	underline: boolean,
+	inverse: boolean,
+	strike: boolean,
+};
+
+/**  `start` and `len` count UTF-16 code units of the line's text. */
+export type StyleRun = {
+	start: number,
+	len: number,
+	style: Style,
+};
 
 /**  The immediate answer to `submit_command`. */
 export type SubmitAck = 

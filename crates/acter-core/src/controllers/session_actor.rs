@@ -9,7 +9,7 @@ use crate::entities::{Integration, ReadMode, UnspokenText};
 use crate::policies::{PacingAction, measure, on_command_end, on_output, on_wake};
 use crate::{
     Announcement, Clock, CommandId, ConnectionState, EventSink, ExitCode, LineId, LineRevision,
-    Mode, PacingConfig, PacingState, SessionEvent, SessionState, Timer,
+    Mode, PacingConfig, PacingState, SessionEvent, SessionState, StyleRun, Timer, join_runs,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -27,6 +27,7 @@ pub enum SessionInput {
         text: String,
         spoken: bool,
         prompt: bool,
+        runs: Vec<StyleRun>,
     },
     FarEndLine {
         text: Option<String>,
@@ -89,6 +90,7 @@ struct Rendered {
     revision: LineRevision,
     text: String,
     prompt: bool,
+    runs: Vec<StyleRun>,
 }
 
 impl ActiveCommand {
@@ -104,11 +106,19 @@ impl ActiveCommand {
         }
     }
 
-    fn render(&mut self, line: LineId, revision: LineRevision, text: &str, prompt: bool) {
+    fn render(
+        &mut self,
+        line: LineId,
+        revision: LineRevision,
+        text: &str,
+        prompt: bool,
+        runs: Vec<StyleRun>,
+    ) {
         if revision == LineRevision::Appended
             && let Some(last) = self.unrendered.last_mut()
             && last.line == line
         {
+            join_runs(&mut last.runs, &last.text, &runs);
             last.text.push_str(text);
             last.prompt = prompt;
             return;
@@ -121,6 +131,7 @@ impl ActiveCommand {
             revision,
             text: text.to_owned(),
             prompt,
+            runs,
         });
     }
 }
@@ -200,7 +211,8 @@ impl SessionActor {
                 text,
                 spoken,
                 prompt,
-            } => self.output(line, revision, &text, spoken, prompt),
+                runs,
+            } => self.output(line, revision, &text, spoken, prompt, runs),
             SessionInput::CommandEnded {
                 command_id,
                 exit_code,
@@ -285,6 +297,7 @@ impl SessionActor {
         text: &str,
         spoken: bool,
         prompt: bool,
+        runs: Vec<StyleRun>,
     ) {
         let Some(active) = self.active.as_mut() else {
             return;
@@ -292,7 +305,7 @@ impl SessionActor {
         // The tick is not re-armed per chunk, or continuous output would starve rendering.
         // An empty rewrite is a row the far end erased, so only an empty append is skipped.
         if revision != LineRevision::Appended || !text.is_empty() {
-            active.render(line, revision, text, prompt);
+            active.render(line, revision, text, prompt, runs);
             if !active.render_armed {
                 active.render_armed = true;
                 self.requests.render = Wake::After(self.config.render_tick);
@@ -433,6 +446,7 @@ impl SessionActor {
                 revision: line.revision,
                 text: line.text,
                 prompt: line.prompt,
+                runs: line.runs,
             });
         }
     }
@@ -482,6 +496,7 @@ mod tests {
     use tokio::sync::oneshot;
 
     use super::*;
+    use crate::{Colour, Style};
 
     #[derive(Default)]
     struct FakeClock {
@@ -580,12 +595,24 @@ mod tests {
         text: &str,
         spoken: bool,
     ) -> Requests {
+        styled(actor, line, revision, text, spoken, vec![])
+    }
+
+    fn styled(
+        actor: &mut SessionActor,
+        line: u64,
+        revision: LineRevision,
+        text: &str,
+        spoken: bool,
+        runs: Vec<StyleRun>,
+    ) -> Requests {
         actor.handle(SessionInput::Output {
             line: LineId(line),
             revision,
             text: text.to_owned(),
             spoken,
             prompt: false,
+            runs,
         });
         actor.take_requests()
     }
@@ -688,9 +715,91 @@ mod tests {
                 revision: LineRevision::Appended,
                 text: "text\n".to_owned(),
                 prompt: false,
+                runs: vec![],
             }),
             "rendering carries no verdict: the verdict rides an Announce"
         );
+    }
+
+    #[test]
+    fn coalesced_appends_shift_the_later_runs_past_the_earlier_text() {
+        let (mut actor, _clock, sink) = actor();
+        started(&mut actor);
+        let red = Style {
+            fg: Some(Colour::Named { index: 1 }),
+            ..Style::default()
+        };
+        let bold = Style {
+            bold: true,
+            ..Style::default()
+        };
+
+        styled(
+            &mut actor,
+            1,
+            LineRevision::Appended,
+            "é: ",
+            true,
+            vec![run(0, 1, bold)],
+        );
+        styled(
+            &mut actor,
+            1,
+            LineRevision::Appended,
+            "red",
+            true,
+            vec![run(0, 3, red)],
+        );
+        actor.wake_render();
+
+        assert_eq!(
+            sink.events().last(),
+            Some(&SessionEvent::Output {
+                command_id: CommandId(1),
+                line: LineId(1),
+                revision: LineRevision::Appended,
+                text: "é: red".to_owned(),
+                prompt: false,
+                runs: vec![run(0, 1, bold), run(3, 3, red)],
+            })
+        );
+    }
+
+    #[test]
+    fn a_rewrite_replaces_the_runs_of_what_it_replaces() {
+        let (mut actor, _clock, sink) = actor();
+        started(&mut actor);
+        let red = Style {
+            fg: Some(Colour::Named { index: 1 }),
+            ..Style::default()
+        };
+
+        styled(
+            &mut actor,
+            1,
+            LineRevision::Appended,
+            "abc",
+            true,
+            vec![run(0, 3, red)],
+        );
+        styled(&mut actor, 1, LineRevision::Rewritten, "abc", false, vec![]);
+        actor.wake_render();
+
+        assert_eq!(
+            sink.events().last(),
+            Some(&SessionEvent::Output {
+                command_id: CommandId(1),
+                line: LineId(1),
+                revision: LineRevision::Rewritten,
+                text: "abc".to_owned(),
+                prompt: false,
+                runs: vec![],
+            })
+        );
+    }
+
+    fn run(start: u32, len: u32, style: Style) -> StyleRun {
+        StyleRun { start, len, style }
     }
 
     #[test]
@@ -1383,6 +1492,7 @@ the user's
                 text: "hello\n".to_owned(),
                 spoken: true,
                 prompt: false,
+                runs: vec![],
             })
             .expect("actor is running");
         until(&sink, "the command to open", |events| !events.is_empty()).await;
