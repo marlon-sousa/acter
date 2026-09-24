@@ -75,6 +75,10 @@ lane's next step.
 - 53.3. **Open** — In far-end line mode, the cursor's row is drawn twice. Entry: [53.3-the-far-end-cursor-row-is-drawn-twice.md](roadmap/53.3-the-far-end-cursor-row-is-drawn-twice.md). Spec: none yet.
 - 54. **Open** — V3, the output carries the far end's colours. Entry: [54-the-output-carries-the-far-ends-colours.md](roadmap/54-the-output-carries-the-far-ends-colours.md). Spec: none yet.
 
+**Lane 6: the Windows beta** (last: after lane 5, and possibly after 42 to 51)
+
+- 55. **Open** — The first Windows release is the 0.1 beta. Entry: [55-the-first-windows-release-is-the-0.1-beta.md](roadmap/55-the-first-windows-release-is-the-0.1-beta.md). Spec: none yet.
+
 **Keyboard routing and the changed row**
 
 - 28.12. **Open** — Ctrl+C at an idle prompt says a command failed. Entry: [28.12-ctrl-c-idle-prompt-says-command.md](roadmap/28.12-ctrl-c-idle-prompt-says-command.md). Spec: none yet.
@@ -214,6 +218,10 @@ lane's next step.
 - 53.2. **Open** — A prompt the shell does not mark never shares a line with its command. Entry: [53.2-an-unmarked-prompt-never-shares-a-line.md](roadmap/53.2-an-unmarked-prompt-never-shares-a-line.md). Spec: none yet.
 - 53.3. **Open** — In far-end line mode, the cursor's row is drawn twice. Entry: [53.3-the-far-end-cursor-row-is-drawn-twice.md](roadmap/53.3-the-far-end-cursor-row-is-drawn-twice.md). Spec: none yet.
 - 54. **Open** — V3, the output carries the far end's colours. Entry: [54-the-output-carries-the-far-ends-colours.md](roadmap/54-the-output-carries-the-far-ends-colours.md). Spec: none yet.
+
+## Status board — lane 6: the Windows beta (**opened 2026-09-23**; runs last, after lane 5 and possibly after 42 to 51)
+
+- 55. **Open** — The first Windows release is the 0.1 beta. Entry: [55-the-first-windows-release-is-the-0.1-beta.md](roadmap/55-the-first-windows-release-is-the-0.1-beta.md). Spec: none yet.
 
 ## Keyboard routing and the changed row — carved out of the phase 2 gate
 
