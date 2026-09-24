@@ -70,6 +70,9 @@ lane's next step.
 
 **Lane 5: the look**
 
+- 53.1. **Open** — A heading repeats text that is already on the line above it. Entry: [53.1-a-heading-repeats-the-line-above-it.md](roadmap/53.1-a-heading-repeats-the-line-above-it.md). Spec: none yet.
+- 53.2. **Open** — A prompt the shell does not mark never shares a line with its command. Entry: [53.2-an-unmarked-prompt-never-shares-a-line.md](roadmap/53.2-an-unmarked-prompt-never-shares-a-line.md). Spec: none yet.
+- 53.3. **Open** — In far-end line mode, the cursor's row is drawn twice. Entry: [53.3-the-far-end-cursor-row-is-drawn-twice.md](roadmap/53.3-the-far-end-cursor-row-is-drawn-twice.md). Spec: none yet.
 - 54. **Open** — V3, the output carries the far end's colours. Entry: [54-the-output-carries-the-far-ends-colours.md](roadmap/54-the-output-carries-the-far-ends-colours.md). Spec: none yet.
 
 **Keyboard routing and the changed row**
@@ -207,6 +210,9 @@ lane's next step.
 
 - 52. **Done** — V1, to a sighted person, it looks like a terminal. Spec: [v1-it-looks-like-a-terminal.md](specs/v1-it-looks-like-a-terminal.md)
 - 53. **Done** — V2, the prompt, the command and the edit field share one visual line. Spec: [v2-the-prompt-and-the-command-share-a-line.md](specs/v2-the-prompt-and-the-command-share-a-line.md)
+- 53.1. **Open** — A heading repeats text that is already on the line above it. Entry: [53.1-a-heading-repeats-the-line-above-it.md](roadmap/53.1-a-heading-repeats-the-line-above-it.md). Spec: none yet.
+- 53.2. **Open** — A prompt the shell does not mark never shares a line with its command. Entry: [53.2-an-unmarked-prompt-never-shares-a-line.md](roadmap/53.2-an-unmarked-prompt-never-shares-a-line.md). Spec: none yet.
+- 53.3. **Open** — In far-end line mode, the cursor's row is drawn twice. Entry: [53.3-the-far-end-cursor-row-is-drawn-twice.md](roadmap/53.3-the-far-end-cursor-row-is-drawn-twice.md). Spec: none yet.
 - 54. **Open** — V3, the output carries the far end's colours. Entry: [54-the-output-carries-the-far-ends-colours.md](roadmap/54-the-output-carries-the-far-ends-colours.md). Spec: none yet.
 
 ## Keyboard routing and the changed row — carved out of the phase 2 gate

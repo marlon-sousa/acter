@@ -1427,6 +1427,30 @@ the header row it repaints identically each time produces nothing. So the rule t
 have forced is not needed for this program. One program is not a population, and entry 30
 keeps that caveat.
 
+## The look — **Decided 2026-09-23**
+
+(Agreed in conversation 2026-09-23; shipped as V1 and V2, PRs #71 and #72.) Acter is also a
+portfolio project, so it has to look good to sighted people, and it has to do that without
+costing a screen reader user anything.
+
+- **To a sighted person, Acter looks like a terminal.** The model is Windows Terminal with its
+  default settings: the Campbell colours, Cascadia Mono in the session, and dark menus,
+  dialogs and title bar in the Windows 11 style. The window is always dark.
+- **The look never changes what a screen reader reads.** Styling is CSS and window settings.
+  Where it hides something from sight, such as the edit fields' labels, it uses the
+  visually-hidden technique, which keeps the element in the accessibility tree. When a
+  change to the look needs the page itself to change, the change carries an NVDA reading of
+  the same steps on both builds.
+- **Headings stay headings.** A command heading is drawn as an ordinary terminal line and is
+  still a level 2 heading for navigation.
+- **A prompt shares its line with the command after it, and the last prompt with the cursor,**
+  by floating the prompt paragraph. A float leaves the prompt `display: block`, and NVDA
+  2026.1.1 reads it as its own line either way (measured 2026-09-23, spec V2).
+- **Windows high contrast wins.** Under a contrast theme the system colours replace Acter's,
+  and the edit fields get their borders back.
+- **No packaged design system.** Fluent, Material and similar libraries replace hand-built,
+  NVDA-measured widgets with their own. Acter borrows a design language, not a library.
+
 ## Open questions
 
 - Browse-cursor stability under in-place updates (raised 2026-08-17 with the
