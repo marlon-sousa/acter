@@ -5005,7 +5005,7 @@ mod tests {
 
             assert_eq!(
                 session.far_end_lines().last(),
-                Some(&(None, 5)),
+                Some(&(None, 5, true)),
                 "no text, because no text changed"
             );
         }
