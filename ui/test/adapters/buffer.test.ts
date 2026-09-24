@@ -350,3 +350,41 @@ describe('a heading that repeats the line above it', () => {
     expect(echoed(region)).toEqual([false, true]);
   });
 });
+
+describe('a row the shell drew as its prompt', () => {
+  it('is marked, and loses the mark when the row is rewritten as output', () => {
+    const region = makeRegion();
+    const buffer = new BufferDom(region);
+    buffer.openBlock(1, 'dir');
+    buffer.applyLine(1, 1, 'Appended', 'one.txt');
+    buffer.applyLine(1, 2, 'Appended', 'C:\Users\marlo>', true);
+
+    const rows = Array.from(region.querySelectorAll('.response > div'));
+    expect(rows.map((row) => row.classList.contains('prompt-row'))).toEqual([false, true]);
+
+    buffer.applyLine(1, 2, 'Rewritten', 'something else', false);
+    expect(rows[1]?.classList.contains('prompt-row')).toBe(false);
+  });
+
+  it('is marked repeated when the next heading already begins with it', () => {
+    const region = makeRegion();
+    const buffer = new BufferDom(region);
+    buffer.openBlock(1, 'dir');
+    buffer.applyLine(1, 1, 'Appended', 'C:\Users\marlo>', true);
+    buffer.openBlock(2, 'C:\Users\marlo>python -c "input()"');
+
+    const prompt = region.querySelector('.prompt-row');
+    expect(prompt?.classList.contains('repeated')).toBe(true);
+  });
+
+  it('is not marked repeated when the next heading is only the command', () => {
+    const region = makeRegion();
+    const buffer = new BufferDom(region);
+    buffer.openBlock(1, 'dir');
+    buffer.applyLine(1, 1, 'Appended', 'C:\Users\marlo>', true);
+    buffer.openBlock(2, 'echo hello');
+
+    const prompt = region.querySelector('.prompt-row');
+    expect(prompt?.classList.contains('repeated')).toBe(false);
+  });
+});

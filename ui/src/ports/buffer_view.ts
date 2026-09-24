@@ -10,6 +10,7 @@ export interface BufferView {
     line: LineId,
     revision: LineRevision,
     text: string,
+    prompt: boolean,
   ): void;
   appendPrompt(text: string): void;
   clear(): void;

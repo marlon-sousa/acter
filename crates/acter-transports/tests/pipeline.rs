@@ -259,6 +259,7 @@ impl Pipeline {
                     line,
                     revision,
                     text,
+                    prompt,
                 } => {
                     let at = seen
                         .iter()
@@ -272,6 +273,7 @@ impl Pipeline {
                         line: LineId(at as u64),
                         revision,
                         text,
+                        prompt,
                     }
                 }
                 other => other,
@@ -330,6 +332,7 @@ impl Pipeline {
                     line,
                     revision,
                     text,
+                    ..
                 } => {
                     let at = find(&mut blocks, command_id, "output");
                     blocks[at].apply(line, revision, &text);
@@ -424,6 +427,7 @@ fn output_on(line: u64, revision: LineRevision, text: &str) -> SessionEvent {
         line: LineId(line),
         revision,
         text: text.to_owned(),
+        prompt: false,
     }
 }
 

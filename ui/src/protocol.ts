@@ -246,9 +246,9 @@ export type SessionEvent =
 { type: "CommandStarted"; command_id: CommandId; command_line: string | null } | 
 /**
  *  What to put in the buffer, never what to say; speech is only ever an
- *  [`Announce`](SessionEvent::Announce).
+ *  [`Announce`](SessionEvent::Announce). `prompt` marks a row the shell drew as its prompt.
  */
-{ type: "Output"; command_id: CommandId; line: LineId; revision: LineRevision; text: string } | 
+{ type: "Output"; command_id: CommandId; line: LineId; revision: LineRevision; text: string; prompt: boolean } | 
 /**
  *  OSC 133 D. A nonzero exit code follows as `Announce { Failed }`; a zero one is never
  *  sent.
