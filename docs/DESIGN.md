@@ -1413,9 +1413,11 @@ reviewing the session afterwards finds precisely what a sighted user is left loo
 
 This is also the answer to the objection that motivated the whole question: the options
 *are* gone after the interaction, so whatever a listener learns about a list they learn
-while it is on screen. That is what makes the live region load-bearing here rather than
-decorative — it is the only thing that reports the moving selection, and a design that
-required leaving focus mode to re-read the list between arrow presses would not be used.
+while it is on screen. That is what makes reporting the moving selection load-bearing here
+rather than decorative, and a design that required leaving focus mode to re-read the list
+between arrow presses would not be used. (This was first written about a live region. Far-end
+line mode later reported the selection through its own text box and stopped using the live
+region at all; see "The live region is not used by this mode at all" above.)
 
 **Measured 2026-08-31, and the fourth bucket survives.** `gh repo create`'s selection
 prompt draws its highlight as a `>` in the text of the row, with colour *as well as* rather
