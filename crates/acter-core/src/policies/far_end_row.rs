@@ -61,6 +61,8 @@ pub struct Keystroke<'a> {
 pub enum FarEndAnswer {
     /// The row changed: this is its text, with the caret at this character.
     Row { text: String, caret: usize },
+    /// No anchored row changed and this whole row gained content; the caret sits at its start.
+    Detached { text: String },
     /// Nothing was redrawn and the cursor moved along the row it was already on.
     Caret { caret: usize },
     /// Nothing the listener has any business hearing about.
@@ -90,9 +92,8 @@ pub fn far_end_row(keystroke: &Keystroke<'_>) -> FarEndAnswer {
     }
 
     if let Some(change) = keystroke.changed.iter().find(gained_content) {
-        return FarEndAnswer::Row {
+        return FarEndAnswer::Detached {
             text: change.after.clone(),
-            caret: 0,
         };
     }
 
@@ -305,9 +306,8 @@ mod tests {
 
         assert_eq!(
             answer,
-            FarEndAnswer::Row {
+            FarEndAnswer::Detached {
                 text: "> Skip pushing the branch".to_owned(),
-                caret: 0,
             }
         );
     }
@@ -320,9 +320,8 @@ mod tests {
         ];
         assert_eq!(
             far_end_row(&keystroke(&changed, None, None, None)),
-            FarEndAnswer::Row {
+            FarEndAnswer::Detached {
                 text: "* Debian".to_owned(),
-                caret: 0,
             }
         );
     }

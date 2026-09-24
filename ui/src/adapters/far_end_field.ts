@@ -16,7 +16,8 @@ export class FarEndFieldDom implements FarEndFieldView {
   ) {}
 
   // `text` is null when only the caret moved; writing the same string back is a change the reader announces.
-  render(text: string | null, caret: number, completed = false): void {
+  render(text: string | null, caret: number, anchored: boolean, completed = false): void {
+    this.field.classList.toggle('detached', !anchored);
     const before = this.field.textContent ?? '';
     if (text !== null && before !== text) {
       this.field.textContent = text;

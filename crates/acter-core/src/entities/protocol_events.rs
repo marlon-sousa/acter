@@ -53,6 +53,8 @@ pub enum SessionEvent {
     FarEndLine {
         text: Option<String>,
         caret: u32,
+        /// False when `text` is a whole row the far end changed rather than its command line.
+        anchored: bool,
     },
     ConnectionChanged {
         state: ConnectionState,
@@ -130,10 +132,17 @@ mod tests {
             SessionEvent::FarEndLine {
                 text: Some("cargo test --all".to_owned()),
                 caret: 16,
+                anchored: true,
             },
             SessionEvent::FarEndLine {
                 text: None,
                 caret: 3,
+                anchored: true,
+            },
+            SessionEvent::FarEndLine {
+                text: Some("> Skip pushing the branch".to_owned()),
+                caret: 0,
+                anchored: false,
             },
             SessionEvent::ConnectionChanged {
                 state: ConnectionState::Reconnecting,
@@ -224,17 +233,19 @@ mod tests {
             serde_json::to_value(SessionEvent::FarEndLine {
                 text: Some("exit".to_owned()),
                 caret: 4,
+                anchored: true,
             })
             .unwrap(),
-            json!({ "type": "FarEndLine", "text": "exit", "caret": 4 })
+            json!({ "type": "FarEndLine", "text": "exit", "caret": 4, "anchored": true })
         );
         assert_eq!(
             serde_json::to_value(SessionEvent::FarEndLine {
                 text: None,
                 caret: 2,
+                anchored: false,
             })
             .unwrap(),
-            json!({ "type": "FarEndLine", "text": null, "caret": 2 })
+            json!({ "type": "FarEndLine", "text": null, "caret": 2, "anchored": false })
         );
     }
 

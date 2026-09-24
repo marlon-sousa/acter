@@ -57,39 +57,64 @@ describe('what the element announces itself as', () => {
 
 describe('what Acter writes into it', () => {
   it('holds the row the far end drew', () => {
-    built.dom.render('cargo test --all', 16);
+    built.dom.render('cargo test --all', 16, true);
 
     expect(built.field.textContent).toBe('cargo test --all');
     expect(caretAt()).toBe(16);
   });
 
   it('moves the caret without touching the text when no row changed', () => {
-    built.dom.render('cargo test --all', 16);
+    built.dom.render('cargo test --all', 16, true);
 
-    built.dom.render(null, 3);
+    built.dom.render(null, 3, true);
 
     expect(built.field.textContent).toBe('cargo test --all');
     expect(caretAt()).toBe(3);
   });
 
   it('empties the row when the far end emptied it', () => {
-    built.dom.render('some command', 12);
+    built.dom.render('some command', 12, true);
 
-    built.dom.render('', 0);
+    built.dom.render('', 0, true);
 
     expect(built.field.textContent).toBe('');
     expect(caretAt()).toBe(0);
   });
 
   it('clamps a caret past the end of the row to its end', () => {
-    built.dom.render('ls', 99);
+    built.dom.render('ls', 99, true);
 
     expect(caretAt()).toBe(2);
   });
 
   it('places the caret in an empty field without throwing', () => {
-    expect(() => built.dom.render('', 4)).not.toThrow();
+    expect(() => built.dom.render('', 4, true)).not.toThrow();
     expect(built.field.textContent).toBe('');
+  });
+});
+
+describe('a row that is not the command line', () => {
+  it('is drawn transparent, because the buffer already shows it', () => {
+    built.dom.render('> Skip pushing the branch', 0, false);
+
+    expect(built.field.classList.contains('detached')).toBe(true);
+    expect(built.field.textContent).toBe('> Skip pushing the branch');
+    expect(caretAt()).toBe(0);
+  });
+
+  it('is drawn again once the command line is anchored', () => {
+    built.dom.render('PS C:\\Users\\marlo>', 0, false);
+
+    built.dom.render('', 0, true);
+
+    expect(built.field.classList.contains('detached')).toBe(false);
+    expect(built.field.textContent).toBe('');
+  });
+
+  it('never marks an anchored row', () => {
+    built.dom.render('cargo test --all', 16, true);
+
+    expect(built.field.classList.contains('detached')).toBe(false);
   });
 });
 
@@ -116,9 +141,9 @@ describe('being there at all', () => {
   describe('a completion', () => {
     it('leaves what it added selected, so the reader says it', () => {
       const { field, dom } = build();
-      dom.render('ech', 3);
+      dom.render('ech', 3, true);
 
-      dom.render('echo ', 5, true);
+      dom.render('echo ', 5, true, true);
 
       const selection = window.getSelection();
       expect(selection?.toString()).toBe('o ');
@@ -127,8 +152,8 @@ describe('being there at all', () => {
 
     it("drops the selection again, because the row is the far end's and not a suggestion", async () => {
       const { dom } = build();
-      dom.render('ech', 3);
-      dom.render('echo ', 5, true);
+      dom.render('ech', 3, true);
+      dom.render('echo ', 5, true, true);
 
       await new Promise((resolve) => setTimeout(resolve, 200));
 
@@ -139,18 +164,18 @@ describe('being there at all', () => {
 
     it('says nothing extra when the row was rewritten rather than added to', () => {
       const { dom } = build();
-      dom.render('echo one', 8);
+      dom.render('echo one', 8, true);
 
-      dom.render('echo two', 8, true);
+      dom.render('echo two', 8, true, true);
 
       expect(window.getSelection()?.isCollapsed).toBe(true);
     });
 
     it('is not applied to an ordinary answer', () => {
       const { dom } = build();
-      dom.render('ech', 3);
+      dom.render('ech', 3, true);
 
-      dom.render('echo ', 5);
+      dom.render('echo ', 5, true);
 
       expect(window.getSelection()?.isCollapsed).toBe(true);
     });

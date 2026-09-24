@@ -270,7 +270,9 @@ export type SessionEvent =
  *  The far end's command line in far-end-line mode; `text` is `None` when only the caret
  *  moved, and `caret` counts characters from the anchor column.
  */
-{ type: "FarEndLine"; text: string | null; caret: number } | { type: "ConnectionChanged"; state: ConnectionState } | 
+{ type: "FarEndLine"; text: string | null; caret: number; 
+/**  False when `text` is a whole row the far end changed rather than its command line. */
+anchored: boolean } | { type: "ConnectionChanged"; state: ConnectionState } | 
 /**
  *  Always sent after the `Output` it speaks about, on the same in-order channel, so
  *  spoken text is already in the buffer.
