@@ -445,6 +445,8 @@ impl Pump {
             // Inside the loop, so a prompt is spoken before output later in the same read.
             self.prompt_finished();
         }
+        // A read holding only `B` produces no event, yet it is what finished the prompt.
+        self.prompt_finished();
 
         // A program that sent a device query waits forever unless the answer is written back.
         let replies = self.engine.take_replies();
@@ -2887,6 +2889,21 @@ mod tests {
             session.advance_to(1_000).await;
 
             assert_eq!(prompts(&session), vec![PROMPT.to_owned()]);
+        }
+
+        #[tokio::test]
+        async fn is_spoken_when_its_end_arrives_in_a_read_of_its_own() {
+            let session = marked().await;
+            session.emit(vec![marker(Osc133Marker::PromptStart)]).await;
+            session.emit(vec![line(1, PROMPT)]).await;
+            session.emit(vec![marker(Osc133Marker::CommandStart)]).await;
+            session.advance_to(1_000).await;
+
+            assert_eq!(
+                prompts(&session),
+                vec![PROMPT.to_owned()],
+                "the prompt is finished when B arrives, not when the next command is typed"
+            );
         }
 
         #[tokio::test]
