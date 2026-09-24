@@ -808,12 +808,10 @@ impl Pump {
         // went out.
         let before = self.row_text(id);
         // `due` runs whatever the region: its bookkeeping tells the echo's row from output later.
-        let due = self
-            .due(id, text.clone(), revision)
-            .map(|due| Due {
-                prompt: region == Region::Prompt,
-                ..due
-            });
+        let due = self.due(id, text.clone(), revision).map(|due| Due {
+            prompt: region == Region::Prompt,
+            ..due
+        });
         self.note_change(id, before, &text, revision);
 
         if let Some(due) = due {
