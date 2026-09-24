@@ -69,7 +69,6 @@ lane's next step.
 
 **Lane 5: the look**
 
-- 53.3. **Open** — In far-end line mode, the cursor's row is drawn twice. Entry: [53.3-the-far-end-cursor-row-is-drawn-twice.md](roadmap/53.3-the-far-end-cursor-row-is-drawn-twice.md). Spec: none yet.
 - 54. **Open** — V3, the output carries the far end's colours. Entry: [54-the-output-carries-the-far-ends-colours.md](roadmap/54-the-output-carries-the-far-ends-colours.md). Spec: none yet.
 
 **Lane 6: the Windows beta** (last: after lane 5, and possibly after 42 to 51)
@@ -213,7 +212,7 @@ lane's next step.
 - 53. **Done** — V2, the prompt, the command and the edit field share one visual line. Spec: [v2-the-prompt-and-the-command-share-a-line.md](specs/v2-the-prompt-and-the-command-share-a-line.md)
 - 53.1. **Done** — A heading repeats text that is already on the line above it. Spec: [v2.1-a-heading-that-repeats-the-line-above-is-hidden-from-sight.md](specs/v2.1-a-heading-that-repeats-the-line-above-is-hidden-from-sight.md)
 - 53.2. **Done** — A prompt the shell does not mark never shares a line with its command. Spec: [v2.2-a-cmd-prompt-shares-a-line-with-its-command.md](specs/v2.2-a-cmd-prompt-shares-a-line-with-its-command.md)
-- 53.3. **Open** — In far-end line mode, the cursor's row is drawn twice. Entry: [53.3-the-far-end-cursor-row-is-drawn-twice.md](roadmap/53.3-the-far-end-cursor-row-is-drawn-twice.md). Spec: none yet.
+- 53.3. **Done** — In far-end line mode, the cursor's row is drawn twice. Spec: [v2.3-the-far-end-row-is-drawn-once.md](specs/v2.3-the-far-end-row-is-drawn-once.md)
 - 54. **Open** — V3, the output carries the far end's colours. Entry: [54-the-output-carries-the-far-ends-colours.md](roadmap/54-the-output-carries-the-far-ends-colours.md). Spec: none yet.
 
 ## Status board — lane 6: the Windows beta (**opened 2026-09-23**; runs last, after lane 5 and possibly after 42 to 51)
