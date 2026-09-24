@@ -1450,6 +1450,11 @@ costing a screen reader user anything.
   2026.1.1 reads it as its own line either way (measured 2026-09-23, spec V2).
 - **Windows high contrast wins.** Under a contrast theme the system colours replace Acter's,
   and the edit fields get their borders back.
+- **The far end's colours are drawn in Campbell, kept readable, and never announced by Acter**
+  (agreed 2026-09-24, for V3.1). Each colour the far end asks for is drawn from the Campbell
+  palette. A foreground below 4.5:1 against its background is raised until it reaches 4.5:1:
+  on #0C0C0C that is red, blue, magenta, bright black and bright magenta. Acter adds no
+  speech for colour. A user who wants it turns on NVDA's own "report colour" setting.
 - **No packaged design system.** Fluent, Material and similar libraries replace hand-built,
   NVDA-measured widgets with their own. Acter borrows a design language, not a library.
 
