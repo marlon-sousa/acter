@@ -259,6 +259,7 @@ impl Pipeline {
                     line,
                     revision,
                     text,
+                    prompt,
                 } => {
                     let at = seen
                         .iter()
@@ -272,6 +273,7 @@ impl Pipeline {
                         line: LineId(at as u64),
                         revision,
                         text,
+                        prompt,
                     }
                 }
                 other => other,
@@ -330,6 +332,7 @@ impl Pipeline {
                     line,
                     revision,
                     text,
+                    ..
                 } => {
                     let at = find(&mut blocks, command_id, "output");
                     blocks[at].apply(line, revision, &text);
@@ -424,6 +427,7 @@ fn output_on(line: u64, revision: LineRevision, text: &str) -> SessionEvent {
         line: LineId(line),
         revision,
         text: text.to_owned(),
+        prompt: false,
     }
 }
 
@@ -456,7 +460,11 @@ fn prompt(text: &str) -> SessionEvent {
 async fn a_command_produces_its_output_and_nothing_the_shell_said_around_it() {
     let mut pipeline = Pipeline::start(SessionTranscript::builtin());
     pipeline.run_until(0).await;
-    assert_eq!(pipeline.events(), vec![connected()]);
+    assert_eq!(
+        pipeline.events(),
+        vec![connected(), prompt("acter>")],
+        "the first prompt is reported when it is drawn, before anything is typed at it"
+    );
 
     pipeline.submit("small");
     pipeline.run_until(1_000).await;
@@ -472,6 +480,7 @@ async fn a_command_produces_its_output_and_nothing_the_shell_said_around_it() {
                 text: "hello from acter".to_owned()
             }),
             finished(),
+            prompt("acter>"),
         ]
     );
     assert!(
@@ -523,6 +532,7 @@ async fn a_failing_command_carries_its_exit_code_out_of_the_marker() {
             announce(Announcement::Failed {
                 exit_code: ExitCode(2)
             }),
+            prompt("acter>"),
         ]
     );
 }

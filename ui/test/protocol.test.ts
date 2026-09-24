@@ -64,6 +64,7 @@ describe('protocol bindings', () => {
       line: 4,
       revision: 'Appended',
       text: 'hello',
+      prompt: false,
     };
     expect(describeEvent(output)).toBe('output 1: hello');
 

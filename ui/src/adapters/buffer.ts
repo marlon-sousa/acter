@@ -78,23 +78,25 @@ export class BufferDom implements BufferView {
     line: LineId,
     revision: LineRevision,
     text: string,
+    prompt = false,
   ): void {
     const block = this.blocks.get(commandId);
     if (block === undefined) {
       // Output for a block that was never opened is dropped.
       return;
     }
-    const existing = block.lines.get(line);
-    if (existing === undefined) {
-      const row = document.createElement('div');
+    let row = block.lines.get(line);
+    if (row === undefined) {
+      row = document.createElement('div');
       row.textContent = text;
       block.output.append(row);
       block.lines.set(line, row);
     } else if (revision === 'Appended') {
-      existing.textContent = `${existing.textContent ?? ''}${text}`;
+      row.textContent = `${row.textContent ?? ''}${text}`;
     } else {
-      existing.textContent = text;
+      row.textContent = text;
     }
+    row.classList.toggle('prompt-row', prompt);
     const next = block.output.nextElementSibling;
     if (next instanceof HTMLElement && next.tagName === 'H2') {
       markEcho(next);
@@ -114,7 +116,7 @@ export class BufferDom implements BufferView {
 
 }
 
-// Marks a heading whose text already ends the line above it; the stylesheet hides it from sight only.
+// Marks whichever of a heading and the line above it repeats the other; the stylesheet hides it from sight only.
 function markEcho(heading: HTMLElement): void {
   const before = heading.previousElementSibling;
   const above = before?.classList.contains('response') ? before.lastElementChild : before;
@@ -126,4 +128,7 @@ function markEcho(heading: HTMLElement): void {
     line.endsWith(text) &&
     /\s/.test(line.charAt(line.length - text.length - 1));
   heading.classList.toggle('echoed', echoed);
+  if (above?.classList.contains('prompt-row') === true) {
+    above.classList.toggle('repeated', line !== '' && text.startsWith(line));
+  }
 }

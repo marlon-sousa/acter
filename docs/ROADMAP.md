@@ -32,7 +32,6 @@ lane's next step.
 - 15. **Open** — A5.3 and onward: iteration entries appear here as NVDA findings arrive. Spec: none yet.
 - 49. **Open** — A new menu action compiles and does nothing. Entry: [49-a-new-menu-action-compiles-and-does-nothing.md](roadmap/49-a-new-menu-action-compiles-and-does-nothing.md). Spec: none yet.
 - 50. **Open** — The far-end toggle depends on the keyboard layout. Entry: [50-the-far-end-toggle-depends-on-the-keyboard-layout.md](roadmap/50-the-far-end-toggle-depends-on-the-keyboard-layout.md). Spec: none yet.
-- 52.1. **Open** — A prompt lands in a different place in the buffer from one run to the next. Entry: [52.1-a-prompt-lands-in-a-different-place-each-run.md](roadmap/52.1-a-prompt-lands-in-a-different-place-each-run.md). Spec: none yet.
 
 **Lane 2: domain**
 
@@ -70,7 +69,6 @@ lane's next step.
 
 **Lane 5: the look**
 
-- 53.2. **Open** — A prompt the shell does not mark never shares a line with its command. Entry: [53.2-an-unmarked-prompt-never-shares-a-line.md](roadmap/53.2-an-unmarked-prompt-never-shares-a-line.md). Spec: none yet.
 - 53.3. **Open** — In far-end line mode, the cursor's row is drawn twice. Entry: [53.3-the-far-end-cursor-row-is-drawn-twice.md](roadmap/53.3-the-far-end-cursor-row-is-drawn-twice.md). Spec: none yet.
 - 54. **Open** — V3, the output carries the far end's colours. Entry: [54-the-output-carries-the-far-ends-colours.md](roadmap/54-the-output-carries-the-far-ends-colours.md). Spec: none yet.
 
@@ -112,7 +110,7 @@ lane's next step.
 - 41. **Done** — The end-to-end test for F10 checks focus before the menu has taken it. Spec: [41-the-startup-focus-leaves-a-moved-focus-alone.md](specs/41-the-startup-focus-leaves-a-moved-focus-alone.md)
 - 49. **Open** — A new menu action compiles and does nothing. Entry: [49-a-new-menu-action-compiles-and-does-nothing.md](roadmap/49-a-new-menu-action-compiles-and-does-nothing.md). Spec: none yet.
 - 50. **Open** — The far-end toggle depends on the keyboard layout. Entry: [50-the-far-end-toggle-depends-on-the-keyboard-layout.md](roadmap/50-the-far-end-toggle-depends-on-the-keyboard-layout.md). Spec: none yet.
-- 52.1. **Open** — A prompt lands in a different place in the buffer from one run to the next. Entry: [52.1-a-prompt-lands-in-a-different-place-each-run.md](roadmap/52.1-a-prompt-lands-in-a-different-place-each-run.md). Spec: none yet.
+- 52.1. **Done** — A prompt lands in a different place in the buffer from one run to the next. Spec: [52.1-a-prompt-is-reported-when-it-is-drawn.md](specs/52.1-a-prompt-is-reported-when-it-is-drawn.md)
 
 ## Status board — lane 2: domain (pure Rust; may start anytime, parallel to lane 1)
 
@@ -214,7 +212,7 @@ lane's next step.
 - 52. **Done** — V1, to a sighted person, it looks like a terminal. Spec: [v1-it-looks-like-a-terminal.md](specs/v1-it-looks-like-a-terminal.md)
 - 53. **Done** — V2, the prompt, the command and the edit field share one visual line. Spec: [v2-the-prompt-and-the-command-share-a-line.md](specs/v2-the-prompt-and-the-command-share-a-line.md)
 - 53.1. **Done** — A heading repeats text that is already on the line above it. Spec: [v2.1-a-heading-that-repeats-the-line-above-is-hidden-from-sight.md](specs/v2.1-a-heading-that-repeats-the-line-above-is-hidden-from-sight.md)
-- 53.2. **Open** — A prompt the shell does not mark never shares a line with its command. Entry: [53.2-an-unmarked-prompt-never-shares-a-line.md](roadmap/53.2-an-unmarked-prompt-never-shares-a-line.md). Spec: none yet.
+- 53.2. **Done** — A prompt the shell does not mark never shares a line with its command. Spec: [v2.2-a-cmd-prompt-shares-a-line-with-its-command.md](specs/v2.2-a-cmd-prompt-shares-a-line-with-its-command.md)
 - 53.3. **Open** — In far-end line mode, the cursor's row is drawn twice. Entry: [53.3-the-far-end-cursor-row-is-drawn-twice.md](roadmap/53.3-the-far-end-cursor-row-is-drawn-twice.md). Spec: none yet.
 - 54. **Open** — V3, the output carries the far end's colours. Entry: [54-the-output-carries-the-far-ends-colours.md](roadmap/54-the-output-carries-the-far-ends-colours.md). Spec: none yet.
 

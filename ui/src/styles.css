@@ -101,7 +101,8 @@ main {
 .visually-hidden,
 #command-form > label,
 #far-end-label,
-#results h2.echoed:not(:focus) {
+#results h2.echoed:not(:focus),
+#results .prompt-row.repeated {
   position: absolute;
   width: 1px;
   height: 1px;
@@ -328,7 +329,9 @@ input[type='checkbox'] {
 
 /* Floated, the prompt stays `display: block`, and NVDA 2026.1.1 still reads it as its own line (measured 2026-09-23). */
 #results .prompt:has(+ h2),
-#results .prompt:last-child {
+#results .prompt:last-child,
+#results .response:has(+ h2) > .prompt-row:last-child:not(.repeated),
+#results > .response:last-child > .prompt-row:last-child {
   float: left;
   margin-right: 1ch;
 }

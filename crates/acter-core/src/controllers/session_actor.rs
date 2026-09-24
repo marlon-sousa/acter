@@ -19,11 +19,14 @@ pub enum SessionInput {
         command_id: CommandId,
         command_line: Option<String>,
     },
+    /// `prompt` is true for a row the shell drew as its prompt, which reaches the buffer as output
+    /// only in a shell that reports no exit code.
     Output {
         line: LineId,
         revision: LineRevision,
         text: String,
         spoken: bool,
+        prompt: bool,
     },
     FarEndLine {
         text: Option<String>,
@@ -84,6 +87,7 @@ struct Rendered {
     line: LineId,
     revision: LineRevision,
     text: String,
+    prompt: bool,
 }
 
 impl ActiveCommand {
@@ -99,12 +103,13 @@ impl ActiveCommand {
         }
     }
 
-    fn render(&mut self, line: LineId, revision: LineRevision, text: &str) {
+    fn render(&mut self, line: LineId, revision: LineRevision, text: &str, prompt: bool) {
         if revision == LineRevision::Appended
             && let Some(last) = self.unrendered.last_mut()
             && last.line == line
         {
             last.text.push_str(text);
+            last.prompt = prompt;
             return;
         }
         if revision != LineRevision::Appended {
@@ -114,6 +119,7 @@ impl ActiveCommand {
             line,
             revision,
             text: text.to_owned(),
+            prompt,
         });
     }
 }
@@ -192,7 +198,8 @@ impl SessionActor {
                 revision,
                 text,
                 spoken,
-            } => self.output(line, revision, &text, spoken),
+                prompt,
+            } => self.output(line, revision, &text, spoken, prompt),
             SessionInput::CommandEnded {
                 command_id,
                 exit_code,
@@ -262,14 +269,21 @@ impl SessionActor {
         });
     }
 
-    fn output(&mut self, line: LineId, revision: LineRevision, text: &str, spoken: bool) {
+    fn output(
+        &mut self,
+        line: LineId,
+        revision: LineRevision,
+        text: &str,
+        spoken: bool,
+        prompt: bool,
+    ) {
         let Some(active) = self.active.as_mut() else {
             return;
         };
         // The tick is not re-armed per chunk, or continuous output would starve rendering.
         // An empty rewrite is a row the far end erased, so only an empty append is skipped.
         if revision != LineRevision::Appended || !text.is_empty() {
-            active.render(line, revision, text);
+            active.render(line, revision, text, prompt);
             if !active.render_armed {
                 active.render_armed = true;
                 self.requests.render = Wake::After(self.config.render_tick);
@@ -409,6 +423,7 @@ impl SessionActor {
                 line: line.line,
                 revision: line.revision,
                 text: line.text,
+                prompt: line.prompt,
             });
         }
     }
@@ -561,6 +576,7 @@ mod tests {
             revision,
             text: text.to_owned(),
             spoken,
+            prompt: false,
         });
         actor.take_requests()
     }
@@ -662,6 +678,7 @@ mod tests {
                 line: LineId(1),
                 revision: LineRevision::Appended,
                 text: "text\n".to_owned(),
+                prompt: false,
             }),
             "rendering carries no verdict: the verdict rides an Announce"
         );
@@ -1356,6 +1373,7 @@ the user's
                 revision: LineRevision::Appended,
                 text: "hello\n".to_owned(),
                 spoken: true,
+                prompt: false,
             })
             .expect("actor is running");
         until(&sink, "the command to open", |events| !events.is_empty()).await;

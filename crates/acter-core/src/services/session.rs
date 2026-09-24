@@ -295,6 +295,7 @@ struct Held {
     text: String,
     revision: LineRevision,
     spoken: bool,
+    prompt: bool,
 }
 
 impl Held {
@@ -304,6 +305,7 @@ impl Held {
             text: due.text,
             revision: due.revision,
             spoken: due.spoken,
+            prompt: due.prompt,
         }
     }
 
@@ -316,6 +318,7 @@ impl Held {
             }
         }
         self.spoken |= due.spoken;
+        self.prompt = due.prompt;
     }
 
     fn due(self) -> Due {
@@ -323,6 +326,7 @@ impl Held {
             text: self.text,
             revision: self.revision,
             spoken: self.spoken,
+            prompt: self.prompt,
         }
     }
 }
@@ -332,6 +336,7 @@ struct Due {
     text: String,
     revision: LineRevision,
     spoken: bool,
+    prompt: bool,
 }
 
 /// Every field is inert while Acter owns the line.
@@ -445,6 +450,8 @@ impl Pump {
             // Inside the loop, so a prompt is spoken before output later in the same read.
             self.prompt_finished();
         }
+        // A read holding only `B` produces no event, yet it is what finished the prompt.
+        self.prompt_finished();
 
         // A program that sent a device query waits forever unless the answer is written back.
         let replies = self.engine.take_replies();
@@ -801,7 +808,10 @@ impl Pump {
         // went out.
         let before = self.row_text(id);
         // `due` runs whatever the region: its bookkeeping tells the echo's row from output later.
-        let due = self.due(id, text.clone(), revision);
+        let due = self.due(id, text.clone(), revision).map(|due| Due {
+            prompt: region == Region::Prompt,
+            ..due
+        });
         self.note_change(id, before, &text, revision);
 
         if let Some(due) = due {
@@ -1056,6 +1066,7 @@ impl Pump {
                     text,
                     revision,
                     spoken: true,
+                    prompt: false,
                 })
             }
             LineRevision::Rewritten => {
@@ -1066,6 +1077,7 @@ impl Pump {
                     text,
                     revision,
                     spoken: false,
+                    prompt: false,
                 })
             }
             // Owed when rewritten since its last word, or never seen: a line that scrolled out
@@ -1078,6 +1090,7 @@ impl Pump {
                         text,
                         revision,
                         spoken: true,
+                        prompt: false,
                     })
             }
         }
@@ -1091,6 +1104,7 @@ impl Pump {
             revision: due.revision,
             text: due.text,
             spoken,
+            prompt: due.prompt,
         });
     }
 
@@ -2890,6 +2904,21 @@ mod tests {
         }
 
         #[tokio::test]
+        async fn is_spoken_when_its_end_arrives_in_a_read_of_its_own() {
+            let session = marked().await;
+            session.emit(vec![marker(Osc133Marker::PromptStart)]).await;
+            session.emit(vec![line(1, PROMPT)]).await;
+            session.emit(vec![marker(Osc133Marker::CommandStart)]).await;
+            session.advance_to(1_000).await;
+
+            assert_eq!(
+                prompts(&session),
+                vec![PROMPT.to_owned()],
+                "the prompt is finished when B arrives, not when the next command is typed"
+            );
+        }
+
+        #[tokio::test]
         async fn is_spoken_again_after_every_command() {
             let session = marked().await;
             session.emit(prompt(1, PROMPT)).await;
@@ -3030,6 +3059,37 @@ mod tests {
                     SessionEvent::CommandFinished { command_id } if *command_id == command
                 )),
                 "the block closes"
+            );
+        }
+
+        fn flagged(session: &Session, command_id: CommandId) -> Vec<(String, bool)> {
+            session
+                .events()
+                .into_iter()
+                .filter_map(|event| match event {
+                    SessionEvent::Output {
+                        command_id: id,
+                        text,
+                        prompt,
+                        ..
+                    } if id == command_id => Some((text, prompt)),
+                    _ => None,
+                })
+                .collect()
+        }
+
+        #[tokio::test]
+        async fn the_returning_prompt_says_it_is_a_prompt_and_the_output_does_not() {
+            let session = cmd().await;
+            session.emit(prompt(1, PROMPT)).await;
+            let command = session.submit("dir").await;
+            session.emit(vec![line(1, "dir"), line(2, "one.txt")]).await;
+            session.emit(prompt(3, PROMPT)).await;
+            session.advance_to(1_000).await;
+
+            assert_eq!(
+                flagged(&session, command),
+                vec![("one.txt".to_owned(), false), (PROMPT.to_owned(), true)]
             );
         }
 

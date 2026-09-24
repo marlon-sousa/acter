@@ -86,6 +86,7 @@ describe('installDebugRecorder in a debug build', () => {
       line: 1,
       revision: 'Appended',
       text: 'hello',
+      prompt: false,
     });
     backend.emit({
       type: 'Announce',

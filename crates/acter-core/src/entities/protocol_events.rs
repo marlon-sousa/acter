@@ -18,12 +18,13 @@ pub enum SessionEvent {
         command_line: Option<String>,
     },
     /// What to put in the buffer, never what to say; speech is only ever an
-    /// [`Announce`](SessionEvent::Announce).
+    /// [`Announce`](SessionEvent::Announce). `prompt` marks a row the shell drew as its prompt.
     Output {
         command_id: CommandId,
         line: LineId,
         revision: LineRevision,
         text: String,
+        prompt: bool,
     },
     /// OSC 133 D. A nonzero exit code follows as `Announce { Failed }`; a zero one is never
     /// sent.
@@ -105,12 +106,14 @@ mod tests {
                 line: LineId(4),
                 revision: LineRevision::Appended,
                 text: "hello".to_owned(),
+                prompt: false,
             },
             SessionEvent::Output {
                 command_id: CommandId(1),
                 line: LineId(4),
                 revision: LineRevision::Rewritten,
                 text: "hello again".to_owned(),
+                prompt: false,
             },
             SessionEvent::CommandFinished {
                 command_id: CommandId(1),
@@ -178,6 +181,7 @@ mod tests {
             line: LineId(9),
             revision: LineRevision::Appended,
             text: "line".to_owned(),
+            prompt: false,
         };
         assert_eq!(
             serde_json::to_value(&event).unwrap(),
@@ -187,6 +191,7 @@ mod tests {
                 "line": 9,
                 "revision": "Appended",
                 "text": "line",
+                "prompt": false,
             })
         );
     }
@@ -199,6 +204,7 @@ mod tests {
                 line: LineId(9),
                 revision: LineRevision::Rewritten,
                 text: String::new(),
+                prompt: false,
             })
             .unwrap(),
             json!({
@@ -207,6 +213,7 @@ mod tests {
                 "line": 9,
                 "revision": "Rewritten",
                 "text": "",
+                "prompt": false,
             })
         );
     }
