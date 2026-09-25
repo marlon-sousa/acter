@@ -18,6 +18,7 @@ import type {
   SessionEvent,
   SessionId,
   SetUp,
+  StyleRun,
   SubmitAck,
 } from '../../src/protocol';
 import type { AnnouncerView } from '../../src/ports/announcer_view';
@@ -153,9 +154,12 @@ class FakeBuffer implements BufferView {
     revision: LineRevision,
     text: string,
     _prompt: boolean,
+    runs: readonly StyleRun[],
   ): void {
     this.appended.push({ commandId, line, revision, text });
+    this.runs.push(runs);
   }
+  runs: (readonly StyleRun[])[] = [];
   appendPrompt(text: string): void {
     this.prompts.push(text);
   }
@@ -543,6 +547,39 @@ describe('event rendering (decision 2)', () => {
       { commandId: 1, line: 1, revision: 'Appended', text: 'hello from acter' },
     ]);
     expect(announcer.announcements).toEqual(['hello from acter']);
+  });
+
+  it('Output hands its style runs to the buffer', async () => {
+    const { backend, buffer } = await makeApp();
+    const runs: StyleRun[] = [
+      {
+        start: 0,
+        len: 5,
+        style: {
+          fg: { kind: 'Named', index: 1 },
+          bg: null,
+          bold: false,
+          dim: false,
+          italic: false,
+          underline: false,
+          inverse: false,
+          strike: false,
+        },
+      },
+    ];
+
+    backend.emit({ type: 'CommandStarted', command_id: 1, command_line: null });
+    backend.emit({
+      type: 'Output',
+      command_id: 1,
+      line: 1,
+      revision: 'Appended',
+      text: 'error: no such file',
+      prompt: false,
+      runs,
+    });
+
+    expect(buffer.runs).toEqual([runs]);
   });
 
   it('renders an auto-read chunk into the buffer before announcing it (A5.2)', async () => {
