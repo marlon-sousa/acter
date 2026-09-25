@@ -1,6 +1,6 @@
 // Role: port (driven) — what the controller needs from the results buffer.
 
-import type { CommandId, LineId, LineRevision } from '../protocol';
+import type { CommandId, LineId, LineRevision, StyleRun } from '../protocol';
 
 export interface BufferView {
   openBlock(commandId: CommandId, commandLine: string): void;
@@ -11,6 +11,7 @@ export interface BufferView {
     revision: LineRevision,
     text: string,
     prompt: boolean,
+    runs: readonly StyleRun[],
   ): void;
   appendPrompt(text: string): void;
   clear(): void;

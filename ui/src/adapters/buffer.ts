@@ -1,7 +1,8 @@
 // Role: adapter (DOM) — the results buffer region: one h2 per command keyed by CommandId.
 
-import type { CommandId, LineId, LineRevision } from '../protocol';
+import type { CommandId, LineId, LineRevision, StyleRun } from '../protocol';
 import type { BufferView } from '../ports/buffer_view';
+import { drawn } from '../policies/colour';
 
 interface Block {
   // Null while nothing says what the block runs; never an empty h2, which heading navigation
@@ -79,6 +80,7 @@ export class BufferDom implements BufferView {
     revision: LineRevision,
     text: string,
     prompt = false,
+    runs: readonly StyleRun[] = [],
   ): void {
     const block = this.blocks.get(commandId);
     if (block === undefined) {
@@ -88,13 +90,14 @@ export class BufferDom implements BufferView {
     let row = block.lines.get(line);
     if (row === undefined) {
       row = document.createElement('div');
-      row.textContent = text;
+      row.append(...styled(text, runs));
       block.output.append(row);
       block.lines.set(line, row);
     } else if (revision === 'Appended') {
-      row.textContent = `${row.textContent ?? ''}${text}`;
+      row.append(...styled(text, runs));
+      row.normalize();
     } else {
-      row.textContent = text;
+      row.replaceChildren(...styled(text, runs));
     }
     row.classList.toggle('prompt-row', prompt);
     const next = block.output.nextElementSibling;
@@ -114,6 +117,41 @@ export class BufferDom implements BufferView {
     return this.region.contains(document.activeElement);
   }
 
+}
+
+function styled(text: string, runs: readonly StyleRun[]): Node[] {
+  const nodes: Node[] = [];
+  let at = 0;
+  for (const { start, len, style } of runs) {
+    if (start > at) {
+      nodes.push(document.createTextNode(text.slice(at, start)));
+    }
+    const span = document.createElement('span');
+    span.textContent = text.slice(start, start + len);
+    const look = drawn(style);
+    if (look.color !== null) {
+      span.style.color = look.color;
+    }
+    if (look.background !== null) {
+      span.style.backgroundColor = look.background;
+    }
+    if (look.bold) {
+      span.style.fontWeight = 'bold';
+    }
+    if (look.italic) {
+      span.style.fontStyle = 'italic';
+    }
+    span.style.textDecorationLine = [
+      look.underline ? 'underline' : '',
+      look.strike ? 'line-through' : '',
+    ].join(' ').trim();
+    nodes.push(span);
+    at = start + len;
+  }
+  if (at < text.length || nodes.length === 0) {
+    nodes.push(document.createTextNode(text.slice(at)));
+  }
+  return nodes;
 }
 
 // Marks whichever of a heading and the line above it repeats the other; the stylesheet hides it from sight only.

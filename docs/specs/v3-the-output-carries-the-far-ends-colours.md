@@ -91,15 +91,31 @@ Campbell, the palette DESIGN's look section names, against the session backgroun
    announcements do not change.
 6. **V3.1 draws them.** Each row is rendered as text nodes and `span`s. A row with no runs
    stays a single text node, as today.
-   - Named colours use Campbell as CSS custom properties.
+   - Named colours use Campbell.
    - Indexed colours use the xterm 256-colour table.
    - `Rgb` is used as given.
-   - `inverse` swaps foreground and background; `bold`, `italic`, `underline`, `strike` and
-     `dim` map to their CSS equivalents.
+   - `inverse` swaps foreground and background; `bold`, `italic`, `underline` and `strike`
+     map to their CSS equivalents.
+   - The palette lives in a colour policy module, not in CSS custom properties (amended in
+     V3.1): the contrast adjustment has to compute on the values, so the adapter draws each
+     span with the colour the policy returns. A test holds the stylesheet's session
+     foreground and background equal to the policy's.
 7. **Every drawn colour is kept readable.** When a run's foreground is below 4.5:1 against the
-   background it is drawn on, V3.1 raises its lightness until it reaches 4.5:1, keeping its hue.
-   Windows Terminal offers the same adjustment as a setting. For Acter, a low-vision user's
-   ability to read the red error comes before the exact shade.
+   background it is drawn on, V3.1 changes its lightness, keeping its hue and saturation, by
+   the least amount that reaches 4.5:1. Windows Terminal offers the same adjustment as a
+   setting. For Acter, a low-vision user's ability to read the red error comes before the
+   exact shade.
+   - The lightness moves away from the background (amended in V3.1): lighter on a dark
+     background, darker on a light one, such as text on a run with a white background.
+   - `dim` is folded into the colour before the check (amended in V3.1), by Alacritty's own
+     factor of 0.66, so dim text can never fall below the floor. The session's default text
+     still looks dim (#878787, 5.4:1); a dim colour that would go below the floor is held
+     at it.
+   - Measured on #0C0C0C, 2026-09-25: red #C50F1F is drawn #EE1B2E (4.50:1), blue #0037DA
+     #3C6EFF (4.53), magenta #881798 #C829DF (4.51), bright black #767676 #7A7A7A (4.56),
+     bright magenta #B4009E #DD00C2 (4.52). Black itself is drawn as a readable grey, so
+     text a far end prints in black on the default background is visible, where Windows
+     Terminal would leave it invisible. Red and the raised dark red end up close in shade.
 8. **Windows high contrast still wins.** Spans take system colours under `forced-colors`, like
    everything else.
 
@@ -126,9 +142,12 @@ The frontend accepts `runs` and ignores them.
 
 **V3.1:**
 - `ui/src/adapters/buffer.ts`, its port and its tests;
-- `ui/src/styles.css`;
-- a small colour policy module (palette, 256-colour table, contrast adjustment) with its own
+- `ui/src/controllers/app.ts`, which hands the runs to the port;
+- `ui/src/policies/colour.ts` (palette, 256-colour table, contrast adjustment) with its own
   tests.
+
+`ui/src/styles.css` does not change: an inline colour gives way to the system colours under
+`forced-colors` without a rule of its own.
 
 ## Acceptance criteria
 
@@ -156,9 +175,11 @@ The frontend accepts `runs` and ignores them.
 2. Buffer tests: runs become spans with the right text and styles; `Appended` spans join a row
    correctly; a row without runs stays one text node.
 3. Screenshots against real shells:
-   - PowerShell's red error;
+   - PowerShell's red error, and `Write-Host -ForegroundColor` in each of the sixteen
+     console colours;
    - `ls --color` under WSL;
-   - `git diff` in a scratch repository;
+   - `git diff` in a scratch repository, under WSL;
+   - `gh`, whose own output carries underline and 256-colour greys;
    - the same under emulated forced colours.
 4. NVDA 2026.1.1 through the bridge, `user` persona, default settings: the same coloured
    output reads line for line the same as with colour removed.

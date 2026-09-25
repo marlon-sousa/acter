@@ -368,6 +368,7 @@ export class AppController {
           event.revision,
           event.text,
           event.prompt,
+          event.runs,
         );
         break;
       case 'CommandFinished':

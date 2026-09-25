@@ -4,6 +4,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { BufferDom } from '../../src/adapters/buffer';
+import type { Style } from '../../src/protocol';
 
 function makeRegion(): HTMLElement {
   const region = document.createElement('div');
@@ -386,5 +387,98 @@ describe('a row the shell drew as its prompt', () => {
 
     const prompt = region.querySelector('.prompt-row');
     expect(prompt?.classList.contains('repeated')).toBe(false);
+  });
+});
+
+describe('a row with style runs', () => {
+  const plain: Style = {
+    fg: null,
+    bg: null,
+    bold: false,
+    dim: false,
+    italic: false,
+    underline: false,
+    inverse: false,
+    strike: false,
+  };
+  const red: Style = { ...plain, fg: { kind: 'Named', index: 1 } };
+  const green: Style = { ...plain, fg: { kind: 'Named', index: 2 }, bold: true };
+
+  function row(region: HTMLElement): HTMLElement {
+    const found = region.querySelector<HTMLElement>('.response > div');
+    if (found === null) {
+      throw new Error('no row');
+    }
+    return found;
+  }
+
+  it('draws each run as a span with its text and style, and the rest as plain text', () => {
+    const region = makeRegion();
+    const buffer = new BufferDom(region);
+    buffer.openBlock(1, 'ls');
+    buffer.applyLine(1, 1, 'Appended', 'error: no such file', false, [
+      { start: 0, len: 5, style: red },
+      { start: 10, len: 4, style: green },
+    ]);
+
+    const nodes = Array.from(row(region).childNodes);
+    expect(nodes.map((node) => node.nodeName)).toEqual(['SPAN', '#text', 'SPAN', '#text']);
+    expect(nodes.map((node) => node.textContent)).toEqual(['error', ': no ', 'such', ' file']);
+    const [error, , such] = nodes as HTMLElement[];
+    expect(error?.style.color).toBe('rgb(238, 27, 46)');
+    expect(such?.style.color).toBe('rgb(19, 161, 14)');
+    expect(such?.style.fontWeight).toBe('bold');
+    expect(row(region).textContent).toBe('error: no such file');
+  });
+
+  it('places appended runs after the text already in the row', () => {
+    const region = makeRegion();
+    const buffer = new BufferDom(region);
+    buffer.openBlock(1, 'git diff');
+    buffer.applyLine(1, 1, 'Appended', 'diff ', false, []);
+    buffer.applyLine(1, 1, 'Appended', '+added', false, [{ start: 0, len: 6, style: green }]);
+
+    const nodes = Array.from(row(region).childNodes);
+    expect(nodes.map((node) => node.textContent)).toEqual(['diff ', '+added']);
+    expect(nodes.map((node) => node.nodeName)).toEqual(['#text', 'SPAN']);
+  });
+
+  it('replaces the spans when the row is rewritten with the same text in another colour', () => {
+    const region = makeRegion();
+    const buffer = new BufferDom(region);
+    buffer.openBlock(1, 'menu');
+    buffer.applyLine(1, 1, 'Appended', '> option', false, [{ start: 0, len: 8, style: red }]);
+    buffer.applyLine(1, 1, 'Rewritten', '> option', false, [{ start: 0, len: 8, style: green }]);
+
+    const spans = row(region).querySelectorAll('span');
+    expect(spans).toHaveLength(1);
+    expect(spans[0]?.style.color).toBe('rgb(19, 161, 14)');
+  });
+
+  it('keeps a row with no runs one text node, however many appends it takes', () => {
+    const region = makeRegion();
+    const buffer = new BufferDom(region);
+    buffer.openBlock(1, 'ls');
+    buffer.applyLine(1, 1, 'Appended', 'one', false, []);
+    buffer.applyLine(1, 1, 'Appended', ' two', false, []);
+
+    const nodes = Array.from(row(region).childNodes);
+    expect(nodes.map((node) => node.nodeName)).toEqual(['#text']);
+    expect(nodes[0]?.textContent).toBe('one two');
+  });
+
+  it('draws underline and strike together, and inverse with both colours', () => {
+    const region = makeRegion();
+    const buffer = new BufferDom(region);
+    buffer.openBlock(1, 'x');
+    buffer.applyLine(1, 1, 'Appended', 'ab', false, [
+      { start: 0, len: 1, style: { ...plain, underline: true, strike: true } },
+      { start: 1, len: 1, style: { ...plain, inverse: true } },
+    ]);
+
+    const [marked, inverse] = Array.from(row(region).querySelectorAll('span'));
+    expect(marked?.style.textDecorationLine).toBe('underline line-through');
+    expect(inverse?.style.color).toBe('rgb(12, 12, 12)');
+    expect(inverse?.style.backgroundColor).toBe('rgb(204, 204, 204)');
   });
 });
