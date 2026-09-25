@@ -95,7 +95,7 @@ impl SessionService {
                 echo: Echo::default(),
                 open: None,
                 interrupted: false,
-                barren: false,
+                unshown: false,
                 lines: HashMap::new(),
                 held: None,
                 row: String::new(),
@@ -272,9 +272,9 @@ struct Pump {
     echo: Echo,
     open: Option<CommandId>,
     interrupted: bool,
-    /// Whether the open block is nobody's; set from what opened it rather than what it printed,
-    /// so a real command that fails silently keeps its verdict.
-    barren: bool,
+    /// Set only for a block nobody submitted, so a real command that prints nothing still ends
+    /// with its verdict.
+    unshown: bool,
     /// Kept across regions and blocks; an entry leaves only when [`Pump::due`] sees its line
     /// settle.
     lines: HashMap<LineId, Row>,
@@ -785,9 +785,11 @@ impl Pump {
                 .then_some(claimed.line)
                 .filter(|line| !line.trim().is_empty())
         });
-        let nobodys = claimed.minted && named.is_none();
-        self.open(claimed.id, named);
-        self.barren = nobodys;
+        if claimed.minted && named.is_none() {
+            self.open_unshown(claimed.id);
+        } else {
+            self.open(claimed.id, named);
+        }
         self.settle_running();
     }
 
@@ -967,8 +969,7 @@ impl Pump {
     /// may be about to complete.
     fn unclaimed(&mut self) {
         let command_id = CommandId(self.next_id.fetch_add(1, Ordering::SeqCst));
-        self.open(command_id, None);
-        self.barren = true;
+        self.open_unshown(command_id);
         self.settle_running();
     }
 
@@ -1081,11 +1082,17 @@ impl Pump {
 
     fn open(&mut self, command_id: CommandId, command_line: Option<String>) {
         self.open = Some(command_id);
-        self.barren = false;
+        self.unshown = false;
         self.send(SessionInput::CommandStarted {
             command_id,
             command_line,
         });
+    }
+
+    /// Started toward the frontend by its first line with text, and never if it closes first.
+    fn open_unshown(&mut self, command_id: CommandId) {
+        self.open = Some(command_id);
+        self.unshown = true;
     }
 
     async fn close(&mut self, exit: Option<ExitCode>) {
@@ -1097,16 +1104,16 @@ impl Pump {
         self.lines.values_mut().for_each(|row| row.owed = false);
         let stopped = exit.is_none() && self.interrupted;
         self.interrupted = false;
-        self.send(if stopped {
-            SessionInput::CommandInterrupted { command_id }
-        } else if self.barren {
-            SessionInput::NothingRan { command_id }
-        } else {
-            SessionInput::CommandEnded {
-                command_id,
-                exit_code: exit.unwrap_or(ExitCode(0)),
-            }
-        });
+        if !std::mem::take(&mut self.unshown) {
+            self.send(if stopped {
+                SessionInput::CommandInterrupted { command_id }
+            } else {
+                SessionInput::CommandEnded {
+                    command_id,
+                    exit_code: exit.unwrap_or(ExitCode(0)),
+                }
+            });
+        }
         // After the ending, never before: the flush the ending triggers must be quiet too.
         if self.self_talk == Some(command_id) {
             self.self_talk = None;
@@ -1194,7 +1201,19 @@ impl Pump {
     }
 
     fn output(&mut self, id: LineId, due: Due) {
-        self.barren = false;
+        if self.unshown {
+            if due.text.is_empty() {
+                return;
+            }
+            self.unshown = false;
+            if let Some(command_id) = self.open {
+                self.send(SessionInput::CommandStarted {
+                    command_id,
+                    command_line: None,
+                });
+            }
+            self.settle_running();
+        }
         if let Some(row) = self.lines.get_mut(&id) {
             row.shown = self.open;
             row.prompt = due.prompt;
@@ -1212,7 +1231,7 @@ impl Pump {
 
     fn settle_running(&self) {
         self.running.store(
-            self.open.is_some() || !self.submitted.is_empty(),
+            (self.open.is_some() && !self.unshown) || !self.submitted.is_empty(),
             Ordering::SeqCst,
         );
     }
@@ -4303,20 +4322,75 @@ mod tests {
         }
 
         #[tokio::test]
-        async fn the_block_it_opens_is_closed_all_the_same() {
+        async fn the_block_it_opens_never_reaches_the_frontend() {
             let session = after_a_failure().await;
+            let before = session.events().len();
             an_empty_enter(&session, 2, 2_000).await;
 
-            let opened = *session.started().last().expect("a block opened");
+            let after: Vec<SessionEvent> = session.events().split_off(before);
             assert!(
-                session.events().iter().any(|event| matches!(
+                !after.iter().any(|event| matches!(
                     event,
-                    SessionEvent::CommandFinished { command_id } if *command_id == opened
+                    SessionEvent::CommandStarted { .. } | SessionEvent::CommandFinished { .. }
                 )),
-                "the block the empty Enter opened ends: {:?}",
-                session.events()
+                "no block is started or finished for it: {after:?}"
             );
             assert_eq!(session.press(ctrl('c')).await, KeyAck::NothingToActOn);
+        }
+
+        #[tokio::test]
+        async fn an_empty_line_does_not_start_it() {
+            let session = after_a_failure().await;
+            let before = session.events().len();
+            session
+                .emit(vec![
+                    marker(Osc133Marker::OutputStart),
+                    line(3, ""),
+                    marker(Osc133Marker::CommandEnd(Some(ExitCode(1)))),
+                ])
+                .await;
+            session.advance_to(2_000).await;
+
+            let after: Vec<SessionEvent> = session.events().split_off(before);
+            assert!(
+                !after
+                    .iter()
+                    .any(|event| matches!(event, SessionEvent::CommandStarted { .. })),
+                "an empty row prints nothing: {after:?}"
+            );
+        }
+
+        #[tokio::test]
+        async fn a_block_nobody_submitted_starts_at_its_first_line() {
+            let session = after_a_failure().await;
+            let before = session.events().len();
+            session
+                .emit(vec![
+                    marker(Osc133Marker::OutputStart),
+                    line(3, "a far end talking to itself"),
+                ])
+                .await;
+            session.advance_to(2_000).await;
+
+            let after: Vec<SessionEvent> = session.events().split_off(before);
+            let started = after
+                .iter()
+                .position(|event| {
+                    matches!(
+                        event,
+                        SessionEvent::CommandStarted {
+                            command_line: None,
+                            ..
+                        }
+                    )
+                })
+                .expect("the block is started");
+            let printed = after
+                .iter()
+                .position(|event| matches!(event, SessionEvent::Output { .. }))
+                .expect("its line is printed");
+            assert!(started < printed, "started before its line: {after:?}");
+            assert_eq!(session.press(ctrl('c')).await, KeyAck::Applied);
         }
 
         #[tokio::test]
