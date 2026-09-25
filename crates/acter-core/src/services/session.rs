@@ -609,12 +609,13 @@ impl Pump {
         }
     }
 
-    /// Publishes every row except the cursor's, which is the command line and belongs to the field,
+    /// Publishes every row except the cursor's and the command line's, which belong to the field,
     /// and the one the command line was left on.
     fn printed(&mut self) {
         let printed = std::mem::take(&mut self.far_end.printed);
+        let anchored = self.far_end.anchor.map(|anchor| anchor.line);
         for (id, due) in printed {
-            if self.cursor == Some(id) || self.far_end.left == Some(id) {
+            if [self.cursor, anchored, self.far_end.left].contains(&Some(id)) {
                 continue;
             }
             self.publish(id, due);
@@ -3960,6 +3961,35 @@ mod tests {
                 !session.headings().contains(&None),
                 "no block without a heading: {:?}",
                 session.headings()
+            );
+        }
+
+        #[tokio::test]
+        async fn a_line_redrawn_below_a_completion_list_is_printed_once() {
+            let session = at_a_marked_prompt().await;
+            let _ = session.press(named(Key::Char('l'))).await;
+            session.emit(vec![line(0, "ls")]).await;
+            session.cursor_at(15, 0).await;
+            session.advance_to(2_000).await;
+
+            let _ = session.press(named(Key::Char(' '))).await;
+            session.emit(vec![line(0, " /tmp/al")]).await;
+            session.cursor_at(23, 0).await;
+            let _ = session.press(named(Key::Tab)).await;
+            session
+                .emit(vec![
+                    line(4, "alpha-one.txt  alpha-two.txt"),
+                    line(5, "user@host:~$ ls /tmp/al"),
+                ])
+                .await;
+            session.cursor_at(23, 2).await;
+            session.advance_to(2_100).await;
+            session.advance_to(4_000).await;
+
+            assert_eq!(
+                session.outputs(),
+                vec!["alpha-one.txt  alpha-two.txt".to_owned()],
+                "the candidates, and none of the row the line was typed on"
             );
         }
 
