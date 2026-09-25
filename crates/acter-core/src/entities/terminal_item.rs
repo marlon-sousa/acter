@@ -5,7 +5,7 @@
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
-use crate::{Osc133Marker, Screen};
+use crate::{Osc133Marker, Screen, StyleRun};
 
 /// Minted once per line, never reused, unique across the session; not a grid row.
 ///
@@ -38,6 +38,8 @@ pub enum TerminalItem {
         id: LineId,
         text: String,
         revision: LineRevision,
+        /// Counted from the start of `text`, so an `Appended` item's runs cover only what it adds.
+        runs: Vec<StyleRun>,
     },
     Marker(Osc133Marker),
     /// In the stream, between the lines before and after the switch; see

@@ -109,7 +109,9 @@ async fn drain(
 
 fn describe(item: &TerminalItem) -> String {
     match item {
-        TerminalItem::Line { id, text, revision } => {
+        TerminalItem::Line {
+            id, text, revision, ..
+        } => {
             format!("line {:>4} {:?} {:?}", id.0, revision, text)
         }
         TerminalItem::Marker(marker) => format!("marker {marker:?}"),

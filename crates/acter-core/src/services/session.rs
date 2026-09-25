@@ -12,12 +12,14 @@ use tokio::select;
 use tokio::spawn;
 use tokio::sync::mpsc::{Receiver, Sender, UnboundedSender, channel, unbounded_channel};
 
+use crate::entities::utf16_len;
 use crate::{
     Anchor, Binding, BoundaryEvent, BoundaryTracker, Caret, Clock, CommandId, ConnectionState,
     EventSink, ExitCode, FarEndAnswer, Integration, Key, KeyAck, KeyPress, Keystroke, LineId,
     LineOwner, LineRevision, PacingConfig, Region, RowChange, Screen, SessionActor, SessionApi,
-    SessionEvent, SessionId, SessionInput, SessionIntent, ShellFacts, ShellMarkers, SubmitAck,
-    TerminalEngine, Timer, Transport, binding_for, far_end_row, key_bytes,
+    SessionEvent, SessionId, SessionInput, SessionIntent, ShellFacts, ShellMarkers, StyleRun,
+    SubmitAck, TerminalEngine, Timer, Transport, binding_for, far_end_row, join_runs, key_bytes,
+    slice_runs,
 };
 
 const READS: usize = 1024;
@@ -288,6 +290,9 @@ struct Pump {
 struct Row {
     owed: bool,
     text: String,
+    /// The block the row last went to the buffer in; `None` if it never did.
+    shown: Option<CommandId>,
+    prompt: bool,
 }
 
 struct Held {
@@ -296,6 +301,7 @@ struct Held {
     revision: LineRevision,
     spoken: bool,
     prompt: bool,
+    runs: Vec<StyleRun>,
 }
 
 impl Held {
@@ -306,19 +312,33 @@ impl Held {
             revision: due.revision,
             spoken: due.spoken,
             prompt: due.prompt,
+            runs: due.runs,
         }
     }
 
     fn absorb(&mut self, due: Due) {
         match due.revision {
-            LineRevision::Appended => self.text.push_str(&due.text),
+            LineRevision::Appended => {
+                join_runs(&mut self.runs, &self.text, &due.runs);
+                self.text.push_str(&due.text);
+            }
             _ => {
                 self.text = due.text;
                 self.revision = due.revision;
+                self.runs = due.runs;
             }
         }
         self.spoken |= due.spoken;
         self.prompt = due.prompt;
+    }
+
+    fn recolour(&mut self, row: &str, runs: &[StyleRun]) {
+        if self.revision != LineRevision::Appended {
+            self.runs = runs.to_vec();
+        } else if row.ends_with(&self.text) {
+            let end = utf16_len(row);
+            self.runs = slice_runs(runs, end - utf16_len(&self.text), end);
+        }
     }
 
     fn due(self) -> Due {
@@ -327,6 +347,7 @@ impl Held {
             revision: self.revision,
             spoken: self.spoken,
             prompt: self.prompt,
+            runs: self.runs,
         }
     }
 }
@@ -337,6 +358,7 @@ struct Due {
     revision: LineRevision,
     spoken: bool,
     prompt: bool,
+    runs: Vec<StyleRun>,
 }
 
 /// Every field is inert while Acter owns the line.
@@ -435,7 +457,8 @@ impl Pump {
                     id,
                     text,
                     revision,
-                } => self.line(region, id, text, revision).await,
+                    runs,
+                } => self.line(region, id, text, revision, runs).await,
                 BoundaryEvent::BlockEnded { exit } => {
                     self.standing = None;
                     self.close(exit).await;
@@ -803,7 +826,19 @@ impl Pump {
         self.send(SessionInput::PromptDrawn { text: drawn });
     }
 
-    async fn line(&mut self, region: Region, id: LineId, text: String, revision: LineRevision) {
+    async fn line(
+        &mut self,
+        region: Region,
+        id: LineId,
+        text: String,
+        revision: LineRevision,
+        runs: Vec<StyleRun>,
+    ) {
+        if self.recoloured(id, &text, revision) {
+            self.recolour(id, text, runs);
+            return;
+        }
+
         self.drawn(region, &text, revision);
 
         self.echo.observe(region, &text, revision);
@@ -816,7 +851,7 @@ impl Pump {
         // went out.
         let before = self.row_text(id);
         // `due` runs whatever the region: its bookkeeping tells the echo's row from output later.
-        let due = self.due(id, text.clone(), revision).map(|due| Due {
+        let due = self.due(id, text.clone(), revision, runs).map(|due| Due {
             prompt: region == Region::Prompt,
             ..due
         });
@@ -839,6 +874,50 @@ impl Pump {
         self.boundary(region, id, text, revision).await;
         if self.window().is_none() {
             self.spill().await;
+        }
+    }
+
+    fn recoloured(&self, id: LineId, text: &str, revision: LineRevision) -> bool {
+        revision == LineRevision::Rewritten
+            && self.lines.get(&id).is_some_and(|row| row.text == text)
+    }
+
+    /// Reaches the buffer only where the row's text already did, so it never adds a row.
+    fn recolour(&mut self, id: LineId, text: String, runs: Vec<StyleRun>) {
+        if let Some(held) = self.held.as_mut().filter(|held| held.line == id) {
+            held.recolour(&text, &runs);
+            return;
+        }
+        let printed = self
+            .far_end
+            .printed
+            .iter()
+            .rev()
+            .find(|(line, _)| *line == id)
+            .map(|(_, due)| due.prompt);
+        if let Some(prompt) = printed {
+            let due = Due {
+                text,
+                revision: LineRevision::Rewritten,
+                spoken: false,
+                prompt,
+                runs,
+            };
+            self.far_end.printed.push((id, due));
+            return;
+        }
+        let Some(row) = self.lines.get(&id) else {
+            return;
+        };
+        if self.open.is_some() && row.shown == self.open {
+            self.send(SessionInput::Output {
+                line: id,
+                revision: LineRevision::Rewritten,
+                text,
+                spoken: false,
+                prompt: row.prompt,
+                runs,
+            });
         }
     }
 
@@ -936,6 +1015,7 @@ impl Pump {
                 Some(before) if before.is_empty() => {}
                 Some(before) => {
                     let mut due = held.due();
+                    due.runs = slice_runs(&due.runs, 0, utf16_len(&before));
                     due.text = before;
                     self.publish(line, due);
                 }
@@ -1064,7 +1144,13 @@ impl Pump {
         matches!(region, Region::Output | Region::Prompt)
     }
 
-    fn due(&mut self, id: LineId, text: String, revision: LineRevision) -> Option<Due> {
+    fn due(
+        &mut self,
+        id: LineId,
+        text: String,
+        revision: LineRevision,
+        runs: Vec<StyleRun>,
+    ) -> Option<Due> {
         match revision {
             LineRevision::Appended => {
                 let row = self.lines.entry(id).or_default();
@@ -1075,6 +1161,7 @@ impl Pump {
                     revision,
                     spoken: true,
                     prompt: false,
+                    runs,
                 })
             }
             LineRevision::Rewritten => {
@@ -1086,6 +1173,7 @@ impl Pump {
                     revision,
                     spoken: false,
                     prompt: false,
+                    runs,
                 })
             }
             // Owed when rewritten since its last word, or never seen: a line that scrolled out
@@ -1099,6 +1187,7 @@ impl Pump {
                         revision,
                         spoken: true,
                         prompt: false,
+                        runs,
                     })
             }
         }
@@ -1106,6 +1195,10 @@ impl Pump {
 
     fn output(&mut self, id: LineId, due: Due) {
         self.barren = false;
+        if let Some(row) = self.lines.get_mut(&id) {
+            row.shown = self.open;
+            row.prompt = due.prompt;
+        }
         let spoken = due.spoken && !self.on_anchor(id);
         self.send(SessionInput::Output {
             line: id,
@@ -1113,6 +1206,7 @@ impl Pump {
             text: due.text,
             spoken,
             prompt: due.prompt,
+            runs: due.runs,
         });
     }
 
@@ -1219,8 +1313,8 @@ mod tests {
     use tokio::task::yield_now;
 
     use crate::{
-        Announcement, Cursor, Key, Osc133Marker, SessionSetup, TerminalItem, TerminalModes,
-        TransportError,
+        Announcement, Colour, Cursor, Key, Osc133Marker, SessionSetup, Style, StyleRun,
+        TerminalItem, TerminalModes, TransportError,
     };
 
     use super::*;
@@ -1620,26 +1714,23 @@ mod tests {
     }
 
     fn line(id: u64, text: &str) -> TerminalItem {
-        TerminalItem::Line {
-            id: LineId(id),
-            text: text.to_owned(),
-            revision: LineRevision::Appended,
-        }
+        styled(id, text, LineRevision::Appended, vec![])
     }
 
     fn rewritten(id: u64, text: &str) -> TerminalItem {
-        TerminalItem::Line {
-            id: LineId(id),
-            text: text.to_owned(),
-            revision: LineRevision::Rewritten,
-        }
+        styled(id, text, LineRevision::Rewritten, vec![])
     }
 
     fn settled(id: u64, text: &str) -> TerminalItem {
+        styled(id, text, LineRevision::Settled, vec![])
+    }
+
+    fn styled(id: u64, text: &str, revision: LineRevision, runs: Vec<StyleRun>) -> TerminalItem {
         TerminalItem::Line {
             id: LineId(id),
             text: text.to_owned(),
-            revision: LineRevision::Settled,
+            revision,
+            runs,
         }
     }
 
@@ -4598,6 +4689,381 @@ mod tests {
                 .await;
 
             assert_eq!(session.press(ctrl('c')).await, KeyAck::NothingToActOn);
+        }
+    }
+
+    mod colour_travels_beside_the_text {
+        use super::*;
+
+        const RED: Style = Style {
+            fg: Some(Colour::Named { index: 1 }),
+            bg: None,
+            bold: false,
+            dim: false,
+            italic: false,
+            underline: false,
+            inverse: false,
+            strike: false,
+        };
+
+        const BOLD: Style = Style {
+            fg: None,
+            bold: true,
+            ..RED
+        };
+
+        fn run(start: u32, len: u32, style: Style) -> StyleRun {
+            StyleRun { start, len, style }
+        }
+
+        fn outputs_of(session: &Session, id: u64) -> Vec<(LineRevision, String, Vec<StyleRun>)> {
+            session
+                .events()
+                .into_iter()
+                .filter_map(|event| match event {
+                    SessionEvent::Output {
+                        line,
+                        revision,
+                        text,
+                        runs,
+                        ..
+                    } if line == LineId(id) => Some((revision, text, runs)),
+                    _ => None,
+                })
+                .collect()
+        }
+
+        async fn a_failed_build(error: TerminalItem, after: Vec<TerminalItem>) -> Session {
+            let session = Session::start().await;
+            session.submit("build").await;
+            let mut items = vec![
+                marker(Osc133Marker::PromptStart),
+                line(1, "> "),
+                marker(Osc133Marker::CommandStart),
+                line(1, "build"),
+                marker(Osc133Marker::OutputStart),
+                error,
+            ];
+            items.extend(after);
+            items.push(marker(Osc133Marker::CommandEnd(Some(ExitCode(1)))));
+            session.emit(items).await;
+            session.advance_to(1_000).await;
+            session
+        }
+
+        #[tokio::test]
+        async fn the_runs_reach_the_buffer_and_speech_hears_the_same_text() {
+            let plain = a_failed_build(line(2, "error: it broke"), vec![]).await;
+            let red = a_failed_build(
+                styled(
+                    2,
+                    "error: it broke",
+                    LineRevision::Appended,
+                    vec![run(0, 5, RED)],
+                ),
+                vec![],
+            )
+            .await;
+
+            assert_eq!(
+                outputs_of(&red, 2),
+                vec![(
+                    LineRevision::Appended,
+                    "error: it broke".to_owned(),
+                    vec![run(0, 5, RED)]
+                )]
+            );
+            assert_eq!(red.announcements(), plain.announcements());
+            assert_eq!(red.rendered(), plain.rendered());
+        }
+
+        #[tokio::test]
+        async fn a_colour_only_rewrite_reaches_the_buffer_and_is_never_spoken() {
+            let plain = a_failed_build(
+                line(2, "error: it broke"),
+                vec![settled(2, "error: it broke")],
+            )
+            .await;
+            let recoloured = a_failed_build(
+                line(2, "error: it broke"),
+                vec![
+                    styled(
+                        2,
+                        "error: it broke",
+                        LineRevision::Rewritten,
+                        vec![run(0, 5, RED)],
+                    ),
+                    styled(
+                        2,
+                        "error: it broke",
+                        LineRevision::Settled,
+                        vec![run(0, 5, RED)],
+                    ),
+                ],
+            )
+            .await;
+
+            assert_eq!(
+                outputs_of(&recoloured, 2),
+                vec![(
+                    LineRevision::Rewritten,
+                    "error: it broke".to_owned(),
+                    vec![run(0, 5, RED)]
+                )],
+                "the rewrite replaces the append before the tick, and the settlement owes nothing"
+            );
+            assert_eq!(recoloured.announcements(), plain.announcements());
+            assert_eq!(recoloured.headings(), plain.headings());
+        }
+
+        #[tokio::test]
+        async fn a_colour_only_rewrite_of_a_row_the_buffer_never_got_adds_no_row() {
+            let session = Session::start().await;
+            session
+                .emit(vec![
+                    marker(Osc133Marker::PromptStart),
+                    line(1, "PS> "),
+                    marker(Osc133Marker::CommandStart),
+                ])
+                .await;
+            session.advance_to(1_000).await;
+
+            session
+                .emit(vec![styled(
+                    1,
+                    "PS> ",
+                    LineRevision::Rewritten,
+                    vec![run(0, 3, BOLD)],
+                )])
+                .await;
+            session.advance_to(2_000).await;
+
+            assert_eq!(outputs_of(&session, 1), vec![]);
+        }
+
+        #[tokio::test]
+        async fn a_recoloured_prompt_row_stays_a_prompt_row() {
+            let session = Session::of(quick_grace(), ShellMarkers::PromptAndCommandLine).await;
+            session
+                .emit(vec![
+                    marker(Osc133Marker::PromptStart),
+                    line(1, PROMPT),
+                    marker(Osc133Marker::CommandStart),
+                ])
+                .await;
+            session.advance_to(1_000).await;
+
+            session
+                .emit(vec![styled(
+                    1,
+                    PROMPT,
+                    LineRevision::Rewritten,
+                    vec![run(0, 2, BOLD)],
+                )])
+                .await;
+            session.advance_to(2_000).await;
+
+            let rows: Vec<(LineRevision, bool, Vec<StyleRun>)> = session
+                .events()
+                .into_iter()
+                .filter_map(|event| match event {
+                    SessionEvent::Output {
+                        line: LineId(1),
+                        revision,
+                        prompt,
+                        runs,
+                        ..
+                    } => Some((revision, prompt, runs)),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                rows,
+                vec![
+                    (LineRevision::Appended, true, vec![]),
+                    (LineRevision::Rewritten, true, vec![run(0, 2, BOLD)]),
+                ],
+                "{:?}",
+                session.events()
+            );
+        }
+
+        #[tokio::test]
+        async fn a_row_printed_at_the_far_ends_prompt_is_published_in_its_last_colours() {
+            let session = Session::start().await;
+            session
+                .emit(vec![
+                    marker(Osc133Marker::PromptStart),
+                    line(0, "user@host:~$ "),
+                    marker(Osc133Marker::CommandStart),
+                ])
+                .await;
+            session.cursor_at(13, 0).await;
+            session.advance_to(1_000).await;
+            session.owner(LineOwner::FarEnd).await;
+
+            let _ = session
+                .press(KeyPress {
+                    key: Key::Tab,
+                    ctrl: false,
+                    shift: false,
+                    alt: false,
+                })
+                .await;
+            session
+                .emit(vec![
+                    line(4, "alpha-one.txt"),
+                    styled(
+                        4,
+                        "alpha-one.txt",
+                        LineRevision::Rewritten,
+                        vec![run(0, 5, BOLD)],
+                    ),
+                    line(5, "user@host:~$ "),
+                ])
+                .await;
+            session.cursor_at(13, 2).await;
+            session.advance_to(2_100).await;
+
+            assert_eq!(
+                outputs_of(&session, 4),
+                vec![(
+                    LineRevision::Rewritten,
+                    "alpha-one.txt".to_owned(),
+                    vec![run(0, 5, BOLD)]
+                )],
+                "{:?}",
+                session.events()
+            );
+        }
+
+        #[tokio::test]
+        async fn a_colour_only_rewrite_is_no_echo() {
+            let session = Session::with_config(quick_grace()).await;
+            session.advance_to(300).await;
+            session.emit(vec![line(1, "/ # ls")]).await;
+            session.advance_to(1_000).await;
+            let opened = session.started().len();
+
+            session.submit("ls").await;
+            session
+                .emit(vec![styled(
+                    1,
+                    "/ # ls",
+                    LineRevision::Rewritten,
+                    vec![run(4, 2, BOLD)],
+                )])
+                .await;
+            session.advance_to(2_000).await;
+
+            assert_eq!(
+                session.started().len(),
+                opened,
+                "a row whose text did not change cannot be the echo of a line sent after it: {:?}",
+                session.events()
+            );
+        }
+
+        #[tokio::test]
+        async fn a_colour_only_rewrite_moves_only_the_caret_at_the_far_ends_line() {
+            let session = Session::with_config(quick_grace()).await;
+            session.advance_to(300).await;
+            session.emit(vec![line(1, "user@host:~$ ")]).await;
+            session.cursor_at(13, 0).await;
+            session.advance_to(1_000).await;
+            session.owner(LineOwner::FarEnd).await;
+            let _ = session
+                .press(KeyPress {
+                    key: Key::Char('l'),
+                    ctrl: false,
+                    shift: false,
+                    alt: false,
+                })
+                .await;
+            session.emit(vec![line(1, "ls -la")]).await;
+            session.cursor_at(19, 0).await;
+            session.advance_to(4_000).await;
+
+            let _ = session
+                .press(KeyPress {
+                    key: Key::Left,
+                    ctrl: false,
+                    shift: false,
+                    alt: false,
+                })
+                .await;
+            session.cursor_at(18, 0).await;
+            session
+                .emit(vec![styled(
+                    1,
+                    "user@host:~$ ls -la",
+                    LineRevision::Rewritten,
+                    vec![run(13, 2, BOLD)],
+                )])
+                .await;
+            session.advance_to(8_000).await;
+
+            assert_eq!(
+                session.far_end_lines().last(),
+                Some(&(None, 5, true)),
+                "no text, because no text changed"
+            );
+        }
+
+        #[tokio::test]
+        async fn appends_held_for_an_echo_are_joined_with_their_runs_shifted() {
+            let session = Session::with_config(quick_grace()).await;
+            session.advance_to(300).await;
+
+            session.submit("ls").await;
+            session
+                .emit(vec![
+                    styled(1, "é ", LineRevision::Appended, vec![run(0, 1, RED)]),
+                    styled(1, "banner", LineRevision::Appended, vec![run(0, 6, BOLD)]),
+                ])
+                .await;
+            session.advance_to(2_000).await;
+
+            assert_eq!(
+                outputs_of(&session, 1),
+                vec![(
+                    LineRevision::Appended,
+                    "é banner".to_owned(),
+                    vec![run(0, 1, RED), run(2, 6, BOLD)]
+                )]
+            );
+        }
+
+        #[tokio::test]
+        async fn what_is_kept_in_front_of_an_echo_keeps_only_its_own_runs() {
+            let session = Session::with_config(quick_grace()).await;
+            session.advance_to(300).await;
+            session.emit(vec![line(1, "")]).await;
+
+            session.submit("ls").await;
+            session
+                .emit(vec![
+                    styled(1, "/", LineRevision::Appended, vec![run(0, 1, RED)]),
+                    styled(
+                        1,
+                        "/ls",
+                        LineRevision::Rewritten,
+                        vec![run(0, 1, RED), run(1, 2, BOLD)],
+                    ),
+                ])
+                .await;
+            session.advance_to(2_000).await;
+
+            assert_eq!(
+                outputs_of(&session, 1),
+                vec![(
+                    LineRevision::Rewritten,
+                    "/".to_owned(),
+                    vec![run(0, 1, RED)]
+                )],
+                "{:?}",
+                session.events()
+            );
         }
     }
 }

@@ -172,10 +172,10 @@ impl TerminalEngine for AlacrittyEngine {
 
 #[cfg(test)]
 mod tests {
-    use acter_core::{ExitCode, LineId, LineRevision};
+    use acter_core::{Colour, ExitCode, LineId, LineRevision, Style, StyleRun, join_runs};
     use proptest::prelude::*;
 
-    use super::extractor::grid_lines;
+    use super::extractor::{grid_lines, styled_grid_lines};
     use super::*;
 
     const APPENDED: LineRevision = LineRevision::Appended;
@@ -187,10 +187,15 @@ mod tests {
     }
 
     fn line(id: u64, text: &str, revision: LineRevision) -> TerminalItem {
+        styled(id, text, revision, vec![])
+    }
+
+    fn styled(id: u64, text: &str, revision: LineRevision, runs: Vec<StyleRun>) -> TerminalItem {
         TerminalItem::Line {
             id: LineId(id),
             text: text.to_owned(),
             revision,
+            runs,
         }
     }
 
@@ -202,7 +207,9 @@ mod tests {
         items
             .iter()
             .filter_map(|item| match item {
-                TerminalItem::Line { id, text, revision } => Some((id.0, text.clone(), *revision)),
+                TerminalItem::Line {
+                    id, text, revision, ..
+                } => Some((id.0, text.clone(), *revision)),
                 _ => None,
             })
             .collect()
@@ -558,29 +565,56 @@ mod tests {
     }
 
     fn replay(items: &[TerminalItem]) -> Vec<String> {
+        replay_styled(items)
+            .into_iter()
+            .map(|(text, _)| text)
+            .collect()
+    }
+
+    fn replay_styled(items: &[TerminalItem]) -> Vec<(String, Vec<StyleRun>)> {
         let mut ids: Vec<LineId> = Vec::new();
-        let mut texts: Vec<String> = Vec::new();
+        let mut lines: Vec<(String, Vec<StyleRun>)> = Vec::new();
         for item in items {
-            let TerminalItem::Line { id, text, revision } = item else {
+            let TerminalItem::Line {
+                id,
+                text,
+                revision,
+                runs,
+            } = item
+            else {
                 continue;
             };
             let index = match ids.iter().position(|known| known == id) {
                 Some(index) => index,
                 None => {
                     ids.push(*id);
-                    texts.push(String::new());
+                    lines.push((String::new(), Vec::new()));
                     ids.len() - 1
                 }
             };
+            let (shown, shown_runs) = &mut lines[index];
             match revision {
-                LineRevision::Appended => texts[index].push_str(text),
-                LineRevision::Rewritten | LineRevision::Settled => texts[index] = text.clone(),
+                LineRevision::Appended => {
+                    join_runs(shown_runs, shown, runs);
+                    shown.push_str(text);
+                }
+                LineRevision::Rewritten | LineRevision::Settled => {
+                    *shown = text.clone();
+                    *shown_runs = runs.clone();
+                }
             }
         }
-        while texts.last().is_some_and(|text| text.is_empty()) {
-            texts.pop();
+        while lines.last().is_some_and(|(text, _)| text.is_empty()) {
+            lines.pop();
         }
-        texts
+        lines
+    }
+
+    fn without_blank_lines(lines: Vec<(String, Vec<StyleRun>)>) -> Vec<(String, Vec<StyleRun>)> {
+        lines
+            .into_iter()
+            .filter(|(text, _)| !text.is_empty())
+            .collect()
     }
 
     /// A line swallowed by a wrapping line above it settles empty (see `Extractor::absorb`), so
@@ -590,6 +624,14 @@ mod tests {
     }
 
     fn reference_lines(bytes: &[u8], columns: usize, screen_lines: usize) -> Vec<String> {
+        grid_lines(&reference_term(bytes, columns, screen_lines))
+    }
+
+    fn reference_styled_lines(bytes: &[u8]) -> Vec<(String, Vec<StyleRun>)> {
+        styled_grid_lines(&reference_term(bytes, 12, 4))
+    }
+
+    fn reference_term(bytes: &[u8], columns: usize, screen_lines: usize) -> Term<DeviceReplies> {
         let config = Config {
             scrolling_history: 100_000,
             osc52: Osc52::Disabled,
@@ -599,7 +641,7 @@ mod tests {
         let mut term = Term::new(config, &TermSize::new(columns, screen_lines), replies);
         let mut parser = Processor::<StdSyncHandler>::new();
         parser.advance(&mut term, bytes);
-        grid_lines(&term)
+        term
     }
 
     fn drive(bytes: &[u8], chunk: usize) -> Vec<TerminalItem> {
@@ -623,6 +665,9 @@ mod tests {
             Just(b"\t".to_vec()),
             Just(b"\x08".to_vec()),
             Just(b"\x1b[31m".to_vec()),
+            Just(b"\x1b[1;32m".to_vec()),
+            Just(b"\x1b[44m".to_vec()),
+            Just(b"\x1b[38;5;200m".to_vec()),
             Just(b"\x1b[0m".to_vec()),
             Just(b"\x1b[A".to_vec()),
             Just(b"\x1b[B".to_vec()),
@@ -691,6 +736,16 @@ mod tests {
         }
 
         #[test]
+        fn every_colour_reaches_the_reader(transcript in any_transcript(), chunk in 1usize..40) {
+            let items = drive(&transcript, chunk);
+
+            prop_assert_eq!(
+                without_blank_lines(replay_styled(&items)),
+                without_blank_lines(reference_styled_lines(&transcript))
+            );
+        }
+
+        #[test]
         fn reconstruction_is_independent_of_chunking(transcript in any_transcript()) {
             let whole = without_blanks(replay(&drive(&transcript, transcript.len().max(1))));
             for chunk in [1, 3, 7, 29] {
@@ -721,6 +776,255 @@ mod tests {
                     settled.push(*id);
                 }
             }
+        }
+    }
+
+    mod colour {
+        use super::*;
+
+        const RED: Style = Style {
+            fg: Some(Colour::Named { index: 1 }),
+            bg: None,
+            bold: false,
+            dim: false,
+            italic: false,
+            underline: false,
+            inverse: false,
+            strike: false,
+        };
+
+        fn run(start: u32, len: u32, style: Style) -> StyleRun {
+            StyleRun { start, len, style }
+        }
+
+        fn plain() -> Style {
+            Style::default()
+        }
+
+        #[test]
+        fn a_red_word_in_plain_text_is_one_run() {
+            let items = engine().advance(b"an \x1b[31merror\x1b[0m here");
+
+            assert_eq!(
+                items,
+                vec![styled(0, "an error here", APPENDED, vec![run(3, 5, RED)])]
+            );
+        }
+
+        #[test]
+        fn a_colour_change_in_the_middle_of_a_line_starts_a_new_run() {
+            let items = engine().advance(b"\x1b[32mok\x1b[1;31mbad\x1b[0m.");
+
+            let green = Style {
+                fg: Some(Colour::Named { index: 2 }),
+                ..plain()
+            };
+            let bold_red = Style { bold: true, ..RED };
+            assert_eq!(
+                items,
+                vec![styled(
+                    0,
+                    "okbad.",
+                    APPENDED,
+                    vec![run(0, 2, green), run(2, 3, bold_red)]
+                )]
+            );
+        }
+
+        #[test]
+        fn every_kind_of_colour_is_carried() {
+            let items = engine()
+                .advance(b"\x1b[91ma\x1b[38;5;208mb\x1b[38;2;1;2;3mc\x1b[0;48;5;4md\x1b[38;5;9me");
+
+            let fg = |colour| Style {
+                fg: Some(colour),
+                ..plain()
+            };
+            let blue_behind = Style {
+                bg: Some(Colour::Named { index: 4 }),
+                ..plain()
+            };
+            assert_eq!(
+                items,
+                vec![styled(
+                    0,
+                    "abcde",
+                    APPENDED,
+                    vec![
+                        run(0, 1, fg(Colour::Named { index: 9 })),
+                        run(1, 1, fg(Colour::Indexed { index: 208 })),
+                        run(2, 1, fg(Colour::Rgb { r: 1, g: 2, b: 3 })),
+                        run(3, 1, blue_behind),
+                        run(
+                            4,
+                            1,
+                            Style {
+                                fg: Some(Colour::Named { index: 9 }),
+                                ..blue_behind
+                            }
+                        ),
+                    ]
+                )],
+                "a 256-colour index below 16 is the palette colour it names"
+            );
+        }
+
+        #[test]
+        fn every_attribute_is_carried_and_hidden_text_is_sent_as_it_is() {
+            let items = engine().advance(
+                b"\x1b[2ma\x1b[0;3mb\x1b[0;4:3mc\x1b[0;7md\x1b[0;9me\x1b[0;1mf\x1b[0;8mg\x1b[0m",
+            );
+
+            assert_eq!(
+                items,
+                vec![styled(
+                    0,
+                    "abcdefg",
+                    APPENDED,
+                    vec![
+                        run(
+                            0,
+                            1,
+                            Style {
+                                dim: true,
+                                ..plain()
+                            }
+                        ),
+                        run(
+                            1,
+                            1,
+                            Style {
+                                italic: true,
+                                ..plain()
+                            }
+                        ),
+                        run(
+                            2,
+                            1,
+                            Style {
+                                underline: true,
+                                ..plain()
+                            }
+                        ),
+                        run(
+                            3,
+                            1,
+                            Style {
+                                inverse: true,
+                                ..plain()
+                            }
+                        ),
+                        run(
+                            4,
+                            1,
+                            Style {
+                                strike: true,
+                                ..plain()
+                            }
+                        ),
+                        run(
+                            5,
+                            1,
+                            Style {
+                                bold: true,
+                                ..plain()
+                            }
+                        ),
+                    ]
+                )]
+            );
+        }
+
+        #[test]
+        fn trailing_coloured_blanks_are_trimmed_with_the_text() {
+            let items = engine().advance(b"ab\x1b[41m   ");
+
+            assert_eq!(items, vec![line(0, "ab", APPENDED)]);
+        }
+
+        #[test]
+        fn an_append_carries_runs_counted_from_its_own_start() {
+            let mut engine = engine();
+
+            let first = engine.advance(b"ab");
+            let second = engine.advance(b"\x1b[31mcd");
+            let third = engine.advance(b"e");
+
+            assert_eq!(first, vec![line(0, "ab", APPENDED)]);
+            assert_eq!(
+                second,
+                vec![styled(0, "cd", APPENDED, vec![run(0, 2, RED)])]
+            );
+            assert_eq!(third, vec![styled(0, "e", APPENDED, vec![run(0, 1, RED)])]);
+        }
+
+        #[test]
+        fn a_colour_only_change_is_a_rewrite_of_the_same_text() {
+            let mut engine = engine();
+            let _ = engine.advance(b"abc");
+
+            let items = engine.advance(b"\r\x1b[31mabc");
+
+            assert_eq!(
+                items,
+                vec![styled(0, "abc", REWRITTEN, vec![run(0, 3, RED)])]
+            );
+        }
+
+        #[test]
+        fn a_recoloured_start_with_text_added_is_a_rewrite_of_the_whole_line() {
+            let mut engine = engine();
+            let _ = engine.advance(b"ab");
+
+            let items = engine.advance(b"\r\x1b[31mabc");
+
+            assert_eq!(
+                items,
+                vec![styled(0, "abc", REWRITTEN, vec![run(0, 3, RED)])]
+            );
+        }
+
+        #[test]
+        fn a_settled_line_carries_the_runs_of_the_whole_line() {
+            let mut engine = engine();
+            let _ = engine.advance(b"\x1b[31mab\x1b[0mc");
+            let _ = engine.advance(b"d");
+
+            let items = engine.advance(b"\x1b]133;D;0\x07");
+
+            assert_eq!(
+                items,
+                vec![
+                    styled(0, "abcd", SETTLED, vec![run(0, 2, RED)]),
+                    marker(Osc133Marker::CommandEnd(Some(ExitCode(0)))),
+                ]
+            );
+        }
+
+        #[test]
+        fn a_wide_character_counts_as_the_utf16_units_it_takes() {
+            let items = engine()
+                .advance("\u{4e2d}\x1b[31m\u{6587}\x1b[0m!\x1b[31m\u{1f600}\x1b[0mx".as_bytes());
+
+            assert_eq!(
+                items,
+                vec![styled(
+                    0,
+                    "\u{4e2d}\u{6587}!\u{1f600}x",
+                    APPENDED,
+                    vec![run(1, 1, RED), run(3, 2, RED)]
+                )]
+            );
+        }
+
+        #[test]
+        fn a_zero_width_character_belongs_to_its_base_characters_run() {
+            let items = engine().advance("\x1b[31me\x1b[0m\u{301}x".as_bytes());
+
+            assert_eq!(
+                items,
+                vec![styled(0, "e\u{301}x", APPENDED, vec![run(0, 2, RED)])]
+            );
         }
     }
 }

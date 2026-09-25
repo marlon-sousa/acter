@@ -6,9 +6,10 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use acter_core::{
-    Announcement, Clock, CommandId, ConnectionState, EventSink, ExitCode, Key, KeyAck, KeyPress,
-    LineId, LineRevision, PacingConfig, SessionApi, SessionEvent, SessionId, SessionService,
-    ShellFacts, ShellMarkers, SubmitAck, Timer, Transport, TransportError,
+    Announcement, Clock, Colour, CommandId, ConnectionState, EventSink, ExitCode, Key, KeyAck,
+    KeyPress, LineId, LineRevision, PacingConfig, SessionApi, SessionEvent, SessionId,
+    SessionService, ShellFacts, ShellMarkers, Style, StyleRun, SubmitAck, Timer, Transport,
+    TransportError, join_runs,
 };
 use acter_term::AlacrittyEngine;
 use acter_transports::{
@@ -260,6 +261,7 @@ impl Pipeline {
                     revision,
                     text,
                     prompt,
+                    runs,
                 } => {
                     let at = seen
                         .iter()
@@ -274,6 +276,7 @@ impl Pipeline {
                         revision,
                         text,
                         prompt,
+                        runs,
                     }
                 }
                 other => other,
@@ -332,10 +335,11 @@ impl Pipeline {
                     line,
                     revision,
                     text,
+                    runs,
                     ..
                 } => {
                     let at = find(&mut blocks, command_id, "output");
-                    blocks[at].apply(line, revision, &text);
+                    blocks[at].apply(line, revision, &text, &runs);
                 }
                 SessionEvent::CommandFinished { command_id } => {
                     let at = find(&mut blocks, command_id, "a command finished that");
@@ -380,23 +384,29 @@ struct Substance {
 struct Block {
     command_id: CommandId,
     command_line: Option<String>,
-    lines: Vec<(LineId, String)>,
+    lines: Vec<(LineId, String, Vec<StyleRun>)>,
     closed: bool,
 }
 
 impl Block {
-    fn apply(&mut self, line: LineId, revision: LineRevision, text: &str) {
-        match self.lines.iter_mut().find(|(known, _)| *known == line) {
-            Some((_, held)) if revision == LineRevision::Appended => held.push_str(text),
-            Some((_, held)) => *held = text.to_owned(),
-            None => self.lines.push((line, text.to_owned())),
+    fn apply(&mut self, line: LineId, revision: LineRevision, text: &str, runs: &[StyleRun]) {
+        match self.lines.iter_mut().find(|(known, _, _)| *known == line) {
+            Some((_, held, held_runs)) if revision == LineRevision::Appended => {
+                join_runs(held_runs, held, runs);
+                held.push_str(text);
+            }
+            Some((_, held, held_runs)) => {
+                *held = text.to_owned();
+                *held_runs = runs.to_vec();
+            }
+            None => self.lines.push((line, text.to_owned(), runs.to_vec())),
         }
     }
 
     fn output(&self) -> String {
         self.lines
             .iter()
-            .map(|(_, text)| text.as_str())
+            .map(|(_, text, _)| text.as_str())
             .collect::<Vec<_>>()
             .join("\n")
     }
@@ -422,12 +432,17 @@ fn output(text: &str) -> SessionEvent {
 }
 
 fn output_on(line: u64, revision: LineRevision, text: &str) -> SessionEvent {
+    styled_on(line, revision, text, vec![])
+}
+
+fn styled_on(line: u64, revision: LineRevision, text: &str, runs: Vec<StyleRun>) -> SessionEvent {
     SessionEvent::Output {
         command_id: CommandId(1),
         line: LineId(line),
         revision,
         text: text.to_owned(),
         prompt: false,
+        runs,
     }
 }
 
@@ -487,6 +502,67 @@ async fn a_command_produces_its_output_and_nothing_the_shell_said_around_it() {
         !pipeline.unintegrated(),
         "the markers arrived, so the grace period passed without a word"
     );
+}
+
+fn failing_build(error: &str) -> SessionTranscript {
+    let error = serde_json::to_string(&format!("{error}\r\n")).expect("a string serializes");
+    SessionTranscript::parse(&format!(
+        r#"{{
+            "on_start": [
+                {{ "payload": {{ "marker": {{ "kind": "A" }} }} }},
+                {{ "payload": {{ "text": "acter> " }} }},
+                {{ "payload": {{ "marker": {{ "kind": "B" }} }} }}
+            ],
+            "rules": [
+                {{
+                    "match": "build",
+                    "steps": [
+                        {{ "payload": {{ "marker": {{ "kind": "C" }} }} }},
+                        {{ "payload": {{ "text": {error} }} }},
+                        {{ "payload": {{ "marker": {{ "kind": "D", "exit_code": 1 }} }} }}
+                    ]
+                }}
+            ],
+            "default": {{ "steps": [] }}
+        }}"#
+    ))
+    .expect("the transcript parses")
+}
+
+async fn build_over(transcript: SessionTranscript) -> Pipeline {
+    let mut pipeline = Pipeline::start(transcript);
+    pipeline.run_until(0).await;
+    pipeline.submit("build");
+    pipeline.run_until(1_000).await;
+    pipeline
+}
+
+#[tokio::test]
+async fn a_red_error_reaches_the_buffer_with_its_runs_and_is_read_as_plain_text() {
+    let red = build_over(failing_build("\u{1b}[1;31merror\u{1b}[0m: it broke")).await;
+    let plain = build_over(failing_build("error: it broke")).await;
+
+    let bold_red = Style {
+        fg: Some(Colour::Named { index: 1 }),
+        bold: true,
+        ..Style::default()
+    };
+    assert!(
+        red.events().contains(&styled_on(
+            0,
+            LineRevision::Appended,
+            "error: it broke",
+            vec![StyleRun {
+                start: 0,
+                len: 5,
+                style: bold_red
+            }]
+        )),
+        "{:?}",
+        red.events()
+    );
+    assert_eq!(red.announcements(), plain.announcements());
+    assert_eq!(red.rendered(), plain.rendered());
 }
 
 #[tokio::test]
@@ -642,7 +718,7 @@ async fn a_marker_split_across_two_reads_is_still_one_marker() {
         vec![Block {
             command_id: CommandId(1),
             command_line: Some("small".to_owned()),
-            lines: vec![(LineId(0), "hello from acter".to_owned())],
+            lines: vec![(LineId(0), "hello from acter".to_owned(), vec![])],
             closed: true,
         }],
         "one block, opened and closed by markers nobody ever received whole, headed by an          echo delivered one byte at a time"
