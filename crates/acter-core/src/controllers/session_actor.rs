@@ -47,9 +47,6 @@ pub enum SessionInput {
     CommandInterrupted {
         command_id: CommandId,
     },
-    NothingRan {
-        command_id: CommandId,
-    },
     MarkersObserved,
     GracePeriodExpired,
     FollowMode(bool),
@@ -218,7 +215,6 @@ impl SessionActor {
                 exit_code,
             } => self.command_ended(command_id, exit_code),
             SessionInput::CommandInterrupted { command_id } => self.command_interrupted(command_id),
-            SessionInput::NothingRan { command_id } => self.nothing_ran(command_id),
             SessionInput::Connection { state } => {
                 self.sink.send(SessionEvent::ConnectionChanged { state })
             }
@@ -346,13 +342,6 @@ impl SessionActor {
 
     fn command_interrupted(&mut self, command_id: CommandId) {
         if !self.close(SessionEvent::CommandInterrupted { command_id }) {
-            return;
-        }
-        self.retire();
-    }
-
-    fn nothing_ran(&mut self, command_id: CommandId) {
-        if !self.close(SessionEvent::CommandFinished { command_id }) {
             return;
         }
         self.retire();
@@ -1137,25 +1126,6 @@ the user's
                     exit_code: ExitCode(2)
                 },
             ]
-        );
-    }
-
-    #[test]
-    fn a_block_nothing_ran_in_finishes_and_says_nothing() {
-        let (mut actor, _clock, sink) = actor();
-        started(&mut actor);
-
-        actor.handle(SessionInput::NothingRan {
-            command_id: CommandId(1),
-        });
-
-        assert_eq!(sink.announcements(), vec![]);
-        assert!(
-            sink.events().contains(&SessionEvent::CommandFinished {
-                command_id: CommandId(1)
-            }),
-            "and the block closes rather than being left running: {:?}",
-            sink.events()
         );
     }
 
