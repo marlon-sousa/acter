@@ -78,6 +78,8 @@ lane's next step.
 **Keyboard routing and the changed row**
 
 - 28.12. **Open** — Ctrl+C at an idle prompt says a command failed. Entry: [28.12-ctrl-c-idle-prompt-says-command.md](roadmap/28.12-ctrl-c-idle-prompt-says-command.md). Spec: none yet.
+- 28.13. **Open** — After a listing Tab typed without a pause, the field holds the candidates. Entry: [28.13-a-listing-tab-typed-without-a-pause-loses-the-line.md](roadmap/28.13-a-listing-tab-typed-without-a-pause-loses-the-line.md). Spec: none yet.
+- 28.14. **Open** — A line submitted with Ctrl+J or Ctrl+O gets no heading. Entry: [28.14-ctrl-j-and-ctrl-o-submit-without-a-heading.md](roadmap/28.14-ctrl-j-and-ctrl-o-submit-without-a-heading.md). Spec: none yet.
 - 29. **Open** — A program that is waiting says so. Entry: [29-program-waiting-says-so.md](roadmap/29-program-waiting-says-so.md). Spec: none yet.
 
 ## Status board — lane 1: UI and testing infrastructure
@@ -236,6 +238,8 @@ lane's next step.
 - 28.10. **Done** — in an integrated session the prompt was announced on every completion redraw. Spec: [28-far-end-line-mode.md](specs/28-far-end-line-mode.md)
 - 28.11. **Done** — a failing command was announced again at every empty Enter. Spec: [b6-session-service.md](specs/b6-session-service.md)
 - 28.12. **Open** — Ctrl+C at an idle prompt says a command failed. Entry: [28.12-ctrl-c-idle-prompt-says-command.md](roadmap/28.12-ctrl-c-idle-prompt-says-command.md). Spec: none yet.
+- 28.13. **Open** — After a listing Tab typed without a pause, the field holds the candidates. Entry: [28.13-a-listing-tab-typed-without-a-pause-loses-the-line.md](roadmap/28.13-a-listing-tab-typed-without-a-pause-loses-the-line.md). Spec: none yet.
+- 28.14. **Open** — A line submitted with Ctrl+J or Ctrl+O gets no heading. Entry: [28.14-ctrl-j-and-ctrl-o-submit-without-a-heading.md](roadmap/28.14-ctrl-j-and-ctrl-o-submit-without-a-heading.md). Spec: none yet.
 - 29. **Open** — A program that is waiting says so. Entry: [29-program-waiting-says-so.md](roadmap/29-program-waiting-says-so.md). Spec: none yet.
 - 30. **Closed 2026-09-02** — measured, and the answer went into 28. Entry: [30-a-widget-selection-is-visible-to-a-text-diff.md](roadmap/30-a-widget-selection-is-visible-to-a-text-diff.md).
 
