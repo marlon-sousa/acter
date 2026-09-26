@@ -1,0 +1,165 @@
+name: Test build
+
+# `issue_comment` runs this file as it is on main, never a pull request's copy.
+on:
+  issue_comment:
+    types: [created]
+
+permissions: {}
+
+jobs:
+  decide:
+    name: read the request
+    if: github.event.issue.pull_request && contains(github.event.comment.body, '@build-')
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      pull-requests: write
+    outputs:
+      sha: ${{ steps.request.outputs.sha }}
+      commit: ${{ steps.request.outputs.commit }}
+      artifact: ${{ steps.request.outputs.artifact }}
+    steps:
+      - name: Decide whether this comment asks for a build nobody has made yet
+        id: request
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const platforms = [...context.payload.comment.body.matchAll(/(?:^|\s)@build-([a-z]+)\b/gi)]
+              .map((match) => match[1].toLowerCase());
+            if (!platforms.includes('windows')) {
+              core.info(`No supported platform was asked for: ${platforms.join(', ') || 'none'}.`);
+              return;
+            }
+            const { data: pull } = await github.rest.pulls.get({
+              ...context.repo,
+              pull_number: context.issue.number,
+            });
+            if (pull.head.repo?.full_name !== `${context.repo.owner}/${context.repo.repo}`) {
+              core.info('The pull request comes from a fork, so nothing is built.');
+              return;
+            }
+            const commit = pull.head.sha.slice(0, 7);
+            const artifact = `acter-windows-${commit}`;
+            const { data: existing } = await github.rest.actions.listArtifactsForRepo({
+              ...context.repo,
+              name: artifact,
+            });
+            if (existing.artifacts.some((found) => !found.expired)) {
+              core.info(`${artifact} already exists and has not expired.`);
+              return;
+            }
+            await github.rest.reactions.createForIssueComment({
+              ...context.repo,
+              comment_id: context.payload.comment.id,
+              content: 'eyes',
+            });
+            core.setOutput('sha', pull.head.sha);
+            core.setOutput('commit', commit);
+            core.setOutput('artifact', artifact);
+
+  build:
+    name: build the portable zip (Windows)
+    needs: decide
+    if: needs.decide.outputs.sha != ''
+    runs-on: windows-latest
+    permissions:
+      actions: read
+      contents: read
+    concurrency:
+      group: test-build-windows-${{ needs.decide.outputs.sha }}
+    outputs:
+      url: ${{ steps.upload.outputs.artifact-url }}
+    steps:
+      # A second request for the same commit waits here for the first and finds its build.
+      - name: Check again for a build of this commit
+        id: again
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT: ${{ needs.decide.outputs.artifact }}
+        run: |
+          live=$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=$ARTIFACT" \
+            --jq '[.artifacts[] | select(.expired | not)] | length')
+          echo "live=$live" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        if: steps.again.outputs.live == '0'
+        with:
+          ref: ${{ needs.decide.outputs.sha }}
+          persist-credentials: false
+
+      # The build step comes from main: a branch cut before it existed has no copy of it.
+      - uses: actions/checkout@v4
+        if: steps.again.outputs.live == '0'
+        with:
+          path: .main
+          sparse-checkout: .github/actions
+          persist-credentials: false
+
+      - name: Build the portable binary
+        if: steps.again.outputs.live == '0'
+        uses: ./.main/.github/actions/portable-build
+        with:
+          describe: ${{ needs.decide.outputs.commit }}
+          commit: ${{ needs.decide.outputs.commit }}
+
+      # GitHub serves an artifact as a zip, so uploading the bare executable is what makes the
+      # download a zip holding acter.exe and nothing else.
+      - name: Upload
+        id: upload
+        if: steps.again.outputs.live == '0'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ needs.decide.outputs.artifact }}
+          path: target/portable/release/acter.exe
+          retention-days: 7
+          if-no-files-found: error
+
+  answer:
+    name: add the link to the comment
+    needs: [decide, build]
+    if: >
+      always() && needs.decide.outputs.sha != '' &&
+      (needs.build.result == 'failure' || needs.build.outputs.url != '')
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - uses: actions/github-script@v7
+        env:
+          COMMIT: ${{ needs.decide.outputs.commit }}
+          SHA: ${{ needs.decide.outputs.sha }}
+          ARTIFACT: ${{ needs.decide.outputs.artifact }}
+          URL: ${{ needs.build.outputs.url }}
+        with:
+          script: |
+            const { COMMIT, SHA, ARTIFACT, URL } = process.env;
+            const run = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const expires = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
+              .toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' });
+            const section = URL
+              ? [
+                  `<!-- build-windows:${SHA} -->`,
+                  `### Test build for Windows, commit ${COMMIT}`,
+                  '',
+                  `- [Download ${ARTIFACT}.zip](${URL}). You need to be signed in to GitHub, and the link works until ${expires}.`,
+                  '- Unzip it into any folder and run acter.exe. Nothing is installed, and Acter keeps its settings in that folder.',
+                  '- Windows may say it protected your PC from an unknown publisher. Choose More info, then Run anyway.',
+                  `- Built by [this run](${run}).`,
+                ]
+              : [
+                  `<!-- build-windows:${SHA} -->`,
+                  `### Test build for Windows, commit ${COMMIT}`,
+                  '',
+                  `The build failed, so there is nothing to download. [The run](${run}) says why.`,
+                ];
+            const { data: comment } = await github.rest.issues.getComment({
+              ...context.repo,
+              comment_id: context.payload.comment.id,
+            });
+            await github.rest.issues.updateComment({
+              ...context.repo,
+              comment_id: comment.id,
+              body: `${comment.body}\n\n${section.join('\n')}`,
+            });

@@ -1,0 +1,36 @@
+name: Portable build
+description: Builds acter.exe with the portable feature into target/portable/release.
+
+inputs:
+  describe:
+    description: What the build calls itself, passed as VERGEN_GIT_DESCRIBE.
+    required: true
+  commit:
+    description: The commit the build names, passed as VERGEN_GIT_SHA; empty leaves it to git.
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - uses: dtolnay/rust-toolchain@stable
+    - uses: Swatinem/rust-cache@v2
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 22
+        cache: npm
+        cache-dependency-path: package-lock.json
+    - name: Install dependencies
+      shell: bash
+      run: npm ci
+    - name: Build the frontend
+      shell: bash
+      run: npm -w acter-ui run build
+    - name: Build the portable binary
+      shell: pwsh
+      env:
+        VERGEN_GIT_DESCRIBE: ${{ inputs.describe }}
+        COMMIT: ${{ inputs.commit }}
+      run: |
+        if ($env:COMMIT) { $env:VERGEN_GIT_SHA = $env:COMMIT }
+        cargo build --release -p acter-app --features custom-protocol,portable --target-dir target/portable
