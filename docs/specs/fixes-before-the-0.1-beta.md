@@ -3,7 +3,8 @@
 Roadmap entries 47, 50, 44, 42 and 28.12, in one spec and one PR, as the user asked on
 2026-09-26 ahead of entry 55, the 0.1 beta. Entry 50 is in lane 1; the others are in lane 2,
 and 28.12 is under keyboard routing. They are ordered by how much a beta tester would meet
-each one.
+each one. Entry 27.7, the one SSH rig test that failed on this PR and on main, joined it the
+same day at the user's request.
 
 Four of them were found by reading code during lane 4's comment work (C4, C6, C7, C10), and
 none of those four had been observed. 28.12 was raised by the reader pass on 28.11. Each is
@@ -82,9 +83,19 @@ The same file has the same pattern in two more places:
 
 F1, F6, Escape and the named keys do not depend on the layout. Two jsdom tests failed against
 the old code: a keydown with `key` "Л" and `code` `KeyK` did not toggle, and one with `key`
-"с" and `code` `KeyC` was not reported. Those tests assume what WebView2 reports; Chromium
-reports the layout's character in `key` while Ctrl is held. That was not observed on a
-Russian layout on this machine, because doing so means adding the layout to Windows.
+"с" and `code` `KeyC` was not reported.
+
+Then on the real thing, with the user's agreement: the Russian layout was added to Windows,
+used, and removed again. Keys were sent as scan codes, because NVDA's own key presses carry
+no scan code and arrive with an empty `code`. A keydown listener in Acter's page recorded
+what WebView2 reported:
+
+- Ctrl+Shift+K: `key` "Л", `code` `KeyK`. Acter said "Acter process keys.", and "Remote
+  process keys." for the next press.
+- Ctrl+C from the edit field at an idle prompt: `key` "с", `code` `KeyC`. Acter said
+  "nothing running to stop".
+- Ctrl+C with the far end holding the line and `ping -t 127.0.0.1` running: `key` "с",
+  `code` `KeyC`. The ping stopped, and cmd printed its statistics and `^C`.
 
 ### Decisions
 
@@ -251,6 +262,42 @@ Options not taken:
 - Answering "nothing running to stop" in far-end mode too. The ack would claim nothing
   happened while the key did reach the far end and cleared its line.
 
+## 27.7 — at a bash far end, nothing is read aloud when the session connects
+
+### What the entry recorded
+
+Found on 2026-08-31 while running the SSH rig suite for B5.8, and not that entry's: it
+reproduced on `main` at 5531f2c with B5.8's changes stashed.
+
+`ssh_rig.rs`'s `what_a_session_says_when_it_has_just_connected` asserts what 27.4 and B6.2
+were about: that the far end's own banner and first prompt reach a listener rather than being
+discarded. It failed. Six seconds after connecting as the rig's bash account, the recorder held
+the banner and the prompt as `Output`, a `PromptDrawn`, and no `Announce` of any kind.
+
+The contrast made it worth filing: B5.8's accessibility pass, against the same rig as the zsh
+account, heard "connected to SSH: zshuser at 127.0.0.1, port 2222, zsh", then "acter-ssh%".
+The entry named 23.12's quieting as a suspect rather than a diagnosis: B9.6 stopped Acter's own
+setup line being read aloud, and at this far end `sshd` prints `Last login: ...` before the
+prompt, so the banner shares a block with Acter's own command. It left open whether the quieting
+reached past its line, or whether the test was asserting something that had deliberately
+changed.
+
+### Measured, 2026-09-26
+
+- The test failed on this branch and on main, the same way, every run. It is not flaky.
+- The recorder held `PromptDrawn { text: "acter@acter-ssh:~$" }`. Since B5.6 (#38), that is the
+  event a prompt reaches the listener by: the frontend speaks every `PromptDrawn`. The test
+  looked for the prompt in an `Announce`, which is where it lived before.
+- Through NVDA 2026.1.1, `user` persona, connecting to the rig as `acter` was heard as
+  "connected to SSH: acter at 127.0.0.1, port 2222, bash", "Remote process keys. Ctrl+Shift+K
+  changes that.", and then "acter@acter-ssh:~$".
+
+### Decision
+
+The test was stale, and nothing is broken: the listener hears the prompt. The test now asserts
+the `PromptDrawn` the frontend speaks. The `Last login` banner is still quieted with Acter's
+setup line, as B9.6 decided; this PR does not change that.
+
 ## Files touched
 
 - `crates/acter-transports/src/ssh/transport.rs`: `authenticate` asks the server first (47).
@@ -267,8 +314,10 @@ Options not taken:
   `Option<ExitCode>` (28.12).
 - `crates/acter-transports/tests/real_session.rs`: Ctrl+C at an idle prompt, against real
   shells (28.12).
+- `crates/acter-transports/tests/ssh_rig.rs`: `what_a_session_says_when_it_has_just_connected`
+  asserts the spoken prompt (27.7).
 - `docs/DESIGN.md`: the keystroke map's two rules (50, 28.12).
-- `docs/ROADMAP.md`: the five lines point here; the five entry files are deleted.
+- `docs/ROADMAP.md`: the six lines point here and are Done; the six entry files are deleted.
 
 ## Acceptance criteria
 
@@ -287,8 +336,8 @@ Options not taken:
   `a_file_started_anyway_is_mentioned_beside_what_the_far_end_is`, the layout tests in
   `keyboard.test.ts`, `a_ctrl_c_with_nothing_running_is_not_said_to_have_failed`, and the rig
   test `a_server_that_takes_no_password_is_never_asked_for_one`.
-- `cargo fmt`, `cargo clippy -- -D warnings`, `cargo test --workspace`, the UI tests and the
-  ignored real-shell tests are green.
+- `cargo fmt`, `cargo clippy -- -D warnings`, `cargo test --workspace`, the UI tests, the
+  ignored real-shell tests and the SSH rig suite are green.
 
 ## Manual accessibility checklist (PR body)
 
@@ -305,10 +354,11 @@ Through the screen-readers bridge, `user` persona, one item per sentence that ch
 - cmd and PowerShell, far end holding the line: Ctrl+C at an idle prompt is followed by the
   prompt, as before.
 - Acter holding the line: Ctrl+C at an idle prompt says "nothing running to stop".
+- On a Russian layout: Ctrl+Shift+K toggles, Ctrl+C from the edit field says "nothing running
+  to stop", and Ctrl+C stops a far-end command.
+- SSH to the password rig as `acter`: the prompt is heard at connect (27.7).
 
 ## Out of scope
 
 - Signing in with a key or through an agent (B9.1, B9.2).
-- The rig test `what_a_session_says_when_it_has_just_connected`, which fails on main as well.
-  It is entry 27.7.
 - A Ctrl+C sent to the far end while a command is running. What that says is unchanged.

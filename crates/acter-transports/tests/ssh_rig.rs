@@ -834,12 +834,9 @@ async fn what_a_session_says_when_it_has_just_connected() {
     assert!(
         seen.iter().any(|event| matches!(
             event,
-            SessionEvent::Announce {
-                announcement: Announcement::ReadAloud { text },
-                ..
-            } if text.contains('$')
+            SessionEvent::PromptDrawn { text } if text.contains('$')
         )),
-        "and a listener hears it rather than having to go looking: {seen:?}"
+        "and a listener hears it, because the frontend speaks every prompt drawn: {seen:?}"
     );
 }
 

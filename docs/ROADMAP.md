@@ -31,7 +31,6 @@ lane's next step.
 - 14. **Open** — A4, completion path. Entry: [14-a4-completion-path.md](roadmap/14-a4-completion-path.md). Spec: none yet.
 - 15. **Open** — A5.3 and onward: iteration entries appear here as NVDA findings arrive. Spec: none yet.
 - 49. **Open** — A new menu action compiles and does nothing. Entry: [49-a-new-menu-action-compiles-and-does-nothing.md](roadmap/49-a-new-menu-action-compiles-and-does-nothing.md). Spec: none yet.
-- 50. **Open** — The far-end toggle depends on the keyboard layout. Spec: [fixes-before-the-0.1-beta.md](specs/fixes-before-the-0.1-beta.md).
 
 **Lane 2: domain**
 
@@ -47,13 +46,9 @@ lane's next step.
 - 27.2. **Open** — A connection that waits for a person can be hung up on while it waits. Entry: [27.2-connection-waits-for-person-can-be.md](roadmap/27.2-connection-waits-for-person-can-be.md). Spec: none yet.
 - 27.3. **Open** — Reopening the Connect dialog re-reads the last thing the previous attempt said. Entry: [27.3-reopening-connect-dialog-re-reads-last.md](roadmap/27.3-reopening-connect-dialog-re-reads-last.md). Spec: none yet.
 - 27.6. **Open** — Windows PowerShell's screen-reader warning is spoken after the prompt the buffer puts it before. Entry: [27.6-powershell-warning-spoken-after-prompt.md](roadmap/27.6-powershell-warning-spoken-after-prompt.md). Spec: none yet.
-- 27.7. **Open** — At a bash far end, nothing is read aloud when the session connects. Entry: [27.7-bash-far-end-nothing-read-aloud.md](roadmap/27.7-bash-far-end-nothing-read-aloud.md). Spec: none yet.
-- 42. **Open** — A file started anyway goes unmentioned when the far end also has a note. Spec: [fixes-before-the-0.1-beta.md](specs/fixes-before-the-0.1-beta.md).
 - 43. **Open** — A leftover answer can resolve the next question in the same attempt. Entry: [43-a-stale-answer-resolves-the-next-question.md](roadmap/43-a-stale-answer-resolves-the-next-question.md). Spec: none yet.
-- 44. **Open** — A trusted signature whose subject merely contains "Microsoft" is announced as Microsoft's. Spec: [fixes-before-the-0.1-beta.md](specs/fixes-before-the-0.1-beta.md).
 - 45. **Open** — A full reset leaves Acter believing the alternate screen is up. Entry: [45-a-full-reset-leaves-acter-on-the-alternate-screen.md](roadmap/45-a-full-reset-leaves-acter-on-the-alternate-screen.md). Spec: none yet.
 - 46. **Open** — A marker inside a synchronized update may be placed before the output ahead of it. Entry: [46-a-marker-inside-a-synchronized-update-may-be-misplaced.md](roadmap/46-a-marker-inside-a-synchronized-update-may-be-misplaced.md). Spec: none yet.
-- 47. **Open** — A password is asked for before the server says it takes one. Spec: [fixes-before-the-0.1-beta.md](specs/fixes-before-the-0.1-beta.md).
 - 48. **Open** — A question nobody will answer parks a thread for good. Entry: [48-an-abandoned-question-parks-a-thread-for-good.md](roadmap/48-an-abandoned-question-parks-a-thread-for-good.md). Spec: none yet.
 - 51. **Open** — Four tests and fakes claim more than they check. Entry: [51-four-tests-and-fakes-claim-more-than-they-check.md](roadmap/51-four-tests-and-fakes-claim-more-than-they-check.md). Spec: none yet.
 
@@ -73,7 +68,6 @@ lane's next step.
 
 **Keyboard routing and the changed row**
 
-- 28.12. **Open** — Ctrl+C at an idle prompt says a command failed. Spec: [fixes-before-the-0.1-beta.md](specs/fixes-before-the-0.1-beta.md).
 - 28.13. **Open** — After a listing Tab typed without a pause, the field holds the candidates. Entry: [28.13-a-listing-tab-typed-without-a-pause-loses-the-line.md](roadmap/28.13-a-listing-tab-typed-without-a-pause-loses-the-line.md). Spec: none yet.
 - 28.14. **Open** — A line submitted with Ctrl+J or Ctrl+O gets no heading. Entry: [28.14-ctrl-j-and-ctrl-o-submit-without-a-heading.md](roadmap/28.14-ctrl-j-and-ctrl-o-submit-without-a-heading.md). Spec: none yet.
 - 29. **Open** — A program that is waiting says so. Entry: [29-program-waiting-says-so.md](roadmap/29-program-waiting-says-so.md). Spec: none yet.
@@ -106,7 +100,7 @@ lane's next step.
 - 15. **Open** — A5.3 and onward: iteration entries appear here as NVDA findings arrive. Spec: none yet.
 - 41. **Done** — The end-to-end test for F10 checks focus before the menu has taken it. Spec: [41-the-startup-focus-leaves-a-moved-focus-alone.md](specs/41-the-startup-focus-leaves-a-moved-focus-alone.md)
 - 49. **Open** — A new menu action compiles and does nothing. Entry: [49-a-new-menu-action-compiles-and-does-nothing.md](roadmap/49-a-new-menu-action-compiles-and-does-nothing.md). Spec: none yet.
-- 50. **Open** — The far-end toggle depends on the keyboard layout. Spec: [fixes-before-the-0.1-beta.md](specs/fixes-before-the-0.1-beta.md).
+- 50. **Done** — The far-end toggle depends on the keyboard layout. Spec: [fixes-before-the-0.1-beta.md](specs/fixes-before-the-0.1-beta.md).
 - 52.1. **Done** — A prompt lands in a different place in the buffer from one run to the next. Spec: [52.1-a-prompt-is-reported-when-it-is-drawn.md](specs/52.1-a-prompt-is-reported-when-it-is-drawn.md)
 
 ## Status board — lane 2: domain (pure Rust; may start anytime, parallel to lane 1)
@@ -160,17 +154,17 @@ lane's next step.
 - 27.2. **Open** — A connection that waits for a person can be hung up on while it waits. Entry: [27.2-connection-waits-for-person-can-be.md](roadmap/27.2-connection-waits-for-person-can-be.md). Spec: none yet.
 - 27.3. **Open** — Reopening the Connect dialog re-reads the last thing the previous attempt said. Entry: [27.3-reopening-connect-dialog-re-reads-last.md](roadmap/27.3-reopening-connect-dialog-re-reads-last.md). Spec: none yet.
 - 27.4. **Done** — B6.2, what the far end said before its first marker. Spec: [b6.2-what-the-far-end-said-before-its-first-marker.md](specs/b6.2-what-the-far-end-said-before-its-first-marker.md)
-- 27.7. **Open** — At a bash far end, nothing is read aloud when the session connects. Entry: [27.7-bash-far-end-nothing-read-aloud.md](roadmap/27.7-bash-far-end-nothing-read-aloud.md). Spec: none yet.
+- 27.7. **Done** — At a bash far end, nothing is read aloud when the session connects. Spec: [fixes-before-the-0.1-beta.md](specs/fixes-before-the-0.1-beta.md).
 - 27.5. **Done** — the status region says the whole sentence, and the announcement is that same string, from one function. Spec: [a9-the-window-says-where-you-are.md](specs/a9-the-window-says-where-you-are.md)
 - 27.6. **Open** — Windows PowerShell's screen-reader warning is spoken after the prompt the buffer puts it before. Entry: [27.6-powershell-warning-spoken-after-prompt.md](roadmap/27.6-powershell-warning-spoken-after-prompt.md). Spec: none yet.
 - 27.1. **Done** — B9.5, the session is set up after it is established. Spec: [b9.5-the-session-is-set-up-after-it-is-established.md](specs/b9.5-the-session-is-set-up-after-it-is-established.md)
 - 40. **Done** — The terminal engine can emit two rows in the wrong order after the cursor moves up. Spec: [40-a-line-above-keeps-its-place.md](specs/40-a-line-above-keeps-its-place.md)
-- 42. **Open** — A file started anyway goes unmentioned when the far end also has a note. Spec: [fixes-before-the-0.1-beta.md](specs/fixes-before-the-0.1-beta.md).
+- 42. **Done** — A file started anyway goes unmentioned when the far end also has a note. Spec: [fixes-before-the-0.1-beta.md](specs/fixes-before-the-0.1-beta.md).
 - 43. **Open** — A leftover answer can resolve the next question in the same attempt. Entry: [43-a-stale-answer-resolves-the-next-question.md](roadmap/43-a-stale-answer-resolves-the-next-question.md). Spec: none yet.
-- 44. **Open** — A trusted signature whose subject merely contains "Microsoft" is announced as Microsoft's. Spec: [fixes-before-the-0.1-beta.md](specs/fixes-before-the-0.1-beta.md).
+- 44. **Done** — A trusted signature whose subject merely contains "Microsoft" is announced as Microsoft's. Spec: [fixes-before-the-0.1-beta.md](specs/fixes-before-the-0.1-beta.md).
 - 45. **Open** — A full reset leaves Acter believing the alternate screen is up. Entry: [45-a-full-reset-leaves-acter-on-the-alternate-screen.md](roadmap/45-a-full-reset-leaves-acter-on-the-alternate-screen.md). Spec: none yet.
 - 46. **Open** — A marker inside a synchronized update may be placed before the output ahead of it. Entry: [46-a-marker-inside-a-synchronized-update-may-be-misplaced.md](roadmap/46-a-marker-inside-a-synchronized-update-may-be-misplaced.md). Spec: none yet.
-- 47. **Open** — A password is asked for before the server says it takes one. Spec: [fixes-before-the-0.1-beta.md](specs/fixes-before-the-0.1-beta.md).
+- 47. **Done** — A password is asked for before the server says it takes one. Spec: [fixes-before-the-0.1-beta.md](specs/fixes-before-the-0.1-beta.md).
 - 48. **Open** — A question nobody will answer parks a thread for good. Entry: [48-an-abandoned-question-parks-a-thread-for-good.md](roadmap/48-an-abandoned-question-parks-a-thread-for-good.md). Spec: none yet.
 - 51. **Open** — Four tests and fakes claim more than they check. Entry: [51-four-tests-and-fakes-claim-more-than-they-check.md](roadmap/51-four-tests-and-fakes-claim-more-than-they-check.md). Spec: none yet.
 
@@ -233,7 +227,7 @@ lane's next step.
 - 28.9. **Done** — a trailing space was invisible, so deleting one was silent. Spec: [28-far-end-line-mode.md](specs/28-far-end-line-mode.md)
 - 28.10. **Done** — in an integrated session the prompt was announced on every completion redraw. Spec: [28-far-end-line-mode.md](specs/28-far-end-line-mode.md)
 - 28.11. **Done** — a failing command was announced again at every empty Enter. Spec: [b6-session-service.md](specs/b6-session-service.md)
-- 28.12. **Open** — Ctrl+C at an idle prompt says a command failed. Spec: [fixes-before-the-0.1-beta.md](specs/fixes-before-the-0.1-beta.md).
+- 28.12. **Done** — Ctrl+C at an idle prompt says a command failed. Spec: [fixes-before-the-0.1-beta.md](specs/fixes-before-the-0.1-beta.md).
 - 28.13. **Open** — After a listing Tab typed without a pause, the field holds the candidates. Entry: [28.13-a-listing-tab-typed-without-a-pause-loses-the-line.md](roadmap/28.13-a-listing-tab-typed-without-a-pause-loses-the-line.md). Spec: none yet.
 - 28.14. **Open** — A line submitted with Ctrl+J or Ctrl+O gets no heading. Entry: [28.14-ctrl-j-and-ctrl-o-submit-without-a-heading.md](roadmap/28.14-ctrl-j-and-ctrl-o-submit-without-a-heading.md). Spec: none yet.
 - 29. **Open** — A program that is waiting says so. Entry: [29-program-waiting-says-so.md](roadmap/29-program-waiting-says-so.md). Spec: none yet.
