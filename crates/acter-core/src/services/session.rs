@@ -376,6 +376,8 @@ struct FarEndLine {
     printed: Vec<(LineId, Due)>,
     /// The text the listener currently has in front of them.
     held: String,
+    /// `None` unless Enter or Ctrl+C left an anchored command line since the last anchor.
+    left: Option<LineId>,
 }
 
 impl Pump {
@@ -524,6 +526,7 @@ impl Pump {
         self.far_end.was = None;
         self.far_end.held.clear();
         self.far_end.printed.clear();
+        self.far_end.left = None;
         match owner {
             LineOwner::FarEnd => self.anchor_here(),
             LineOwner::Local => self.far_end.anchor = None,
@@ -557,7 +560,9 @@ impl Pump {
     }
 
     fn await_prompt(&mut self) {
-        self.far_end.anchor = None;
+        if let Some(anchor) = self.far_end.anchor.take() {
+            self.far_end.left = Some(anchor.line);
+        }
         self.far_end.awaiting_prompt = true;
     }
 
@@ -584,6 +589,7 @@ impl Pump {
         let changed = std::mem::take(&mut self.far_end.changed);
         let watching = std::mem::take(&mut self.far_end.watching);
         if !watching || std::mem::take(&mut self.far_end.awaiting_prompt) {
+            self.far_end.left = None;
             self.anchor_here();
             return;
         }
@@ -603,11 +609,13 @@ impl Pump {
         }
     }
 
-    /// Publishes every row except the cursor's, which is the command line and belongs to the field.
+    /// Publishes every row except the cursor's and the command line's, which belong to the field,
+    /// and the one the command line was left on.
     fn printed(&mut self) {
         let printed = std::mem::take(&mut self.far_end.printed);
+        let anchored = self.far_end.anchor.map(|anchor| anchor.line);
         for (id, due) in printed {
-            if self.cursor == Some(id) {
+            if [self.cursor, anchored, self.far_end.left].contains(&Some(id)) {
                 continue;
             }
             self.publish(id, due);
@@ -3879,6 +3887,136 @@ mod tests {
                 session.far_end_lines().last(),
                 Some(&(Some("ls /tmp/al".to_owned()), 10, true)),
                 "and the field still holds the line being edited"
+            );
+        }
+
+        async fn at_a_marked_prompt() -> Session {
+            let session = Session::start().await;
+            session
+                .emit(vec![
+                    marker(Osc133Marker::PromptStart),
+                    line(0, "user@host:~$ "),
+                    marker(Osc133Marker::CommandStart),
+                ])
+                .await;
+            session.cursor_at(13, 0).await;
+            session.advance_to(1_000).await;
+            session.owner(LineOwner::FarEnd).await;
+            session
+        }
+
+        fn the_next_prompt(row: u64) -> Vec<TerminalItem> {
+            vec![
+                marker(Osc133Marker::PromptStart),
+                line(row, "user@host:~$ "),
+                marker(Osc133Marker::CommandStart),
+            ]
+        }
+
+        #[tokio::test]
+        async fn a_line_typed_faster_than_it_settles_is_printed_once() {
+            let session = at_a_marked_prompt().await;
+            let _ = session.press(named(Key::Char('e'))).await;
+            session.emit(vec![line(0, "ech")]).await;
+            session.cursor_at(16, 0).await;
+            session.advance_to(2_000).await;
+
+            let _ = session.press(named(Key::Char('o'))).await;
+            session.emit(vec![line(0, "o before")]).await;
+            session.cursor_at(24, 0).await;
+            let _ = session.press(named(Key::Enter)).await;
+            let mut finished = vec![
+                marker(Osc133Marker::OutputStart),
+                line(1, "before"),
+                marker(Osc133Marker::CommandEnd(Some(ExitCode(0)))),
+            ];
+            finished.extend(the_next_prompt(2));
+            session.emit(finished).await;
+            session.cursor_at(13, 2).await;
+            session.advance_to(3_000).await;
+
+            assert_eq!(
+                session.headings(),
+                vec![Some("echo before".to_owned())],
+                "one block, headed by the line that was typed"
+            );
+            assert_eq!(session.outputs(), vec!["before".to_owned()]);
+        }
+
+        #[tokio::test]
+        async fn a_ctrl_c_drawn_on_the_command_row_opens_no_block_of_its_own() {
+            let session = at_a_marked_prompt().await;
+            let _ = session.press(ctrl('c')).await;
+            let mut interrupted = vec![
+                line(0, "^C"),
+                marker(Osc133Marker::OutputStart),
+                marker(Osc133Marker::CommandEnd(Some(ExitCode(130)))),
+            ];
+            interrupted.extend(the_next_prompt(1));
+            session.emit(interrupted).await;
+            session.cursor_at(13, 1).await;
+            session.advance_to(3_000).await;
+
+            assert!(
+                !session.headings().contains(&None),
+                "no block without a heading: {:?}",
+                session.headings()
+            );
+        }
+
+        #[tokio::test]
+        async fn a_line_redrawn_below_a_completion_list_is_printed_once() {
+            let session = at_a_marked_prompt().await;
+            let _ = session.press(named(Key::Char('l'))).await;
+            session.emit(vec![line(0, "ls")]).await;
+            session.cursor_at(15, 0).await;
+            session.advance_to(2_000).await;
+
+            let _ = session.press(named(Key::Char(' '))).await;
+            session.emit(vec![line(0, " /tmp/al")]).await;
+            session.cursor_at(23, 0).await;
+            let _ = session.press(named(Key::Tab)).await;
+            session
+                .emit(vec![
+                    line(4, "alpha-one.txt  alpha-two.txt"),
+                    line(5, "user@host:~$ ls /tmp/al"),
+                ])
+                .await;
+            session.cursor_at(23, 2).await;
+            session.advance_to(2_100).await;
+            session.advance_to(4_000).await;
+
+            assert_eq!(
+                session.outputs(),
+                vec!["alpha-one.txt  alpha-two.txt".to_owned()],
+                "the candidates, and none of the row the line was typed on"
+            );
+        }
+
+        #[tokio::test]
+        async fn a_row_drawn_under_a_hidden_cursor_still_reaches_the_buffer() {
+            let session = Session::start().await;
+            session
+                .emit(vec![
+                    marker(Osc133Marker::PromptStart),
+                    line(0, "user@host:~$ "),
+                    marker(Osc133Marker::CommandStart),
+                ])
+                .await;
+            session.hides_its_cursor().await;
+            session.advance_to(1_000).await;
+            session.owner(LineOwner::FarEnd).await;
+
+            session.emit(vec![line(0, "? Pick one")]).await;
+            let _ = session.press(named(Key::Enter)).await;
+            session.emit(vec![line(1, "picked")]).await;
+            session.advance_to(3_000).await;
+            session.advance_to(5_000).await;
+
+            let rendered = session.rendered();
+            assert!(
+                rendered.contains("? Pick one"),
+                "no anchor, so no row was left: {rendered:?}"
             );
         }
 

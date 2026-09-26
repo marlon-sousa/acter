@@ -67,10 +67,6 @@ lane's next step.
 - 38. **Open** — The set-up dialog reads its whole command aloud on macOS. Entry: [38-set-up-dialog-reads-whole-command.md](roadmap/38-set-up-dialog-reads-whole-command.md). Spec: none yet.
 - 39. **Open** — Four smaller things the same run measured, each its own fix. Entry: [39-four-smaller-things-same-run-measured.md](roadmap/39-four-smaller-things-same-run-measured.md). Spec: none yet.
 
-**Lane 5: the look**
-
-- 53.5. **Open** — The command line's own row is printed after the next prompt. Entry: [53.5-the-command-lines-row-is-printed-after-the-next-prompt.md](roadmap/53.5-the-command-lines-row-is-printed-after-the-next-prompt.md). Spec: none yet.
-
 **Lane 6: the Windows beta** (last: after lane 5, and possibly after 42 to 51)
 
 - 55. **Open** — The first Windows release is the 0.1 beta. Entry: [55-the-first-windows-release-is-the-0.1-beta.md](roadmap/55-the-first-windows-release-is-the-0.1-beta.md). Spec: none yet.
@@ -217,7 +213,7 @@ lane's next step.
 - 53.3. **Done** — In far-end line mode, the cursor's row is drawn twice. Spec: [v2.3-the-far-end-row-is-drawn-once.md](specs/v2.3-the-far-end-row-is-drawn-once.md)
 - 54. **Done** — V3, the output carries the far end's colours. Spec: [v3-the-output-carries-the-far-ends-colours.md](specs/v3-the-output-carries-the-far-ends-colours.md).
 - 53.4. **Done** — After a program is stopped with Ctrl+C, the next prompt does not share a line with its command. Spec: [v2.4-a-block-nothing-was-printed-into-is-never-drawn.md](specs/v2.4-a-block-nothing-was-printed-into-is-never-drawn.md)
-- 53.5. **Open** — The command line's own row is printed after the next prompt. Entry: [53.5-the-command-lines-row-is-printed-after-the-next-prompt.md](roadmap/53.5-the-command-lines-row-is-printed-after-the-next-prompt.md). Spec: none yet.
+- 53.5. **Done** — The command line's own row is printed after the next prompt. Spec: [v2.5-the-row-a-command-was-typed-on-is-printed-once.md](specs/v2.5-the-row-a-command-was-typed-on-is-printed-once.md)
 
 ## Status board — lane 6: the Windows beta (**opened 2026-09-23**; runs last, after lane 5 and possibly after 42 to 51)
 
