@@ -232,6 +232,19 @@ async fn authenticate(
     questions: &Arc<dyn SshQuestions>,
 ) -> Result<(), String> {
     questions.tell("Signing in.");
+    let offered = connection
+        .authenticate_none(user)
+        .await
+        .map_err(|why| lost_while_asking(host, &why))?;
+    if offered.success() {
+        return Ok(());
+    }
+    if !offers_password(&offered) {
+        return Err(format!(
+            "The server at {host} does not take a password for {user}, and Acter can only \
+             sign in with a password so far."
+        ));
+    }
     let mut again = false;
     loop {
         let question = PasswordQuestion {

@@ -18,6 +18,13 @@ if [ "${ACTER_SSH_REKEY:-0}" = "1" ]; then
     echo "acter-ssh: host keys regenerated; this container now has a NEW identity" >&2
 fi
 
+# **A server that takes keys only**, on demand: what Acter must recognise before it asks
+# anybody for a password.
+if [ "${ACTER_SSH_KEYS_ONLY:-0}" = "1" ]; then
+    sed -i 's/^PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config.d/acter.conf
+    echo "acter-ssh: passwords are refused; keys only" >&2
+fi
+
 # **No attempt to set the hostname here, and that is a correction.** This script tried, with
 # a `|| true` after it, and the try never succeeded: a container cannot rename itself without
 # CAP_SYS_ADMIN, so the prompt read `acter@8bb4e345cb83` while the code claimed otherwise.

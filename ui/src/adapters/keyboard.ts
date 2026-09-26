@@ -45,7 +45,7 @@ export function bindKeys(
     }
     event.preventDefault();
     void controller.reportKey({
-      key: { Char: event.key },
+      key: { Char: chordLetter(event) },
       ctrl: event.ctrlKey,
       shift: event.shiftKey,
       alt: event.altKey,
@@ -90,7 +90,7 @@ export function bindKeys(
 
 function isFarEndToggle(event: KeyboardEvent): boolean {
   return (
-    (event.key === 'k' || event.key === 'K') &&
+    chordLetter(event) === 'k' &&
     event.ctrlKey &&
     event.shiftKey &&
     !event.altKey &&
@@ -103,13 +103,22 @@ function platformOwns(event: KeyboardEvent): boolean {
   return event.metaKey;
 }
 
+// Empty for a key with no letter at its position.
+function chordLetter(event: KeyboardEvent): string {
+  if (/^[a-z]$/i.test(event.key)) {
+    return event.key.toLowerCase();
+  }
+  const position = /^Key([A-Z])$/.exec(event.code);
+  return position?.[1]?.toLowerCase() ?? '';
+}
+
 function isLayerOne(event: KeyboardEvent): boolean {
   return event.ctrlKey && event.shiftKey;
 }
 
 function isReportable(event: KeyboardEvent): boolean {
   return (
-    (event.key === 'c' || event.key === 'd') &&
+    (chordLetter(event) === 'c' || chordLetter(event) === 'd') &&
     event.ctrlKey &&
     !event.shiftKey &&
     !event.altKey &&
@@ -143,6 +152,10 @@ function keyOf(event: KeyboardEvent): Key | null {
     case 'Escape':
       return 'Escape';
     default:
+      // Not with Alt: on Windows AltGr arrives as Ctrl+Alt, and the character it typed is the key.
+      if (event.ctrlKey && !event.altKey && chordLetter(event) !== '') {
+        return { Char: chordLetter(event) };
+      }
       return [...event.key].length === 1 ? { Char: event.key } : null;
   }
 }

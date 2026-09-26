@@ -132,6 +132,56 @@ mod tests {
     }
 
     #[test]
+    fn both_wsl_clients_are_signed_by_microsoft() {
+        let system = cmd().with_file_name("wsl.exe");
+        let program_files = PathBuf::from(
+            std::env::var_os("ProgramFiles").unwrap_or_else(|| r"C:\Program Files".into()),
+        )
+        .join("WSL")
+        .join("wsl.exe");
+        let signatures = WindowsTrust::new();
+
+        for client in [system, program_files] {
+            if !client.exists() {
+                eprintln!("no {} on this machine", client.display());
+                continue;
+            }
+            assert_eq!(
+                signatures.verdict(&client),
+                Verdict::Trusted {
+                    signer: Signer::Microsoft
+                },
+                "{}",
+                client.display()
+            );
+        }
+    }
+
+    #[test]
+    fn a_trusted_shell_somebody_else_built_is_named_as_theirs() {
+        let bash = PathBuf::from(
+            std::env::var_os("ProgramFiles").unwrap_or_else(|| r"C:\Program Files".into()),
+        )
+        .join("Git")
+        .join("bin")
+        .join("bash.exe");
+        if !bash.exists() {
+            eprintln!("no Git for Windows on this machine, so there is nothing to verify");
+            return;
+        }
+
+        let verdict = WindowsTrust::new().verdict(&bash);
+
+        let Verdict::Trusted {
+            signer: Signer::Other { name },
+        } = verdict
+        else {
+            panic!("Git's bash is trusted and is not Microsoft's: {verdict:?}");
+        };
+        assert!(!name.contains("Microsoft"), "{name}");
+    }
+
+    #[test]
     fn a_program_nothing_has_signed_is_untrusted_and_says_which_kind_of_untrusted() {
         let copied = scratch("unsigned.exe");
         let mut bytes = read(cmd()).expect("cmd.exe can be read");

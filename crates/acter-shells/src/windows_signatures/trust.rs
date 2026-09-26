@@ -19,12 +19,16 @@ use windows_sys::Win32::Security::Cryptography::Catalog::{
     CryptCATAdminReleaseContext, CryptCATCatalogInfoFromContext,
 };
 use windows_sys::Win32::Security::Cryptography::{
-    CERT_CONTEXT, CERT_FIND_SUBJECT_CERT, CERT_INFO, CERT_NAME_SIMPLE_DISPLAY_TYPE,
-    CERT_QUERY_CONTENT_FLAG_PKCS7_SIGNED, CERT_QUERY_CONTENT_FLAG_PKCS7_SIGNED_EMBED,
-    CERT_QUERY_FORMAT_FLAG_BINARY, CERT_QUERY_OBJECT_FILE, CMSG_SIGNER_INFO,
-    CMSG_SIGNER_INFO_PARAM, CertCloseStore, CertFindCertificateInStore, CertFreeCertificateContext,
-    CertGetNameStringW, CryptMsgClose, CryptMsgGetParam, CryptQueryObject, HCERTSTORE,
-    PKCS_7_ASN_ENCODING, X509_ASN_ENCODING,
+    CERT_CHAIN_CONTEXT, CERT_CHAIN_PARA, CERT_CHAIN_POLICY_MICROSOFT_ROOT, CERT_CHAIN_POLICY_PARA,
+    CERT_CHAIN_POLICY_STATUS, CERT_CONTEXT, CERT_FIND_SUBJECT_CERT, CERT_INFO,
+    CERT_NAME_SIMPLE_DISPLAY_TYPE, CERT_QUERY_CONTENT_FLAG_PKCS7_SIGNED,
+    CERT_QUERY_CONTENT_FLAG_PKCS7_SIGNED_EMBED, CERT_QUERY_FORMAT_FLAG_BINARY,
+    CERT_QUERY_OBJECT_FILE, CMSG_SIGNER_INFO, CMSG_SIGNER_INFO_PARAM, CertCloseStore,
+    CertFindCertificateInStore, CertFreeCertificateChain, CertFreeCertificateContext,
+    CertGetCertificateChain, CertGetNameStringW, CertVerifyCertificateChainPolicy, CryptMsgClose,
+    CryptMsgGetParam, CryptQueryObject, HCERTSTORE,
+    MICROSOFT_ROOT_CERT_CHAIN_POLICY_CHECK_APPLICATION_ROOT_FLAG, PKCS_7_ASN_ENCODING,
+    X509_ASN_ENCODING,
 };
 use windows_sys::Win32::Security::WinTrust::{
     WINTRUST_ACTION_GENERIC_VERIFY_V2, WINTRUST_CATALOG_INFO, WINTRUST_DATA, WINTRUST_DATA_0,
@@ -58,9 +62,14 @@ mod status {
     pub(super) const CRYPT_E_SECURITY_SETTINGS: i32 = 0x8009_2026_u32 as i32;
 }
 
-/// Matched anywhere in the subject, because Microsoft signs as both `Microsoft Windows` and
-/// `Microsoft Corporation`.
-const MICROSOFT: &str = "Microsoft";
+/// Matched whole; measured 2026-09-26, cmd.exe, powershell.exe and System32's wsl.exe sign as
+/// the first, and pwsh.exe and Program Files' wsl.exe as the second.
+const MICROSOFT: [&str; 2] = ["Microsoft Windows", "Microsoft Corporation"];
+
+struct Signed {
+    name: String,
+    microsoft_root: bool,
+}
 
 pub(super) fn verify(program: &Path) -> Verdict {
     let path = wide(program.as_os_str());
@@ -205,12 +214,16 @@ fn asked(choice: u32, subject: WINTRUST_DATA_0) -> i32 {
     status
 }
 
-fn verdict_for(status: i32, whose: impl Fn() -> Option<String>) -> Verdict {
+fn verdict_for(status: i32, whose: impl Fn() -> Option<Signed>) -> Verdict {
+    let named = || whose().map(|signed| signed.name);
     match status {
         0 => Verdict::Trusted {
             signer: match whose() {
-                Some(name) if name.contains(MICROSOFT) => Signer::Microsoft,
-                Some(name) => Signer::Other { name },
+                Some(Signed {
+                    name,
+                    microsoft_root: true,
+                }) if MICROSOFT.contains(&name.as_str()) => Signer::Microsoft,
+                Some(Signed { name, .. }) => Signer::Other { name },
                 None => Signer::Other {
                     name: "somebody whose name could not be read".to_owned(),
                 },
@@ -227,13 +240,13 @@ fn verdict_for(status: i32, whose: impl Fn() -> Option<String>) -> Verdict {
         | status::CERT_E_CHAINING
         | status::TRUST_E_SUBJECT_NOT_TRUSTED
         | status::TRUST_E_EXPLICIT_DISTRUST => Verdict::Untrusted {
-            fault: Fault::UntrustedRoot { signer: whose() },
+            fault: Fault::UntrustedRoot { signer: named() },
         },
         status::CERT_E_REVOKED => Verdict::Untrusted {
-            fault: Fault::Revoked { signer: whose() },
+            fault: Fault::Revoked { signer: named() },
         },
         status::CERT_E_EXPIRED => Verdict::Untrusted {
-            fault: Fault::Expired { signer: whose() },
+            fault: Fault::Expired { signer: named() },
         },
         status::CRYPT_E_REVOCATION_OFFLINE | status::CRYPT_E_NO_REVOCATION_CHECK => {
             Verdict::Unverifiable {
@@ -259,7 +272,7 @@ fn verdict_for(status: i32, whose: impl Fn() -> Option<String>) -> Verdict {
 }
 
 /// `None` for a file whose certificate subject cannot be read.
-fn signer(program: &Path) -> Option<String> {
+fn signer(program: &Path) -> Option<Signed> {
     let path = wide(program.as_os_str());
     let mut store: HCERTSTORE = null_mut();
     let mut message: *mut c_void = null_mut();
@@ -300,7 +313,7 @@ fn signer(program: &Path) -> Option<String> {
     name
 }
 
-fn subject(store: HCERTSTORE, message: *mut c_void) -> Option<String> {
+fn subject(store: HCERTSTORE, message: *mut c_void) -> Option<Signed> {
     let mut length: u32 = 0;
     if unsafe { CryptMsgGetParam(message, CMSG_SIGNER_INFO_PARAM, 0, null_mut(), &mut length) } == 0
         || length == 0
@@ -343,9 +356,65 @@ fn subject(store: HCERTSTORE, message: *mut c_void) -> Option<String> {
     if certificate.is_null() {
         return None;
     }
-    let name = display_name(certificate);
+    let signed = display_name(certificate).map(|name| Signed {
+        name,
+        microsoft_root: microsoft_root(certificate, store),
+    });
     unsafe { CertFreeCertificateContext(certificate) };
-    name
+    signed
+}
+
+/// Only where the chain ends is asked here; whether it is trusted was `WinVerifyTrust`'s answer.
+fn microsoft_root(certificate: *const CERT_CONTEXT, store: HCERTSTORE) -> bool {
+    let para = CERT_CHAIN_PARA {
+        cbSize: size_of::<CERT_CHAIN_PARA>() as u32,
+        ..Default::default()
+    };
+    let mut chain: *mut CERT_CHAIN_CONTEXT = null_mut();
+    let built = unsafe {
+        CertGetCertificateChain(
+            null_mut(),
+            certificate,
+            null(),
+            store,
+            &para,
+            0,
+            null(),
+            &mut chain,
+        )
+    };
+    if built == 0 || chain.is_null() {
+        return false;
+    }
+    // Measured 2026-09-26: Microsoft's 2010 root passes only without the flag, its 2011 root
+    // only with it.
+    let found = [
+        0,
+        MICROSOFT_ROOT_CERT_CHAIN_POLICY_CHECK_APPLICATION_ROOT_FLAG,
+    ]
+    .into_iter()
+    .any(|flags| {
+        let policy = CERT_CHAIN_POLICY_PARA {
+            cbSize: size_of::<CERT_CHAIN_POLICY_PARA>() as u32,
+            dwFlags: flags,
+            pvExtraPolicyPara: null_mut(),
+        };
+        let mut status = CERT_CHAIN_POLICY_STATUS {
+            cbSize: size_of::<CERT_CHAIN_POLICY_STATUS>() as u32,
+            ..Default::default()
+        };
+        let asked = unsafe {
+            CertVerifyCertificateChainPolicy(
+                CERT_CHAIN_POLICY_MICROSOFT_ROOT,
+                chain,
+                &policy,
+                &mut status,
+            )
+        };
+        asked != 0 && status.dwError == 0
+    });
+    unsafe { CertFreeCertificateChain(chain) };
+    found
 }
 
 fn display_name(certificate: *const CERT_CONTEXT) -> Option<String> {
@@ -475,27 +544,60 @@ mod tests {
         );
     }
 
+    fn signed(name: &'static str, microsoft_root: bool) -> impl Fn() -> Option<Signed> {
+        move || {
+            Some(Signed {
+                name: name.to_owned(),
+                microsoft_root,
+            })
+        }
+    }
+
+    fn somebody_else(name: &str) -> Verdict {
+        Verdict::Trusted {
+            signer: Signer::Other {
+                name: name.to_owned(),
+            },
+        }
+    }
+
     #[test]
     fn microsoft_and_somebody_else_are_two_different_verdicts() {
-        assert_eq!(
-            verdict_for(0, || Some("Microsoft Windows".to_owned())),
-            Verdict::Trusted {
-                signer: Signer::Microsoft
-            }
-        );
-        assert_eq!(
-            verdict_for(0, || Some("Microsoft Corporation".to_owned())),
-            Verdict::Trusted {
-                signer: Signer::Microsoft
-            }
-        );
-        assert_eq!(
-            verdict_for(0, || Some("Contoso Corporation".to_owned())),
-            Verdict::Trusted {
-                signer: Signer::Other {
-                    name: "Contoso Corporation".to_owned()
+        for name in MICROSOFT {
+            assert_eq!(
+                verdict_for(0, signed(name, true)),
+                Verdict::Trusted {
+                    signer: Signer::Microsoft
                 }
-            }
+            );
+        }
+        assert_eq!(
+            verdict_for(0, signed("Contoso Corporation", false)),
+            somebody_else("Contoso Corporation")
+        );
+    }
+
+    #[test]
+    fn a_name_that_merely_contains_microsoft_is_somebody_else() {
+        assert_eq!(
+            verdict_for(0, signed("Not Microsoft Ltd", true)),
+            somebody_else("Not Microsoft Ltd")
+        );
+    }
+
+    #[test]
+    fn microsofts_name_under_a_root_that_is_not_microsofts_is_somebody_else() {
+        assert_eq!(
+            verdict_for(0, signed("Microsoft Corporation", false)),
+            somebody_else("Microsoft Corporation")
+        );
+    }
+
+    #[test]
+    fn another_publisher_under_a_microsoft_root_is_that_publisher() {
+        assert_eq!(
+            verdict_for(0, signed("Contoso Corporation", true)),
+            somebody_else("Contoso Corporation")
         );
     }
 

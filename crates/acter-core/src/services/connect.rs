@@ -397,7 +397,7 @@ impl ConnectApi for ConnectService {
             limit_explained,
         } = self.factory.open(&chosen, set_up, questions)?;
 
-        let note = note.or(agreed);
+        let note = both(note, agreed);
         let line_owner = origin
             .and_then(|named| self.remembered(named))
             .map_or(LineOwner::FarEnd, |saved| saved.line_owner);
@@ -681,6 +681,23 @@ fn gone(distribution: &str) -> String {
     )
 }
 
+/// The signature clause, when there is one, is never the one dropped.
+fn both(far_end: Option<String>, signature: Option<String>) -> Option<String> {
+    match (far_end, signature) {
+        (Some(far_end), Some(signature)) => {
+            let mut letters = signature.chars();
+            let first = letters.next().map(|first| first.to_uppercase().to_string());
+            Some(format!(
+                "{}. {}{}.",
+                far_end.trim_end_matches('.'),
+                first.unwrap_or_default(),
+                letters.as_str()
+            ))
+        }
+        (far_end, signature) => far_end.or(signature),
+    }
+}
+
 /// Must match the sentence the factory refuses a scripted session with in a release build;
 /// see crates/acter-app/src/container.rs.
 fn only_in_development(scenario: &str) -> String {
@@ -821,6 +838,7 @@ mod tests {
         last: Mutex<Option<Arc<FakeSession>>>,
         refuses: Mutex<Option<(ProfileId, String)>>,
         set_up: Mutex<Vec<SetUp>>,
+        note: Mutex<Option<String>>,
     }
 
     impl FakeFactory {
@@ -849,7 +867,7 @@ mod tests {
             *self.last.lock().unwrap() = Some(Arc::clone(&session));
             Ok(Started {
                 session: session as Arc<dyn SessionApi>,
-                note: None,
+                note: self.note.lock().unwrap().clone(),
                 limit_explained: false,
             })
         }
@@ -2058,6 +2076,52 @@ mod tests {
             Some("started although nothing has signed it")
         );
         assert_eq!(factory.opened.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_file_started_anyway_is_mentioned_beside_what_the_far_end_is() {
+        let signatures = Arc::new(FakeSignatures::saying(
+            r"C:\Windows\system32\cmd.exe",
+            Verdict::Untrusted {
+                fault: Fault::NotSigned,
+            },
+        ));
+        let (service, factory, _) = signed(FakeMachine::complete(), signatures, &[]);
+        *factory.note.lock().unwrap() = Some("bash".to_owned());
+        let questions = Arc::new(Agreeing) as Arc<dyn ConnectQuestions>;
+
+        let connected = service
+            .use_profile(
+                &ProfileId::Shell {
+                    kind: ConnectionKind::Cmd,
+                },
+                SetUp::Yes,
+                None,
+                &questions,
+            )
+            .expect("saying so starts it");
+
+        assert_eq!(
+            connected.note.as_deref(),
+            Some("bash. Started although nothing has signed it.")
+        );
+    }
+
+    #[test]
+    fn a_far_end_note_that_is_a_sentence_already_is_not_given_a_second_full_stop() {
+        assert_eq!(
+            both(
+                Some("bash, which Acter cannot set up yet.".to_owned()),
+                Some("signed by Contoso Corporation".to_owned())
+            )
+            .as_deref(),
+            Some("bash, which Acter cannot set up yet. Signed by Contoso Corporation.")
+        );
+        assert_eq!(both(Some("bash".to_owned()), None).as_deref(), Some("bash"));
+        assert_eq!(
+            both(None, Some("signed by Contoso Corporation".to_owned())).as_deref(),
+            Some("signed by Contoso Corporation")
+        );
     }
 
     #[test]

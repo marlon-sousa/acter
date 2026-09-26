@@ -754,6 +754,13 @@ per-profile (muscle memory must not change between sessions).
    rather than displaced. The selection half of the test is not weakened either, because
    a field holding no text can hold no selection. Layer 3 is then what far-end-line mode
    already does, and what interactive mode adds on top of it is the screen, not the keys.
+
+   **A Ctrl+C with nothing running is never called a failure — Decided 2026-09-26.**
+   Owning the line, Acter answers it once: "nothing running to stop". Holding the line, the
+   far end gets the key, because clearing a half-typed line is its line editor's job, and
+   Acter says nothing of its own: the listener hears the prompt come back. bash marks that
+   line with the code 130, and Acter does not announce it, because it describes no command.
+   cmd and PowerShell never gave such a code, so all three now sound alike.
 3. **Interactive mode passes everything that isn't layer 1 to the app**, including
    plain Ctrl+C (SIGINT via PTY), Alt combos (Meta keys), and Escape.
 
@@ -762,6 +769,13 @@ Decided 2026-09-03.** Command on macOS, the Windows key on Windows. Acter neithe
 to a far end nor prevents it, in any mode, so the accelerator behind it fires and the menu
 item runs. This is not a fourth layer: it is the boundary the other three sit inside, because
 a terminal has never received either key and the desktop underneath is entitled to them.
+
+**A Ctrl chord is the same key on every keyboard layout — Decided 2026-09-26.** A chord
+holding Ctrl without Alt is matched on the letter the key types when that letter is Latin,
+because Windows' own shortcuts follow it, and otherwise on the key's position, so that on a
+Russian or Greek layout Ctrl+Shift+K, Ctrl+C and Ctrl+D are the same keys they are on an
+English one. With Alt it is left alone, because on Windows AltGr arrives as Ctrl+Alt and the
+character it typed is what was meant.
 
 It is written down because the layers are stated in terminal vocabulary, where **Meta means
 Alt** — layer 3 says so two lines above, and means the `ESC`-prefixed sequences a far end

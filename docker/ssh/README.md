@@ -70,6 +70,17 @@ cases it has to handle are reachable here, with no editing:
   This is the security case. What a listener hears here, and how hard it is to say yes by
   accident, is the most important thing in B9's accessibility checklist.
 
+## A server that takes no password
+
+A second container, beside the first, that refuses passwords and takes keys only. Acter must
+say so before it asks anybody for a password:
+
+```
+docker run --rm -d --name acter-ssh-keys --hostname acter-ssh -p 127.0.0.1:2223:22 -e ACTER_SSH_KEYS_ONLY=1 acter-ssh
+```
+
+The rig tests reach it on port 2223.
+
 ## What is deliberately absent
 
 - **No `docker-compose`.** Two `docker run` lines that differ by one variable are easier to
