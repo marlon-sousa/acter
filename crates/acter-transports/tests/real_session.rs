@@ -2005,3 +2005,94 @@ mod the_session_is_set_up_after_it_is_established {
         );
     }
 }
+
+mod ctrl_c_at_an_idle_prompt {
+    use acter_core::LineOwner;
+
+    use super::*;
+
+    const CTRL_C: KeyPress = KeyPress {
+        key: Key::Char('c'),
+        ctrl: true,
+        shift: false,
+        alt: false,
+    };
+
+    async fn idle(session: &RealSession) {
+        let ready = session.submit("echo acter-ready");
+        session.until(ready, "acter-ready", WSL_PATIENCE).await;
+        let deadline = Instant::now() + WSL_PATIENCE;
+        while !session.ended(ready) {
+            assert!(Instant::now() < deadline, "the command never finished");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        tokio::time::sleep(SETTLE).await;
+    }
+
+    fn failures(session: &RealSession) -> Vec<ExitCode> {
+        session
+            .events
+            .0
+            .lock()
+            .expect("recorder poisoned")
+            .iter()
+            .filter_map(|event| match event {
+                SessionEvent::Announce {
+                    announcement: Announcement::Failed { exit_code },
+                    ..
+                } => Some(*exit_code),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    #[ignore = "spawns a real shell"]
+    async fn cmd_and_powershell_have_nothing_to_stop() {
+        for session in [RealSession::marked(), RealSession::powershell()] {
+            idle(&session).await;
+
+            assert_eq!(
+                session.session.send_key(SESSION, CTRL_C),
+                KeyAck::NothingToActOn
+            );
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "spawns a real shell and needs a WSL distribution installed"]
+    async fn bash_holding_the_line_is_not_said_to_have_failed() {
+        if !wsl_is_available() {
+            println!("skipped: this machine has no WSL distribution");
+            return;
+        }
+        let session = RealSession::wsl().await;
+        idle(&session).await;
+        session.session.set_line_owner(SESSION, LineOwner::FarEnd);
+        tokio::time::sleep(SETTLE).await;
+
+        assert_eq!(session.session.send_key(SESSION, CTRL_C), KeyAck::Applied);
+        let deadline = Instant::now() + WSL_PATIENCE;
+        let cleared = loop {
+            if let Some(command_id) = session.setup_block("^C") {
+                break command_id;
+            }
+            assert!(Instant::now() < deadline, "bash never drew the ^C");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        };
+        while !session.ended(cleared) {
+            assert!(
+                Instant::now() < deadline,
+                "the cleared line's block never ended"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        tokio::time::sleep(SETTLE).await;
+
+        assert_eq!(
+            failures(&session),
+            Vec::new(),
+            "bash answers 130, and nothing ran"
+        );
+    }
+}

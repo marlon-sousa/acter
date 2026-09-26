@@ -234,6 +234,69 @@ describe('Ctrl+Shift+K hands the line over and takes it back', () => {
   });
 });
 
+describe('a Ctrl chord on a layout that is not QWERTY', () => {
+  function chord(
+    target: EventTarget,
+    key: string,
+    code: string,
+    modifiers: { shift?: boolean; alt?: boolean } = {},
+  ): boolean {
+    const event = new KeyboardEvent('keydown', {
+      key,
+      code,
+      ctrlKey: true,
+      shiftKey: modifiers.shift ?? false,
+      altKey: modifiers.alt ?? false,
+      bubbles: true,
+      cancelable: true,
+    });
+    target.dispatchEvent(event);
+    return event.defaultPrevented;
+  }
+
+  it('toggles on the K key when it types a Cyrillic letter', () => {
+    expect(chord(results, 'Л', 'KeyK', { shift: true })).toBe(true);
+
+    expect(controller.owners).toBe(1);
+  });
+
+  it('toggles on the key that types K where the layout moved it', () => {
+    chord(results, 'K', 'KeyV', { shift: true });
+
+    expect(controller.owners).toBe(1);
+  });
+
+  it('does not toggle on the K position when that key types another Latin letter', () => {
+    chord(results, 'T', 'KeyK', { shift: true });
+
+    expect(controller.owners).toBe(0);
+  });
+
+  it('reports Ctrl+C from the edit field when the C key types a Cyrillic letter', () => {
+    chord(editField, 'с', 'KeyC');
+
+    expect(controller.reported).toEqual([
+      { key: { Char: 'c' }, ctrl: true, shift: false, alt: false },
+    ]);
+  });
+
+  it('sends the far end Ctrl+C when the C key types a Cyrillic letter', () => {
+    chord(farEndField, 'с', 'KeyC');
+
+    expect(controller.reported).toEqual([
+      { key: { Char: 'c' }, ctrl: true, shift: false, alt: false },
+    ]);
+  });
+
+  it('sends the character AltGr typed, which Windows reports as Ctrl+Alt', () => {
+    chord(farEndField, 'ą', 'KeyA', { alt: true });
+
+    expect(controller.reported).toEqual([
+      { key: { Char: 'ą' }, ctrl: true, shift: false, alt: true },
+    ]);
+  });
+});
+
 describe('the far end field', () => {
   it('reports each named key by name and prevents it', () => {
     const rows: Array<[string, string]> = [

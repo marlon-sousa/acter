@@ -42,7 +42,8 @@ pub enum SessionInput {
     },
     CommandEnded {
         command_id: CommandId,
-        exit_code: ExitCode,
+        /// `None` for a block whose code describes no command, which is not said.
+        exit_code: Option<ExitCode>,
     },
     CommandInterrupted {
         command_id: CommandId,
@@ -330,11 +331,13 @@ impl SessionActor {
         self.requests.pacing = wake_from(outcome.wake_after);
     }
 
-    fn command_ended(&mut self, command_id: CommandId, exit_code: ExitCode) {
+    fn command_ended(&mut self, command_id: CommandId, exit_code: Option<ExitCode>) {
         if !self.close(SessionEvent::CommandFinished { command_id }) {
             return;
         }
-        if exit_code.0 != 0 {
+        if let Some(exit_code) = exit_code
+            && exit_code.0 != 0
+        {
             self.announce(Announcement::Failed { exit_code });
         }
         self.retire();
@@ -609,7 +612,7 @@ mod tests {
     fn ended(actor: &mut SessionActor, command_id: u32, exit_code: i32) {
         actor.handle(SessionInput::CommandEnded {
             command_id: CommandId(command_id),
-            exit_code: ExitCode(exit_code),
+            exit_code: Some(ExitCode(exit_code)),
         });
     }
 

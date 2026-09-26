@@ -31,6 +31,8 @@ const ZSH_USER: &str = "zshuser";
 
 const HOST: &str = "127.0.0.1";
 const PORT: u16 = 2222;
+/// The second container, started with `ACTER_SSH_KEYS_ONLY=1`.
+const KEYS_ONLY_PORT: u16 = 2223;
 const USER: &str = "acter";
 /// Safe only because the rig is published on loopback.
 const PASSWORD: &str = "acter";
@@ -328,6 +330,38 @@ async fn giving_no_password_ends_the_attempt_with_a_sentence() {
 
     assert!(why.contains("no password was given"), "{why}");
     assert!(why.ends_with('.'), "it is a whole sentence: {why}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore]
+async fn a_server_that_takes_no_password_is_never_asked_for_one() {
+    let scratch = Scratch::new();
+    let answers = Answers::accepting();
+    let target = SshTarget {
+        host: HOST.to_owned(),
+        port: KEYS_ONLY_PORT,
+        user: USER.to_owned(),
+    };
+
+    let Err(why) = SshTransport::connect(
+        &target,
+        scratch.empty(),
+        Arc::clone(&answers) as Arc<dyn SshQuestions>,
+        COLUMNS,
+        SCREEN_LINES,
+        acter_transports::probe_patience(),
+    )
+    .await
+    else {
+        panic!("a server that takes keys only lets nobody in with a password");
+    };
+
+    assert!(answers.prompts().is_empty(), "nobody is asked to type one");
+    assert_eq!(
+        why,
+        "The server at 127.0.0.1 does not take a password for acter, and Acter can only sign \
+         in with a password so far."
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -800,12 +834,9 @@ async fn what_a_session_says_when_it_has_just_connected() {
     assert!(
         seen.iter().any(|event| matches!(
             event,
-            SessionEvent::Announce {
-                announcement: Announcement::ReadAloud { text },
-                ..
-            } if text.contains('$')
+            SessionEvent::PromptDrawn { text } if text.contains('$')
         )),
-        "and a listener hears it rather than having to go looking: {seen:?}"
+        "and a listener hears it, because the frontend speaks every prompt drawn: {seen:?}"
     );
 }
 

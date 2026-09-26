@@ -95,6 +95,7 @@ impl SessionService {
                 echo: Echo::default(),
                 open: None,
                 interrupted: false,
+                cleared_at_idle: false,
                 unshown: false,
                 lines: HashMap::new(),
                 held: None,
@@ -272,6 +273,9 @@ struct Pump {
     echo: Echo,
     open: Option<CommandId>,
     interrupted: bool,
+    /// The last key sent to the far end was Ctrl+C with nothing running; the block it closes
+    /// describes no command, so its code is not said.
+    cleared_at_idle: bool,
     /// Set only for a block nobody submitted, so a real command that prints nothing still ends
     /// with its verdict.
     unshown: bool,
@@ -535,6 +539,7 @@ impl Pump {
 
     async fn far_end_key(&mut self, key: KeyPress) {
         let bytes = key_bytes(&key, self.engine.modes());
+        self.cleared_at_idle = bytes == [0x03] && !self.running();
         if key.key == Key::Enter {
             self.far_end_submitted().await;
         } else if bytes == [0x03] {
@@ -1112,13 +1117,18 @@ impl Pump {
         self.lines.values_mut().for_each(|row| row.owed = false);
         let stopped = exit.is_none() && self.interrupted;
         self.interrupted = false;
+        let cleared = std::mem::take(&mut self.cleared_at_idle);
         if !std::mem::take(&mut self.unshown) {
             self.send(if stopped {
                 SessionInput::CommandInterrupted { command_id }
             } else {
                 SessionInput::CommandEnded {
                     command_id,
-                    exit_code: exit.unwrap_or(ExitCode(0)),
+                    exit_code: if cleared {
+                        None
+                    } else {
+                        Some(exit.unwrap_or(ExitCode(0)))
+                    },
                 }
             });
         }
@@ -1237,11 +1247,12 @@ impl Pump {
         });
     }
 
+    fn running(&self) -> bool {
+        (self.open.is_some() && !self.unshown) || !self.submitted.is_empty()
+    }
+
     fn settle_running(&self) {
-        self.running.store(
-            (self.open.is_some() && !self.unshown) || !self.submitted.is_empty(),
-            Ordering::SeqCst,
-        );
+        self.running.store(self.running(), Ordering::SeqCst);
     }
 
     /// A failure means the far end is gone, which the read channel closing reports.
@@ -3961,6 +3972,63 @@ mod tests {
                 !session.headings().contains(&None),
                 "no block without a heading: {:?}",
                 session.headings()
+            );
+        }
+
+        async fn cleared_at_the_prompt(session: &Session) {
+            let _ = session.press(ctrl('c')).await;
+            let mut cleared = vec![
+                line(0, "^C"),
+                marker(Osc133Marker::OutputStart),
+                marker(Osc133Marker::CommandEnd(Some(ExitCode(130)))),
+            ];
+            cleared.extend(the_next_prompt(1));
+            session.emit(cleared).await;
+            session.cursor_at(13, 1).await;
+        }
+
+        #[tokio::test]
+        async fn a_ctrl_c_with_nothing_running_is_not_said_to_have_failed() {
+            let session = at_a_marked_prompt().await;
+            cleared_at_the_prompt(&session).await;
+            session.advance_to(3_000).await;
+
+            assert!(
+                !session
+                    .announcements()
+                    .iter()
+                    .any(|announcement| matches!(announcement, Announcement::Failed { .. })),
+                "nothing ran, so nothing failed: {:?}",
+                session.announcements()
+            );
+        }
+
+        #[tokio::test]
+        async fn a_command_that_fails_after_a_cleared_line_still_says_so() {
+            let session = at_a_marked_prompt().await;
+            cleared_at_the_prompt(&session).await;
+            session.advance_to(3_000).await;
+
+            let _ = session.press(named(Key::Char('f'))).await;
+            session.emit(vec![line(1, "false")]).await;
+            session.cursor_at(18, 1).await;
+            session.advance_to(5_000).await;
+            let _ = session.press(named(Key::Enter)).await;
+            let mut failed = vec![
+                marker(Osc133Marker::OutputStart),
+                marker(Osc133Marker::CommandEnd(Some(ExitCode(1)))),
+            ];
+            failed.extend(the_next_prompt(2));
+            session.emit(failed).await;
+            session.cursor_at(13, 2).await;
+            session.advance_to(7_000).await;
+
+            assert!(
+                session.announcements().contains(&Announcement::Failed {
+                    exit_code: ExitCode(1)
+                }),
+                "{:?}",
+                session.announcements()
             );
         }
 
