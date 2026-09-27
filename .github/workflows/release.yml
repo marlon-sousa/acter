@@ -51,17 +51,15 @@ jobs:
           fi
           echo "${GITHUB_REF_NAME} is on main."
 
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - uses: actions/setup-node@v4
+      # **The portable binary**, from a build carrying the `portable` feature — which is what
+      # makes decision 3 true. A copy built without it would keep its settings with the
+      # account's configuration wherever the zip was unpacked to. test-build.yml uses this step.
+      # No cache: a fork's test build runs on a runner that can write to it.
+      - name: Build the portable binary
+        uses: ./.github/actions/portable-build
         with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: package-lock.json
-      - name: Install dependencies
-        run: npm ci
-      - name: Build the frontend
-        run: npm -w acter-ui run build
+          describe: ${{ github.ref_name }}
+          cache: 'off'
 
       # **The installer**: Tauri's NSIS target with `installMode` set to `currentUser`, so
       # installing never asks for administrator rights and the copy lands under
@@ -86,18 +84,7 @@ jobs:
           Set-Content -Path release-version.json -Value "{ ""version"": ""$number"" }"
           npm run tauri -- build --config release-version.json
 
-      # **The portable package**: a zip holding `acter.exe` and nothing else, from a second
-      # build carrying the `portable` feature — which is what makes decision 3 true. A copy
-      # built without it would keep its settings with the account's configuration wherever
-      # the zip was unpacked to.
-      - name: Build the portable binary
-        env:
-          VERGEN_GIT_DESCRIBE: ${{ github.ref_name }}
-        run: >
-          cargo build --release -p acter-app
-          --features custom-protocol,portable
-          --target-dir target/portable
-
+      # **The portable package**: a zip holding `acter.exe` and nothing else.
       - name: Make the portable zip
         shell: pwsh
         run: |
