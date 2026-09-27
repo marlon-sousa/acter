@@ -37,10 +37,13 @@ page changes.
 7. **Anyone who can comment can ask for a build of this repository's branches.** Only
    collaborators can push a branch here, so the code is trusted even when the person asking
    is not.
-8. **A fork's pull request is built only when the owner or a collaborator asks.** Their
-   comment is the judgement that the fork's code is safe to build, the same one they make
-   when approving CI for a first-time contributor. Anyone else's `@build-windows` on a fork
-   does nothing. This workflow never waits for that approval: `issue_comment` runs from main.
+8. **A fork's pull request is built when the owner or a collaborator asks, or when its author
+   asks and CI has been allowed to run on that commit.** A comment is never held for "Approve
+   and run", so the build follows that approval instead: the author's request is honoured when
+   `ci.yml` has a `pull_request` run for the commit that is not waiting for approval. That is
+   either the owner's "Approve and run" or the repository's policy not asking about this
+   contributor. A new push is a new commit and needs CI's approval again. Anyone else's
+   `@build-windows` on a fork does nothing.
 9. **Three jobs with separate permissions.** `decide` reads the comment, checks the pull
    request's origin, picks the commit, checks for an unexpired build and adds the reaction.
    `build` runs on Windows with read-only access. `answer` is the only job that edits the
@@ -76,5 +79,6 @@ page changes.
 - After merge, which `issue_comment` requires before it runs at all, `@build-windows` on an
   open pull request from this repository adds a working link to that comment, the zip holds
   `acter.exe`, and a second `@build-windows` on the same commit changes nothing. On a fork's
-  pull request, the owner's `@build-windows` builds it. These run after the merge and are
+  pull request, the owner's `@build-windows` builds it, and its author's builds it once CI
+  has been approved for that commit. These run after the merge and are
   recorded on the PR.

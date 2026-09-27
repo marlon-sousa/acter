@@ -39,8 +39,22 @@ jobs:
             const fork = pull.head.repo?.full_name !== `${context.repo.owner}/${context.repo.repo}`;
             const trusted = ['OWNER', 'MEMBER', 'COLLABORATOR'].includes(context.payload.comment.author_association);
             if (fork && !trusted) {
-              core.info('A fork is built only when the owner or a collaborator asks.');
-              return;
+              if (context.payload.comment.user.login !== pull.user.login) {
+                core.info('On a fork, only its author, the owner or a collaborator can ask.');
+                return;
+              }
+              // A run awaiting "Approve and run" is completed with conclusion action_required (nvaccess/nvda, 2026-09-27).
+              const { data: ci } = await github.rest.actions.listWorkflowRuns({
+                ...context.repo,
+                workflow_id: 'ci.yml',
+                event: 'pull_request',
+                head_sha: pull.head.sha,
+              });
+              const approved = ci.workflow_runs.some((run) => run.conclusion !== 'action_required');
+              if (!approved) {
+                core.info('CI has not been allowed to run on this commit, so neither is the build.');
+                return;
+              }
             }
             const commit = pull.head.sha.slice(0, 7);
             const artifact = `acter-windows-${commit}`;
