@@ -19,6 +19,7 @@ jobs:
       sha: ${{ steps.request.outputs.sha }}
       commit: ${{ steps.request.outputs.commit }}
       artifact: ${{ steps.request.outputs.artifact }}
+      cache: ${{ steps.request.outputs.cache }}
     steps:
       - name: Decide whether this comment asks for a build nobody has made yet
         id: request
@@ -35,8 +36,10 @@ jobs:
               ...context.repo,
               pull_number: context.issue.number,
             });
-            if (pull.head.repo?.full_name !== `${context.repo.owner}/${context.repo.repo}`) {
-              core.info('The pull request comes from a fork, so nothing is built.');
+            const fork = pull.head.repo?.full_name !== `${context.repo.owner}/${context.repo.repo}`;
+            const trusted = ['OWNER', 'MEMBER', 'COLLABORATOR'].includes(context.payload.comment.author_association);
+            if (fork && !trusted) {
+              core.info('A fork is built only when the owner or a collaborator asks.');
               return;
             }
             const commit = pull.head.sha.slice(0, 7);
@@ -57,6 +60,7 @@ jobs:
             core.setOutput('sha', pull.head.sha);
             core.setOutput('commit', commit);
             core.setOutput('artifact', artifact);
+            core.setOutput('cache', fork ? 'restore' : 'full');
 
   build:
     name: build the portable zip (Windows)
@@ -103,6 +107,7 @@ jobs:
         with:
           describe: ${{ needs.decide.outputs.commit }}
           commit: ${{ needs.decide.outputs.commit }}
+          cache: ${{ needs.decide.outputs.cache }}
 
       # GitHub serves an artifact as a zip, so uploading the bare executable is what makes the
       # download a zip holding acter.exe and nothing else.

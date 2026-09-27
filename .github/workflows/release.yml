@@ -54,10 +54,12 @@ jobs:
       # **The portable binary**, from a build carrying the `portable` feature — which is what
       # makes decision 3 true. A copy built without it would keep its settings with the
       # account's configuration wherever the zip was unpacked to. test-build.yml uses this step.
+      # No cache: a fork's test build runs on a runner that can write to it.
       - name: Build the portable binary
         uses: ./.github/actions/portable-build
         with:
           describe: ${{ github.ref_name }}
+          cache: 'off'
 
       # **The installer**: Tauri's NSIS target with `installMode` set to `currentUser`, so
       # installing never asks for administrator rights and the copy lands under

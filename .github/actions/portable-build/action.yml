@@ -9,16 +9,23 @@ inputs:
     description: The commit the build names, passed as VERGEN_GIT_SHA; empty leaves it to git.
     required: false
     default: ''
+  cache:
+    description: full restores and saves the build caches, restore only restores the Rust one, off uses none.
+    required: false
+    default: full
 
 runs:
   using: composite
   steps:
     - uses: dtolnay/rust-toolchain@stable
     - uses: Swatinem/rust-cache@v2
+      if: inputs.cache != 'off'
+      with:
+        save-if: ${{ inputs.cache == 'full' }}
     - uses: actions/setup-node@v4
       with:
         node-version: 22
-        cache: npm
+        cache: ${{ inputs.cache == 'full' && 'npm' || '' }}
         cache-dependency-path: package-lock.json
     - name: Install dependencies
       shell: bash

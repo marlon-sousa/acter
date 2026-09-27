@@ -34,30 +34,38 @@ page changes.
 
 ## Who can ask, and what is safe
 
-7. **Anyone who can comment can ask; only this repository's branches are built.** Only
-   collaborators can push a branch here, so the code is trusted even when the person asking is
-   not. A pull request from a fork gets nothing.
-8. **Three jobs with separate permissions.** `decide` reads the comment, checks the pull
+7. **Anyone who can comment can ask for a build of this repository's branches.** Only
+   collaborators can push a branch here, so the code is trusted even when the person asking
+   is not.
+8. **A fork's pull request is built only when the owner or a collaborator asks.** Their
+   comment is the judgement that the fork's code is safe to build, the same one they make
+   when approving CI for a first-time contributor. Anyone else's `@build-windows` on a fork
+   does nothing. This workflow never waits for that approval: `issue_comment` runs from main.
+9. **Three jobs with separate permissions.** `decide` reads the comment, checks the pull
    request's origin, picks the commit, checks for an unexpired build and adds the reaction.
    `build` runs on Windows with read-only access. `answer` is the only job that edits the
    comment.
-9. **Two requests for one commit do not build twice.** The build job holds a concurrency group
-   named after the commit, and checks again for a build once it has the group, so a request
-   that waited behind another finds that build and does nothing.
+10. **Two requests for one commit do not build twice.** The build job holds a concurrency
+    group named after the commit, and checks again for a build once it has the group, so a
+    request that waited behind another finds that build and does nothing.
+11. **Fork code never reaches a cache a release reads.** A fork's build restores the Rust
+    cache but saves nothing, and uses no npm cache. Code running on the runner can reach the
+    cache's credentials whatever the workflow says, so the release builds with no cache at
+    all: what the public installs is always built from a clean tree.
 
 ## One build recipe
 
-10. **The portable build is one composite step, `.github/actions/portable-build`,** used by
+12. **The portable build is one composite step, `.github/actions/portable-build`,** used by
     both `release.yml` and `test-build.yml`, so a test build is what a release would ship. It
     installs the toolchains, builds the frontend and runs the `portable` cargo build into
-    `target/portable`. The test build takes it from main, not from the pull request, so a
-    branch cut before this PR can still be built.
+    `target/portable`. Its `cache` input is `full`, `restore` or `off`. The test build takes it
+    from main, not from the pull request, so a branch cut before this PR can still be built.
 
 ## Files touched
 
 - `.github/workflows/test-build.yml`, new.
 - `.github/actions/portable-build/action.yml`, new.
-- `.github/workflows/release.yml`, uses the composite step for its portable binary.
+- `.github/workflows/release.yml`, uses the composite step for its portable binary, with no cache.
 - This spec.
 
 ## Definition of done
@@ -67,5 +75,6 @@ page changes.
   produces an `acter.exe` whose About says "Development build, commit" and that commit.
 - After merge, which `issue_comment` requires before it runs at all, `@build-windows` on an
   open pull request from this repository adds a working link to that comment, the zip holds
-  `acter.exe`, and a second `@build-windows` on the same commit changes nothing. These run
-  after the merge and are recorded on the PR.
+  `acter.exe`, and a second `@build-windows` on the same commit changes nothing. On a fork's
+  pull request, the owner's `@build-windows` builds it. These run after the merge and are
+  recorded on the PR.
